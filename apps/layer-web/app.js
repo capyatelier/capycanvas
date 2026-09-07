@@ -1104,7 +1104,7 @@ async function startGpu() {
   gpuStarting = true;
   document.body.dataset.gpu = "starting";
   const notice = $("gpu-notice");
-  notice.replaceChildren(element("div", "gpu-help", "Connecting to the GPU…"));
+  notice.replaceChildren(element("div", "gpu-help", "Starting the canvas…"));
   try {
     if (!isSecureContext) throw new Error("WebGPU requires HTTPS or localhost.");
     if (!navigator.gpu) throw new Error("navigator.gpu is unavailable.");

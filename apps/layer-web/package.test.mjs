@@ -7,11 +7,15 @@ import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, writeWorker } from "./package.mjs";
 import { gpuProblem } from "./gpu.js";
 
-test("GPU guidance distinguishes secure context, API, adapter and device failures", () => {
-  assert.match(gpuProblem({ secure: false, api: false })[0], /secure connection/);
-  assert.match(gpuProblem({ secure: true, api: false })[0], /WebGPU is not available/);
-  assert.match(gpuProblem({ secure: true, api: true, error: "No suitable graphics adapter found" })[0], /No compatible GPU/);
-  assert.match(gpuProblem({ secure: true, api: true, error: "requestDevice failed" })[0], /could not start/);
+test("GPU help uses short, plain messages without exposing technical errors", () => {
+  assert.match(gpuProblem({ secure: false, api: false })[0], /secure link/);
+  assert.match(gpuProblem({ secure: true, api: false })[1], /Update your browser/);
+  assert.equal(gpuProblem({ secure: true, api: true })[0], "Drawing isn’t available");
+  for (const api of [true, false]) {
+    const text = gpuProblem({ secure: true, api }).join(" ");
+    assert.ok(text.split(/\s+/).length < 25);
+    assert.doesNotMatch(text, /GPU|adapter|API|driver|renderer/);
+  }
 });
 
 function fixture(t) {

@@ -49,7 +49,11 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     await action({ type: "invoke", command: "add_layer" });
     assert.equal(await evaluate("window.frameCalls"), 0, "No paint loop while the GPU is unavailable");
     if (mode !== "pending") {
-      await evaluate("document.querySelector('.gpu-help > details:last-of-type').open=true");
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-help details[open]').length"), 0);
+      const visibleText = await evaluate("document.querySelector('.gpu-help').innerText");
+      assert.ok(visibleText.split(/\s+/).length < 70, "Default help stays brief");
+      assert.doesNotMatch(visibleText, /WebGPU|adapter|API|driver|renderer|chrome:\/\//);
+      assert.equal(await evaluate("document.querySelector('.gpu-retry').textContent"), "Try again");
       await capture(mode + "-dark");
       assert.equal(await evaluate("getComputedStyle(document.querySelector('.gpu-address code')).userSelect"), "text");
       await action({ type: "set_theme", theme: "light" });
