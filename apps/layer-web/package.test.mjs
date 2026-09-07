@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, writeWorker } from "./package.mjs";
+import { gpuProblem } from "./gpu.js";
+
+test("GPU guidance distinguishes secure context, API, adapter and device failures", () => {
+  assert.match(gpuProblem({ secure: false, api: false })[0], /secure connection/);
+  assert.match(gpuProblem({ secure: true, api: false })[0], /WebGPU is not available/);
+  assert.match(gpuProblem({ secure: true, api: true, error: "No suitable graphics adapter found" })[0], /No compatible GPU/);
+  assert.match(gpuProblem({ secure: true, api: true, error: "requestDevice failed" })[0], /could not start/);
+});
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), "capy-package-test-"));

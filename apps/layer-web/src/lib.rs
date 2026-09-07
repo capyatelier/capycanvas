@@ -1,21 +1,73 @@
 #![cfg(target_arch = "wasm32")]
 
-use layer_core::Point;
+use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
-use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
+use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
+use layer_render_wgpu::{GpuRasterError, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub struct WebApp {
-    session: UiSession<WgpuRasterizer>,
-    instance: wgpu::Instance,
+    session: UiSession<WebRenderer>,
     canvas: web_sys::HtmlCanvasElement,
+    sequence: u64,
+}
+
+/// Created separately so an adapter request never holds a mutable UI borrow
+/// across await. Settings and layout remain usable throughout GPU startup.
+#[wasm_bindgen]
+pub struct WebGpu {
+    renderer: WgpuRasterizer,
+    instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
-    sequence: u64,
+}
+
+/// An unattached GPU, not a fallback rasterizer. Only viewport bookkeeping is
+/// permitted before attachment; pixel operations fail instead of losing work.
+#[derive(Default)]
+struct WebRenderer(Option<WebGpu>);
+
+impl WebRenderer {
+    fn renderer(&mut self) -> Result<&mut WgpuRasterizer, GpuRasterError> {
+        self.0
+            .as_mut()
+            .map(|gpu| &mut gpu.renderer)
+            .ok_or(GpuRasterError::AdapterUnavailable)
+    }
+}
+
+impl CanvasRenderer for WebRenderer {
+    type Error = GpuRasterError;
+    fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
+        self.0.as_ref()?.renderer.tip_outline(asset)
+    }
+    fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error> {
+        if let Some(gpu) = &mut self.0 {
+            gpu.renderer.resize_surface(width, height)?;
+        }
+        Ok(())
+    }
+    fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
+        self.renderer()?.prepare_asset(asset, image)
+    }
+    fn release_asset(&mut self, asset: &AssetId) {
+        if let Some(gpu) = &mut self.0 {
+            gpu.renderer.release_asset(asset);
+        }
+    }
+    fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        self.renderer()?.submit(packet)
+    }
+    fn request_readback(&mut self, id: u64) -> Result<(), Self::Error> {
+        self.renderer()?.request_readback(id)
+    }
+    fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        self.0.as_mut()?.renderer.take_readback()
+    }
 }
 
 fn js(value: impl std::fmt::Display) -> JsValue {
@@ -65,10 +117,46 @@ impl WebApp {
         self.session.cursor_input(event);
     }
     pub fn canvas_cursor(&mut self) -> Result<JsValue, JsValue> {
+        if !self.gpu_ready() {
+            return Ok(JsValue::NULL);
+        }
         serialize(&self.session.canvas_cursor())
     }
-    pub async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebApp, JsValue> {
+    pub fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebApp, JsValue> {
         console_error_panic_hook::set_once();
+        let mut session = UiSession::blank(
+            WebRenderer::default(),
+            [canvas.width().max(1), canvas.height().max(1)],
+        )
+        .map_err(js)?;
+        session.set_platform(layer_ui::Platform::Web);
+        Ok(Self {
+            session,
+            canvas,
+            sequence: 0,
+        })
+    }
+    pub fn gpu_ready(&self) -> bool {
+        self.session.engine().backend().0.is_some()
+    }
+    pub fn attach_gpu(&mut self, mut gpu: WebGpu) -> Result<(), JsValue> {
+        if self.gpu_ready() {
+            return Err(js("GPU is already attached"));
+        }
+        gpu.config.width = self.canvas.width().max(1);
+        gpu.config.height = self.canvas.height().max(1);
+        gpu.renderer
+            .resize_surface(gpu.config.width, gpu.config.height)
+            .map_err(js)?;
+        gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+        self.session.renderer_mut().0 = Some(gpu);
+        Ok(())
+    }
+}
+
+#[wasm_bindgen]
+impl WebGpu {
+    pub async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WebGpu, JsValue> {
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -101,7 +189,6 @@ impl WebApp {
             })
             .await
             .map_err(js)?;
-        surface.configure(&device, &config);
         device.on_uncaptured_error(std::sync::Arc::new(|error| {
             web_sys::console::error_1(&js(error))
         }));
@@ -111,19 +198,18 @@ impl WebApp {
         if let Some(error) = validation.pop().await {
             return Err(js(error));
         }
-        let mut session = UiSession::blank(renderer, [width, height]).map_err(js)?;
-        session.set_platform(layer_ui::Platform::Web);
         Ok(Self {
-            session,
+            renderer,
             instance,
-            canvas,
             surface,
             config,
             presenter,
-            sequence: 0,
         })
     }
+}
 
+#[wasm_bindgen]
+impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
         serialize(self.session.state())
     }
@@ -138,12 +224,11 @@ impl WebApp {
         serialize(&self.session.dispatch(action).map_err(js)?)
     }
     pub fn input(&mut self, input: JsValue) -> Result<JsValue, JsValue> {
-        serialize(
-            &self
-                .session
-                .input(serde_wasm_bindgen::from_value(input).map_err(js)?)
-                .map_err(js)?,
-        )
+        let input = serde_wasm_bindgen::from_value(input).map_err(js)?;
+        if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
+            return serialize(&layer_ui::InputReply::default());
+        }
+        serialize(&self.session.input(input).map_err(js)?)
     }
     pub fn layout(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         serialize(&self.session.layout([width, height]))
@@ -197,11 +282,12 @@ impl WebApp {
             .session
             .set_viewport([logical_width, logical_height], [width, height])
             .map_err(js)?;
-        if [width, height] != [self.config.width, self.config.height] {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface
-                .configure(self.session.engine().backend().device(), &self.config);
+        if let Some(gpu) = &mut self.session.renderer_mut().0 {
+            if [width, height] != [gpu.config.width, gpu.config.height] {
+                gpu.config.width = width;
+                gpu.config.height = height;
+                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+            }
         }
         serialize(&change)
     }
@@ -210,6 +296,9 @@ impl WebApp {
     /// timestamp milliseconds, flags, device kind (0 pen / 1 mouse / 2 eraser).
     /// Returns consumed record count if the bounded input queue fills.
     pub fn pen(&mut self, records: &[f64], view_revision: u64) -> Result<u32, JsValue> {
+        if !self.gpu_ready() {
+            return Err(js("Drawing is unavailable until the GPU is connected"));
+        }
         if !records.len().is_multiple_of(11) {
             return Err(js("Invalid pen batch length"));
         }
@@ -262,6 +351,9 @@ impl WebApp {
         )
     }
     pub fn frame(&mut self, now_ms: f64, presentation_ms: f64) -> Result<JsValue, JsValue> {
+        if !self.gpu_ready() {
+            return serialize(&layer_ui::UiChange::default());
+        }
         let change = self
             .session
             .frame(
@@ -269,24 +361,25 @@ impl WebApp {
                 (presentation_ms * 1_000_000.0) as u64,
             )
             .map_err(js)?;
-        let target = match self.surface.get_current_texture() {
+        let view = self.session.state().camera.view();
+        let surround = self.session.state().theme.canvas_surround();
+        let gpu = self.session.renderer_mut().0.as_mut().unwrap();
+        let target = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,
             wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface = self
+                gpu.surface = gpu
                     .instance
                     .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
                     .map_err(js)?;
-                self.surface
-                    .configure(self.session.engine().backend().device(), &self.config);
+                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
                 });
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface
-                    .configure(self.session.engine().backend().device(), &self.config);
+                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
@@ -303,14 +396,13 @@ impl WebApp {
                 return Err(js("WebGPU surface validation failed"));
             }
         };
-        let surround = self.session.state().theme.canvas_surround();
-        self.presenter.present(
-            self.session.engine().backend(),
+        gpu.presenter.present(
+            &gpu.renderer,
             &target.texture.create_view(&Default::default()),
-            self.session.state().camera.view(),
+            view,
             surround,
         );
-        self.session.engine().backend().queue().present(target);
+        gpu.renderer.queue().present(target);
         serialize(&change)
     }
 }

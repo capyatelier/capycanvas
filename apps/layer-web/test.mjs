@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { checkParity } from "./parity.mjs";
 import { checkPreferences } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
+import { checkGpuStartup } from "./gpu.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
@@ -151,10 +152,14 @@ try {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
   await evaluate(
-    `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
+    `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (packageHost) {
+  if (process.argv.includes("--gpu-startup")) {
+    assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
+    await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url });
+    assert.deepEqual(errors, []);
+  } else if (packageHost) {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {

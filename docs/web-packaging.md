@@ -71,6 +71,9 @@ node --test apps/layer-web/run.test.mjs apps/layer-web/package.test.mjs
 
 # Actual Chrome + WebGPU + service workers; starts its own local test server.
 node apps/layer-web/test.mjs --package
+
+# Inject unavailable API/adapter/device and delayed startup; verify UI + retry.
+node apps/layer-web/test.mjs --package --gpu-startup
 ```
 
 The browser test uses a fresh temporary Chrome profile on Wayland and serves
@@ -88,7 +91,16 @@ device testing.
 
 Serve over HTTPS (or localhost for testing), with JavaScript module MIME types
 and `application/wasm` for `.wasm`. WebGPU support and a suitable hardware adapter
-are still required; packaging cannot enable unsupported browser/GPU features.
+are required for drawing; packaging cannot enable unsupported browser/GPU features.
+The Rust UI session starts before GPU initialization. Without a GPU, menus,
+panels and preferences still work, and the canvas area shows theme-matched help.
+Missing secure context, missing WebGPU, adapter failure and device failure have
+distinct guidance, with copyable Chrome/Edge settings addresses and collapsible
+technical details. Experimental flags are explicitly cautioned, not enabled by
+the app. Retry attaches a GPU to the existing session without resetting it.
+No paint input is queued and no render loop runs before attachment; this is
+not a CPU renderer or an invisible drawing mode. GPU initialization is a
+separate async object so it never borrows the Rust UI session across `await`.
 The current Wasm client does not use shared-memory threads, so it does not need
 cross-origin-isolation headers. A later shared-memory implementation would need
 a separate hosting review.
@@ -124,3 +136,5 @@ first-time deployment usable.
 - [Service-worker lifecycle](https://developer.chrome.com/docs/workbox/service-worker-lifecycle)
 - [rustc source-path remapping](https://doc.rust-lang.org/rustc/command-line-arguments.html#--remap-path-prefix-remap-source-names-in-output)
 - [cargo-about license harvesting](https://embarkstudios.github.io/cargo-about/cli/generate/index.html)
+- [Chrome: WebGPU troubleshooting](https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips)
+- [Darkly GPU help](https://github.com/darkly-art/darkly/blob/dev/frontend/src/ui/GpuErrorPage.svelte): UX reference only for actionable settings/diagnostics; no code, text or assets imported.

@@ -1,5 +1,6 @@
-import init, { WebApp } from "./pkg/layer_web.js";
+import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
 import { createPreferences } from "./preferences.js";
+import { showGpuNotice } from "./gpu.js";
 
 // Resolve assets beside the module, including in a versioned static package.
 const asset = (path) => new URL(path, import.meta.url).href;
@@ -29,6 +30,8 @@ let app,
   dragItem = null,
   statusTimer;
 let refreshPreferences;
+let gpuStarting = false;
+let gpuReady = false;
 let servicingRequests = false;
 const settingsKey = "layer.preferences.v1";
 const pending = [];
@@ -281,7 +284,7 @@ function applyChange(change) {
 }
 let cursorScheduled = false;
 function scheduleCursor() {
-  if (cursorScheduled || !app) return;
+  if (cursorScheduled || !gpuReady) return;
   cursorScheduled = true;
   requestAnimationFrame(() => {
     cursorScheduled = false;
@@ -294,7 +297,7 @@ function scheduleCursor() {
   });
 }
 function cursorInput(e) {
-  if (!app) return;
+  if (!gpuReady) return;
   const onCanvas =
     e &&
     e.pointerType !== "touch" &&
@@ -314,7 +317,7 @@ function cursorInput(e) {
   scheduleCursor();
 }
 function wake() {
-  if (!scheduled) {
+  if (gpuReady && !scheduled) {
     scheduled = true;
     requestAnimationFrame(frame);
   }
@@ -449,6 +452,9 @@ function arrange() {
       dividers.delete(key);
     }
   place($("canvas-status"), layout.status);
+  // The help occupies the same unobstructed area used for fitting the document.
+  // Panels remain native UI siblings above the full-window drawing surface.
+  place($("gpu-notice"), layout.work_area);
   resizeCanvas();
   updateZen();
 }
@@ -1054,7 +1060,7 @@ try {
   await init();
   canvas.width = 800;
   canvas.height = 600;
-  app = await WebApp.create(canvas);
+  app = WebApp.create(canvas);
   let restoreError;
   try {
     const saved = localStorage.getItem(settingsKey);
@@ -1080,13 +1086,38 @@ try {
   buildHeader();
   buildPanels();
   update(127);
-  wake();
   $("status").textContent = "";
   if (restoreError) message(restoreError);
   new ResizeObserver(arrange).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
   window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas };
+  await startGpu();
 } catch (error) {
-  $("status").textContent = `Unable to start the GPU canvas: ${error}`;
+  $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
+    element("p", "", "Reload the page. If the problem continues, check that the complete app package is being served."), element("pre", "", String(error)));
+  $("status").textContent = "";
   console.error(error);
+}
+
+async function startGpu() {
+  if (gpuStarting || gpuReady) return;
+  gpuStarting = true;
+  document.body.dataset.gpu = "starting";
+  const notice = $("gpu-notice");
+  notice.replaceChildren(element("div", "gpu-help", "Connecting to the GPU…"));
+  try {
+    if (!isSecureContext) throw new Error("WebGPU requires HTTPS or localhost.");
+    if (!navigator.gpu) throw new Error("navigator.gpu is unavailable.");
+    app.attach_gpu(await WebGpu.create(canvas));
+    gpuReady = true;
+    document.body.dataset.gpu = "ready";
+    notice.hidden = true;
+    wake();
+  } catch (error) {
+    document.body.dataset.gpu = "unavailable";
+    showGpuNotice({ container: notice, error, retry: startGpu, element, button });
+    console.warn("GPU canvas unavailable:", error);
+  } finally {
+    gpuStarting = false;
+  }
 }

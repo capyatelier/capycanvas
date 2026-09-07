@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="style.css" />
     <!-- Packager inserts install metadata here; development never registers a worker. -->
   </head>
-  <body data-theme="dark">
+  <body data-theme="dark" data-gpu="starting">
     <main id="workspace" aria-label="Drawing workspace">
       <div id="center">
         <canvas
@@ -23,6 +23,9 @@
           <path class="cursor-marker-front" />
         </svg>
       </div>
+      <section id="gpu-notice" aria-label="Canvas availability" aria-live="polite">
+        <div class="gpu-help"><h1>Starting the canvas…</h1></div>
+      </section>
       <header id="header" class="chrome">
         <nav id="header-start" aria-label="Application menus"></nav>
         <span id="document-title">Capy Canvas</span>

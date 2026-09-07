@@ -99,7 +99,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["app.js", "preferences.js", "style.css"])
+    for (const path of ["app.js", "preferences.js", "gpu.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));

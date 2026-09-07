@@ -19,6 +19,23 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 #canvas:focus { outline: none; }
 #workspace { position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
 #center { position: absolute; inset: 0; }
+body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
+#gpu-notice { position: absolute; inset: 54px 6px 30px; padding: 24px; overflow: auto; background: var(--bg); cursor: default; }
+#gpu-notice[hidden] { display: none; }
+.gpu-help { max-width: 600px; margin: auto; font-size: 14px; line-height: 1.5; user-select: text; }
+.gpu-help h1 { font-size: 22px; line-height: 1.25; margin: 0 0 16px; }
+.gpu-help p { margin: 12px 0; }
+.gpu-help li { margin: 6px 0; }
+.gpu-help ol { padding-left: 24px; }
+.gpu-help summary { display: list-item; list-style: disclosure-closed inside; padding: 6px 0; min-height: 34px; user-select: none; }
+.gpu-help details[open] > summary { list-style-type: disclosure-open; }
+.gpu-help summary::-webkit-details-marker { display: inline; }
+.gpu-help a { color: var(--text); text-underline-offset: 3px; }
+.gpu-help pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.gpu-address { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.gpu-address code { overflow-wrap: anywhere; }
+.gpu-address button, .gpu-retry { background: var(--button); user-select: none; }
+.gpu-retry { margin-top: 16px; }
 #canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: none; }
 #canvas-cursor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
 #canvas-cursor path { fill: none; stroke: black; stroke-width: 1; }

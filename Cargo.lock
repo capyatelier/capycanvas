@@ -862,6 +862,7 @@ dependencies = [
  "console_error_panic_hook",
  "layer-core",
  "layer-engine",
+ "layer-render",
  "layer-render-wgpu",
  "layer-ui",
  "serde",

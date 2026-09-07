@@ -640,14 +640,14 @@ export async function checkParity({ call, evaluate, settle }) {
     true,
   );
   await capture("tabbed-tools");
-  // Restore the serialized workspace into a separate real Wasm/GPU session,
+  // Restore the serialized workspace into a separate real Wasm UI session,
   // not just back into the session that created its IDs and topology.
   const savedWorkspace = await evaluate("layerApp.state().workspace");
   const savedLayout = await evaluate("layerApp.app.layout(1200,900)");
   const fresh = await evaluate(`(async () => {
     const {WebApp}=await import('./pkg/layer_web.js');
     const surface=document.createElement('canvas');surface.width=1200;surface.height=900;
-    const session=await WebApp.create(surface);
+    const session=WebApp.create(surface);
     try {
       session.dispatch({type:'restore_workspace',workspace:${JSON.stringify(savedWorkspace)}});
       return {workspace:session.state().workspace,layout:session.layout(1200,900)};

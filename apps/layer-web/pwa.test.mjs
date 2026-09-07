@@ -45,7 +45,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     const start = Date.now();
     while (Date.now() - start < 25000) {
       try {
-        if (await evaluate(`performance.timeOrigin !== ${previous} && !!window.layerApp`)) return;
+        if (await evaluate(`performance.timeOrigin !== ${previous} && !!window.layerApp && document.body.dataset.gpu === 'ready'`)) return;
       } catch (error) {
         if (!/navigated|context|Cannot find/i.test(String(error))) throw error;
       }
