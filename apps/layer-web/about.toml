@@ -1,0 +1,13 @@
+# Wasm distribution only. The repository-wide policy lives in /deny.toml.
+accepted = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "ISC", "Unicode-3.0", "Zlib"]
+targets = ["wasm32-unknown-unknown"]
+ignore-dev-dependencies = true
+
+# profiling's crate archive omits the notice; retrieve it from that crate's
+# recorded upstream Git revision and verify the original file's checksum.
+[profiling.clarify]
+license = "MIT OR Apache-2.0"
+[[profiling.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"

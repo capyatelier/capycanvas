@@ -56,6 +56,7 @@ for (const [name, installed, customHome, override, expected] of [
     executable(join(bin, "cargo"), "build");
     executable(join(bin, "python3"), "serve");
     symlinkSync("/usr/bin/dirname", join(bin, "dirname"));
+    symlinkSync("/bin/bash", join(bin, "bash"));
     for (const tool of installed) executable(locations[tool], tool);
     const env = { HOME: home, PATH: bin };
     if (customHome) env.CARGO_HOME = cargo;

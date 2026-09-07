@@ -60,6 +60,10 @@ cargo run --release -p layer-linux
 ```
 
 The web client is served at `http://127.0.0.1:4173` and needs hardware WebGPU.
+For a static, installable/offline PWA, run `node apps/layer-web/package.mjs`.
+The ignored `dist/capycanvas/` bundle can be hosted at a root or subpath;
+see [packaging prerequisites and tests](docs/web-packaging.md). Deployment is
+separate and no packaged artifacts are tracked here.
 GTK requires Wayland and Vulkan mailbox presentation. A dedicated worker renders
 brushes, the full-window viewport and cursor into an app-owned Wayland subsurface
 beneath native controls. GTK handles input and UI, not canvas image imports.

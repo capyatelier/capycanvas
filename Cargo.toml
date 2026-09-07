@@ -21,3 +21,9 @@ debug = 1
 
 [profile.bench]
 debug = 1
+
+# Distribution keeps the normal speed optimizations, without native debug data.
+[profile.web-release]
+inherits = "release"
+debug = 0
+strip = "debuginfo"

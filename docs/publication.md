@@ -86,3 +86,9 @@ retain their own terms, including applicable LGPL requirements. Do not assume
 that our MIT option relicenses them or satisfies redistribution obligations.
 Review actual packaged contents before publishing binaries, WebAssembly bundles,
 containers or vendored source archives.
+
+The [web packager](web-packaging.md) now generates a separate static distribution
+with Wasm dependency/toolchain notices, branding terms and runtime path checks.
+Those generated files stay in ignored `dist/`, not in the source repository.
+Review its output whenever dependencies or bundled assets change; native binary
+distribution remains a separate gate.

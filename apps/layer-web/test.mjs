@@ -6,6 +6,9 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkParity } from "./parity.mjs";
 import { checkPreferences } from "./preferences.test.mjs";
+import { checkPwa, servePackage } from "./pwa.test.mjs";
+
+const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
 const profile = await mkdtemp(join(tmpdir(), "layer-chrome-"));
 const chrome = spawn(
@@ -46,7 +49,7 @@ chrome.stdio[4].on("data", (data) => {
       if (!waiter) continue;
       requests.delete(event.id);
       clearTimeout(waiter.timer);
-      if (event.error) waiter.reject(new Error(JSON.stringify(event.error)));
+      if (event.error) waiter.reject(new Error(`${waiter.method}: ${JSON.stringify(event.error)}`));
       else waiter.resolve(event.result);
     } else if (event.method === "Runtime.exceptionThrown")
       errors.push(
@@ -75,7 +78,7 @@ function call(method, params = {}, sessionId = session) {
       requests.delete(id);
       reject(new Error(`CDP timeout: ${method}`));
     }, 30000);
-    requests.set(id, { resolve, reject, timer });
+    requests.set(id, { resolve, reject, timer, method });
     chrome.stdio[3].write(
       JSON.stringify({
         id,
@@ -145,13 +148,16 @@ try {
     mobile: false,
   });
   await call("Page.navigate", {
-    url: process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
+    url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
   await evaluate(
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--preferences")) {
+  if (packageHost) {
+    await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--preferences")) {
     await checkPreferences({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--parity")) {
@@ -1069,4 +1075,5 @@ try {
   if (chrome.exitCode === null)
     await new Promise((resolve) => chrome.once("exit", resolve));
   await rm(profile, { recursive: true, force: true });
+  await packageHost?.close();
 }

@@ -1,6 +1,9 @@
 import init, { WebApp } from "./pkg/layer_web.js";
 import { createPreferences } from "./preferences.js";
 
+// Resolve assets beside the module, including in a versioned static package.
+const asset = (path) => new URL(path, import.meta.url).href;
+
 const panels = new Map(),
   groups = new Map(),
   dividers = new Map();
@@ -182,7 +185,7 @@ const icons = new Map();
 async function loadIcons() {
   await Promise.all(
     catalog.icons.map(async (name) => {
-      const response = await fetch(`./icons/layer-${name}-symbolic.svg`);
+      const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
       if (!response.ok) throw new Error(`Cannot load icon ${name}`);
       const svg = new DOMParser().parseFromString(
         await response.text(),
@@ -527,7 +530,7 @@ function buildPanels() {
       choice.dataset.brush = brush.id;
       choice.dataset.category = category;
       const preview = element("img", "brush-preview");
-      preview.src = `brush-previews/${brush.id}-${state.theme}.png`;
+      preview.src = asset(`brush-previews/${brush.id}-${state.theme}.png`);
       preview.alt = "";
       preview.draggable = false;
       choice.append(preview, element("span", "", brush.label));
@@ -693,7 +696,7 @@ function update(regions) {
     document.body.dataset.theme = state.theme;
     for (const [id, button] of brushButtons)
       button.querySelector("img").src =
-        `brush-previews/${id}-${state.theme}.png`;
+        asset(`brush-previews/${id}-${state.theme}.png`);
     refreshPreferences(app.preferences());
   }
   if (regions & 32)

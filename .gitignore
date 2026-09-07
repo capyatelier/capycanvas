@@ -1,5 +1,6 @@
 target/
 node_modules/
+/dist/
 /artifacts/
 /apps/layer-web/pkg/
 
