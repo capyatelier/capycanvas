@@ -1,0 +1,27 @@
+target/
+node_modules/
+/artifacts/
+/apps/layer-web/pkg/
+
+# Local environment, credentials, editor state, and private agent sessions.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.bundle
+.idea/
+.vscode/
+.codex/
+.agents/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.log
+*.profraw
+*.profdata

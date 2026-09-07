@@ -1,0 +1,15 @@
+[package]
+name = "layer-bench"
+version = "0.1.0"
+edition = "2024"
+description = "Completed-work wgpu canvas benchmark harness"
+license.workspace = true
+
+[dependencies]
+layer-ffi = { path = "../layer-ffi" }
+layer-ui = { path = "../layer-ui" }
+png = "0.17.16"
+
+[[bin]]
+name = "gpu-bench"
+path = "src/main.rs"

@@ -1,0 +1,14 @@
+[package]
+name = "layer-engine"
+version = "0.1.0"
+edition = "2024"
+description = "Portable input, brush, document orchestration, and render submission for Layer"
+license.workspace = true
+
+[dependencies]
+layer-core = { path = "../layer-core" }
+layer-render = { path = "../layer-render" }
+rtrb = "0.4.0"
+
+[lib]
+path = "src/lib.rs"

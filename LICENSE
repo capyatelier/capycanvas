@@ -1,0 +1,13 @@
+Capy Canvas's original software and non-brand assets are licensed under either
+of the following, at your option:
+
+  - MIT License (LICENSE-MIT)
+  - Apache License, Version 2.0 (LICENSE-APACHE)
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Exception: the Capy Canvas / Capy Atelier names and designated branding assets
+are not covered by this grant. See BRANDING.md for the separate branding terms.
+
+Third-party material and dependencies retain their own licenses. See
+THIRD_PARTY_NOTICES.md for included third-party material and distribution notes.

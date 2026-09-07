@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "crates/layer-core",
+    "crates/layer-render",
+    "crates/layer-engine",
+    "crates/layer-render-wgpu",
+    "crates/layer-ffi",
+    "crates/layer-bench",
+    "crates/layer-ui",
+    "apps/layer-linux",
+    "apps/layer-web",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[profile.release]
+debug = 1
+
+[profile.bench]
+debug = 1

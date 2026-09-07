@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Capy Canvas — drawing workspace</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-theme="dark">
+    <main id="workspace" aria-label="Drawing workspace">
+      <div id="center">
+        <canvas
+          id="canvas"
+          tabindex="0"
+          aria-label="Drawing canvas. Draw with a mouse or pen; use two fingers to pan, rotate and zoom."
+        ></canvas>
+        <svg id="canvas-cursor" aria-hidden="true" focusable="false">
+          <path class="cursor-outline-back" />
+          <path class="cursor-outline-front" />
+          <path class="cursor-marker-back" />
+          <path class="cursor-marker-front" />
+        </svg>
+      </div>
+      <header id="header" class="chrome">
+        <nav id="header-start" aria-label="Application menus"></nav>
+        <span id="document-title">Capy Canvas</span>
+        <nav id="header-end" aria-label="Workspace controls"></nav>
+      </header>
+      <div id="canvas-status" class="chrome" aria-label="Canvas status">
+        <output id="view-info"></output>
+      </div>
+    </main>
+    <output id="status" role="status">Starting WebGPU…</output>
+    <dialog id="settings" aria-labelledby="settings-title"></dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

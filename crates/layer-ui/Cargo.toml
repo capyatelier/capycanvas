@@ -1,0 +1,15 @@
+[package]
+name = "layer-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Portable workspace layout, UI state, actions, and canvas interaction"
+
+[dependencies]
+layer-core = { path = "../layer-core" }
+layer-engine = { path = "../layer-engine" }
+layer-render = { path = "../layer-render" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

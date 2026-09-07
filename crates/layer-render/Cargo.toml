@@ -1,0 +1,12 @@
+[package]
+name = "layer-render"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal backend-neutral render packets for Layer"
+license.workspace = true
+
+[dependencies]
+layer-core = { path = "../layer-core" }
+
+[lib]
+path = "src/lib.rs"

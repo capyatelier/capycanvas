@@ -1,0 +1,15 @@
+[package]
+name = "layer-render-wgpu"
+version = "0.1.0"
+edition = "2024"
+description = "GPU-resident wgpu raster backend for Layer"
+license.workspace = true
+
+[dependencies]
+layer-core = { path = "../layer-core" }
+layer-render = { path = "../layer-render" }
+pollster = "0.4.0"
+wgpu = "30.0.1"
+
+[lib]
+path = "src/lib.rs"

@@ -1,0 +1,16 @@
+[package]
+name = "layer-ffi"
+version = "0.1.0"
+edition = "2024"
+description = "Stable C ABI for Layer canvas clients"
+license.workspace = true
+
+[dependencies]
+layer-core = { path = "../layer-core" }
+layer-engine = { path = "../layer-engine" }
+layer-render = { path = "../layer-render" }
+layer-render-wgpu = { path = "../layer-render-wgpu" }
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]

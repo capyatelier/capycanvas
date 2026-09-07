@@ -1,0 +1,55 @@
+/* GTK paints native controls above our full-window Wayland canvas underlay. */
+window.background { background: transparent; }
+window { --window-bg-color: #333333; --window-fg-color: #fafafb; --headerbar-bg-color: #414141; --view-bg-color: #2b2b2b; --popover-bg-color: #414141; --panel-bg: #414141; --tabbar-bg: #2e2e2e; --input-bg: #333333; }
+window.light-theme { --window-bg-color: #b8b8b8; --window-fg-color: #2e2e32; --headerbar-bg-color: #ededed; --view-bg-color: #e4e4e4; --popover-bg-color: #ededed; --panel-bg: #ededed; --tabbar-bg: #dedede; --input-bg: #fafafa; }
+/* Shared 6px workspace gaps; retain native close-circle padding/placement. */
+.workspace-header { background: transparent; box-shadow: none; }
+.workspace-header > windowhandle > box { padding-bottom: 6px; }
+.workspace-header button.chrome-control, .workspace-header menubutton.chrome-control > button, .workspace-header windowcontrols button { min-height: 24px; padding-top: 6px; padding-bottom: 6px; }
+.workspace-header button.chrome-control { min-width: 24px; padding-left: 6px; padding-right: 6px; }
+.workspace-header .chrome-control, .workspace-header windowcontrols button, .document-title { background: var(--window-bg-color); border-radius: 6px; }
+.workspace-header windowcontrols button image { background: transparent; box-shadow: none; }
+.workspace-header button.chrome-control:hover, .workspace-header windowcontrols button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
+.workspace-header button.chrome-control:active, .workspace-header windowcontrols button:active { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
+/* Keep libadwaita's native icon padding/circle size and larger click target. */
+.workspace-header windowcontrols button.close, .workspace-header windowcontrols button.close:hover, .workspace-header windowcontrols button.close:active { background: transparent; }
+.workspace-header windowcontrols button.close image { background: var(--window-bg-color); border-radius: 100%; }
+.workspace-header windowcontrols button.close:hover image { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
+.workspace-header windowcontrols button.close:active image { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
+.workspace-header button.chrome-control.selected-tool { background: alpha(var(--accent-bg-color), .22); }
+.document-title { font-weight: 600; padding: 4px 8px; }
+.workspace-status { background: transparent; padding: 0 4px; font-size: 12.026px; color: var(--window-fg-color); }
+.status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
+.dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: 12.026px; }
+.dock-tabs { background: var(--tabbar-bg); font-size: 14.667px; }
+.dock-panel .heading { font-size: 14.667px; }
+.selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
+.dock-panel button { border-radius: 6px; min-height: 20px; padding: 4px 12px; }
+.dock-panel image { -gtk-icon-size: 14px; }
+.dock-panel .layer-tools button { min-width: 16px; }
+.dock-panel spinbutton { min-height: 28px; }
+.dock-panel spinbutton > button { min-width: 15px; padding: 4px 6px; border: 0; box-shadow: none; }
+.dock-panel scale { min-height: 16px; padding: 6px 12px; }
+.dock-panel scale slider { min-width: 16px; min-height: 16px; margin: -6px; }
+.dock-panel checkbutton check { min-width: 16px; min-height: 16px; -gtk-icon-size: 16px; padding: 0; border-radius: 4px; }
+.dock-panel checkbutton check:checked { -gtk-icon-source: -gtk-icontheme("layer-check-symbolic"); -gtk-icon-transform: none; }
+.dock-panel checkbutton check:indeterminate { -gtk-icon-source: -gtk-icontheme("layer-minus-symbolic"); }
+.dock-panel .panel-grip { -gtk-icon-size: 16px; opacity: .65; -gtk-icon-transform: translateX(-1.6px); }
+.toolbar-controls.vertical > .panel-grip { -gtk-icon-transform: translateY(-1.6px) rotate(90deg); }
+.dock-panel .caption { font-size: 1em; }
+.dock-tabs button { border-radius: 6px 6px 0 0; min-height: 28px; padding: 4px 8px; }
+.dock-tabs button.selected-tool { background: var(--panel-bg); }
+.tab-joins { color: var(--panel-bg); }
+.dock-panel spinbutton, .dock-panel entry, .dock-panel dropdown > button, .dock-panel scale trough { background: var(--input-bg); }
+.dock-panel .brush-choice { padding: 3px 6px; }
+.brush-choice label { font-size: 1em; }
+.dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }
+.toolbar-controls > button, .toolbar-controls > menubutton > button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
+.toolbar-controls image { -gtk-icon-size: 16px; }
+.workspace-header, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
+.zen-hidden { opacity: 0; }
+/* Preferences are a native surface, not the canvas surround (especially light). */
+.layer-preferences { --window-bg-color: #333333; --headerbar-bg-color: #333333; }
+window.light-theme .layer-preferences { --window-bg-color: #fafafb; --headerbar-bg-color: #fafafb; }
+.layer-preferences *:focus { outline: none; }
+.shortcut-hint { font-weight: 400; }
