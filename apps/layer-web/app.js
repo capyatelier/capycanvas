@@ -912,6 +912,11 @@ function position(e) {
     ((e.clientY - rect.top) * canvas.height) / rect.height,
   ];
 }
+// DOM IDs are signed 32-bit (Safari can use negative IDs). Preserve their bits
+// at the unsigned Rust boundary; DOM pointer capture keeps the original ID.
+function corePointerId(e) {
+  return e.pointerId >>> 0;
+}
 function queuePen(e, stage) {
   lastPenEvent = stage === 3 || stage === 4 ? null : e;
   const records = [];
@@ -920,7 +925,7 @@ function queuePen(e, stage) {
     const [x, y] = position(item),
       pen = item.pointerType === "pen";
     records.push(
-      item.pointerId,
+      corePointerId(item),
       stage,
       x,
       y,
@@ -968,7 +973,7 @@ canvas.addEventListener("lostpointercapture", (e) => {
 function pointerInput(e, stage, point = position(e)) {
   return input({
     type: "pointer",
-    id: BigInt(e.pointerId),
+    id: BigInt(corePointerId(e)),
     phase: ["move", "down", "move", "up", "cancel"][stage],
     kind: e.pointerType || "mouse",
     button:

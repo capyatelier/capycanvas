@@ -126,7 +126,66 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   console.log("Fullscreen: geometry, real enter/exit, external exit, failure recovery, settings and GPU ink passed");
 }
 
+async function checkPointerIds({ call, evaluate, settle, canvasPixels }) {
+  // Synthetic events can carry Safari's negative IDs. Only DOM capture is
+  // substituted; routing, Wasm deserialization, coalescing and GPU ink are real.
+  await call("Input.setIgnoreInputEvents", { ignore: true });
+  await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
+  await settle();
+  const before = await canvasPixels();
+  let result;
+  try {
+    result = await evaluate(`(async () => {
+      const {app,canvas}=layerApp, input=app.input, pen=app.pen, capture=canvas.setPointerCapture;
+      const routed=[], samples=[], captures=[], expectedRoutes=[], expectedSamples=[];
+      const ids=[-2147483648,-1234567890,1234567890,-1,0,1,2147483647,-2];
+      app.input=function(event){if(event.type==='pointer')routed.push([String(event.id),event.phase]);return input.call(this,event)};
+      app.pen=function(records,revision){for(let i=0;i<records.length;i+=11)samples.push([records[i],records[i+1]]);return pen.call(this,records,revision)};
+      canvas.setPointerCapture=id=>captures.push(id);
+      const settle=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      const r=canvas.getBoundingClientRect(), x=r.x+r.width/2-80, y=r.y+r.height/2-160;
+      const emit=(type,id,kind,px,py,coalesced=false)=>{
+        const end=['pointerup','pointercancel','lostpointercapture'].includes(type);
+        const init={bubbles:true,cancelable:true,pointerId:id,pointerType:kind,clientX:px,clientY:py,button:0,buttons:end?0:1,pressure:end?0:.7};
+        const event=new PointerEvent(type,init);
+        if(coalesced)Object.defineProperty(event,'getCoalescedEvents',{value:()=>[new PointerEvent(type,{...init,clientX:px-20}),new PointerEvent(type,init)]});
+        expectedRoutes.push([String(id>>>0),type==='lostpointercapture'?'cancel':type.slice(7)]);
+        canvas.dispatchEvent(event);
+      };
+      try {
+        for(const [i,id] of ids.entries()){
+          const kind=i===5?'mouse':'pen', end=i===6?'pointercancel':i===7?'lostpointercapture':'pointerup';
+          emit('pointerdown',id,kind,x,y+i*12);
+          emit('pointermove',id,kind,x+100,y+i*12,true);
+          emit(end,id,kind,x+100,y+i*12);
+          expectedSamples.push(...[1,2,2,end==='pointerup'?3:4].map(phase=>[id>>>0,phase]));
+          await settle();
+        }
+        const zoom=app.state().camera.zoom;
+        emit('pointerdown',-11,'touch',x,y);
+        emit('pointerdown',-12,'touch',x+100,y);
+        emit('pointermove',-12,'touch',x+180,y);
+        const scale=app.state().camera.zoom/zoom;
+        emit('pointerup',-11,'touch',x,y);
+        emit('pointerup',-12,'touch',x+180,y);
+        await settle();
+        return {routed,samples,captures,expectedRoutes,expectedSamples,ids,scale,status:document.querySelector('#status').textContent};
+      } finally {app.input=input;app.pen=pen;canvas.setPointerCapture=capture;}
+    })()`);
+    assert.deepEqual(result.routed, result.expectedRoutes, "Signed DOM IDs retain their bits at the unsigned Rust boundary");
+    assert.deepEqual(result.samples, result.expectedSamples, "Brush histories use the same IDs, including cancellation and capture loss");
+    assert.deepEqual(result.captures, [...result.ids, -11, -12], "DOM capture receives the original signed IDs");
+    assert.ok(result.scale > 1.5, "Two negative touch IDs remain distinct and pinch zoom works");
+    assert.doesNotMatch(result.status, /error|invalid|u64/i);
+    await evaluate("layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
+    await settle();
+    assert.ok((await canvasPixels()).white < before.white - 50, "Negative-ID pen strokes reach the GPU canvas");
+  } finally { await call("Input.setIgnoreInputEvents", { ignore: false }); }
+  console.log("Signed pointer IDs: Wasm routing, GPU ink, coalesced samples, cancel/capture loss and multitouch passed");
+}
+
 export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
+  await checkPointerIds({ call, evaluate, settle, canvasPixels });
   await checkFullscreen({ call, evaluate, settle, canvasPixels });
   const point = (selector) => evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
   const background = (selector) => evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).backgroundColor`);

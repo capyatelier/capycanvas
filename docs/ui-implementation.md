@@ -148,6 +148,10 @@ Actions are typed values with stable command/panel/layer identities. Commands
 have one availability source for buttons, menus, shortcuts, and accessibility.
 Changed-region flags tell hosts which cached views to refresh. Pointer batches
 take a separate compact numeric path and do not serialize the UI state.
+The web adapter reinterprets signed 32-bit DOM `pointerId` values as unsigned
+32-bit IDs before both UI routing and packed brush samples reach Rust's `u64`.
+This preserves negative Safari IDs without collisions or float-to-unsigned
+clamping; DOM capture/release and host-only comparisons keep the original ID.
 One synchronous `UiSession` calls the existing engine directly and refreshes
 derived state. UI snapshots never become a second editable document model.
 
