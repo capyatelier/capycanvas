@@ -47,7 +47,10 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-panel .brush-choice { padding: 3px 6px; }
 .brush-choice label { font-size: 1em; }
 .dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }
-.toolbar-controls > button, .toolbar-controls > menubutton > button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
+.toolbar-controls button.tile-button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
+.expanded-panel > contents { background: var(--panel-bg); }
+.expanded-panel { font-size: var(--ui-text-size); }
+.expanded-panel .dock-panel { background: transparent; box-shadow: none; border-radius: 0; }
 .toolbar-controls image { -gtk-icon-size: 16px; }
 .workspace-header, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }

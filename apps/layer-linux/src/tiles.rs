@@ -95,6 +95,12 @@ impl TileStrip {
             .borrow_mut()
             .push(widget.clone().upcast());
     }
+    pub fn clear(&self) {
+        for child in self.imp().children.take() {
+            child.unparent();
+        }
+        self.queue_resize();
+    }
     pub fn set_grip(&self, widget: &impl IsA<gtk::Widget>) {
         widget.set_parent(self);
         *self.imp().grip.borrow_mut() = Some(widget.clone().upcast());

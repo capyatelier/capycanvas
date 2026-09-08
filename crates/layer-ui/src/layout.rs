@@ -1450,6 +1450,17 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
                 * (TILE_SIZE + 2.0)
                 - 2.0
         }
+        DockNode::Tabs { panels, .. } if panels.iter().any(|p| p.kind() == PanelKind::Tiles) => {
+            // A tab bar must not consume the ribbon's entire old one-row
+            // allocation. Reserve one padded lane; additional tiles may clip.
+            TILE_SIZE
+                + 8.0
+                + if ribbon_axis == Axis::Horizontal {
+                    TAB_BAR_HEIGHT
+                } else {
+                    0.0
+                }
+        }
         DockNode::Tabs { .. } => 0.0,
         DockNode::Split {
             axis,
@@ -1955,7 +1966,7 @@ mod tests {
         }
     }
     #[test]
-    fn nested_standalone_ribbons_grow_but_tabbed_tools_do_not() {
+    fn nested_ribbons_grow_and_tabbed_ribbons_keep_one_visible_lane() {
         for split_axis in [Axis::Horizontal, Axis::Vertical] {
             let mut layout = DockLayout::default();
             layout.bands.retain(|b| b.id == 1);
@@ -1990,8 +2001,15 @@ mod tests {
         };
         assert_eq!(
             group(&layout.resolve(100.0, 800.0), Panel::Toolbar).height,
-            TILE_SIZE
+            TAB_BAR_HEIGHT + TILE_SIZE + 8.0
         );
+        let resolved = layout.resolve(100.0, 800.0);
+        let g = &resolved.groups[0];
+        let first = g.tiles.as_ref().unwrap().tiles[0];
+        assert!(first.y + first.height <= g.bounds.height - TAB_BAR_HEIGHT);
+        // Selecting another tab must not collapse the ribbon's reserved lane.
+        layout.select_tab(2, Panel::Brushes).unwrap();
+        assert_eq!(layout.resolve(100.0, 800.0).groups[0].bounds, g.bounds);
     }
     #[test]
     fn toolbar_and_status_stay_between_sides_and_above_bottom() {

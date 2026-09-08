@@ -13,6 +13,9 @@ use std::{
     rc::Rc,
 };
 
+#[path = "workspace_customization.rs"]
+mod customization;
+
 mod allocation {
     use super::*;
 
@@ -38,7 +41,7 @@ mod allocation {
     impl WidgetImpl for DockSurface {
         fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
             // Dock allocation can shrink below an individual panel's natural
-            // size. Native scrollers handle overflow, not the document canvas.
+            // size. Content panels scroll; tool ribbons clip their overflow.
             if orientation == gtk::Orientation::Horizontal {
                 (640, 1200, -1, -1)
             } else {
@@ -91,6 +94,7 @@ mod allocation {
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
+                owner.customization.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
                 let extent = [
                     owner.area.width().max(1) as u32 * scale,
@@ -197,7 +201,7 @@ fn native_accelerator(chord: &KeyChord) -> String {
         }
     } else {
         gdk::Key::from_name(name)
-            .or_else(|| gdk::Key::from_name(&name.to_uppercase()))
+            .or_else(|| gdk::Key::from_name(name.to_uppercase()))
             .unwrap_or(gdk::Key::VoidSymbol)
     };
     let mut modifiers = gdk::ModifierType::empty();
@@ -287,6 +291,7 @@ pub struct Workspace {
     view_info: gtk::Label,
     status: gtk::Label,
     pub(crate) preferences: crate::preferences::Preferences,
+    customization: customization::Customization,
     refreshing: Cell<bool>,
     ticking: Cell<bool>,
     frame_deadline: Cell<u64>,
@@ -296,6 +301,7 @@ impl Drop for Workspace {
         // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
         // Join the GPU worker before any native window/surface fields drop.
         self.gpu.get_mut().take();
+        self.customization.dispose();
     }
 }
 
@@ -406,13 +412,15 @@ impl Workspace {
             view_info,
             status,
             preferences: crate::preferences::Preferences::new(),
+            customization: customization::Customization::new(),
             refreshing: Cell::new(false),
             ticking: Cell::new(false),
             frame_deadline: Cell::new(0),
             input: Rc::default(),
         });
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
-        this.build_controls(&toolbar, &brushes, &sizes, &layers_panel);
+        this.build_controls(&brushes, &sizes, &layers_panel);
+        this.customization.bind(&this);
         this.preferences.bind(&this);
         this.install_chrome();
         crate::input::install(&this);
@@ -422,89 +430,18 @@ impl Workspace {
         this
     }
 
-    fn build_controls(
-        self: &Rc<Self>,
-        toolbar: &TileStrip,
-        brushes: &gtk::Box,
-        sizes: &gtk::Box,
-        layers: &gtk::Box,
-    ) {
+    fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box, layers: &gtk::Box) {
         shared_spin_icons(self.size_number.upcast_ref());
-        for &item in TOOLBAR_CONTROLS {
-            let (is_color, label, control) = match item {
-                ToolbarControl::Command { command } => {
-                    toolbar.append(&self.command_button(command));
-                    continue;
-                }
-                ToolbarControl::Brush { .. } | ToolbarControl::Size { .. } => {
-                    let choice = tool_choice(item);
-                    let button = self.action_button("", item.action());
-                    button.set_icon_name(&format!("layer-{}-symbolic", choice.icon));
-                    button.set_tooltip_text(Some(&choice.label));
-                    toolbar.append(&button);
-                    continue;
-                }
-                ToolbarControl::Color => (
-                    true,
-                    "Brush color",
-                    self.color.clone().upcast::<gtk::Widget>(),
-                ),
-                ToolbarControl::Opacity => (
-                    false,
-                    "Brush opacity",
-                    self.opacity.clone().upcast::<gtk::Widget>(),
-                ),
-            };
-            let button = gtk::MenuButton::builder().tooltip_text(label).build();
-            let icon = gtk::Image::from_icon_name(if is_color {
-                "layer-color-symbolic"
-            } else {
-                "layer-opacity-symbolic"
-            });
-            if is_color {
-                icon.add_css_class("brush-color");
-                let palette = gtk::CssProvider::new();
-                // Scoped to this image, including in multi-window sessions.
-                #[allow(deprecated)]
-                icon.style_context()
-                    .add_provider(&palette, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-                let update = move |color: &gtk::ColorDialogButton| {
-                    palette.load_from_string(&format!(
-                        ".brush-color {{ -gtk-icon-palette: success {}; }}",
-                        color.rgba()
-                    ));
-                };
-                update(&self.color);
-                self.color.connect_rgba_notify(update);
-            }
-            button.set_child(Some(&icon));
-            button.add_css_class("flat");
-            let popover = gtk::Popover::new();
-            let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
-            margins(&body, 12);
-            body.append(&gtk::Label::new(Some(label)));
-            body.append(&control);
-            popover.set_child(Some(&body));
-            self.watch_popover(&popover);
-            button.set_popover(Some(&popover));
-            toolbar.append(&button);
-        }
-        let grip = tiles::grip();
-        self.install_panel_drag(
-            &grip,
-            DockItem::Panel {
-                panel: Panel::Toolbar,
-            },
-        );
-        toolbar.set_grip(&grip);
         margins(brushes, 8);
+        let brush_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        brushes.append(&brush_list);
         for category in brush_categories() {
             let heading = gtk::Label::new(Some(category.label));
             heading.add_css_class("heading");
             heading.add_css_class("dim-label");
             heading.set_halign(gtk::Align::Start);
             margins(&heading, 8);
-            brushes.append(&heading);
+            brush_list.append(&heading);
             for choice in category.brushes {
                 let button =
                     self.action_button(choice.label, UiAction::SelectBrush { id: choice.id });
@@ -525,16 +462,21 @@ impl Workspace {
                 content.append(&label);
                 button.set_child(Some(&content));
                 self.brush_previews.borrow_mut().push((choice.id, preview));
-                brushes.append(&button);
+                brush_list.append(&button);
                 self.brush_buttons.borrow_mut().push((choice.id, button));
             }
         }
+        self.customization
+            .track(Panel::Brushes, PanelControl::Brushes, &brush_list);
+        self.append_panel_fields(Panel::Brushes, brushes);
         margins(sizes, 8);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         self.size.set_hexpand(true);
         row.append(&self.size);
         row.append(&self.size_number);
         sizes.append(&row);
+        self.customization
+            .track(Panel::Sizes, PanelControl::BrushSize, &row);
         let grid = gtk::FlowBox::builder()
             .homogeneous(true)
             .min_children_per_line(2)
@@ -578,6 +520,9 @@ impl Workspace {
             self.size_buttons.borrow_mut().push((value, button));
         }
         sizes.append(&grid);
+        self.customization
+            .track(Panel::Sizes, PanelControl::SizePresets, &grid);
+        self.append_panel_fields(Panel::Sizes, sizes);
         margins(layers, 12);
         let commands = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         commands.add_css_class("layer-tools");
@@ -587,9 +532,17 @@ impl Workspace {
             commands.append(&button);
         }
         layers.append(&commands);
+        self.customization
+            .track(Panel::Layers, PanelControl::LayerActions, &commands);
         layers.append(&self.layers);
-        layers.append(&gtk::Label::new(Some("Layer opacity")));
-        layers.append(&self.layer_opacity);
+        self.customization
+            .track(Panel::Layers, PanelControl::Layers, &self.layers);
+        let layer_alpha = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        layer_alpha.append(&gtk::Label::new(Some(PanelControl::LayerOpacity.label())));
+        layer_alpha.append(&self.layer_opacity);
+        layers.append(&layer_alpha);
+        self.customization
+            .track(Panel::Layers, PanelControl::LayerOpacity, &layer_alpha);
         self.size.connect_value_changed(glib::clone!(
             #[weak(rename_to = this)]
             self,
@@ -812,6 +765,7 @@ impl Workspace {
     }
 
     fn watch_popover(self: &Rc<Self>, popover: &gtk::Popover) {
+        self.popovers.borrow_mut().retain(|p| p.upgrade().is_some());
         self.popovers.borrow_mut().push(popover.downgrade());
         popover.connect_visible_notify(glib::clone!(
             #[weak(rename_to = this)]
@@ -1253,6 +1207,11 @@ impl Workspace {
         if regions & regions::LAYOUT != 0 {
             self.reconcile_layout(&state.workspace.layout);
         }
+        if regions & (regions::CUSTOMIZATION | regions::LAYOUT | regions::BRUSH | regions::COMMANDS)
+            != 0
+        {
+            self.customization.refresh(self);
+        }
         self.refreshing.set(false);
         if regions & (regions::LAYOUT | regions::SETTINGS) != 0 {
             self.update_zen();
@@ -1268,6 +1227,7 @@ impl Workspace {
         )
     }
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
+        self.customization.reconcile_toolbars(self, layout);
         *self.surface.imp().layout.borrow_mut() = layout.clone();
         let resolved = self.resolved();
         let same_groups = self
@@ -1291,9 +1251,10 @@ impl Workspace {
             })
             .eq(resolved.dividers.iter().map(|d| d.id));
         if !same_groups || !same_dividers {
-            for (_, panel) in &self.panels {
+            self.customization.collapse_panel();
+            for panel in layout.panels.iter().map(|p| self.panel_widget(p.id)) {
                 if let Some(stack) = panel.parent().and_downcast::<gtk::Stack>() {
-                    stack.remove(panel);
+                    stack.remove(&panel);
                 }
             }
             self.surface.clear_docks();
@@ -1323,6 +1284,7 @@ impl Workspace {
                         tab.add_css_class("flat");
                         tab.set_valign(gtk::Align::Center);
                         self.install_panel_drag(&tab, DockItem::Panel { panel });
+                        self.install_context(&tab, ContextTarget::Panel { panel }, true);
                         labels.append(&tab);
                         tabs.push((panel, tab));
                     }
@@ -1342,6 +1304,7 @@ impl Workspace {
                     grip.set_valign(gtk::Align::Center);
                     self.install_panel_drag(&grip, DockItem::Group { group: group.id });
                     header.append(&grip);
+                    self.install_context(&header, ContextTarget::Group { group: group.id }, false);
                     root.append(&header);
                 }
                 let stack = gtk::Stack::new();
@@ -1350,8 +1313,8 @@ impl Workspace {
                 stack.set_hhomogeneous(false);
                 stack.set_vhomogeneous(false);
                 for &panel in &group.panels {
-                    let widget = &self.panels.iter().find(|(p, _)| *p == panel).unwrap().1;
-                    stack.add_named(widget, Some(&format!("{panel:?}")));
+                    let widget = self.panel_widget(panel);
+                    stack.add_named(&widget, Some(&format!("{panel:?}")));
                 }
                 root.append(&stack);
                 self.surface.add(Slot::Group(group.id), &root);
@@ -1368,12 +1331,28 @@ impl Workspace {
             }
         }
         for (view, group) in self.groups.borrow().iter().zip(&resolved.groups) {
-            view.stack
-                .set_visible_child_name(&format!("{:?}", group.active));
-            if group.panels.contains(&Panel::Toolbar) {
-                self.toolbar.configure(group.axis, !group.tabs_visible);
+            let name = format!("{:?}", group.active);
+            if view.stack.child_by_name(&name).is_some() {
+                view.stack.set_visible_child_name(&name);
+            }
+            for toolbar in self
+                .customization
+                .toolbars
+                .borrow()
+                .iter()
+                .filter(|t| group.panels.contains(&t.id))
+            {
+                toolbar.strip.configure(group.axis, !group.tabs_visible);
             }
             for (panel, button) in &view.tabs {
+                let config = layout.panel(*panel).expect("validated panel");
+                if config.tab_style == TabStyle::Name {
+                    button.set_label(config.title());
+                } else {
+                    button.set_icon_name(&format!("layer-{}-symbolic", panel.icon()));
+                }
+                button.set_tooltip_text(Some(config.title()));
+                button.update_property(&[gtk::accessible::Property::Label(config.title())]);
                 selected(button, *panel == group.active);
             }
             view.tab_joins.queue_draw();

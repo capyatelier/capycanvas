@@ -102,6 +102,381 @@ fn capture_reference(w: &Workspace, path: &str, scale: f32) {
 }
 
 #[test]
+#[ignore = "workspace customization: requires a Wayland/Vulkan display"]
+fn native_panel_customization() {
+    let app = native_test_app("dev.layer.CustomizationTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(600);
+    let dir = "../../artifacts/ui/customization";
+    std::fs::create_dir_all(dir).unwrap();
+    let send = |action| w.dispatch(UiAction::Customize { action });
+    let hold = |widget: &gtk::Widget, x: f64, y: f64| {
+        assert!(
+            widget.width() > 0 && widget.height() > 0,
+            "unallocated context target {}: {}x{}",
+            widget.widget_name(),
+            widget.width(),
+            widget.height()
+        );
+        assert!(
+            widget.pick(x, y, gtk::PickFlags::DEFAULT).is_some(),
+            "unpickable context target {}: {}x{}, mapped={}, visible={}, sensitive={}",
+            widget.widget_name(),
+            widget.width(),
+            widget.height(),
+            widget.is_mapped(),
+            widget.is_visible(),
+            widget.is_sensitive()
+        );
+        let controllers = widget.observe_controllers();
+        let gesture = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
+            .find(|g| g.name().as_deref() == Some("workspace-context-hold"))
+            .unwrap();
+        gesture.emit_by_name::<()>("pressed", &[&x, &y]);
+        pump(150);
+    };
+    let context = || {
+        w.popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .find_map(|p| {
+                (p.is_visible() && p.has_css_class("panel-context-menu"))
+                    .then(|| p.downcast::<gtk::PopoverMenu>().ok())
+                    .flatten()
+            })
+            .unwrap()
+    };
+    let snapshot_popover = |popover: &gtk::Popover, file: &str| {
+        popover.present();
+        pump(100);
+        // Like the window capture, complete allocation if Wayland deferred a
+        // configure for an occluded test popup. This inspects GTK's real widgets,
+        // not compositor delivery or physical long-press recognition.
+        let width = popover
+            .width()
+            .max(popover.measure(gtk::Orientation::Horizontal, -1).1);
+        let height = popover
+            .height()
+            .max(popover.measure(gtk::Orientation::Vertical, width).1);
+        popover.allocate(width, height, -1, None);
+        let snapshot = gtk::Snapshot::new();
+        let mut child = popover.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            popover.snapshot_child(&widget, &snapshot);
+        }
+        popover
+            .renderer()
+            .unwrap()
+            .render_texture(snapshot.to_node().unwrap(), None)
+            .save_to_png(format!("{dir}/{file}.png"))
+            .unwrap();
+    };
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        capture_reference(&w, &format!("{dir}/initial-{theme:?}.png"), 1.0);
+        let initial = state(&w).workspace;
+        let tab = w
+            .groups
+            .borrow()
+            .iter()
+            .flat_map(|g| &g.tabs)
+            .find(|(p, _)| *p == Panel::Sizes)
+            .unwrap()
+            .1
+            .clone();
+        hold(tab.upcast_ref(), 12.0, 12.0);
+        let menu = context();
+        snapshot_popover(menu.upcast_ref(), &format!("panel-menu-{theme:?}"));
+        menu.activate_action("context.item-0-1", Some(&"selected".to_variant()))
+            .unwrap();
+        pump(100);
+        assert_eq!(
+            state(&w)
+                .workspace
+                .layout
+                .panel(Panel::Sizes)
+                .unwrap()
+                .tab_style,
+            TabStyle::Icon
+        );
+        assert_eq!(tab.icon_name().as_deref(), Some("layer-size-symbolic"));
+        send(CustomizationAction::SetTabStyle {
+            target: ContextTarget::Group { group: 8 },
+            style: TabStyle::Name,
+        });
+
+        send(CustomizationAction::ShowAllControls {
+            panel: Panel::Sizes,
+        });
+        pump(200);
+        let inspector = w
+            .popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .find(|p| p.has_css_class("expanded-panel"))
+            .unwrap();
+        assert!(inspector.is_visible());
+        assert_eq!(state(&w).workspace.layout.bands, initial.layout.bands);
+        let opacity = find_named(inspector.upcast_ref(), "panel-field-Sizes-BrushOpacity").unwrap();
+        assert!(opacity.is_visible());
+        let input = opacity.last_child().and_downcast::<gtk::Scale>().unwrap();
+        input.set_value(0.42);
+        assert!((state(&w).brush.opacity - 0.42).abs() < 0.001);
+        let visible = find_named(inspector.upcast_ref(), "panel-visible-BrushOpacity")
+            .unwrap()
+            .downcast::<gtk::CheckButton>()
+            .unwrap();
+        visible.set_active(true);
+        pump(100);
+        snapshot_popover(&inspector, &format!("expanded-sizes-{theme:?}"));
+        inspector.popdown();
+        pump(200);
+        assert!(state(&w).customization.expanded.is_none());
+        assert!(
+            w.panel_widget(Panel::Sizes)
+                .parent()
+                .is_some_and(|p| p.is::<gtk::Stack>())
+        );
+        assert!(opacity.is_visible());
+
+        let header = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == 8)
+            .unwrap()
+            .stack
+            .parent()
+            .unwrap()
+            .first_child()
+            .unwrap();
+        hold(&header, (header.width() - 12) as f64, 12.0);
+        let menu = context();
+        snapshot_popover(menu.upcast_ref(), &format!("group-menu-{theme:?}"));
+        menu.activate_action("context.item-1-0", None).unwrap();
+        pump(250);
+        let name = find_named(w.window.upcast_ref(), "toolbar-name")
+            .unwrap()
+            .downcast::<adw::EntryRow>()
+            .unwrap();
+        let confirm = find_named(w.window.upcast_ref(), "confirm-tools")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        assert!(!confirm.is_sensitive());
+        name.set_text("Tools");
+        assert!(
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .tool_picker()
+                .unwrap()
+                .error
+                .is_some()
+        );
+        name.set_text(&format!("Illustration {theme:?}"));
+        let search = find_named(w.window.upcast_ref(), "tool-search")
+            .unwrap()
+            .downcast::<gtk::SearchEntry>()
+            .unwrap();
+        search.set_text("pencil");
+        pump(250);
+        let choices = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .tool_picker()
+            .unwrap()
+            .choices;
+        assert!(!choices.is_empty());
+        for choice in choices.iter().take(2) {
+            send(CustomizationAction::PickerSelect {
+                control: choice.control,
+                selected: true,
+            });
+        }
+        assert!(confirm.is_sensitive());
+        capture_reference(&w, &format!("{dir}/tool-picker-{theme:?}.png"), 1.0);
+        click(&confirm);
+        pump(250); // Finish AdwDialog's closing animation before targeting the ribbon.
+        let layout = state(&w).workspace.layout;
+        let panel = layout
+            .panels
+            .iter()
+            .find(|p| p.title() == format!("Illustration {theme:?}"))
+            .unwrap()
+            .id;
+        let toolbar = w.panel_widget(panel).downcast::<TileStrip>().unwrap();
+        assert_eq!(toolbar.overflow(), gtk::Overflow::Hidden);
+        let tile = layout.panel(panel).unwrap().tiles()[0].id;
+        let button = find_named(toolbar.upcast_ref(), &format!("tile-{tile}"))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        click(&button);
+        assert_eq!(
+            state(&w).brush.preset,
+            match choices[0].control {
+                ToolbarControl::Brush { id } => id,
+                _ => panic!("brush choice"),
+            }
+        );
+        let root = button.parent().unwrap();
+        hold(&root, 10.0, 10.0);
+        let menu = context();
+        snapshot_popover(menu.upcast_ref(), &format!("tile-menu-{theme:?}"));
+        menu.activate_action("context.item-0-1", None).unwrap();
+        pump(200);
+        send(CustomizationAction::PickerSearch { query: "".into() });
+        send(CustomizationAction::PickerSelect {
+            control: ToolbarControl::Size { pixels: 64 },
+            selected: true,
+        });
+        send(CustomizationAction::ConfirmTools);
+        assert_eq!(
+            state(&w).workspace.layout.panel(panel).unwrap().tiles()[0].control,
+            ToolbarControl::Size { pixels: 64 }
+        );
+        let moved = state(&w).workspace.layout.panel(panel).unwrap().tiles()[0].id;
+        let group = w
+            .resolved()
+            .groups
+            .iter()
+            .find(|g| g.panels.contains(&Panel::Toolbar))
+            .unwrap()
+            .id;
+        w.dispatch(UiAction::SelectPanelTab {
+            group,
+            panel: Panel::Toolbar,
+        });
+        pump(250);
+        let resolved = w.resolved();
+        let destination = resolved
+            .groups
+            .iter()
+            .find(|g| g.active == Panel::Toolbar)
+            .unwrap();
+        let line = destination
+            .tiles
+            .as_ref()
+            .unwrap()
+            .insertion
+            .last()
+            .unwrap();
+        let point = [
+            destination.bounds.x + line.x + line.width * 0.5,
+            destination.bounds.y
+                + if destination.tabs_visible {
+                    TAB_BAR_HEIGHT
+                } else {
+                    0.0
+                }
+                + line.y
+                + line.height * 0.5,
+        ];
+        let item = DockItem::Tile { panel, tile: moved };
+        let hint = w.drop_at(point[0], point[1], item).unwrap();
+        *w.drop_hint.borrow_mut() = Some(hint);
+        capture_reference(&w, &format!("{dir}/tile-drop-{theme:?}.png"), 1.0);
+        let controllers = w.surface.observe_controllers();
+        let drop = (0..controllers.n_items())
+            .find_map(|i| controllers.item(i).and_downcast::<gtk::DropTarget>())
+            .unwrap();
+        assert!(drop.emit_by_name::<bool>(
+            "drop",
+            &[
+                &glib::BoxedValue(NativeDockItem(item).to_value()),
+                &(point[0] as f64),
+                &(point[1] as f64)
+            ]
+        ));
+        assert_eq!(
+            state(&w)
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()
+                .last()
+                .unwrap()
+                .id,
+            moved
+        );
+        w.dispatch(UiAction::MovePanel {
+            viewport: [1200.0, 900.0],
+            panel,
+            target: DockTarget::Edge {
+                edge: Edge::Left,
+                outer: false,
+            },
+        });
+        pump(200);
+        capture_reference(&w, &format!("{dir}/custom-workspace-{theme:?}.png"), 1.0);
+        let saved = state(&w).workspace;
+        w.dispatch(UiAction::RestoreWorkspace { workspace: initial });
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: saved.clone(),
+        });
+        assert_eq!(state(&w).workspace, saved);
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::ResetLayout,
+        });
+        assert!(state(&w).workspace.layout.panel(panel).is_ok());
+        for tile in state(&w)
+            .workspace
+            .layout
+            .panel(panel)
+            .unwrap()
+            .tiles()
+            .to_vec()
+        {
+            send(CustomizationAction::RemoveTool {
+                panel,
+                tile: tile.id,
+            });
+        }
+        let group = w
+            .resolved()
+            .groups
+            .iter()
+            .find(|g| g.panels.contains(&panel))
+            .unwrap()
+            .id;
+        w.dispatch(UiAction::SelectPanelTab { group, panel });
+        pump(150);
+        capture_reference(&w, &format!("{dir}/empty-toolbar-{theme:?}.png"), 1.0);
+        hold(&w.panel_widget(panel), 12.0, 12.0);
+        let menu = context();
+        snapshot_popover(menu.upcast_ref(), &format!("ribbon-menu-{theme:?}"));
+        menu.activate_action("context.item-0-0", None).unwrap();
+        pump(150);
+        assert!(
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .tool_picker()
+                .is_some()
+        );
+        send(CustomizationAction::CancelTools);
+        pump(250);
+    }
+    w.window.destroy();
+    pump(150);
+}
+
+#[test]
 #[ignore = "native menu sections: requires a Wayland/Vulkan display"]
 fn native_menu_sections() {
     let app = native_test_app("dev.layer.MenuTest");
@@ -167,7 +542,7 @@ fn native_menu_sections() {
             }
             menu.renderer()
                 .unwrap()
-                .render_texture(&snapshot.to_node().unwrap(), None)
+                .render_texture(snapshot.to_node().unwrap(), None)
                 .save_to_png(format!("{dir}/{label}-{theme:?}.png"))
                 .unwrap();
             menu.popdown();

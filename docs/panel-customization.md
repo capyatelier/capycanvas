@@ -93,6 +93,18 @@ per-panel and group tab styles, expanded-control view metadata, tile movement an
 variable-count ribbon allocation. Old workspace JSON receives the original panel
 configuration. Tests cover these policies and native/Wasm type checks pass.
 
-GTK and web presentation/event wiring and visual validation are still pending;
-this is not yet an exposed end-to-end feature. Final host tests must also cover
-clipped ribbons, not just ribbons that can grow to fit on screen.
+GTK now renders dynamic toolbars, native contextual menus, the searchable picker
+and an expanded live inspector. The inspector temporarily reparents existing
+controls; closing restores the dock without changing its saved geometry. Native
+checks exercise group/panel/tile/empty-ribbon targets, name/icon choices,
+creation/insertion, control visibility and editing, a GTK drop signal, restore
+and reset. Dark/light GTK widget captures are inspected in
+`artifacts/ui/customization/` (ignored). Gesture signals test native bindings,
+not physical tablet/touch delivery or compositor timing.
+
+Tabbed ribbons reserve one padded lane below the header; further overflow clips.
+GTK tool ribbons are explicitly clipped and never gain a scroller.
+
+Web presentation/event wiring and final cross-platform parity are still pending.
+Final host tests must also cover clipped ribbons, not just ribbons that can grow
+to fit on screen; this is not yet a completed cross-platform feature.
