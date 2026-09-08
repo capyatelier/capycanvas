@@ -108,11 +108,11 @@ export function packageWeb() {
           cpSync(join(web, directory, path), join(runtime, directory, path));
       }
     }
-    // Same brand geometry, centered inside the maskable icon's safe area.
+    // Shared brand geometry and rounded background at every icon size.
     const mark = read(join(web, "icons/layer-zen-symbolic.svg"))
       .replace('width="24" height="24"', 'x="96" y="96" width="320" height="320" color="#f6f5f4"');
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#333333"/>${mark}</svg>`;
-    for (const size of [180, 192, 512])
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="76.8" fill="#333333"/>${mark}</svg>`;
+    for (const size of [32, 180, 192, 512])
       run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), "-", join(runtime, `icon-${size}.png`)], { input: svg, stdio: ["pipe", "inherit", "inherit"] });
     const runtimeFiles = filesIn(runtime);
     const hash = createHash("sha256");
@@ -140,13 +140,13 @@ export function packageWeb() {
       id: "./", name: "Capy Canvas", short_name: "Capy Canvas",
       description: "A GPU-powered drawing workspace.", start_url: "./", scope: "./",
       display: "standalone", background_color: "#333333", theme_color: "#333333",
-      icons: [192, 512].map((size) => ({ src: `${base}icon-${size}.png`, sizes: `${size}x${size}`, type: "image/png", purpose: "any maskable" })),
+      icons: [192, 512].map((size) => ({ src: `${base}icon-${size}.png`, sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
     }, null, 2) + "\n");
     const metadata = `<link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="${base}icon-180.png" />
     <link rel="license" href="./licenses.html" />`;
     writeFileSync(join(site, "index.html"), read(join(web, "index.html"))
-      .replace('href="data:,"', `href="${base}icon-192.png"`)
+      .replace('href="data:,"', `type="image/png" sizes="32x32" href="${base}icon-32.png"`)
       .replace('href="style.css"', `href="${base}style.css"`)
       .replace('src="app.js"', `src="${base}app.js"`)
       .replace("<!-- Packager inserts install metadata here; development never registers a worker. -->", metadata)

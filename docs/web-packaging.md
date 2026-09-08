@@ -34,8 +34,10 @@ The build:
    launcher. Runtime speed optimizations stay unchanged. Debug data is disabled
    and source prefixes are remapped so panic strings do not expose build-machine
    paths. The generated runtime is scanned before packaging.
-3. Copies a curated list of runtime files and renders 180/192/512 px PNG app
-   icons from the shared capybara SVG, preserving its separate branding terms.
+3. Copies a curated list of runtime files and renders a 32 px favicon and
+   180/192/512 px PNG installation icons from the shared capybara SVG, all with
+   the same rounded corners, preserving its separate branding terms. Manifest
+   icons use `purpose: any`, since the artwork already has its own shape.
 4. Puts matching JS, Wasm, CSS and artwork under one content-addressed asset
    directory. Relative module/asset URLs require no deployment-specific base
    path and keep a release's JS/Wasm pair together.

@@ -76,11 +76,32 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     assert.equal(new URL(data.start_url, manifest.url).href, host.url + path);
     assert.equal(data.display, "standalone");
     assert.deepEqual(data.icons.map((icon) => icon.sizes), ["192x192", "512x512"]);
+    assert.ok(data.icons.every((icon) => icon.purpose === "any"), "Rounded artwork is not marked maskable");
     await evaluate(`navigator.serviceWorker.ready.then(()=>new Promise(resolve=>{if(navigator.serviceWorker.controller)resolve(true);else navigator.serviceWorker.addEventListener('controllerchange',()=>resolve(true),{once:true})}))`);
     assert.deepEqual((await call("Page.getInstallabilityErrors")).installabilityErrors, []);
     assert.ok(await evaluate(`(async()=>{const keys=await caches.keys();return keys.some(k=>k.startsWith('capycanvas:'+location.href+':'))})()`));
     await offline(true);
     await reload();
+    assert.equal(await evaluate("document.querySelector('link[rel=icon]').sizes.value"), "32x32");
+    const icons = await evaluate(`(async()=>{
+      const manifestUrl=document.querySelector('link[rel=manifest]').href;
+      const manifest=await (await fetch(manifestUrl)).json();
+      const urls=[document.querySelector('link[rel=icon]').href,
+        document.querySelector('link[rel=apple-touch-icon]').href,
+        ...manifest.icons.map(icon=>new URL(icon.src,manifestUrl).href)];
+      return Promise.all(urls.map(async url=>{
+        const image=new Image();image.src=url;await image.decode();
+        const canvas=document.createElement('canvas');canvas.width=canvas.height=32;
+        const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0,32,32);
+        const pixels=ctx.getImageData(0,0,32,32).data;
+        const alpha=(x,y)=>pixels[(y*32+x)*4+3];
+        return {width:image.naturalWidth,height:image.naturalHeight,
+          corners:[alpha(0,0),alpha(31,0),alpha(0,31),alpha(31,31)],edge:alpha(16,0)};
+      }));
+    })()`);
+    assert.deepEqual(icons, [32, 180, 192, 512].map(size => ({
+      width: size, height: size, corners: [0, 0, 0, 0], edge: 255,
+    })), "Favicon and app icons load offline with matching rounded corners");
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));
