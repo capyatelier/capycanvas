@@ -194,7 +194,7 @@ function commandButton(id, text) {
 const icons = new Map();
 async function loadIcons() {
   await Promise.all(
-    catalog.icons.map(async (name) => {
+    [...catalog.icons, "fullscreen-enter", "fullscreen-exit"].map(async (name) => {
       const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
       if (!response.ok) throw new Error(`Cannot load icon ${name}`);
       const svg = new DOMParser().parseFromString(
@@ -216,6 +216,33 @@ function iconButton(id) {
   node.dataset.icon = "true";
   node.classList.add("tile-button");
   node.append(icon(state.commands.find((c) => c.id === id).icon));
+  return node;
+}
+function fullscreenButton() {
+  // Browser-window state belongs to the host, not the shared drawing session.
+  const node = button("", async () => {
+    node.disabled = true;
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      message("Could not change fullscreen mode.");
+    } finally {
+      node.disabled = !document.fullscreenEnabled;
+      sync();
+    }
+  }, "tile-button");
+  node.id = "fullscreen";
+  node.disabled = !document.fullscreenEnabled;
+  function sync() {
+    const active = !!document.fullscreenElement;
+    node.title = !document.fullscreenEnabled ? "Fullscreen unavailable"
+      : active ? "Exit fullscreen" : "Enter fullscreen";
+    node.setAttribute("aria-label", node.title);
+    node.replaceChildren(icon(active ? "fullscreen-exit" : "fullscreen-enter"));
+  }
+  document.addEventListener("fullscreenchange", sync);
+  sync();
   return node;
 }
 function draggable(node, item) {
@@ -804,7 +831,7 @@ function buildHeader() {
   $("header-start").append(iconButton("zen_mode"));
   for (const spec of catalog.menus)
     $("header-start").append(menu(spec.label, spec.commands));
-  $("header-end").append(iconButton("settings"));
+  $("header-end").append(fullscreenButton(), iconButton("settings"));
 }
 window.addEventListener(
   "pointermove",

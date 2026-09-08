@@ -2,7 +2,7 @@
 // loopback server. No deployment, browser installation or OS input injection.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { filesIn, writeWorker } from "./package.mjs";
@@ -40,7 +40,80 @@ export async function servePackage() {
     } };
 }
 
+async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
+  const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>10000)reject(Error('Fullscreen check timed out'));else setTimeout(check,25)}check()})`);
+  const toggle = async () => {
+    const point = await evaluate("(()=>{const r=document.querySelector('#fullscreen').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()");
+    for (const type of ["mousePressed", "mouseReleased"])
+      await call("Input.dispatchMouseEvent", { type, ...point, button: "left", buttons: type === "mousePressed" ? 1 : 0, clickCount: 1 });
+  };
+  const checkButton = async (active) => {
+    // The exit promise can settle before the browser delivers fullscreenchange.
+    await waitFor(`!!document.fullscreenElement === ${active} && !document.querySelector('#fullscreen').disabled && document.querySelector('#fullscreen').title === '${active ? "Exit fullscreen" : "Enter fullscreen"}'`);
+    assert.equal(await evaluate("document.querySelector('#fullscreen').title"), active ? "Exit fullscreen" : "Enter fullscreen");
+    assert.equal(await evaluate("document.querySelector('#fullscreen').getAttribute('aria-label')"), active ? "Exit fullscreen" : "Enter fullscreen");
+    assert.equal(await evaluate("document.querySelector('#fullscreen svg').dataset.asset"), active ? "fullscreen-exit" : "fullscreen-enter");
+    await settle();
+  };
+  await call("Emulation.clearDeviceMetricsOverride");
+  await settle();
+  try {
+    await checkButton(false);
+    assert.ok(await evaluate("(()=>{const f=document.querySelector('#fullscreen'),s=f.nextElementSibling,a=f.getBoundingClientRect(),b=s.getBoundingClientRect();return s.dataset.command==='settings'&&a.width===36&&a.height===36&&b.width===36&&b.height===36&&Math.abs(b.left-a.right-6)<1&&a.top===b.top})()"), "Fullscreen sits immediately left of Settings with matching size and spacing");
+    await evaluate("window.originalFullscreenRequest=document.documentElement.requestFullscreen;document.documentElement.requestFullscreen=()=>Promise.reject(Error('test denied'))");
+    await toggle();
+    await waitFor("document.querySelector('#status').textContent === 'Could not change fullscreen mode.'");
+    await checkButton(false);
+    await evaluate("document.documentElement.requestFullscreen=window.originalFullscreenRequest;delete window.originalFullscreenRequest;document.querySelector('#status').textContent=''");
+    await toggle();
+    await checkButton(true);
+    assert.ok(await evaluate("document.fullscreenElement === document.documentElement"), "Fullscreen includes the whole UI, not only the canvas");
+    await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
+    assert.ok(await evaluate("document.querySelector('#settings').open && document.fullscreenElement.contains(document.querySelector('#settings'))"));
+    await evaluate("layerApp.dispatch({type:'cancel_settings'});layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
+    await settle();
+    const before = await canvasPixels();
+    const point = await evaluate("({x:innerWidth/2-100,y:innerHeight/2})");
+    await call("Input.dispatchMouseEvent", { type: "mousePressed", ...point, button: "left", buttons: 1, clickCount: 1 });
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x + 200, y: point.y, button: "left", buttons: 1 });
+    await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x + 200, y: point.y, button: "left", buttons: 0, clickCount: 1 });
+    await waitFor("layerApp.state().commands.find(c=>c.id==='undo').enabled");
+    await settle();
+    assert.ok((await canvasPixels()).white < before.white - 50, "GPU ink renders after the fullscreen resize");
+    mkdirSync("artifacts/ui/fullscreen", { recursive: true });
+    for (const theme of ["light", "dark"]) {
+      await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`); await settle();
+      const shot = await call("Page.captureScreenshot", { format: "png" });
+      writeFileSync(`artifacts/ui/fullscreen/${theme}.png`, Buffer.from(shot.data, "base64"));
+    }
+    await toggle();
+    await checkButton(false);
+    await toggle();
+    await checkButton(true);
+    // Browser-controlled exits (including Escape) dispatch this same event.
+    await evaluate("document.exitFullscreen()");
+    await checkButton(false);
+  } finally {
+    await evaluate("document.fullscreenElement ? document.exitFullscreen() : undefined").catch(() => {});
+    await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await settle();
+  }
+  // An unavailable Fullscreen API must not break startup or the Settings button.
+  const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: "Object.defineProperty(document,'fullscreenEnabled',{value:false,configurable:true})" });
+  const previous = await evaluate("performance.timeOrigin");
+  await call("Page.reload");
+  await waitFor(`performance.timeOrigin !== ${previous} && document.body.dataset.gpu === 'ready'`);
+  assert.equal(await evaluate("document.querySelector('#fullscreen').disabled"), true);
+  assert.equal(await evaluate("document.querySelector('#fullscreen').title"), "Fullscreen unavailable");
+  await evaluate("document.querySelector('#header-end [data-command=settings]').click()");
+  assert.equal(await evaluate("document.querySelector('#settings').open"), true);
+  await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+  await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  console.log("Fullscreen: geometry, real enter/exit, external exit, failure recovery, settings and GPU ink passed");
+}
+
 export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
+  await checkFullscreen({ call, evaluate, settle, canvasPixels });
   const ready = async (previous) => {
     const start = Date.now();
     while (Date.now() - start < 25000) {

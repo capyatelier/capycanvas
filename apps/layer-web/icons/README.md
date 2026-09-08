@@ -8,6 +8,8 @@ The owner confirmed authorship of the artwork used for that vector trace.
 Web loads these files directly. GTK embeds the same files in its resource bank;
 there are no generated copies or toolkit-specific icon drawings to maintain.
 `layer-ui` supplies command/icon identities to both hosts.
+Web-only browser-window controls load the original two-arrow fullscreen icons
+from this bank directly; no fullscreen button is added to GTK.
 
 Keep 16×16 icon geometry (the capybara retains its own viewBox).
 Stroked paths declare `transparent-fill foreground-stroke` plus per-path stroke

@@ -39,6 +39,14 @@ in dark mode / `#FAFAFA` in light mode (the native slider knob interior). System
 appearance is the default and updates live; Settings offers Light/Dark overrides.
 The browser uses the same geometry and color roles with DOM
 controls, leaving operating-system window decoration to the browser.
+Web adds a 36px fullscreen button immediately left of Settings, using two-arrow
+enter/exit SVGs from the existing icon bank. The browser Fullscreen API owns
+this window state; `fullscreenchange` updates the icon and label even when the
+browser exits fullscreen outside the button. Fullscreen covers the document
+root, keeping Settings dialogs and the full UI visible. Unsupported fullscreen
+is disabled and rejected requests leave a usable button with a brief message.
+Canvas resizing uses the existing resize path; there is no GPU reinitialization
+or shared-session fullscreen state, and GTK is unchanged.
 Both hosts leave 8px between the visible grip dots and the trailing panel edge,
 matching the first tab label's left inset. The drag targets remain 20×24px
 (24×20px at the bottom of vertical ribbons).

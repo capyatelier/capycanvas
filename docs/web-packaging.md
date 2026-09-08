@@ -80,6 +80,9 @@ node apps/layer-web/test.mjs --package --gpu-startup
 
 The browser test uses a fresh temporary Chrome profile on Wayland and serves
 the same package at `/` and `/nested/capy/`. It checks manifest installability,
+covers the web-only fullscreen button beside Settings (real entry/exit, an
+external exit event, unavailable/denied requests, dialogs and GPU drawing after
+resizing), and captures both fullscreen themes. It also checks
 cold offline Wasm startup with HTTP cache disabled, real GPU ink, all brush
 previews in both themes, integrity-mismatched update recovery, waiting updates that preserve
 the live session, activation after leaving the old page, and isolation between

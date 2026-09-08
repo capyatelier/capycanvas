@@ -97,6 +97,14 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     await action({ type: "cancel_settings" });
     await action({ type: "invoke", command: "add_layer" });
     assert.equal(await evaluate("window.frameCalls"), 0, "No paint loop while the GPU is unavailable");
+    if (mode === "no-adapter") {
+      await call("Runtime.evaluate", { expression: "document.querySelector('#fullscreen').click()", userGesture: true });
+      await waitFor("!!document.fullscreenElement && document.querySelector('#fullscreen').title === 'Exit fullscreen'");
+      assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), false);
+      await evaluate("document.exitFullscreen()");
+      await waitFor("!document.fullscreenElement && document.querySelector('#fullscreen').title === 'Enter fullscreen'");
+      await settle();
+    }
     if (mode !== "pending") {
       assert.equal(await evaluate("document.querySelectorAll('.gpu-help details, .gpu-help pre, .gpu-retry').length"), 0);
       assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help button')].every(n=>n.closest('.gpu-address'))"), "Only address Copy buttons remain");
