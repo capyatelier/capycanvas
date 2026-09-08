@@ -5,14 +5,43 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, writeWorker } from "./package.mjs";
-import { gpuProblem } from "./gpu.js";
+import { gpuEnvironment, gpuProblem } from "./gpu.js";
 
 test("GPU help distinguishes missing support, insecure access and no adapter", () => {
   assert.match(gpuProblem({ secure: false, api: false })[1], /secure connection/);
   assert.match(gpuProblem({ secure: true, api: false })[1], /WebGPU is not available/);
-  assert.deepEqual(gpuProblem({ secure: true, api: true }), [
+  assert.deepEqual(gpuProblem({ secure: true, api: true, stage: "adapter" }), [
     "Could not initialize canvas", "Your browser could not find a GPU adapter.",
   ]);
+  assert.match(gpuProblem({ secure: true, api: true, stage: "device" })[1], /found a GPU but could not start/);
+  for (const stage of ["renderer", undefined])
+    assert.match(gpuProblem({ secure: true, api: true, stage })[1], /canvas renderer/);
+});
+
+test("GPU help identifies platforms without using browser identity to decide support", () => {
+  for (const [userAgent, system, browser] of [
+    ["Windows NT 10.0 Chrome/150 Safari/537.36", "windows", "chromium"],
+    ["Windows NT 10.0 Chrome/150 Safari/537.36 Edg/150", "windows", "edge"],
+    ["Windows NT 10.0 Firefox/150", "windows", "firefox"],
+    ["Macintosh Chrome/150 Safari/537.36", "mac", "chromium"],
+    ["Macintosh Version/26.0 Safari/605.1.15", "mac", "safari"],
+    ["Macintosh Firefox/150", "mac", "firefox"],
+    ["X11; Linux x86_64 Chrome/150", "linux", "chromium"],
+    ["X11; Linux x86_64 Firefox/150", "linux", "firefox"],
+    ["X11; CrOS x86_64 Chrome/150", "chromeos", "chromium"],
+    ["Linux; Android 12 Chrome/150 Mobile Safari/537.36", "android", "chromium"],
+    ["Android 14 Firefox/150", "android", "firefox"],
+    ["iPhone; CPU iPhone OS 26_0 Version/26 Mobile Safari/605.1", "ios", "webkit"],
+    ["iPad; CPU OS 26_0 Version/26 Mobile Safari/605.1", "ios", "webkit"],
+    ["Macintosh CriOS/150 Version/26 Safari/605.1", "ios", "webkit"],
+    ["iPhone FxiOS/150 Mobile Safari/605.1", "ios", "webkit"],
+    ["iPhone EdgiOS/150 Mobile Safari/605.1", "ios", "webkit"],
+    ["Unknown browser", "other", "other"],
+  ]) assert.deepEqual(gpuEnvironment({ userAgent }), { system, browser }, userAgent);
+  assert.deepEqual(gpuEnvironment({ userAgent: "Macintosh Version/26 Safari/605.1", platform: "MacIntel", maxTouchPoints: 5 }),
+    { system: "ios", browser: "webkit" }, "Desktop-mode iPad is not a Mac");
+  assert.deepEqual(gpuEnvironment({ userAgent: "X11; Linux x86_64 Chrome/150", userAgentData: { platform: "Android" } }),
+    { system: "android", browser: "chromium" }, "Android desktop mode respects client hints");
 });
 
 test("the source page opts out of Dark Reader before loading app styles", () => {

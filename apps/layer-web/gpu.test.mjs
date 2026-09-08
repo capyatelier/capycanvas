@@ -17,10 +17,25 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     const shot = await call("Page.captureScreenshot", { format: "png" });
     await writeFile(`${dir}/${name}.png`, Buffer.from(shot.data, "base64"));
   };
-  for (const mode of ["missing-api", "unsupported-browser", "insecure", "no-adapter", "non-linux", "device-failure", "pending"]) {
-    const missingApi = ["missing-api", "unsupported-browser"].includes(mode);
-    const chromeSteps = !["unsupported-browser", "insecure"].includes(mode);
-    const linuxSteps = chromeSteps && mode !== "non-linux";
+  // UA overrides validate help routing, not Safari/Firefox/Android GPU drivers.
+  const browsers = {
+    "unsupported-browser": "Capy test browser",
+    "non-linux": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150.0.0.0",
+    "chrome-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/150.0.0.0 Safari/537.36",
+    chromeos: "Mozilla/5.0 (X11; CrOS x86_64) Chrome/150.0.0.0",
+    edge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150.0.0.0 Edg/150.0.0.0",
+    android: "Mozilla/5.0 (Linux; Android 12) Chrome/150.0.0.0 Mobile Safari/537.36",
+    ios: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) Version/26.0 Mobile Safari/605.1.15",
+    "ios-chrome": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) CriOS/150.0 Mobile Safari/605.1.15",
+    "ipad-desktop": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15",
+    safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15",
+    firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+  };
+  for (const mode of ["missing-api", "insecure", "no-adapter", "device-failure", "renderer-failure", "pending", ...Object.keys(browsers)]) {
+    const missingApi = ["missing-api", "unsupported-browser", "ios", "ios-chrome", "ipad-desktop", "safari", "firefox"].includes(mode);
+    const chromeSteps = !["unsupported-browser", "insecure", "android", "ios", "ios-chrome", "ipad-desktop", "safari", "firefox"].includes(mode);
+    const linuxSteps = chromeSteps && !browsers[mode];
+    const noAdapter = ["no-adapter", "non-linux", "chrome-mac", "chromeos", "edge", "android"].includes(mode);
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       const originalGpu = navigator.gpu;
@@ -28,16 +43,28 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       const secure = isSecureContext;
       window.restoreGpu = () => { Object.defineProperty(window, 'isSecureContext', { configurable:true, value:secure }); Object.defineProperty(navigator, 'gpu', { configurable:true, value:originalGpu }); originalGpu.requestAdapter = requestAdapter; };
       window.adapterRequests = 0;
-      if (${JSON.stringify(mode)} === 'unsupported-browser') Object.defineProperty(navigator,'userAgent',{ configurable:true, value:'Capy test browser' });
-      if (${JSON.stringify(mode)} === 'non-linux') Object.defineProperty(navigator,'userAgent',{ configurable:true, value:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140.0.0.0' });
+      if (${JSON.stringify(!!browsers[mode])}) {
+        Object.defineProperty(navigator,'userAgent',{ configurable:true, value:${JSON.stringify(browsers[mode] || "")} });
+        Object.defineProperty(navigator,'userAgentData',{ configurable:true, value:undefined });
+        Object.defineProperty(navigator,'platform',{ configurable:true, value:'' });
+        Object.defineProperty(navigator,'maxTouchPoints',{ configurable:true, value:${mode === "ipad-desktop" ? 5 : 0} });
+      }
       if (${JSON.stringify(mode)} === 'insecure') Object.defineProperty(window,'isSecureContext',{ configurable:true, value:false });
       if (${missingApi}) Object.defineProperty(navigator,'gpu',{ configurable:true, value:undefined });
       else originalGpu.requestAdapter = async (...args) => {
         window.adapterRequests++;
-        if (${JSON.stringify(mode)} === 'no-adapter' || ${JSON.stringify(mode)} === 'non-linux') return null;
+        if (${noAdapter}) return null;
         if (${JSON.stringify(mode)} === 'pending') await new Promise(resolve => { window.releaseAdapter = resolve; });
         const adapter = await requestAdapter(...args);
         if (${JSON.stringify(mode)} === 'device-failure') adapter.requestDevice = async () => { throw new Error('test: device refused'); };
+        if (${JSON.stringify(mode)} === 'renderer-failure') {
+          const requestDevice=adapter.requestDevice.bind(adapter);
+          adapter.requestDevice=async (...args)=>{
+            const device=await requestDevice(...args), createShader=device.createShaderModule.bind(device);
+            device.createShaderModule=descriptor=>createShader({...descriptor,code:'invalid shader for startup test'});
+            return device;
+          };
+        }
         return adapter;
       };
     ` });
@@ -73,7 +100,13 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
       assert.match(visibleText, /Capy Canvas is a GPU-accelerated drawing app/);
       assert.ok(visibleText.split(/\s+/).length < 150, "Instructions stay concise");
-      assert.doesNotMatch(visibleText, /Instructions for other platforms|edge:\/\/|brave:\/\/|opera:\/\//);
+      assert.doesNotMatch(visibleText, /Instructions for other platforms|Vulkan/);
+      const reason = await evaluate("document.querySelector('.gpu-cause').textContent");
+      assert.match(reason, mode === "insecure" ? /secure connection/
+        : missingApi ? /WebGPU is not available/
+        : noAdapter ? /could not find a GPU adapter/
+        : mode === "device-failure" ? /found a GPU but could not start/
+        : /canvas renderer/);
       assert.doesNotMatch(visibleText, /Experimental flags may cause|Restore Default if needed/);
       assert.equal(await evaluate("document.querySelectorAll('.gpu-steps > li').length"), chromeSteps ? 4 : 0);
       if (chromeSteps) {
@@ -89,9 +122,9 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help > p')].some(n=>n.textContent.startsWith('On Linux,'))"), "Linux help is an unnumbered paragraph");
           assert.equal(await evaluate("document.querySelectorAll('.gpu-steps ol').length"), 0, "No nested troubleshooting steps");
         } else assert.doesNotMatch(visibleText, /Linux|experimental|chrome:\/\/flags|Unsafe WebGPU/i);
-        assert.match(visibleText, /Vulkan should be enabled in Chrome's graphics report/);
-        assert.match(visibleText, /chrome:\/\/gpu/);
-        const addresses = linuxSteps ? ["chrome://settings/system", "chrome://flags/#ignore-gpu-blocklist", "chrome://flags/#enable-unsafe-webgpu", "chrome://gpu"] : ["chrome://settings/system", "chrome://gpu"];
+        assert.match(visibleText, /WebGPU should show “Hardware accelerated”/);
+        const scheme = mode === "edge" ? "edge" : "chrome";
+        const addresses = (linuxSteps ? ["settings/system", "flags/#ignore-gpu-blocklist", "flags/#enable-unsafe-webgpu", "gpu"] : ["settings/system", "gpu"]).map(path => `${scheme}://${path}`);
         assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-address code')].map(n=>n.textContent)"), addresses);
         assert.ok(await evaluate("(()=>{const rows=[...document.querySelectorAll('.gpu-address code')];return rows.every(n=>Math.abs(n.getBoundingClientRect().left-rows[0].getBoundingClientRect().left)<1)})()"), "All addresses share one left indent");
         assert.equal(await evaluate("document.querySelectorAll('.gpu-steps h3').length"), 0, "Simple steps, not separate cards");
@@ -106,8 +139,11 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         assert.equal(await evaluate("document.querySelector('.gpu-address button').textContent"), "Copy manually");
         await evaluate("document.querySelector('.gpu-address button').textContent='Copy'");
       } else {
-        assert.doesNotMatch(visibleText, /chrome:\/\/flags|experimental/);
-        assert.match(visibleText, mode === "insecure" ? /secure connection/ : /WebGPU is not available/);
+        assert.doesNotMatch(visibleText, /chrome:\/\/|edge:\/\/|experimental|graphics acceleration/);
+        if (["ios", "ios-chrome", "ipad-desktop"].includes(mode)) assert.match(visibleText, /iOS or iPadOS to 26.*Safari/);
+        if (mode === "android") assert.match(visibleText, /Android 12.*supported GPU/);
+        if (mode === "safari") assert.match(visibleText, /Safari 26 or later/);
+        if (mode === "firefox") assert.match(visibleText, /Update Firefox/);
       }
       await capture(mode + "-dark");
       await action({ type: "set_theme", theme: "light" });
@@ -129,7 +165,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
         await settle();
       }
-      assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : ["no-adapter", "non-linux"].includes(mode) ? 2 : 1);
+      assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : noAdapter ? 2 : 1);
       await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
       await call("Page.reload");
     } else {

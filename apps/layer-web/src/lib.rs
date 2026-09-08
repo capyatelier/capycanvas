@@ -82,6 +82,20 @@ fn serialize(value: &impl Serialize) -> Result<JsValue, JsValue> {
         )
         .map_err(js)
 }
+fn gpu_error(stage: &str, error: impl std::fmt::Display) -> JsValue {
+    // Stable failure categories for platform-specific help, without parsing
+    // browser/driver error strings or making a second adapter/device request.
+    #[derive(Serialize)]
+    struct Failure<'a> {
+        stage: &'a str,
+        message: String,
+    }
+    serialize(&Failure {
+        stage,
+        message: error.to_string(),
+    })
+    .unwrap_or_else(|error| error)
+}
 fn phase(value: u8) -> Result<PenPhase, JsValue> {
     match value {
         0 => Ok(PenPhase::Hover),
@@ -164,7 +178,7 @@ impl WebGpu {
         let instance = wgpu::Instance::new(descriptor);
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
-            .map_err(js)?;
+            .map_err(|error| gpu_error("renderer", error))?;
         let options = wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::None,
             compatible_surface: Some(&surface),
@@ -175,11 +189,14 @@ impl WebGpu {
         // Retry once; an unavailable GPU still becomes an explicit startup error.
         let adapter = match instance.request_adapter(&options).await {
             Ok(adapter) => adapter,
-            Err(_) => instance.request_adapter(&options).await.map_err(js)?,
+            Err(_) => instance
+                .request_adapter(&options)
+                .await
+                .map_err(|error| gpu_error("adapter", error))?,
         };
         let config = surface
             .get_default_config(&adapter, width, height)
-            .ok_or_else(|| js("WebGPU canvas format unavailable"))?;
+            .ok_or_else(|| gpu_error("renderer", "WebGPU canvas format unavailable"))?;
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -188,15 +205,16 @@ impl WebGpu {
                 ..Default::default()
             })
             .await
-            .map_err(js)?;
+            .map_err(|error| gpu_error("device", error))?;
         device.on_uncaptured_error(std::sync::Arc::new(|error| {
             web_sys::console::error_1(&js(error))
         }));
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let presenter = ViewportPresenter::new(&device, config.format);
-        let renderer = WgpuRasterizer::from_wgpu(adapter, device, queue).map_err(js)?;
+        let renderer = WgpuRasterizer::from_wgpu(adapter, device, queue)
+            .map_err(|error| gpu_error("renderer", error))?;
         if let Some(error) = validation.pop().await {
-            return Err(js(error));
+            return Err(gpu_error("renderer", error));
         }
         Ok(Self {
             renderer,

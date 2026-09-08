@@ -100,8 +100,8 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
       }));
     })()`);
     assert.deepEqual(icons, [32, 180, 192, 512].map(size => ({
-      width: size, height: size, corners: [0, 0, 0, 0], background: [65, 65, 65, 255],
-    })), "Favicon and app icons load offline with rounded corners and panel-gray backgrounds");
+      width: size, height: size, corners: [0, 0, 0, 0], background: [118, 118, 118, 255],
+    })), "Favicon and app icons load offline with rounded corners and mid-gray backgrounds");
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));

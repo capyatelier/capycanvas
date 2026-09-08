@@ -96,18 +96,29 @@ and `application/wasm` for `.wasm`. WebGPU support and a suitable hardware adapt
 are required for drawing; packaging cannot enable unsupported browser/GPU features.
 The Rust UI session starts before GPU initialization. Without a GPU, menus,
 panels and preferences still work, and the canvas area shows theme-matched help.
-The help shows the failure reason, a short GPU requirement explanation and a
-compact settings → acceleration → restart → reload checklist. Only Linux gets
-two additional unnumbered paragraphs with conditional instructions and exact flag addresses.
-A reminder to check that Vulkan is enabled appears above Chrome’s graphics report
-address; every address has a Copy button.
+Startup checks the secure context, WebGPU API, real adapter/device requests and
+renderer validation. It does not allowlist browser names, OS versions or GPU
+vendors. Rust reports adapter, device and renderer failures separately; a failed
+device or shader is not described as a missing adapter. No additional GPU probe
+or device is created for detection.
+Browser/platform hints select help only, including desktop-mode iPads and
+Android client hints. Desktop Chromium gets the compact settings → acceleration
+→ restart → reload checklist (Edge uses its own internal addresses). Only Linux
+desktop Chromium gets the two unnumbered experimental-flag paragraphs. Android
+gets Chrome/system-update guidance, iOS/iPadOS gets Safari/system-update guidance,
+and Safari and Firefox get their own update guidance. Mobile users do not get
+desktop graphics-acceleration switches or Linux flags.
+The graphics-report instruction checks **WebGPU: Hardware accelerated**, not
+the separate Vulkan status. Windows normally uses D3D12 and Apple platforms use
+Metal; Chromium can also run WebGPU over Vulkan while its compositor stays on
+OpenGL. Every displayed internal address has a Copy button.
 The help container shares the panels’ background, text color, corners and shadow
 in both themes, with roomier padding and vertical centering in the canvas area.
 All copyable addresses have the same left indent, and explanatory text uses the
 same color as the instructions. Extra space below the subtitle and numbered steps
 separates the sections. The default instructions fit without scrolling at 1280×720
 and 900×700. Browser flags are never enabled by the app. Missing WebGPU and insecure
-connections get appropriate explanations; there are no other-platform guides.
+connections get appropriate explanations; users see only their platform’s guide.
 There are no retry or technical-details controls. Reload the page after fixing
 browser settings; technical errors are logged to the browser console only.
 The document advertises the active light/dark color scheme and matching browser
@@ -119,6 +130,50 @@ separate async object so it never borrows the Rust UI session across `await`.
 The current Wasm client does not use shared-memory threads, so it does not need
 cross-origin-isolation headers. A later shared-memory implementation would need
 a separate hosting review.
+
+### Browser expectations (reviewed 2026-09-07)
+
+These are upstream WebGPU availability expectations, **not a claim that Capy
+Canvas has been tested on every device**. Use current stable browsers and system
+updates; old GPUs, driver blocklists, managed policies and memory limits can
+still prevent startup. Safari/Firefox/mobile GPU rendering needs real-device
+release testing. Our automated help tests simulate those browser identities in
+Chrome; they do not emulate their GPU implementations.
+
+| Platform | Expected browser availability |
+| --- | --- |
+| Windows x86/x64 | Chrome/Edge with supported D3D12 hardware; Firefox 141+. Chromium Windows ARM64 is still listed behind a flag. |
+| macOS | Chrome/Edge; Safari 26+; Firefox 147+ on supported Apple Silicon Macs (Intel Firefox is still listed as Nightly-only). |
+| iOS / iPadOS | Safari on iOS/iPadOS 26+. Other browser brands and embedded webviews must expose working WebGPU; desktop Chrome support does not imply Chrome for iOS support. |
+| Android | Current Chrome on supported GPUs, chiefly Android 12+ ARM/Qualcomm/Intel. Imagination support starts with Android 16; other GPU families vary. Firefox Android remains experimental. |
+| ChromeOS | Current Chrome on supported Vulkan hardware. |
+| Linux | Chrome 144+ rollout for Intel Gen12+, expanding in 147 to NVIDIA on Wayland with sufficiently recent drivers. Other configurations may still need flags; Firefox stable is not yet listed as enabled. |
+
+Sources: [GPUWeb implementation status](https://github.com/gpuweb/gpuweb/wiki/Implementation-Status),
+[Safari 26 WebGPU](https://webkit.org/blog/17333/webkit-features-in-safari-26-0/#webgpu),
+[Firefox 147 release notes](https://www.firefox.com/en-US/firefox/147.0/releasenotes/),
+[Chrome Linux rollout](https://developer.chrome.com/blog/new-in-webgpu-144#webgpu_on_linux),
+[NVIDIA expansion](https://developer.chrome.com/blog/new-in-webgpu-147-148#webgpu_on_linux_nvidia),
+[Chrome troubleshooting](https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips).
+
+### OpenGL versus WebGPU
+
+`chrome://gpu` showing OpenGL enabled and Vulkan disabled does not exclude
+hardware WebGPU: the Linux rollout deliberately separates WebGPU's Vulkan
+backend from Chromium's OpenGL compositor. Check the WebGPU status and the
+actual app startup, not the compositor's backend name.
+
+wgpu's optional browser WebGL2 backend is not a drop-in replacement here: the
+material brush reads a storage buffer in its fragment shader, which WebGL2 does
+not provide. [Chrome 146 compatibility mode](https://developer.chrome.com/blog/new-in-webgpu-146)
+is a different route: WebGPU over OpenGL ES 3.1, initially on Android, with
+restricted capabilities. Our wgpu 30 adapter request does not expose the
+`featureLevel: compatibility` option, and the brush's multiple color attachments
+use different blending states, which the [compatibility subset disallows](https://github.com/gpuweb/gpuweb/blob/main/proposals/compatibility-mode.md#2-color-blending-state-may-not-differ-between-color-attachments-in-a-gpufragmentstate).
+Supporting that subset would require renderer and integration work; it is not
+enabled by this browser-help fix.
+
+### Offline updates
 
 After the first successful online install, the worker precaches the whole
 package. Runtime assets are served from that complete version; failed or
