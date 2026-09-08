@@ -31,8 +31,8 @@ export function gpuEnvironment({ userAgent = "", platform = "", maxTouchPoints =
 export function showGpuNotice({ container, error, element, button }) {
   const [title, reason] = gpuProblem({ secure: isSecureContext, api: !!navigator.gpu, stage: error?.stage });
   const content = element("div", "gpu-help");
-  content.append(element("h1", "", title), element("p", "gpu-cause", reason),
-    element("p", "", "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU."));
+  const intro = element("p", "", "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU.");
+  content.append(element("h1", "", title), element("p", "gpu-cause", reason), intro);
   const { system, browser } = gpuEnvironment(navigator);
   const address = (parent, url) => {
     const row = element("div", "gpu-address");
@@ -82,14 +82,22 @@ export function showGpuNotice({ container, error, element, button }) {
     content.append(element("p", "", report));
     address(content, `${scheme}://gpu`);
   } else {
-    const help = browser === "safari"
-      ? "Update Safari and macOS, then reload this page. Safari 26 or later supports WebGPU."
-      : browser === "firefox"
-        ? "Update Firefox and your system, then restart Firefox. If it still fails, try the latest Chrome."
-        : system === "mac"
-          ? "Open this page in the latest Safari or Chrome, then reload."
-          : "Update your browser or open Capy Canvas in Chrome, then reload this page.";
-    content.append(element("h2", "", "Try an updated browser"), element("p", "", help));
+    intro.append(" At the moment, the only supported browsers are:");
+    const list = element("ul", "gpu-browsers");
+    // Upstream WebGPU availability, not a browser allowlist. See the dated
+    // sources and real-device testing limits in docs/web-packaging.md.
+    for (const [platform, browsers] of [
+      ["iPadOS", "Safari (iPadOS 26+)"],
+      ["Android", "Chrome (Android 12+)"],
+      ["Windows", "Chrome, Edge, Firefox 141+"],
+      ["macOS", "Chrome, Edge, Safari 26+, Firefox 147+ (Apple Silicon)"],
+      ["Linux (Wayland)", "Chrome, Edge"],
+    ]) {
+      const item = element("li");
+      item.append(element("strong", "", platform), `: ${browsers}`);
+      list.append(item);
+    }
+    content.append(list);
   }
   container.replaceChildren(content);
 }

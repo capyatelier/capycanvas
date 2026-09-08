@@ -110,9 +110,16 @@ with the `--use-angle=vulkan` command-line option, styled like the copyable
 browser addresses and separated from its introduction by the same 8 px gap as
 other instruction rows. Its 28 px line height matches rows with Copy buttons.
 The next paragraph identifies the GPU debug page. Android
-gets Chrome/system-update guidance, iOS/iPadOS gets Safari/system-update guidance,
-and Safari and Firefox get their own update guidance. Mobile users do not get
-desktop graphics-acceleration switches or Linux flags.
+gets Chrome/system-update guidance and iOS/iPadOS gets Safari/system-update guidance.
+Other desktop browsers, including Firefox and Safari, get the requested compact
+supported-browser list when startup fails, with bold platform labels in this order:
+iPadOS, Android, Windows, macOS, Linux (Wayland). Missing WebGPU keeps the subtitle
+“WebGPU is not available in this browser.” A failed adapter request uses
+“Your browser could not find a GPU adapter.” Insecure access, device failures and
+renderer failures also keep their distinct explanations.
+The list reflects the upstream availability below, including Firefox on Windows
+and Apple Silicon Macs; it does not block a working browser by name. Mobile users
+do not get desktop graphics-acceleration switches or Linux flags.
 For the Linux workaround, the graphics-report instruction checks **Display Type:
 ANGLE_VULKAN**, not **Vulkan: Enabled**. Other desktop Chromium platforms retain
 the **WebGPU: Hardware accelerated** instruction. Windows normally uses D3D12
@@ -148,6 +155,8 @@ updates; old GPUs, driver blocklists, managed policies and memory limits can
 still prevent startup. Safari/Firefox/mobile GPU rendering needs real-device
 release testing. Our automated help tests simulate those browser identities in
 Chrome; they do not emulate their GPU implementations.
+The unavailable-WebGPU panel was also checked in actual headless Firefox on
+Linux, with a disposable profile, in both light and dark themes.
 
 | Platform | Expected browser availability |
 | --- | --- |

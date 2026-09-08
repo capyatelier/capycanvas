@@ -31,12 +31,15 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     "ipad-desktop": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15",
     safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Version/26.0 Safari/605.1.15",
     firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+    "firefox-linux": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
+    "firefox-no-adapter": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
   };
   for (const mode of ["missing-api", "insecure", "no-adapter", "device-failure", "renderer-failure", "pending", ...Object.keys(browsers)]) {
-    const missingApi = ["missing-api", "unsupported-browser", "ios", "ios-chrome", "ipad-desktop", "safari", "firefox"].includes(mode);
-    const chromeSteps = !["unsupported-browser", "insecure", "android", "ios", "ios-chrome", "ipad-desktop", "safari", "firefox"].includes(mode);
+    const browserList = ["unsupported-browser", "safari", "firefox", "firefox-linux", "firefox-no-adapter"].includes(mode);
+    const missingApi = ["missing-api", "ios", "ios-chrome", "ipad-desktop"].includes(mode) || (browserList && mode !== "firefox-no-adapter");
+    const chromeSteps = !browserList && !["insecure", "android", "ios", "ios-chrome", "ipad-desktop"].includes(mode);
     const linuxSteps = chromeSteps && (!browsers[mode] || mode === "edge-linux");
-    const noAdapter = ["no-adapter", "non-linux", "chrome-mac", "chromeos", "edge", "edge-linux", "android"].includes(mode);
+    const noAdapter = ["no-adapter", "non-linux", "chrome-mac", "chromeos", "edge", "edge-linux", "android", "firefox-no-adapter"].includes(mode);
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       const originalGpu = navigator.gpu;
@@ -155,8 +158,21 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         assert.doesNotMatch(visibleText, /chrome:\/\/|edge:\/\/|experimental|graphics acceleration/);
         if (["ios", "ios-chrome", "ipad-desktop"].includes(mode)) assert.match(visibleText, /iOS or iPadOS to 26.*Safari/);
         if (mode === "android") assert.match(visibleText, /Android 12.*supported GPU/);
-        if (mode === "safari") assert.match(visibleText, /Safari 26 or later/);
-        if (mode === "firefox") assert.match(visibleText, /Update Firefox/);
+      }
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-browsers').length"), browserList ? 1 : 0);
+      if (browserList) {
+        assert.equal(reason, missingApi ? "WebGPU is not available in this browser." : "Your browser could not find a GPU adapter.");
+        assert.equal(await evaluate("document.querySelector('.gpu-cause').nextElementSibling.textContent"), "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU. At the moment, the only supported browsers are:");
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-browsers li')].map(n=>[n.querySelector('strong').textContent,n.textContent])"), [
+          ["iPadOS", "iPadOS: Safari (iPadOS 26+)"],
+          ["Android", "Android: Chrome (Android 12+)"],
+          ["Windows", "Windows: Chrome, Edge, Firefox 141+"],
+          ["macOS", "macOS: Chrome, Edge, Safari 26+, Firefox 147+ (Apple Silicon)"],
+          ["Linux (Wayland)", "Linux (Wayland): Chrome, Edge"],
+        ]);
+        assert.ok(await evaluate("[...document.querySelectorAll('.gpu-browsers strong')].every(n=>Number(getComputedStyle(n).fontWeight)>=600)"), "OS names are bold");
+        assert.equal(await evaluate("document.querySelectorAll('.gpu-help h2, .gpu-help button').length"), 0);
+        assert.doesNotMatch(visibleText, /This browser can’t draw here|Try an updated browser|Update your browser, or try opening/);
       }
       await capture(mode + "-dark");
       await action({ type: "set_theme", theme: "light" });

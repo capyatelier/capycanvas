@@ -30,6 +30,8 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 .gpu-steps { padding-left: 24px; margin: 8px 0 20px; }
 .gpu-steps li { padding-left: 4px; margin: 6px 0; }
 .gpu-steps li::marker { font-weight: 700; }
+.gpu-browsers { padding-left: 24px; margin: 12px 0 0; }
+.gpu-browsers li { padding-left: 4px; margin: 8px 0; }
 .gpu-address { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 /* Match the ordered list's 24px marker inset plus 4px item padding. */
 .gpu-help > .gpu-address, .gpu-launch { margin-left: 28px; }
