@@ -38,15 +38,14 @@ export function showGpuNotice({ container, error, retry, element, button }) {
     ]) steps.append(element("li", "", text));
     const linux = /Linux/.test(navigator.userAgent) && !/Android|CrOS/.test(navigator.userAgent);
     if (linux) {
-      const extra = element("li", "", "On Linux, GPUs are often on Chrome’s GPU blocklist. If it still fails, open:");
-      address(extra, "chrome://flags");
-      const flags = element("ol", "gpu-extra");
-      flags.append(element("li", "", "Set “Override software rendering list” to Enabled."),
-        element("li", "", "Set “Unsafe WebGPU” to Enabled, then relaunch."));
-      extra.append(flags);
+      const extra = element("li", "", "On Linux, if it still fails, set “Override software rendering list” to Enabled.");
+      address(extra, "chrome://flags/#ignore-gpu-blocklist");
+      extra.append(element("p", "", "If that still doesn’t work, set “Unsafe WebGPU” to Enabled."));
+      address(extra, "chrome://flags/#enable-unsafe-webgpu");
       steps.append(extra);
     }
-    content.append(steps);
+    content.append(steps, element("p", "", "Check Chrome’s graphics report:"));
+    address(content, "chrome://gpu");
     if (linux) content.append(element("p", "gpu-caution", "Experimental flags may cause crashes or reduce browser protections. Restore Default if needed."));
   } else {
     content.append(element("h2", "", "Try an updated browser"),
@@ -56,11 +55,6 @@ export function showGpuNotice({ container, error, retry, element, button }) {
   actions.append(button("Try again", retry, "gpu-retry"));
   const technical = element("details");
   technical.append(element("summary", "", "Technical details"));
-  if (isSecureContext && chromium) {
-    technical.append(element("p", "", "Still not working? Update your graphics driver or try another device."));
-    technical.append(element("p", "", "Check Chrome’s graphics report:"));
-    address(technical, "chrome://gpu");
-  }
   technical.append(element("pre", "", String(error)));
   actions.append(technical);
   content.append(actions);

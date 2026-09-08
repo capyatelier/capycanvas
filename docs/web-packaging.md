@@ -96,12 +96,14 @@ The Rust UI session starts before GPU initialization. Without a GPU, menus,
 panels and preferences still work, and the canvas area shows theme-matched help.
 The help shows the failure reason, a short GPU requirement explanation and a
 compact settings → acceleration → restart → reload checklist. Only Linux gets
-a fifth item about the GPU blocklist and two additional experimental flag steps.
-Settings addresses are copyable. The default instructions and retry fit without
+a fifth item with two flat, conditional instructions and exact flag addresses.
+Chrome’s graphics report is visible below the steps; every address has a Copy button.
+The help container shares the panels’ background, text color, corners and shadow
+in both themes. The default instructions and retry fit without
 scrolling at 1280×720 and 900×700. Experimental flags carry a visible warning and
 are never enabled by the app. Missing WebGPU and insecure
 connections get appropriate explanations; there are no other-platform guides.
-Technical details and Chrome’s graphics report stay collapsed. Retry attaches
+Only the raw technical error stays collapsed. Retry attaches
 a GPU to the existing session without resetting it.
 The document advertises the active light/dark color scheme and matching browser
 theme color. A static Dark Reader lock preserves the app’s themes and artwork

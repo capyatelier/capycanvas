@@ -20,27 +20,26 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 #workspace { position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
 #center { position: absolute; inset: 0; }
 body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
-#gpu-notice { position: absolute; inset: 54px 6px 30px; padding: 24px; overflow: auto; background: var(--bg); cursor: default; }
+#gpu-notice { position: absolute; inset: 54px 6px 30px; padding: 6px; overflow: auto; background: var(--bg); cursor: default; }
 #gpu-notice[hidden] { display: none; }
-.gpu-help { max-width: 600px; margin: auto; font-size: 13px; line-height: 1.5; user-select: text; overflow-wrap: anywhere; }
+.gpu-help { max-width: 640px; margin: auto; padding: 12px; font-size: 13px; line-height: 1.4; user-select: text; overflow-wrap: anywhere; }
 .gpu-help h1 { font-size: 24px; line-height: 1.25; margin: 0 0 8px; }
 .gpu-help h2 { font-size: 16px; margin: 16px 0 8px; }
-.gpu-help p { margin: 10px 0; }
-.gpu-help .gpu-cause { margin: 0 0 12px; font-size: 15px; }
+.gpu-help p { margin: 6px 0; }
+.gpu-help .gpu-cause { margin: 0 0 8px; font-size: 15px; }
 .gpu-intro { color: color-mix(in srgb, var(--text) 80%, var(--bg)); }
 .gpu-help .gpu-caution { font-size: 12px; color: color-mix(in srgb, var(--text) 80%, var(--bg)); }
-.gpu-steps { padding-left: 24px; margin: 8px 0 16px; }
-.gpu-steps li { padding-left: 4px; margin: 6px 0; }
+.gpu-steps { padding-left: 24px; margin: 8px 0; }
+.gpu-steps li { padding-left: 4px; margin: 4px 0; }
 .gpu-steps li::marker { font-weight: 700; }
-.gpu-extra { padding-left: 20px; }
 .gpu-actions { display: flex; align-items: flex-start; gap: 16px; }
 .gpu-actions > details { min-width: 0; flex: 1; }
 .gpu-help summary { display: list-item; list-style: disclosure-closed inside; padding: 6px 0; min-height: 34px; user-select: none; }
 .gpu-help details[open] > summary { list-style-type: disclosure-open; }
 .gpu-help summary::-webkit-details-marker { display: inline; }
 .gpu-help pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-.gpu-address { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
-.gpu-address code { min-width: 0; padding: 4px 8px; border-radius: 6px; background: var(--input); font-size: 12px; user-select: text; }
+.gpu-address { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.gpu-address code { min-width: 0; flex: 0 1 auto; padding: 4px 8px; border-radius: 6px; background: var(--input); font-size: 12px; user-select: text; }
 .gpu-address button { flex: none; min-height: 28px; padding: 2px 10px; font-size: 12px; background: var(--button); user-select: none; }
 .gpu-help .gpu-retry { flex: none; margin: 0; background: var(--accent); color: white; user-select: none; }
 .gpu-help .gpu-retry:hover { background: color-mix(in srgb, var(--accent), white 12%); }
@@ -79,7 +78,8 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tile-popover:popover-open { display: flex; flex-direction: column; gap: 12px; }
 .tile-popover input { width: 180px; }
 .dock-group, .divider { position: absolute; }
-.dock-group { background: var(--panel); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 2px 8px rgb(0 0 0 / 16%); }
+.dock-group, .gpu-help { background: var(--panel); color: var(--text); border-radius: 8px; box-shadow: 0 2px 8px rgb(0 0 0 / 16%); }
+.dock-group { overflow: hidden; display: flex; flex-direction: column; }
 .dock-tabs { display: flex; gap: 0; padding: 0; height: var(--tab-bar-height); flex-shrink: 0; align-items: center; background: var(--tabbar); }
 .tab-list { display: flex; align-items: center; flex: 1; min-width: 0; height: var(--tab-bar-height); overflow: auto hidden; scrollbar-width: none; }
 .tab-list > .dock-tab { flex: none; }

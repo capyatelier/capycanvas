@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, url }) {
   const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>20000)reject(new Error('GPU test timed out: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
+  const checkPanelStyle = async () => assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),panel=getComputedStyle(document.querySelector('.dock-group'));return ['backgroundColor','color','borderRadius','boxShadow'].every(key=>help[key]===panel[key])})()"), "GPU help shares the panel background, text, corners and shadow");
   const capture = async (name) => {
     const dir = "artifacts/ui/gpu-startup";
     await mkdir(dir, { recursive: true });
@@ -42,6 +43,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     assert.equal(await evaluate("layerApp.app.gpu_ready()"), false);
     assert.ok(await evaluate("document.querySelectorAll('.dock-group').length >= 3 && document.querySelectorAll('.brush-preview').length > 10 && !!document.querySelector('#header-end button')"));
     await action({ type: "set_theme", theme: "dark" });
+    await checkPanelStyle();
     assert.equal(await evaluate("document.querySelectorAll('head > meta[name=darkreader-lock]').length"), 1);
     assert.equal(await evaluate("document.querySelector('meta[name=color-scheme]').content"), "dark");
     assert.equal(await evaluate("getComputedStyle(document.documentElement).colorScheme"), "dark");
@@ -77,15 +79,22 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         ]);
         if (linuxSteps) {
           assert.match(visibleText, /Experimental.*crashes.*protections/);
-          assert.match(visibleText, /Linux.*GPU blocklist/);
-          assert.match(visibleText, /chrome:\/\/flags/);
-          assert.equal(await evaluate("document.querySelectorAll('.gpu-extra > li').length"), 2);
+          assert.match(visibleText, /On Linux, if it still fails, set “Override software rendering list” to Enabled/);
+          assert.match(visibleText, /If that still doesn’t work, set “Unsafe WebGPU” to Enabled/);
+          assert.equal(await evaluate("document.querySelectorAll('.gpu-steps ol').length"), 0, "No nested troubleshooting steps");
         } else assert.doesNotMatch(visibleText, /Linux|experimental|chrome:\/\/flags|Unsafe WebGPU/i);
+        assert.match(visibleText, /Check Chrome’s graphics report:/);
+        assert.match(visibleText, /chrome:\/\/gpu/);
+        const addresses = linuxSteps ? ["chrome://settings/system", "chrome://flags/#ignore-gpu-blocklist", "chrome://flags/#enable-unsafe-webgpu", "chrome://gpu"] : ["chrome://settings/system", "chrome://gpu"];
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-address code')].map(n=>n.textContent)"), addresses);
         assert.equal(await evaluate("document.querySelectorAll('.gpu-steps h3').length"), 0, "Simple steps, not separate cards");
         assert.equal(await evaluate("getComputedStyle(document.querySelector('.gpu-address code')).userSelect"), "text");
-        await evaluate("navigator.clipboard.writeText=async text=>{window.copiedAddress=text};document.querySelector('.gpu-address button').click()");
-        assert.equal(await evaluate("window.copiedAddress"), "chrome://settings/system");
-        assert.equal(await evaluate("document.querySelector('.gpu-address button').textContent"), "Copied");
+        for (let index = 0; index < addresses.length; index++) {
+          await evaluate(`navigator.clipboard.writeText=async text=>{window.copiedAddress=text};document.querySelectorAll('.gpu-address button')[${index}].click()`);
+          assert.equal(await evaluate("window.copiedAddress"), addresses[index]);
+          assert.equal(await evaluate(`document.querySelectorAll('.gpu-address button')[${index}].textContent`), "Copied");
+          await evaluate(`document.querySelectorAll('.gpu-address button')[${index}].textContent='Copy'`);
+        }
         await evaluate("navigator.clipboard.writeText=async()=>{throw Error('denied')};document.querySelector('.gpu-address button').click()");
         assert.equal(await evaluate("document.querySelector('.gpu-address button').textContent"), "Copy manually");
         await evaluate("document.querySelector('.gpu-address button').textContent='Copy'");
@@ -97,6 +106,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice').getBoundingClientRect(),b=document.querySelector('.gpu-retry').getBoundingClientRect();return b.bottom<=n.bottom})()"), "Retry is visible at the desktop size without scrolling");
       await capture(mode + "-dark");
       await action({ type: "set_theme", theme: "light" });
+      await checkPanelStyle();
       assert.equal(await evaluate("document.querySelector('meta[name=color-scheme]').content"), "light");
       assert.equal(await evaluate("getComputedStyle(document.documentElement).colorScheme"), "light");
       assert.equal(await evaluate("document.querySelector('meta[name=theme-color]').content"), "#b8b8b8");
@@ -107,7 +117,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         for (const [width, height] of [[1280, 720], [900, 700]]) {
           await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
           await settle();
-          assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return n.scrollWidth<=n.clientWidth&&n.scrollHeight<=n.clientHeight})()"), `All instructions fit without scrolling at ${width}×${height}`);
+          assert.deepEqual(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return [n.scrollWidth-n.clientWidth,n.scrollHeight-n.clientHeight]})()"), [0, 0], `All instructions fit without scrolling at ${width}×${height}`);
           await capture(`${mode}-${width}x${height}`);
         }
         await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
