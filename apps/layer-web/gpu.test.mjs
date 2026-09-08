@@ -101,7 +101,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
       assert.match(visibleText, /Capy Canvas is a GPU-accelerated drawing app/);
       assert.ok(visibleText.split(/\s+/).length < 150, "Instructions stay concise");
-      assert.doesNotMatch(visibleText, /Instructions for other platforms|Vulkan/);
+      assert.doesNotMatch(visibleText, /Instructions for other platforms|Vulkan:\s*Enabled/);
       const reason = await evaluate("document.querySelector('.gpu-cause').textContent");
       assert.match(reason, mode === "insecure" ? /secure connection/
         : missingApi ? /WebGPU is not available/
@@ -121,7 +121,11 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           assert.match(visibleText, /On Linux, enable “Override software rendering list”/);
           assert.match(visibleText, /If needed, enable “Unsafe WebGPU”/);
           const name = mode === "edge-linux" ? "Edge" : "Chrome";
-          assert.ok(visibleText.includes(`Add --use-angle=vulkan to ${name}’s launcher command line. Fully quit and reopen ${name}.`));
+          assert.ok(visibleText.includes(`Alternatively, force ${name} to use the Vulkan driver.`));
+          assert.equal(await evaluate("document.querySelector('.gpu-launch').textContent"), `Relaunch ${name} with the --use-angle=vulkan command line option.`);
+          assert.equal(await evaluate("document.querySelector('.gpu-launch code').textContent"), "--use-angle=vulkan");
+          assert.ok(await evaluate("(()=>{const launch=getComputedStyle(document.querySelector('.gpu-launch code')),address=getComputedStyle(document.querySelector('.gpu-address code'));return ['backgroundColor','color','fontFamily','fontSize','borderRadius','padding','userSelect'].every(key=>launch[key]===address[key])})()"), "Launcher flag uses the same code styling as browser addresses");
+          assert.ok(await evaluate("(()=>{const line=document.querySelector('.gpu-launch'),address=document.querySelector('.gpu-address code');return Math.abs(line.getBoundingClientRect().left-address.getBoundingClientRect().left)<1})()"), "Relaunch instruction shares the address-row indent");
           assert.match(visibleText, /Display Type should show “ANGLE_VULKAN”/);
           assert.doesNotMatch(visibleText, /WebGPU should show/);
           assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help > p')].some(n=>n.textContent.startsWith('On Linux,'))"), "Linux help is an unnumbered paragraph");

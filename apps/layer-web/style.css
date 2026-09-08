@@ -32,8 +32,11 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 .gpu-steps li::marker { font-weight: 700; }
 .gpu-address { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 /* Match the ordered list's 24px marker inset plus 4px item padding. */
-.gpu-help > .gpu-address { margin-left: 28px; }
-.gpu-address code { min-width: 0; flex: 0 1 auto; padding: 4px 8px; border-radius: 6px; background: var(--input); font-size: 12px; user-select: text; }
+.gpu-help > .gpu-address, .gpu-launch { margin-left: 28px; }
+.gpu-launch { display: block; }
+.gpu-help code { padding: 4px 8px; border-radius: 6px; background: var(--input); font-size: 12px; user-select: text; }
+.gpu-address code { min-width: 0; flex: 0 1 auto; }
+.gpu-launch code { white-space: nowrap; }
 .gpu-address button { flex: none; min-height: 28px; padding: 2px 10px; font-size: 12px; background: var(--button); user-select: none; }
 #canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: none; }
 #canvas-cursor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }

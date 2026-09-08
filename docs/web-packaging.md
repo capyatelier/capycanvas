@@ -105,7 +105,9 @@ Browser/platform hints select help only, including desktop-mode iPads and
 Android client hints. Desktop Chromium gets the compact settings → acceleration
 → restart → reload checklist (Edge uses its own internal addresses). Only Linux
 desktop Chromium gets the two unnumbered experimental-flag paragraphs and the
-`--use-angle=vulkan` launcher workaround, with a full browser quit and reopen. Android
+alternative Vulkan-driver guidance, followed by an indented instruction to relaunch
+with the `--use-angle=vulkan` command-line option, styled like the copyable
+browser addresses. Android
 gets Chrome/system-update guidance, iOS/iPadOS gets Safari/system-update guidance,
 and Safari and Firefox get their own update guidance. Mobile users do not get
 desktop graphics-acceleration switches or Linux flags.
