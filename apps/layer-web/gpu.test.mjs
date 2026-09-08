@@ -12,9 +12,10 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     const shot = await call("Page.captureScreenshot", { format: "png" });
     await writeFile(`${dir}/${name}.png`, Buffer.from(shot.data, "base64"));
   };
-  for (const mode of ["missing-api", "unsupported-browser", "insecure", "no-adapter", "device-failure", "pending"]) {
+  for (const mode of ["missing-api", "unsupported-browser", "insecure", "no-adapter", "non-linux", "device-failure", "pending"]) {
     const missingApi = ["missing-api", "unsupported-browser"].includes(mode);
     const chromeSteps = !["unsupported-browser", "insecure"].includes(mode);
+    const linuxSteps = chromeSteps && mode !== "non-linux";
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       const originalGpu = navigator.gpu;
@@ -23,11 +24,12 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       window.restoreGpu = () => { Object.defineProperty(window, 'isSecureContext', { configurable:true, value:secure }); Object.defineProperty(navigator, 'gpu', { configurable:true, value:originalGpu }); originalGpu.requestAdapter = requestAdapter; };
       window.adapterRequests = 0;
       if (${JSON.stringify(mode)} === 'unsupported-browser') Object.defineProperty(navigator,'userAgent',{ configurable:true, value:'Capy test browser' });
+      if (${JSON.stringify(mode)} === 'non-linux') Object.defineProperty(navigator,'userAgent',{ configurable:true, value:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/140.0.0.0' });
       if (${JSON.stringify(mode)} === 'insecure') Object.defineProperty(window,'isSecureContext',{ configurable:true, value:false });
       if (${missingApi}) Object.defineProperty(navigator,'gpu',{ configurable:true, value:undefined });
       else originalGpu.requestAdapter = async (...args) => {
         window.adapterRequests++;
-        if (${JSON.stringify(mode)} === 'no-adapter') return null;
+        if (${JSON.stringify(mode)} === 'no-adapter' || ${JSON.stringify(mode)} === 'non-linux') return null;
         if (${JSON.stringify(mode)} === 'pending') await new Promise(resolve => { window.releaseAdapter = resolve; });
         const adapter = await requestAdapter(...args);
         if (${JSON.stringify(mode)} === 'device-failure') adapter.requestDevice = async () => { throw new Error('test: device refused'); };
@@ -63,23 +65,33 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       const visibleText = await evaluate("document.querySelector('.gpu-help').innerText");
       assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
       assert.match(visibleText, /Capy Canvas is a GPU-accelerated drawing app/);
-      assert.ok(visibleText.split(/\s+/).length < 230, "Instructions stay concise");
-      assert.doesNotMatch(visibleText, /Use graphics acceleration when available|Instructions for other platforms|edge:\/\/|brave:\/\/|opera:\/\//);
-      assert.equal(await evaluate("document.querySelectorAll('.gpu-steps > li').length"), chromeSteps ? 5 : 0);
+      assert.ok(visibleText.split(/\s+/).length < 150, "Instructions stay concise");
+      assert.doesNotMatch(visibleText, /Instructions for other platforms|edge:\/\/|brave:\/\/|opera:\/\//);
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-steps > li').length"), chromeSteps ? (linuxSteps ? 5 : 4) : 0);
       if (chromeSteps) {
-        assert.match(visibleText, /experimental.*protections.*crashes/);
-        assert.match(visibleText, /chrome:\/\/flags\/#enable-unsafe-webgpu/);
-        assert.match(visibleText, /chrome:\/\/flags\/#ignore-gpu-blocklist/);
+        assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-steps > li')].slice(0,4).map(n=>n.firstChild.textContent)"), [
+          "Open your browser’s system settings:",
+          "Turn on “Use graphics acceleration when available”, if available.",
+          "Restart the browser.",
+          "Reload this page.",
+        ]);
+        if (linuxSteps) {
+          assert.match(visibleText, /Experimental.*crashes.*protections/);
+          assert.match(visibleText, /Linux.*GPU blocklist/);
+          assert.match(visibleText, /chrome:\/\/flags/);
+          assert.equal(await evaluate("document.querySelectorAll('.gpu-extra > li').length"), 2);
+        } else assert.doesNotMatch(visibleText, /Linux|experimental|chrome:\/\/flags|Unsafe WebGPU/i);
+        assert.equal(await evaluate("document.querySelectorAll('.gpu-steps h3').length"), 0, "Simple steps, not separate cards");
         assert.equal(await evaluate("getComputedStyle(document.querySelector('.gpu-address code')).userSelect"), "text");
         await evaluate("navigator.clipboard.writeText=async text=>{window.copiedAddress=text};document.querySelector('.gpu-address button').click()");
-        assert.equal(await evaluate("window.copiedAddress"), "chrome://settings/help");
+        assert.equal(await evaluate("window.copiedAddress"), "chrome://settings/system");
         assert.equal(await evaluate("document.querySelector('.gpu-address button').textContent"), "Copied");
         await evaluate("navigator.clipboard.writeText=async()=>{throw Error('denied')};document.querySelector('.gpu-address button').click()");
         assert.equal(await evaluate("document.querySelector('.gpu-address button').textContent"), "Copy manually");
         await evaluate("document.querySelector('.gpu-address button').textContent='Copy'");
       } else {
         assert.doesNotMatch(visibleText, /chrome:\/\/flags|experimental/);
-        assert.match(visibleText, mode === "insecure" ? /secure connection/ : /does not have WebGPU enabled/);
+        assert.match(visibleText, mode === "insecure" ? /secure connection/ : /WebGPU is not available/);
       }
       assert.equal(await evaluate("document.querySelector('.gpu-retry').textContent"), "Try again");
       assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice').getBoundingClientRect(),b=document.querySelector('.gpu-retry').getBoundingClientRect();return b.bottom<=n.bottom})()"), "Retry is visible at the desktop size without scrolling");
@@ -91,17 +103,17 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       assert.equal(await evaluate("getComputedStyle(document.querySelector('#gpu-notice')).backgroundColor"), "rgb(184, 184, 184)");
       await capture(mode + "-light");
       if (mode === "no-adapter") {
-        await call("Emulation.setDeviceMetricsOverride", { width: 900, height: 700, deviceScaleFactor: 1, mobile: false });
         await action({ type: "set_theme", theme: "dark" });
-        assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return n.scrollWidth<=n.clientWidth})()"), "Narrow help wraps without horizontal overflow");
-        await evaluate("document.querySelector('.gpu-retry').scrollIntoView({block:'end'})");
-        assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice').getBoundingClientRect(),b=document.querySelector('.gpu-retry').getBoundingClientRect();return b.top>=n.top&&b.bottom<=n.bottom})()"), "Retry is reachable by scrolling");
-        await evaluate("document.querySelector('#gpu-notice').scrollTop=0");
-        await capture(mode + "-narrow");
+        for (const [width, height] of [[1280, 720], [900, 700]]) {
+          await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+          await settle();
+          assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return n.scrollWidth<=n.clientWidth&&n.scrollHeight<=n.clientHeight})()"), `All instructions fit without scrolling at ${width}×${height}`);
+          await capture(`${mode}-${width}x${height}`);
+        }
         await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
         await settle();
       }
-      assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : mode === "no-adapter" ? 2 : 1);
+      assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : ["no-adapter", "non-linux"].includes(mode) ? 2 : 1);
       await evaluate("window.restoreGpu();document.querySelector('.gpu-retry').click()");
     } else {
       await action({ type: "set_theme", theme: null });

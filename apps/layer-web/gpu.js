@@ -3,7 +3,7 @@
 export function gpuProblem({ secure, api }) {
   const title = "Could not initialize canvas";
   if (!secure) return [title, "Your browser needs a secure connection to access the GPU."];
-  if (!api) return [title, "Your browser does not have WebGPU enabled."];
+  if (!api) return [title, "WebGPU is not available in this browser."];
   return [title, "Your browser could not find a GPU adapter."];
 }
 
@@ -11,7 +11,7 @@ export function showGpuNotice({ container, error, retry, element, button }) {
   const [title, reason] = gpuProblem({ secure: isSecureContext, api: !!navigator.gpu });
   const content = element("div", "gpu-help");
   content.append(element("h1", "", title), element("p", "gpu-cause", reason),
-    element("p", "gpu-intro", "Capy Canvas is a GPU-accelerated drawing app. It needs WebGPU to use your graphics hardware. Try the steps below to start drawing."));
+    element("p", "gpu-intro", "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU."));
   const chromium = /Chrome\/|Chromium\/|Edg\//.test(navigator.userAgent);
   const address = (parent, url) => {
     const row = element("div", "gpu-address");
@@ -27,29 +27,33 @@ export function showGpuNotice({ container, error, retry, element, button }) {
     content.append(element("h2", "", "Open a secure link"),
       element("p", "", "Use an https:// address, or localhost if you’re running the app yourself."));
   } else if (chromium) {
-    content.append(element("h2", "", "Try these steps in Chrome"),
-      element("p", "gpu-hint", "Copy each address into a new tab."),
-      element("p", "gpu-caution", "Steps 2–3 are experimental and may reduce browser protections or cause crashes. Restore Default if they cause problems."));
     const steps = element("ol", "gpu-steps");
-    for (const [heading, text, url] of [
-      ["Update Chrome", "", "chrome://settings/help"],
-      ["Enable WebGPU", "Set “Unsafe WebGPU” to Enabled.", "chrome://flags/#enable-unsafe-webgpu"],
-      ["Allow blocked graphics hardware if needed", "Try setting “Override software rendering list” to Enabled.", "chrome://flags/#ignore-gpu-blocklist"],
-      ["Relaunch Chrome", "Use the Relaunch button on the flags page."],
-      ["Return to Capy Canvas", "Click Try again below."],
-    ]) {
-      const step = element("li");
-      step.append(element("h3", "", heading));
-      if (text) step.append(element("p", "", text));
-      if (url) address(step, url);
-      steps.append(step);
+    const open = element("li", "", "Open your browser’s system settings:");
+    address(open, "chrome://settings/system");
+    steps.append(open);
+    for (const text of [
+      "Turn on “Use graphics acceleration when available”, if available.",
+      "Restart the browser.",
+      "Reload this page.",
+    ]) steps.append(element("li", "", text));
+    const linux = /Linux/.test(navigator.userAgent) && !/Android|CrOS/.test(navigator.userAgent);
+    if (linux) {
+      const extra = element("li", "", "On Linux, GPUs are often on Chrome’s GPU blocklist. If it still fails, open:");
+      address(extra, "chrome://flags");
+      const flags = element("ol", "gpu-extra");
+      flags.append(element("li", "", "Set “Override software rendering list” to Enabled."),
+        element("li", "", "Set “Unsafe WebGPU” to Enabled, then relaunch."));
+      extra.append(flags);
+      steps.append(extra);
     }
     content.append(steps);
+    if (linux) content.append(element("p", "gpu-caution", "Experimental flags may cause crashes or reduce browser protections. Restore Default if needed."));
   } else {
     content.append(element("h2", "", "Try an updated browser"),
-      element("p", "", "Update your browser, or open Capy Canvas in Chrome. If drawing still won’t start, try another device."));
+      element("p", "", "Update your browser or open Capy Canvas in Chrome, then try again."));
   }
-  content.append(button("Try again", retry, "gpu-retry"));
+  const actions = element("div", "gpu-actions");
+  actions.append(button("Try again", retry, "gpu-retry"));
   const technical = element("details");
   technical.append(element("summary", "", "Technical details"));
   if (isSecureContext && chromium) {
@@ -58,6 +62,7 @@ export function showGpuNotice({ container, error, retry, element, button }) {
     address(technical, "chrome://gpu");
   }
   technical.append(element("pre", "", String(error)));
-  content.append(technical);
+  actions.append(technical);
+  content.append(actions);
   container.replaceChildren(content);
 }

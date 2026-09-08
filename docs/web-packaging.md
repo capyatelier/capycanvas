@@ -94,9 +94,12 @@ and `application/wasm` for `.wasm`. WebGPU support and a suitable hardware adapt
 are required for drawing; packaging cannot enable unsupported browser/GPU features.
 The Rust UI session starts before GPU initialization. Without a GPU, menus,
 panels and preferences still work, and the canvas area shows theme-matched help.
-The help shows the failure reason, a short GPU requirement explanation and five
-Chrome troubleshooting steps with copyable addresses. Experimental flags carry
-a visible warning and are never enabled by the app. Missing WebGPU and insecure
+The help shows the failure reason, a short GPU requirement explanation and a
+compact settings → acceleration → restart → reload checklist. Only Linux gets
+a fifth item about the GPU blocklist and two additional experimental flag steps.
+Settings addresses are copyable. The default instructions and retry fit without
+scrolling at 1280×720 and 900×700. Experimental flags carry a visible warning and
+are never enabled by the app. Missing WebGPU and insecure
 connections get appropriate explanations; there are no other-platform guides.
 Technical details and Chrome’s graphics report stay collapsed. Retry attaches
 a GPU to the existing session without resetting it.

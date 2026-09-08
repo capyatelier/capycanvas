@@ -9,7 +9,7 @@ import { gpuProblem } from "./gpu.js";
 
 test("GPU help distinguishes missing support, insecure access and no adapter", () => {
   assert.match(gpuProblem({ secure: false, api: false })[1], /secure connection/);
-  assert.match(gpuProblem({ secure: true, api: false })[1], /does not have WebGPU enabled/);
+  assert.match(gpuProblem({ secure: true, api: false })[1], /WebGPU is not available/);
   assert.deepEqual(gpuProblem({ secure: true, api: true }), [
     "Could not initialize canvas", "Your browser could not find a GPU adapter.",
   ]);
