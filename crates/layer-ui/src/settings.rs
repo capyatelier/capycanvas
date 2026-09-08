@@ -159,6 +159,8 @@ pub enum PreferenceId {
     Version,
     License,
     Renderer,
+    Website,
+    SourceCode,
 }
 impl PreferenceId {
     pub fn key(self) -> &'static str {
@@ -177,6 +179,8 @@ impl PreferenceId {
             Self::Version => "version",
             Self::License => "license",
             Self::Renderer => "renderer",
+            Self::Website => "website",
+            Self::SourceCode => "source-code",
         }
     }
 }
@@ -210,6 +214,7 @@ pub enum PreferenceKind {
     Number { control: NumericControl, value: f32 },
     Switch { active: bool },
     Info { value: String },
+    Link { label: String, url: String },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferenceRow {
@@ -501,6 +506,24 @@ impl Settings {
                             .into(),
                         },
                     ),
+                    row(
+                        Website,
+                        "Website",
+                        "",
+                        PreferenceKind::Link {
+                            label: "capycanvas.art".into(),
+                            url: "https://capycanvas.art/".into(),
+                        },
+                    ),
+                    row(
+                        SourceCode,
+                        "Source Code",
+                        "",
+                        PreferenceKind::Link {
+                            label: "GitHub".into(),
+                            url: "https://github.com/capyatelier/capycanvas".into(),
+                        },
+                    ),
                 ],
             }],
         ];
@@ -562,7 +585,9 @@ impl Settings {
             PlatformPrediction => {
                 self.platform_prediction = matches!(value, PreferenceValue::Bool(true))
             }
-            Version | License | Renderer => return Err("This information is read-only".into()),
+            Version | License | Renderer | Website | SourceCode => {
+                return Err("This information is read-only".into());
+            }
         }
         Ok(())
     }
@@ -579,9 +604,14 @@ impl PreferencesState {
         for page in &mut pages {
             for group in &mut page.groups {
                 for row in &mut group.rows {
+                    let value = match &row.kind {
+                        PreferenceKind::Info { value } => value.as_str(),
+                        PreferenceKind::Link { url, .. } => url.as_str(),
+                        _ => "",
+                    };
                     row.visible = format!(
-                        "{} {} {} {}",
-                        page.title, group.title, row.title, row.description
+                        "{} {} {} {} {}",
+                        page.title, group.title, row.title, row.description, value
                     )
                     .to_lowercase()
                     .contains(&query);

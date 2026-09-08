@@ -159,7 +159,7 @@ try {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
     await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url });
     assert.deepEqual(errors, []);
-  } else if (packageHost) {
+  } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity")) {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {

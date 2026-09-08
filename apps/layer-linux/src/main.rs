@@ -129,7 +129,7 @@ fn capture(workspace: &workspace::Workspace, path: &str) {
 }
 
 fn snapshot(workspace: &workspace::Workspace) -> gtk::gdk::Texture {
-    with_canvas_snapshot(workspace, || snapshot_window(&workspace.window))
+    with_canvas_snapshot(workspace, || snapshot_window(&workspace.window, 1.0))
 }
 
 fn with_canvas_snapshot<T>(workspace: &workspace::Workspace, capture: impl FnOnce() -> T) -> T {
@@ -163,12 +163,13 @@ fn with_canvas_snapshot<T>(workspace: &workspace::Workspace, capture: impl FnOnc
     result
 }
 
-fn snapshot_window(window: &adw::ApplicationWindow) -> gtk::gdk::Texture {
+fn snapshot_window(window: &adw::ApplicationWindow, scale: f32) -> gtk::gdk::Texture {
     let paintable = gtk::WidgetPaintable::new(Some(window));
     // A queued native allocation can briefly invalidate WidgetPaintable's
     // scene. Capture a fresh frame, never an old screenshot or fabricated pixels.
     for _ in 0..60 {
         let snapshot = gtk::Snapshot::new();
+        snapshot.scale(scale, scale);
         paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
         if let Some(node) = snapshot.to_node() {
             return window.renderer().unwrap().render_texture(&node, None);

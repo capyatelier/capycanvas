@@ -343,15 +343,22 @@ impl Preferences {
                             ));
                             Field::Switch(control)
                         }
-                        PreferenceKind::Info { value } => {
+                        PreferenceKind::Info { .. } | PreferenceKind::Link { .. } => {
                             let control = adw::ActionRow::builder()
                                 .use_markup(false)
                                 .title(&row.title)
                                 .subtitle(&row.description)
                                 .build();
-                            let text = gtk::Label::new(Some(value));
-                            text.set_selectable(true);
-                            control.add_suffix(&text);
+                            if let PreferenceKind::Link { label, url } = &row.kind {
+                                let link = gtk::LinkButton::with_label(url, label);
+                                link.set_valign(gtk::Align::Center);
+                                control.add_suffix(&link);
+                                control.set_activatable_widget(Some(&link));
+                            } else if let PreferenceKind::Info { value } = &row.kind {
+                                let text = gtk::Label::new(Some(value));
+                                text.set_selectable(true);
+                                control.add_suffix(&text);
+                            }
                             Field::Info(control)
                         }
                     };

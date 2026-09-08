@@ -156,9 +156,19 @@ export function packageWeb() {
       .replace('width="24" height="24"', 'x="96" y="96" width="320" height="320" color="#f6f5f4"');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="76.8" fill="#767676"/>${mark}</svg>`;
     for (const size of [32, 180, 192, 512])
-      run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), "-", join(runtime, `icon-${size}.png`)], { input: svg, stdio: ["pipe", "inherit", "inherit"] });
+      run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), "-", join(runtime, `icon-${size}.png`)], {
+        // Apple masks Home Screen artwork itself; transparent corners can
+        // acquire a black border. Other platforms retain our rounded artwork.
+        input: size === 180 ? svg.replace(' rx="76.8"', "") : svg,
+        stdio: ["pipe", "inherit", "inherit"],
+      });
     const names = fingerprintAssets(runtime);
     const asset = (path) => `assets/${names[path]}`;
+    // Apple's out-of-page icon lookup also needs a conventional stable URL.
+    // A query fingerprint refreshes explicit links while older saved URLs still
+    // work after deployment removes a previous release's hashed asset files.
+    cpSync(join(runtime, names["icon-180.png"]), join(site, "apple-touch-icon.png"));
+    const appleIcon = `./apple-touch-icon.png?v=${names["icon-180.png"].split(".")[1]}`;
 
     const notices = ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"];
     for (const path of notices) cpSync(join(root, path), join(site, path));
@@ -179,7 +189,8 @@ export function packageWeb() {
       icons: [192, 512].map((size) => ({ src: asset(`icon-${size}.png`), sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
     }, null, 2) + "\n");
     const metadata = `<link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="${asset("icon-180.png")}" />
+    <link rel="apple-touch-icon" sizes="180x180" type="image/png" href="${appleIcon}" />
+    <meta name="apple-mobile-web-app-title" content="Capy Canvas" />
     <link rel="license" href="./licenses.html" />`;
     writeFileSync(join(site, "index.html"), read(join(web, "index.html"))
       .replace('href="data:,"', `type="image/png" sizes="32x32" href="${asset("icon-32.png")}"`)

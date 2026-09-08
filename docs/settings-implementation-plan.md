@@ -27,7 +27,7 @@ It remains synchronous and Wasm-portable; OS objects and I/O live in the hosts.
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; feedback enable, prediction horizon and tip lock; platform predictions where supplied |
 | Keyboard Shortcuts | Commands, brushes, size presets and momentary pan; record, clear, reset, conflict replacement |
-| About | Capy Canvas version, application license and platform renderer |
+| About | Capy Canvas version, application license, platform renderer, Website and Source Code links |
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
@@ -48,6 +48,15 @@ The stock `AdwPreferencesDialog` is useful for conventional preferences but
 does not provide this explicit persistent sidebar layout; the general
 `AdwSidebar` adds a separate item model that is unnecessary for a fixed ViewStack.
 We use native controls throughout, not custom canvas-composited settings.
+
+About follows libadwaita's convention of an application website and additional
+project links, within our existing About settings page. Labels, destinations
+and link-row metadata are defined once in `layer-ui/settings.rs`. GTK renders
+native `GtkLinkButton` controls in activatable rows, using the system URI handler;
+web renders ordinary links in a new tab with `noopener noreferrer`, preserving
+the open drawing. These read-only rows are searchable, not editable settings.
+[AdwAboutDialog links](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/class.AboutDialog.html#details),
+[GtkLinkButton](https://docs.gtk.org/gtk4/class.LinkButton.html).
 [PreferencesDialog](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1.9/class.PreferencesDialog.html),
 [Sidebar](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1.9/class.Sidebar.html).
 
@@ -137,12 +146,19 @@ remain separate work, not nonfunctional controls in this dialog.
   pages/themes, core filtering, search, dependencies, shortcut conflicts,
   compact recording prompt, Apply/Cancel, persisted reload and executable
   restored shortcuts.
+  Use `--package --preferences` to run it against the production bundle.
 - The existing GTK workspace, hardware browser and parity suites remain
   regression tests. Native-input pacing is rerun separately, without concurrent
   browser/GPU benchmarks.
 - Review PNGs are in `artifacts/ui/preferences/`.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.
+
+Validation caveat (2026-09-07): native settings/links pass with test file I/O
+disabled (`env -u LAYER_SETTINGS_FILE`). The isolated persistence variant reaches
+the save/reopen checks but crashes in `gdk_surface_handle_event` after destroying
+the additional window. That teardown issue is not fixed by the About-link work;
+do not treat the full native persistence suite as passing.
 
 No simulation of physical tablet delivery or display scanout is implied by
 these UI tests. Native event/presentation measurements remain documented in

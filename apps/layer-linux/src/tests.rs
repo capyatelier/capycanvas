@@ -74,27 +74,10 @@ fn canvas_white(w: &Workspace, texture: &gdk::Texture) -> usize {
 }
 
 fn capture_reference(w: &Workspace, path: &str, scale: f32) {
-    // Snapshot the actual native dialog/content subtree. This reference
-    // measures GTK widgets, not compositor delivery or OS window shadows.
+    // Include AdwDialog's overlay host, not only ApplicationWindow::child().
+    // This measures GTK widgets, not compositor delivery or OS window shadows.
     crate::with_canvas_snapshot(w, || {
-        let snapshot = gtk::Snapshot::new();
-        snapshot.scale(scale, scale);
-        let content = w.window.child().unwrap();
-        content.allocate(w.window.width(), w.window.height(), -1, None);
-        w.window.snapshot_child(&content, &snapshot);
-        let node = snapshot.to_node().expect("allocated native content");
-        w.window
-            .renderer()
-            .unwrap()
-            .render_texture(
-                &node,
-                Some(&gtk::graphene::Rect::new(
-                    0.0,
-                    0.0,
-                    w.window.width() as f32 * scale,
-                    w.window.height() as f32 * scale,
-                )),
-            )
+        crate::snapshot_window(&w.window, scale)
             .save_to_png(path)
             .unwrap();
     });
@@ -270,6 +253,51 @@ fn native_preferences_and_shortcuts() {
                 page
             );
             capture_reference(&w, &format!("{dir}/gtk-{}-{suffix}.png", page.key()), 1.0);
+            if page == SettingsPage::About {
+                assert!(w.preferences.dialog.is_mapped());
+                let view = w
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .preferences()
+                    .unwrap();
+                for row in view
+                    .pages
+                    .iter()
+                    .flat_map(|p| &p.groups)
+                    .flat_map(|g| &g.rows)
+                {
+                    if let PreferenceKind::Link { label, url } = &row.kind {
+                        let native: adw::ActionRow = find_named(
+                            w.preferences.dialog.upcast_ref(),
+                            &format!("setting-{}", row.id.key()),
+                        )
+                        .unwrap()
+                        .downcast()
+                        .unwrap();
+                        let link = native
+                            .activatable_widget()
+                            .unwrap()
+                            .downcast::<gtk::LinkButton>()
+                            .unwrap();
+                        assert_eq!(native.title().as_str(), row.title);
+                        assert_eq!(link.uri().as_str(), url);
+                        assert_eq!(link.label().as_deref(), Some(label.as_str()));
+                        // Exercise activation without opening the user's browser.
+                        let activated = Rc::new(std::cell::Cell::new(false));
+                        let seen = activated.clone();
+                        let handler = link.connect_activate_link(move |_| {
+                            seen.set(true);
+                            glib::Propagation::Stop
+                        });
+                        link.emit_clicked();
+                        assert!(activated.get());
+                        link.disconnect(handler);
+                    }
+                }
+            }
         }
         w.dispatch(UiAction::CancelSettings);
         pump(250);

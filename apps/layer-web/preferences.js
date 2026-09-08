@@ -83,6 +83,10 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
               input = element("input", "settings-switch"); input.type = "checkbox"; input.setAttribute("role", "switch"); widget = input; break;
             case "info":
               input = element("span", "settings-info", row.kind.value); widget = input; break;
+            case "link":
+              input = element("a", "settings-link", row.kind.label);
+              input.href = row.kind.url; input.target = "_blank"; input.rel = "noopener noreferrer";
+              widget = input; break;
           }
           input.id = id; input.setAttribute("aria-label", row.title);
           input.addEventListener("input", () => {

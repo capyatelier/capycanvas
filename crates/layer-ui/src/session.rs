@@ -2084,6 +2084,66 @@ mod tests {
         key(s, name, false, command, true);
     }
     #[test]
+    fn about_links_are_shared_searchable_and_read_only() {
+        for platform in [Platform::Gtk, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::About);
+            let view = s.preferences().unwrap();
+            let about = view
+                .pages
+                .iter()
+                .find(|p| p.id == SettingsPage::About)
+                .unwrap();
+            let links: Vec<_> = about
+                .groups
+                .iter()
+                .flat_map(|g| &g.rows)
+                .filter_map(|r| {
+                    if let PreferenceKind::Link { label, url } = &r.kind {
+                        Some((r.title.as_str(), label.as_str(), url.as_str()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                links,
+                [
+                    ("Website", "capycanvas.art", "https://capycanvas.art/"),
+                    (
+                        "Source Code",
+                        "GitHub",
+                        "https://github.com/capyatelier/capycanvas"
+                    ),
+                ]
+            );
+            for id in [PreferenceId::Website, PreferenceId::SourceCode] {
+                edit_preference(&mut s, id, PreferenceValue::Choice(0));
+                assert!(s.preferences().unwrap().error.is_some());
+                assert!(!s.preferences().unwrap().dirty);
+            }
+            preference(
+                &mut s,
+                PreferenceAction::Search {
+                    query: "github".into(),
+                },
+            );
+            let view = s.preferences().unwrap();
+            assert_eq!(view.page, SettingsPage::About);
+            assert_eq!(
+                view.pages
+                    .iter()
+                    .flat_map(|p| &p.groups)
+                    .flat_map(|g| &g.rows)
+                    .filter(|r| r.visible)
+                    .map(|r| r.id)
+                    .collect::<Vec<_>>(),
+                [PreferenceId::SourceCode]
+            );
+        }
+    }
+    #[test]
     fn preferences_metadata_search_dependencies_and_deep_links() {
         let mut s = session();
         s.set_platform(Platform::Gtk);

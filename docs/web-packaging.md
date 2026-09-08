@@ -36,8 +36,10 @@ The build:
    paths. The generated runtime is scanned before packaging.
 3. Copies a curated list of runtime files and renders a 32 px favicon and
    180/192/512 px PNG installation icons from the shared capybara SVG, all with
-   the same rounded corners, preserving its separate branding terms. Manifest
-   icons use `purpose: any`, since the artwork already has its own shape.
+   rounded corners, preserving its separate branding terms. The Apple-only
+   180px icon instead has an opaque, full-bleed background; iPadOS applies its
+   own corner mask. Manifest icons use `purpose: any`, since those retain their
+   rounded artwork.
 4. Fingerprints every runtime asset with the first 20 hex digits of its own
    SHA-256: `assets/app.<sha>.js`, `assets/style.<sha>.css`, and similarly for
    imported JS, Wasm, SVGs and PNGs. Dependencies are renamed first; rewritten
@@ -222,6 +224,23 @@ blanket immutable policy to the whole site. Publish a complete package together;
 retain previous hashed assets during a non-atomic rollout so an HTML response
 already in flight can still load its dependencies. See
 [HTTP cache busting](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching#cache_busting).
+
+The Apple Home Screen icon has a deliberate compatibility alias,
+`apple-touch-icon.png`, at the package root. Its HTML link includes `sizes`,
+PNG type and a content-SHA query parameter; the unqueried URL also works for
+Apple's conventional lookup without a service worker. Serve this alias with
+revalidation, not immutable caching. The stable pathname also remains fetchable
+when older HTML references its previous query hash. The app title is declared
+with `apple-mobile-web-app-title`; the manifest already provides standalone
+display, so obsolete standalone/status-bar meta overrides are unnecessary.
+The package works at root and subpaths without hardcoding a domain. See
+[Apple's icon lookup](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariWebContent/ConfiguringWebApplications/ConfiguringWebApplications.html)
+and [WebKit's transparency caveat](https://bugs.webkit.org/show_bug.cgi?id=255596).
+The live editor's previous Apple link and PNG were present and returned HTTP
+200; the conventional fallback was missing. These changes harden discovery and
+artwork compatibility, but Home Screen selection still needs a real iPad check
+after deploying and reopening the updated app. An already-installed icon may
+need to be removed and added again; do not discard an unsaved drawing.
 
 After the first successful online install, the worker precaches the whole
 package. Runtime assets are served from that complete version; failed or

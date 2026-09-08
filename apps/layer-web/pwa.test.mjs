@@ -210,6 +210,16 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     assert.equal(data.display, "standalone");
     assert.deepEqual(data.icons.map((icon) => icon.sizes), ["192x192", "512x512"]);
     assert.ok(data.icons.every((icon) => icon.purpose === "any"), "Rounded artwork is not marked maskable");
+    assert.equal(await evaluate("document.querySelector('link[rel=apple-touch-icon]').sizes.value"), "180x180");
+    assert.equal(await evaluate("document.querySelector('meta[name=apple-mobile-web-app-title]').content"), "Capy Canvas");
+    assert.match(await evaluate("document.querySelector('link[rel=apple-touch-icon]').href"), /\/apple-touch-icon\.png\?v=[0-9a-f]{20}$/);
+    // The OS icon fetch is not necessarily controlled by the page's worker.
+    const apple = await fetch(host.url + path + "apple-touch-icon.png");
+    assert.equal(apple.status, 200);
+    assert.equal(apple.headers.get("content-type"), "image/png");
+    assert.equal(apple.headers.get("cache-control"), "no-cache");
+    const png = Buffer.from(await apple.arrayBuffer());
+    assert.equal(png.readUInt32BE(16), 180); assert.equal(png.readUInt32BE(20), 180);
     await evaluate(`navigator.serviceWorker.ready.then(()=>new Promise(resolve=>{if(navigator.serviceWorker.controller)resolve(true);else navigator.serviceWorker.addEventListener('controllerchange',()=>resolve(true),{once:true})}))`);
     assert.deepEqual((await call("Page.getInstallabilityErrors")).installabilityErrors, []);
     assert.ok(await evaluate(`(async()=>{const keys=await caches.keys();return keys.some(k=>k.startsWith('capycanvas:'+location.href+':'))})()`));
@@ -233,8 +243,8 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
       }));
     })()`);
     assert.deepEqual(icons, [32, 180, 192, 512].map(size => ({
-      width: size, height: size, corners: [0, 0, 0, 0], background: [118, 118, 118, 255],
-    })), "Favicon and app icons load offline with rounded corners and mid-gray backgrounds");
+      width: size, height: size, corners: Array(4).fill(size === 180 ? 255 : 0), background: [118, 118, 118, 255],
+    })), "Icons load offline with mid-gray backgrounds; only Apple's artwork leaves corner masking to the OS");
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));

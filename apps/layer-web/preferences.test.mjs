@@ -28,6 +28,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
       await capture(`${page}-${theme}`);
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
+      if (page === "about") {
+        assert.ok(await evaluate(`layerApp.app.preferences().pages.flatMap(p=>p.groups.flatMap(g=>g.rows)).filter(r=>r.kind.type==='link').every(row=>{
+          const a=document.querySelector('#setting-'+row.id.replaceAll('_','-'));
+          return a.tagName==='A'&&a.textContent===row.kind.label&&a.href===row.kind.url&&a.getAttribute('aria-label')===row.title&&a.target==='_blank'&&a.relList.contains('noopener')&&a.relList.contains('noreferrer');
+        })`), "About links render the Rust labels and URLs and preserve the drawing tab");
+        assert.equal(await evaluate("document.querySelectorAll('[data-page=about] a.settings-link').length"), 2);
+      }
     }
     await action({ type: "cancel_settings" });
   }
