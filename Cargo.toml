@@ -9,6 +9,7 @@ members = [
     "crates/layer-ui",
     "apps/layer-linux",
     "apps/layer-web",
+    "apps/layer-android/native",
 ]
 resolver = "2"
 

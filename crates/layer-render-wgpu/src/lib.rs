@@ -738,6 +738,11 @@ impl WgpuRasterizer {
         Ok(renderer)
     }
 
+    /// The platform host validates replacement surfaces against this same GPU.
+    pub fn adapter(&self) -> &wgpu::Adapter {
+        &self.adapter
+    }
+
     pub fn adapter_info(&self) -> GpuAdapterInfo {
         let info = self.adapter.get_info();
         GpuAdapterInfo {

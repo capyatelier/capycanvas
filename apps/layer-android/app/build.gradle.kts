@@ -1,0 +1,59 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+android {
+    namespace = "art.capycanvas"
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
+    ndkVersion = "29.0.14206865"
+    defaultConfig {
+        applicationId = "art.capycanvas"
+        minSdk = 29
+        targetSdk = 37
+        versionCode = 1
+        versionName = "0.1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildFeatures { compose = true; buildConfig = true }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs").get().asFile)
+    sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews")
+    packaging { jniLibs.useLegacyPackaging = false }
+    testOptions { animationsDisabled = true }
+}
+
+val rustBuild by tasks.registering(Exec::class) {
+    val abi = providers.gradleProperty("capyAbi").getOrElse("arm64-v8a,x86_64")
+    val out = layout.buildDirectory.dir("rustJniLibs").get().asFile
+    workingDir = rootDir.resolve("../..")
+    environment("ANDROID_NDK_HOME", "${System.getenv("ANDROID_HOME") ?: System.getProperty("user.home") + "/Android/Sdk"}/ndk/29.0.14206865")
+    commandLine(listOf("cargo", "ndk") + abi.split(",").flatMap { listOf("-t", it) } +
+        listOf("--platform", "29", "-o", out.absolutePath, "build", "--release", "-p", "layer-android"))
+    inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
+    inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
+    inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"))
+    inputs.property("abi", abi)
+    outputs.dir(out)
+}
+tasks.named("preBuild") { dependsOn(rustBuild) }
+
+dependencies {
+    implementation(platform("androidx.compose:compose-bom:2026.08.00"))
+    implementation("androidx.activity:activity-compose:1.12.4")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("com.caverock:androidsvg-aar:1.4")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.08.00"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+}

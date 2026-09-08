@@ -4,6 +4,15 @@ node_modules/
 /artifacts/
 /apps/layer-web/pkg/
 
+# Android SDK paths, build products and signing material.
+.gradle/
+.kotlin/
+local.properties
+*.keystore
+*.jks
+/apps/layer-android/**/build/
+/apps/layer-android/build/
+
 # Local environment, credentials, editor state, and private agent sessions.
 .env
 .env.*
