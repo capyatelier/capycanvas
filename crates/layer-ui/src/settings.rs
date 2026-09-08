@@ -3,7 +3,6 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-const PANEL_TEXT_SIZES: [u8; 3] = [9, 11, 13];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,7 +30,6 @@ impl Platform {
 pub struct Settings {
     pub version: u32,
     pub theme: Option<Theme>,
-    pub panel_text_pt: u8,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub zen_reveal: f32,
@@ -52,7 +50,6 @@ impl Default for Settings {
         Self {
             version: 1,
             theme: None,
-            panel_text_pt: 11,
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             zen_reveal: 80.0,
@@ -69,12 +66,20 @@ impl Default for Settings {
     }
 }
 impl Settings {
+    /// Discard only the retired typography preference, preserving strict
+    /// validation of every other field and all of the user's other settings.
+    pub fn deserialize_saved<'de, D: serde::Deserializer<'de>>(
+        reader: D,
+    ) -> Result<Self, D::Error> {
+        let mut value = serde_json::Value::deserialize(reader)?;
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("panel_text_pt");
+        }
+        serde_json::from_value(value).map_err(serde::de::Error::custom)
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported settings version".into());
-        }
-        if !PANEL_TEXT_SIZES.contains(&self.panel_text_pt) {
-            return Err("Panel text size must be 9, 11 or 13 pt".into());
         }
         for row in self
             .pages(Platform::Gtk)
@@ -152,7 +157,6 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
-    PanelTextSize,
     ZenReveal,
     ZenHide,
     Cursor,
@@ -173,7 +177,6 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
-            Self::PanelTextSize => "panel-text-size",
             Self::ZenReveal => "zen-reveal",
             Self::ZenHide => "zen-hide",
             Self::Cursor => "cursor",
@@ -222,10 +225,6 @@ pub enum PreferenceKind {
         options: Vec<String>,
         selected: u32,
         icons: Vec<String>,
-    },
-    Scale {
-        options: Vec<String>,
-        selected: u32,
     },
     Number {
         control: NumericControl,
@@ -453,37 +452,20 @@ impl Settings {
             vec![
                 PreferenceGroup {
                     title: "Interface".into(),
-                    rows: vec![
-                        row(
-                            Theme,
-                            "Appearance",
-                            "Follow the system theme, or choose an override.",
-                            PreferenceKind::Choice {
-                                icons: Vec::new(),
-                                options: vec!["System".into(), "Light".into(), "Dark".into()],
-                                selected: match self.theme {
-                                    None => 0,
-                                    Some(crate::Theme::Light) => 1,
-                                    Some(crate::Theme::Dark) => 2,
-                                },
+                    rows: vec![row(
+                        Theme,
+                        "Appearance",
+                        "Follow the system theme, or choose an override.",
+                        PreferenceKind::Choice {
+                            icons: Vec::new(),
+                            options: vec!["System".into(), "Light".into(), "Dark".into()],
+                            selected: match self.theme {
+                                None => 0,
+                                Some(crate::Theme::Light) => 1,
+                                Some(crate::Theme::Dark) => 2,
                             },
-                        ),
-                        row(
-                            PanelTextSize,
-                            "Panel text size",
-                            "Text and text controls; tool icons stay the same size.",
-                            PreferenceKind::Scale {
-                                options: PANEL_TEXT_SIZES
-                                    .iter()
-                                    .map(|v| format!("{v} pt"))
-                                    .collect(),
-                                selected: PANEL_TEXT_SIZES
-                                    .iter()
-                                    .position(|v| *v == self.panel_text_pt)
-                                    .unwrap_or(1) as u32,
-                            },
-                        ),
-                    ],
+                        },
+                    )],
                 },
                 PreferenceGroup {
                     title: "Zen mode".into(),
@@ -648,7 +630,7 @@ impl Settings {
             (PreferenceKind::Number { control, .. }, _) => {
                 control.validate(value.number().ok_or("Expected a number")?, &field.title)?
             }
-            (PreferenceKind::Choice { options, .. } | PreferenceKind::Scale { options, .. }, _)
+            (PreferenceKind::Choice { options, .. }, _)
                 if value.choice().is_some_and(|v| (v as usize) < options.len()) => {}
             (PreferenceKind::Switch { .. }, PreferenceValue::Bool(_)) => {}
             _ => return Err("Invalid setting value".into()),
@@ -663,9 +645,6 @@ impl Settings {
                 }
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
-            PanelTextSize => {
-                self.panel_text_pt = PANEL_TEXT_SIZES[value.choice().unwrap() as usize]
-            }
             Pressure => self.pressure_gamma = n,
             ZenReveal => self.zen_reveal = n,
             ZenHide => self.zen_hide = n,

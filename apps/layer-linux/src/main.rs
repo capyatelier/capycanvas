@@ -13,6 +13,14 @@ use adw::prelude::*;
 use gtk::glib;
 use std::{cell::RefCell, rc::Rc};
 
+fn stylesheet() -> String {
+    format!(
+        "window {{ --ui-text-size: {}pt; }}\n{}",
+        layer_ui::UI_TEXT_PT,
+        include_str!("style.css")
+    )
+}
+
 fn main() -> gtk::glib::ExitCode {
     glib::set_application_name(layer_ui::APP_NAME);
     let app = adw::Application::builder()
@@ -21,7 +29,7 @@ fn main() -> gtk::glib::ExitCode {
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {
         let css = gtk::CssProvider::new();
-        css.load_from_string(include_str!("style.css"));
+        css.load_from_string(&stylesheet());
         gtk::style_context_add_provider_for_display(
             &gtk::gdk::Display::default().unwrap(),
             &css,

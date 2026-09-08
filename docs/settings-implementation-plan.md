@@ -23,7 +23,7 @@ It remains synchronous and Wasm-portable; OS objects and I/O live in the hosts.
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; 9/11/13 pt panel text; Zen reveal and keep-visible distances |
+| Appearance | System/Light/Dark; Zen reveal and keep-visible distances |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; feedback enable, prediction horizon up to 64 ms and tip lock; platform predictions where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
@@ -33,10 +33,12 @@ Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
 Defaults preserve the previous drawing behavior: System theme, 80px edge reveal,
 40px keep-visible margin, linear pressure, normal scroll speeds, 8ms prediction.
-Panel text defaults to 11 pt, including tabs and section headings. A discrete
-slider selects 9, 11 or 13 pt. Text-bearing controls and inline step symbols
-scale with the font; tool icons, brush previews, sliders and checkboxes do not.
-Hosts also expose the same typography role for future panel context menus.
+All UI text uses the shared Rust `UI_TEXT_PT` constant (11 pt), including panels,
+tabs, menus, preference descriptions and zoom/rotation status text. There is no
+font-size setting. Text controls and inline step symbols use font-relative sizes;
+tool icons, brush previews, sliders and checkboxes retain their dimensions.
+The core ignores the retired `panel_text_pt` field when loading saved settings,
+without dropping other preferences or relaxing validation of unknown fields.
 
 ## Native presentation and research
 

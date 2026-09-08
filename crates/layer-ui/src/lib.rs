@@ -37,6 +37,8 @@ pub const HEADER_HEIGHT: f32 = 48.0;
 pub const WORKSPACE_SPACING: f32 = 6.0;
 pub const STATUS_HEIGHT: f32 = 28.0;
 pub const APP_NAME: &str = "Capy Canvas";
+/// Shared UI typography in points, including panels, menus and status text.
+pub const UI_TEXT_PT: u8 = 11;
 
 use layer_core::DefaultBrushPreset;
 use serde::{Deserialize, Serialize};
@@ -218,6 +220,7 @@ pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
 #[derive(Clone, Debug, Serialize)]
 pub struct UiCatalog {
     pub app_name: &'static str,
+    pub text_size_pt: u8,
     pub cursors: &'static [(CursorMode, &'static str)],
     pub icons: &'static [&'static str],
     pub panels: Vec<PanelChoice>,
@@ -234,6 +237,7 @@ pub struct UiCatalog {
 pub fn ui_catalog() -> UiCatalog {
     UiCatalog {
         app_name: APP_NAME,
+        text_size_pt: UI_TEXT_PT,
         cursors: CursorMode::CHOICES,
         icons: &[
             "brush",
@@ -555,6 +559,7 @@ pub enum UiAction {
         action: PreferenceAction,
     },
     RestoreSettings {
+        #[serde(deserialize_with = "Settings::deserialize_saved")]
         settings: Settings,
     },
     CompleteRequest {

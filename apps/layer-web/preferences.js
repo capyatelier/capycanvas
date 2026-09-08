@@ -82,12 +82,6 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
           label.htmlFor = id;
           let input, widget;
           switch (row.kind.type) {
-            case "scale":
-              input = element("input"); input.type = "range"; input.min = 0; input.max = row.kind.options.length - 1; input.step = 1;
-              widget = element("div", "preference-scale");
-              const marks = element("div", "preference-scale-marks");
-              row.kind.options.forEach(name => marks.append(element("span", "", name)));
-              widget.append(input, marks); break;
             case "choice":
               if (row.kind.icons.length) {
                 input = element("input"); input.type = "hidden";
@@ -191,11 +185,6 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
         }
       }
       else if (row.kind.type === "switch") input.checked = row.kind.active;
-      else if (row.kind.type === "scale") {
-        input.value = row.kind.selected;
-        input.setAttribute("aria-valuetext", row.kind.options[row.kind.selected]);
-        input.style.setProperty("--fill", `${100 * row.kind.selected / (row.kind.options.length - 1)}%`);
-      }
     }
     for (const [ids, section] of groups) section.hidden = !ids.some((id) => visible.has(id));
     const shortcutIds = new Set(model.shortcuts.map((spec) => spec.id));

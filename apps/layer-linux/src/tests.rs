@@ -39,7 +39,7 @@ impl Drop for NativeTestApp {
 fn native_test_app(id: &str) -> NativeTestApp {
     adw::init().unwrap();
     let css = gtk::CssProvider::new();
-    css.load_from_string(include_str!("style.css"));
+    css.load_from_string(&crate::stylesheet());
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,
@@ -260,34 +260,25 @@ fn native_stacked_divider() {
             .any(|(s, _)| *s == Slot::Divider(40)),
         "same panels with a new split must replace the old native handle"
     );
-    let tab = w.groups.borrow()[0].tabs[0].1.clone();
     let tool = command(&w, CommandId::Brush);
-    let tool_size = [tool.width(), tool.height()];
-    let mut previous_spin = 0;
     std::fs::create_dir_all("../../artifacts/ui/preferences").unwrap();
-    for points in [9, 11, 13] {
-        let settings = Settings {
-            panel_text_pt: points,
-            ..state(&w).settings
-        };
-        w.dispatch(UiAction::RestoreSettings { settings });
-        pump(100);
-        capture_reference(
-            &w,
-            &format!("../../artifacts/ui/preferences/gtk-text-{points}pt.png"),
-            1.0,
-        );
-        let font = tab.pango_context().font_description().unwrap();
+    capture_reference(&w, "../../artifacts/ui/preferences/gtk-typography.png", 1.0);
+    for widget in [
+        w.groups.borrow()[0].tabs[0]
+            .1
+            .clone()
+            .upcast::<gtk::Widget>(),
+        w.size_number.clone().upcast(),
+        w.view_info.clone().upcast(),
+    ] {
+        let font = widget.pango_context().font_description().unwrap();
         assert!(
-            (font.size() as f64 / gtk::pango::SCALE as f64 - points as f64 * 4.0 / 3.0).abs()
+            (font.size() as f64 / gtk::pango::SCALE as f64 - UI_TEXT_PT as f64 * 4.0 / 3.0).abs()
                 < 0.02,
-            "expected {points}pt, got {font}"
+            "expected {UI_TEXT_PT}pt, got {font}"
         );
-        assert_eq!([tool.width(), tool.height()], tool_size);
-        let width = w.size_number.measure(gtk::Orientation::Horizontal, -1).1;
-        assert!(width > previous_spin);
-        previous_spin = width;
     }
+    assert_eq!([tool.width(), tool.height()], [36, 36]);
     w.window.destroy();
     pump(100);
 }
@@ -320,7 +311,7 @@ fn native_window_lifecycle() {
 fn native_ribbon_allocation() {
     adw::init().unwrap();
     let css = gtk::CssProvider::new();
-    css.load_from_string(include_str!("style.css"));
+    css.load_from_string(&crate::stylesheet());
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,
@@ -1072,7 +1063,7 @@ fn native_compositor_input() {
 fn native_workspace_controls_docking_and_ink() {
     adw::init().unwrap();
     let css = gtk::CssProvider::new();
-    css.load_from_string(include_str!("style.css"));
+    css.load_from_string(&crate::stylesheet());
     gtk::style_context_add_provider_for_display(
         &gdk::Display::default().unwrap(),
         &css,

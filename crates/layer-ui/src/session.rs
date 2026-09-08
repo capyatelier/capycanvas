@@ -2433,44 +2433,55 @@ mod tests {
         );
     }
     #[test]
-    fn panel_typography_is_portable_discrete_and_backward_compatible() {
-        assert_eq!(
-            serde_json::from_str::<Settings>("{}")
-                .unwrap()
-                .panel_text_pt,
-            11
-        );
+    fn typography_is_fixed_and_retired_preferences_preserve_other_settings() {
+        assert_eq!(ui_catalog().text_size_pt, UI_TEXT_PT);
+        assert_eq!(UI_TEXT_PT, 11);
         for platform in [Platform::Gtk, Platform::Web] {
             let mut s = session();
             s.set_platform(platform);
-            invoke(&mut s, CommandId::Settings);
-            for (index, points) in [9, 11, 13].into_iter().enumerate() {
-                edit_preference(
-                    &mut s,
-                    PreferenceId::PanelTextSize,
-                    PreferenceValue::Choice(index as u32),
+            for points in [9, 11, 13] {
+                let json = format!(r#"{{"panel_text_pt":{points},"pressure_gamma":1.5}}"#);
+                let native =
+                    Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(&json))
+                        .unwrap();
+                let action: UiAction = serde_json::from_str(&format!(
+                    r#"{{"type":"restore_settings","settings":{json}}}"#
+                ))
+                .unwrap();
+                s.dispatch(action).unwrap();
+                assert_eq!(s.state.settings, native);
+                assert_eq!(native.pressure_gamma, 1.5);
+                assert!(
+                    !serde_json::to_value(native)
+                        .unwrap()
+                        .as_object()
+                        .unwrap()
+                        .contains_key("panel_text_pt")
                 );
-                assert_eq!(
-                    s.state.settings_draft.as_ref().unwrap().panel_text_pt,
-                    points
-                );
-                assert!(s.preferences().unwrap().error.is_none());
             }
-            let before = s.state.settings_draft.clone();
-            edit_preference(
-                &mut s,
-                PreferenceId::PanelTextSize,
-                PreferenceValue::Choice(3),
+            invoke(&mut s, CommandId::Settings);
+            assert!(
+                !s.preferences()
+                    .unwrap()
+                    .pages
+                    .iter()
+                    .flat_map(|p| &p.groups)
+                    .flat_map(|g| &g.rows)
+                    .any(|r| r.title == "Panel text size")
             );
-            assert_eq!(s.state.settings_draft, before);
-            let invalid = Settings {
-                panel_text_pt: 10,
-                ..Settings::default()
-            };
-            assert!(invalid.validate().is_err());
-            s.dispatch(UiAction::CancelSettings).unwrap();
-            assert_eq!(s.state.settings.panel_text_pt, 11);
         }
+        assert!(
+            Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(
+                r#"{"unknown_setting":true}"#
+            ))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<UiAction>(
+                r#"{"type":"restore_settings","settings":{"unknown_setting":true}}"#
+            )
+            .is_err()
+        );
     }
     #[test]
     fn shortcut_editor_preserves_alternatives_and_owns_search_limits_and_defaults() {

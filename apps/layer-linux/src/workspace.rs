@@ -1213,13 +1213,6 @@ impl Workspace {
             }
         }
         if regions & regions::SETTINGS != 0 {
-            for class in self.window.css_classes() {
-                if class.starts_with("panel-text-") {
-                    self.window.remove_css_class(&class);
-                }
-            }
-            self.window
-                .add_css_class(&format!("panel-text-{}", state.settings.panel_text_pt));
             for (id, preview) in self.brush_previews.borrow().iter() {
                 preview.set_paintable(Some(&crate::previews::texture(*id, state.theme)));
             }

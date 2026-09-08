@@ -177,14 +177,13 @@ export async function checkParity({ call, evaluate, settle }) {
     1200 - close[0] - close[2] >= 10 && 1200 - close[0] - close[2] <= 14,
   );
   const nativeFonts = (n, interior = false) => {
-    if (n.css.includes("dock-tabs")) return;
     interior ||= n.css.includes("dock-panel");
     if (
       (interior && (n.type === "GtkLabel" || n.type === "GtkText")) ||
       n.css.includes("status-bubble")
     )
       assert.ok(
-        n.font.endsWith(n.css.includes("heading") ? "14.667px" : "12.026px"),
+        Math.abs(parseFloat(n.font.split(" ").at(-1)) - 11 * 4 / 3) < .02,
         `${n.name}: ${n.font}`,
       );
     n.children.forEach((c) => nativeFonts(c, interior));
@@ -194,9 +193,9 @@ export async function checkParity({ call, evaluate, settle }) {
     const target=getComputedStyle(document.querySelector('.size-button')).fontSize;
     return {target, different:[...document.querySelectorAll('.panel button,.panel input,.panel label,.panel span,#view-info')].filter(n=>getComputedStyle(n).fontSize!==target).map(n=>n.className||n.id), tab:getComputedStyle(document.querySelector('.dock-tab')).fontSize, headings:[...document.querySelectorAll('.brush-list h3')].map(n=>getComputedStyle(n).fontSize)};
   })()`);
-  assert.equal(webFonts.target, "12.026px");
+  assert.ok(Math.abs(parseFloat(webFonts.target) - 11 * 4 / 3) < .02);
   assert.deepEqual(webFonts.different, []);
-  assert.equal(webFonts.tab, "14.667px");
+  assert.equal(webFonts.tab, webFonts.target);
   assert.ok(webFonts.headings.length > 0);
   assert.ok(webFonts.headings.every((font) => font === webFonts.tab));
   const toolSizes = await evaluate(`(() => {

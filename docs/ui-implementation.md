@@ -58,13 +58,13 @@ Both hosts leave 8px between the visible grip dots and the trailing panel edge,
 matching the first tab label's left inset. The drag targets remain 20×24px
 (24×20px at the bottom of vertical ribbons).
 
-Both hosts use the shared Panel text size preference throughout panel content,
-tabs and section headings: 9, 11 or 13 pt, default 11 pt. Text-bearing controls
-and inline +/− icons scale in font-relative units. The window header and status
-HUD keep their existing typography; sliders, 16px checkboxes, 40px brush previews
-and 36px tool tiles with 16px icons stay fixed. Brush entries retain 2px gaps and
+Both hosts use the shared Rust `UI_TEXT_PT` constant (11 pt) for all UI text,
+including panel content, tabs, headings, preferences, menus and the zoom/rotation
+status HUD. It is not a user setting. Text-bearing controls and inline +/− icons
+use font-relative units; sliders, 16px checkboxes, 40px brush previews and 36px
+tool tiles with 16px icons stay fixed. Brush entries retain 2px gaps and
 size samples retain their preview space inside 3px-padded grid cells. Future
-panel context menus use the same panel typography role. One overlay scrollbar
+panel context menus use the same typography role. One overlay scrollbar
 wrapper keeps the browser's native scrolling without consuming preview width.
 Layer rows are reconciled only when their identity/order/labels change; opacity
 and visibility updates keep controls mounted, including during pointer capture.

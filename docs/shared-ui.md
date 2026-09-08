@@ -133,9 +133,10 @@ line in the tab row, clamped before the fixed trailing grip if tabs overflow.
 Tab labels scroll horizontally without moving the grip.
 Tabs have the same 36px button height as tool tiles, in a shared 36px tab bar
 with no outer padding. The active surface joins directly into its panel.
-Panel text, tabs and section headings share a core preference: 9/11/13 pt,
-default 11 pt. Text-bearing inputs/buttons and inline +/− symbols scale with it;
-the header and status text are unchanged. Checkboxes stay 16px, sliders retain
+All UI text shares the Rust `UI_TEXT_PT` constant (11 pt), including panel text,
+tabs, headings, settings descriptions, menus and zoom/rotation status labels.
+Text-bearing inputs/buttons and inline +/− symbols use font-relative sizes.
+There is no font-size setting. Checkboxes stay 16px, sliders retain
 their dimensions, and toolbar icons remain 16px in 36px tiles; brush-size sample
 cells keep their preview space. Future panel context menus use the same
 typography role. Both hosts keep resize handles transparent during hover/drag.
@@ -186,7 +187,7 @@ The canvas surround is sRGB `#333333` in dark mode and `#B8B8B8` in light mode.
 The header and HUD containers are transparent. Their text/control backgrounds
 match the surround, disappearing by default but remaining readable over zoomed
 artwork. Panels have soft shadows rather than persistent outlines.
-Standard native font sizing is retained; keyboard focus halos are disabled
+Text uses the shared 11 pt typography; keyboard focus halos are disabled
 for the requested pen-first presentation, without removing control semantics.
 Panel input fields use `#333333` in dark mode and `#FAFAFA` in light mode,
 matching the light GTK slider knob interior rather than the canvas surround.

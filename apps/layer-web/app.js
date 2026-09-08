@@ -735,7 +735,6 @@ function update(regions) {
       }
   if (regions & 16) {
     applyTheme(state.theme);
-    document.documentElement.style.setProperty("--panel-text-size", `${state.settings.panel_text_pt}pt`);
     for (const [id, button] of brushButtons)
       button.querySelector("img").src =
         asset(`brush-previews/${id}-${state.theme}.png`);
@@ -1128,6 +1127,7 @@ try {
   systemTheme.addEventListener("change", () => dispatch(themeAction()));
   state = app.state();
   catalog = app.catalog();
+  document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = `${catalog.app_name} — drawing workspace`;
   await loadIcons();
   refreshPreferences = createPreferences({ element, button, icon, spin, setNumber, numericControl, panelFrame, dispatch, view: () => app.preferences() });

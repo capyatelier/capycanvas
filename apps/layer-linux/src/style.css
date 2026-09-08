@@ -3,9 +3,7 @@ window.background { background: transparent; }
 window { --window-bg-color: #333333; --window-fg-color: #fafafb; --headerbar-bg-color: #414141; --view-bg-color: #2b2b2b; --popover-bg-color: #414141; --panel-bg: #414141; --tabbar-bg: #2e2e2e; --input-bg: #333333; }
 window.light-theme { --window-bg-color: #b8b8b8; --window-fg-color: #2e2e32; --headerbar-bg-color: #ededed; --view-bg-color: #e4e4e4; --popover-bg-color: #ededed; --panel-bg: #ededed; --tabbar-bg: #dedede; --input-bg: #fafafa; }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
-window { --panel-text-size: 11pt; }
-window.panel-text-9 { --panel-text-size: 9pt; }
-window.panel-text-13 { --panel-text-size: 13pt; }
+window, label, text { font-size: var(--ui-text-size); }
 .workspace-header { background: transparent; box-shadow: none; }
 .workspace-header > windowhandle > box { padding-bottom: 6px; }
 .workspace-header button.chrome-control, .workspace-header menubutton.chrome-control > button, .workspace-header windowcontrols button { min-height: 24px; padding-top: 6px; padding-bottom: 6px; }
@@ -21,10 +19,10 @@ window.panel-text-13 { --panel-text-size: 13pt; }
 .workspace-header windowcontrols button.close:active image { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
 .workspace-header button.chrome-control.selected-tool { background: alpha(var(--accent-bg-color), .22); }
 .document-title { font-weight: 600; padding: 4px 8px; }
-.workspace-status { background: transparent; padding: 0 4px; font-size: 12.026px; color: var(--window-fg-color); }
+.workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
-.dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--panel-text-size); }
-.panel-context-menu { font-size: var(--panel-text-size); }
+.dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
+.panel-context-menu { font-size: var(--ui-text-size); }
 .dock-tabs { background: var(--tabbar-bg); font-size: inherit; }
 .dock-panel .heading { font-size: inherit; }
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }

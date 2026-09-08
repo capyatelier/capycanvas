@@ -17,7 +17,6 @@ static SAVE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 
 enum Field {
     Choice(adw::ComboRow),
-    Scale(adw::ActionRow, gtk::Scale),
     Number(adw::SpinRow),
     Switch(adw::SwitchRow),
     Info(adw::ActionRow),
@@ -26,7 +25,6 @@ impl Field {
     fn widget(&self) -> &gtk::Widget {
         match self {
             Self::Choice(w) => w.upcast_ref(),
-            Self::Scale(w, _) => w.upcast_ref(),
             Self::Number(w) => w.upcast_ref(),
             Self::Switch(w) => w.upcast_ref(),
             Self::Info(w) => w.upcast_ref(),
@@ -37,9 +35,6 @@ impl Field {
         self.widget().set_visible(row.visible);
         match (self, &row.kind) {
             (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
-            (Self::Scale(_, w), PreferenceKind::Scale { selected, .. }) => {
-                w.set_value(*selected as f64)
-            }
             (Self::Number(w), PreferenceKind::Number { value, .. }) => w.set_value(*value as f64),
             (Self::Switch(w), PreferenceKind::Switch { active }) => w.set_active(*active),
             _ => {}
@@ -443,42 +438,6 @@ impl Preferences {
                 for row in &group.rows {
                     let id = row.id;
                     let field = match &row.kind {
-                        PreferenceKind::Scale { options, .. } => {
-                            let control = text_row(&row.title, &row.description);
-                            let scale = gtk::Scale::with_range(
-                                gtk::Orientation::Horizontal,
-                                0.0,
-                                (options.len() - 1) as f64,
-                                1.0,
-                            );
-                            scale.set_round_digits(0);
-                            scale.set_width_request(180);
-                            scale.set_valign(gtk::Align::Center);
-                            for (index, label) in options.iter().enumerate() {
-                                scale.add_mark(
-                                    index as f64,
-                                    gtk::PositionType::Bottom,
-                                    Some(label),
-                                );
-                            }
-                            scale.connect_value_changed(glib::clone!(
-                                #[weak]
-                                w,
-                                move |scale| {
-                                    send(
-                                        &w,
-                                        PreferenceAction::Edit {
-                                            id,
-                                            value: PreferenceValue::Choice(
-                                                scale.value().round() as u32
-                                            ),
-                                        },
-                                    );
-                                }
-                            ));
-                            control.add_suffix(&scale);
-                            Field::Scale(control, scale)
-                        }
                         PreferenceKind::Choice { options, icons, .. } => {
                             let model = gtk::StringList::new(
                                 &options.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -963,8 +922,12 @@ pub fn load() -> Result<Option<Settings>, String> {
     if file.metadata().map_err(|e| e.to_string())?.len() > 1_048_576 {
         return Err("Preferences file is too large".into());
     }
-    let settings: Settings =
-        serde_json::from_reader(file).map_err(|e| format!("Cannot read preferences: {e}"))?;
+    let mut reader = serde_json::Deserializer::from_reader(file);
+    let settings = Settings::deserialize_saved(&mut reader)
+        .map_err(|e| format!("Cannot read preferences: {e}"))?;
+    reader
+        .end()
+        .map_err(|e| format!("Cannot read preferences: {e}"))?;
     settings.validate()?;
     Ok(Some(settings))
 }

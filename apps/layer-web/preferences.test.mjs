@@ -19,16 +19,15 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   assert.equal(await evaluate("layerApp.app.catalog().app_name"), "Capy Canvas");
   assert.equal(await evaluate("document.querySelector('#header-end [data-command=settings] svg').dataset.asset"), "settings");
-  let previousSpin = 0;
-  for (const [index, points] of [9, 11, 13].entries()) {
-    await action({ type: "open_settings", page: "appearance" });
-    await evaluate(`(() => { const input=document.querySelector('#setting-panel-text-size'); input.value=${index}; input.dispatchEvent(new Event('input')); })()`);
-    assert.equal(await evaluate("layerApp.state().settings_draft.panel_text_pt"), points);
-    await click('#apply-settings');
+  const points = await evaluate("layerApp.app.catalog().text_size_pt");
+  assert.equal(points, 11);
+  for (const legacySize of [9, 11, 13]) {
+    await evaluate(`layerApp.dispatch({type:'restore_settings',settings:{...layerApp.state().settings,panel_text_pt:${legacySize}}})`);
+    await settle();
+    assert.equal(await evaluate("'panel_text_pt' in layerApp.state().settings"), false);
     const metrics = await evaluate(`(() => {
       const style = selector => getComputedStyle(document.querySelector(selector));
-      return { fonts:['.dock-tab','.brush-list h3','.size-button','.spin input'].map(s=>parseFloat(style(s).fontSize)),
-        spin:document.querySelector('.panel .spin').getBoundingClientRect().width,
+      return { fonts:['.dock-tab','.brush-list h3','.size-button','.spin input','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
         step:parseFloat(style('.panel .spin button svg').width), tool:parseFloat(style('.tile-button svg').width),
         tile:document.querySelector('.tile-button').getBoundingClientRect().height,
         preview:document.querySelector('.brush-preview').getBoundingClientRect().height,
@@ -36,13 +35,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
         layerIconButton:document.querySelector('.layer-tools button').getBoundingClientRect().height};
     })()`);
     for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
-    assert.ok(metrics.spin > previousSpin); previousSpin = metrics.spin;
     assert.ok(Math.abs(metrics.step - points * 4 / 3 * 1.16) < .1);
     assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 28); assert.equal(metrics.layerIconButton, 28);
-    await capture(`text-${points}pt`);
   }
+  await capture('typography');
   await action({ type: "open_settings", page: "appearance" });
-  await preference({ type: "edit", id: "panel_text_size", value: 1 }); await click('#apply-settings');
+  assert.equal(await evaluate("document.querySelector('#setting-panel-text-size')"), null);
+  await action({ type: "cancel_settings" });
   for (const theme of ["dark", "light"]) {
     await action({ type: "set_theme", theme });
     await click('#header-end [data-command="settings"]');
@@ -53,6 +52,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
       await capture(`${page}-${theme}`);
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
+      assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3})<.02)`), "all settings text uses the shared size");
       if (page === "canvas") {
         await click('.preference-choice summary');
         assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 5);
