@@ -358,6 +358,11 @@ default to one row on top/bottom, one column on a side, and wrap when resized
 across that axis. Standalone grips sit at the right/bottom; tabbed ribbons have
 no additional grip inside their content. The tab-bar grip remains visible and
 moves every tab as one unit; dragging a tab label still moves only that tab.
+Right-click or touch-hold panels, tab headers and tiles to customize them. A tap
+on the selected tab toggles its live two-column configuration; another tab
+switches that view without closing it. The combined group and drawer cast one
+stronger shadow. Named toolbars, tile contents, control visibility and tab styles
+belong to the shared workspace; see [panel customization](panel-customization.md).
 Zen uses the same right-facing capybara silhouette SVG on both platforms, with
 the normal tool-selection highlight when enabled. Decoration controls use the
 standard button radius, except the circular close button, and menus have no carets.

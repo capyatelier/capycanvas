@@ -896,6 +896,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS, false)
             }
         };
+        if changed & LAYOUT != 0 {
+            let layout = &self.state.workspace.layout;
+            self.state.customization.expanded = self
+                .state
+                .customization
+                .expanded
+                .filter(|_| layout.panels_visible)
+                .and_then(|panel| layout.active_panel(panel));
+        }
         if was_expanded && self.state.customization.expanded.is_none() {
             self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
         }
@@ -2505,6 +2514,28 @@ mod tests {
         assert!(app.state.customization.expanded.is_none());
     }
 
+    #[test]
+    fn expanded_configuration_tracks_the_selected_tab_after_docking() {
+        let mut app = session();
+        app.dispatch(UiAction::SelectPanelTab {
+            group: 6,
+            panel: Panel::Sizes,
+        })
+        .unwrap();
+        assert_eq!(app.state.customization.expanded, Some(Panel::Sizes));
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Layers,
+            target: DockTarget::Tab {
+                group: 6,
+                index: None,
+            },
+            viewport: [1200.0, 900.0],
+        })
+        .unwrap();
+        assert_eq!(app.state.customization.expanded, Some(Panel::Layers));
+        invoke(&mut app, CommandId::TogglePanels);
+        assert!(app.state.customization.expanded.is_none());
+    }
     #[test]
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
         let mut app = session();

@@ -311,9 +311,9 @@ pub enum DockNode {
     },
 }
 impl DockNode {
-    fn group_for(&self, panel: Panel) -> Option<u32> {
+    fn group_for(&self, panel: Panel) -> Option<(u32, Panel)> {
         match self {
-            Self::Tabs { id, panels, .. } => panels.contains(&panel).then_some(*id),
+            Self::Tabs { id, panels, active } => panels.contains(&panel).then_some((*id, *active)),
             Self::Split { first, second, .. } => {
                 first.group_for(panel).or_else(|| second.group_for(panel))
             }
@@ -587,7 +587,17 @@ pub const PANEL_EXPANSION_MS: u32 = 200;
 
 impl DockLayout {
     pub fn panel_group(&self, panel: Panel) -> Option<u32> {
-        self.bands.iter().find_map(|b| b.root.group_for(panel))
+        self.bands
+            .iter()
+            .find_map(|b| b.root.group_for(panel))
+            .map(|(id, _)| id)
+    }
+
+    pub(crate) fn active_panel(&self, panel: Panel) -> Option<Panel> {
+        self.bands
+            .iter()
+            .find_map(|b| b.root.group_for(panel))
+            .map(|(_, active)| active)
     }
 
     pub fn expanded_panel(
@@ -1901,17 +1911,19 @@ mod tests {
     }
     #[test]
     fn tab_size_changes_interpolate_from_the_presented_bounds() {
-        let mut layout = DockLayout::default();
-        layout.bands = vec![DockBand {
-            id: 3,
-            edge: Edge::Bottom,
-            extent: 160.0,
-            root: DockNode::Tabs {
-                id: 5,
-                panels: vec![Panel::Layers, Panel::Sizes],
-                active: Panel::Sizes,
-            },
-        }];
+        let layout = DockLayout {
+            bands: vec![DockBand {
+                id: 3,
+                edge: Edge::Bottom,
+                extent: 160.0,
+                root: DockNode::Tabs {
+                    id: 5,
+                    panels: vec![Panel::Layers, Panel::Sizes],
+                    active: Panel::Sizes,
+                },
+            }],
+            ..DockLayout::default()
+        };
         let shape = |height, progress| {
             layout
                 .expanded_panel([1200.0, 900.0], Panel::Sizes, [240.0, height], progress)

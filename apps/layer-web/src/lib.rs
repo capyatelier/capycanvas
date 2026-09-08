@@ -5,7 +5,7 @@ use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
 use layer_render_wgpu::{GpuRasterError, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -13,6 +13,27 @@ pub struct WebApp {
     session: UiSession<WebRenderer>,
     canvas: web_sys::HtmlCanvasElement,
     sequence: u64,
+}
+
+#[derive(Deserialize)]
+struct ExpansionQuery {
+    viewport: [f32; 2],
+    panel: layer_ui::Panel,
+    heights: [f32; 2],
+    open: bool,
+    progress: f32,
+    #[serde(default)]
+    from: Option<layer_ui::PanelExpansion>,
+}
+
+#[derive(Deserialize)]
+struct DropQuery {
+    viewport: [f32; 2],
+    position: [f32; 2],
+    tabs: Vec<layer_ui::TabHit>,
+    item: layer_ui::DockItem,
+    #[serde(default)]
+    expansion: Option<layer_ui::PanelExpansion>,
 }
 
 /// Created separately so an adapter request never holds a mutable UI borrow
@@ -248,21 +269,46 @@ impl WebApp {
         let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
         serialize(&self.session.context_menu(target).map_err(js)?)
     }
-    pub fn expanded_panel(
+    pub fn expanded_panel(&self, query: JsValue) -> Result<JsValue, JsValue> {
+        let q: ExpansionQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
+        let layout = &self.session.state().workspace.layout;
+        let target = layout.expanded_panel(
+            q.viewport,
+            q.panel,
+            q.heights,
+            if q.open { 1.0 } else { 0.0 },
+        );
+        let from = q
+            .from
+            .or_else(|| layout.expanded_panel(q.viewport, q.panel, q.heights, 0.0));
+        serialize(
+            &target
+                .zip(from)
+                .filter(|_| q.progress.is_finite())
+                .map(|(to, from)| to.interpolate_from(from, q.progress)),
+        )
+    }
+    pub fn panel_tiles(
         &self,
+        panel: JsValue,
         width: f32,
         height: f32,
-        panel: JsValue,
-        preview_height: f32,
-        configuration_height: f32,
-        progress: f32,
+        axis: JsValue,
+        standalone: bool,
     ) -> Result<JsValue, JsValue> {
         let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
-        serialize(&self.session.state().workspace.layout.expanded_panel(
-            [width, height],
-            panel,
-            [preview_height, configuration_height],
-            progress,
+        let axis = serde_wasm_bindgen::from_value(axis).map_err(js)?;
+        let count = self
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel(panel)
+            .map_err(js)?
+            .tiles()
+            .len();
+        serialize(&layer_ui::tile_layout(
+            width, height, axis, count, standalone,
         ))
     }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
@@ -279,25 +325,11 @@ impl WebApp {
     pub fn layout(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
         serialize(&self.session.layout([width, height]))
     }
-    pub fn drop_hint(
-        &self,
-        width: f32,
-        height: f32,
-        x: f32,
-        y: f32,
-        tabs: JsValue,
-        item: JsValue,
-        expansion: Option<JsValue>,
-    ) -> Result<JsValue, JsValue> {
-        let tabs: Vec<layer_ui::TabHit> = serde_wasm_bindgen::from_value(tabs).map_err(js)?;
-        let item: layer_ui::DockItem = serde_wasm_bindgen::from_value(item).map_err(js)?;
-        let expansion = expansion
-            .map(serde_wasm_bindgen::from_value)
-            .transpose()
-            .map_err(js)?;
+    pub fn drop_hint(&self, query: JsValue) -> Result<JsValue, JsValue> {
+        let q: DropQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
         match self
             .session
-            .drop_hint([width, height], [x, y], &tabs, item, expansion)
+            .drop_hint(q.viewport, q.position, &q.tabs, q.item, q.expansion)
         {
             Some(hint) => serialize(&hint),
             None => Ok(JsValue::NULL),
@@ -336,12 +368,12 @@ impl WebApp {
             .session
             .set_viewport([logical_width, logical_height], [width, height])
             .map_err(js)?;
-        if let Some(gpu) = &mut self.session.renderer_mut().0 {
-            if [width, height] != [gpu.config.width, gpu.config.height] {
-                gpu.config.width = width;
-                gpu.config.height = height;
-                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
-            }
+        if let Some(gpu) = &mut self.session.renderer_mut().0
+            && [width, height] != [gpu.config.width, gpu.config.height]
+        {
+            gpu.config.width = width;
+            gpu.config.height = height;
+            gpu.surface.configure(gpu.renderer.device(), &gpu.config);
         }
         serialize(&change)
     }

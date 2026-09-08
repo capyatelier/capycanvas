@@ -8,6 +8,7 @@ import { checkParity } from "./parity.mjs";
 import { checkPreferences } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup } from "./gpu.test.mjs";
+import { checkCustomization } from "./customization.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
@@ -16,7 +17,7 @@ const chrome = spawn(
   process.env.CHROME || "google-chrome",
   [
     ...(process.argv.includes("--headless")
-      ? ["--headless=new", "--ozone-platform=headless", "--enable-features=Vulkan", "--disable-vulkan-surface"]
+      ? ["--headless=new", "--ozone-platform=headless"]
       : ["--ozone-platform=wayland"]),
     "--remote-debugging-pipe",
     `--user-data-dir=${profile}`,
@@ -27,6 +28,10 @@ const chrome = spawn(
     "--enable-gpu",
     "--enable-unsafe-webgpu",
     "--use-angle=vulkan",
+    // Offscreen Vulkan avoids Wayland's Vulkan swapchain incompatibility while
+    // retaining the hardware WebGPU renderer and capturable window contents.
+    "--enable-features=Vulkan",
+    "--disable-vulkan-surface",
     "--window-size=1440,1000",
     "about:blank",
   ],
@@ -119,7 +124,7 @@ async function canvasPixels() {
   // Inspect the presented framebuffer. Reading a WebGPU canvas backbuffer in a
   // later task can return its newly cleared buffer instead of the visible frame.
   return evaluate(
-    `(async () => { const image = new Image(); image.src = ${JSON.stringify("data:image/png;base64,")} + ${JSON.stringify(shot.data)}; await image.decode(); const canvas = document.createElement('canvas'); canvas.width=image.width; canvas.height=image.height; const ctx=canvas.getContext('2d'); ctx.drawImage(image,0,0); const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data; let white=0; for(let i=0;i<rgba.length;i+=4) if(rgba[i]>245 && rgba[i+1]>245 && rgba[i+2]>245) white++; return {white,total:rgba.length/4}; })()`,
+    `(async () => { const image = new Image(); image.src = ${JSON.stringify("data:image/png;base64,")} + ${JSON.stringify(shot.data)}; await image.decode(); const canvas = document.createElement('canvas'); canvas.width=image.width; canvas.height=image.height; const ctx=canvas.getContext('2d',{willReadFrequently:true}); ctx.drawImage(image,0,0); const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data; let white=0; for(let i=0;i<rgba.length;i+=4) if(rgba[i]>245 && rgba[i+1]>245 && rgba[i+2]>245) white++; return {white,total:rgba.length/4}; })()`,
   );
 }
 async function click(selector) {
@@ -159,7 +164,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--gpu-startup")) {
+  if (process.argv.includes("--customization")) {
+    await checkCustomization({ call, evaluate, settle, canvasPixels });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
     await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url });
     assert.deepEqual(errors, []);

@@ -36,12 +36,12 @@ export async function checkParity({ call, evaluate, settle }) {
   for (const [id, spec] of [
     ["size-number", catalog.brush_size],
     ["size-range", catalog.brush_size_slider],
-    ["opacity", catalog.opacity],
+    [".sizes-panel [data-control=brush_opacity] input", catalog.opacity],
     ["layer-opacity", catalog.opacity],
   ]) {
     assert.deepEqual(
       await evaluate(
-        `(() => {const n=document.getElementById('${id}');return [Number(n.min),Number(n.max),Number(n.step)]})()`,
+        `(() => {const n=document.querySelector(${JSON.stringify(id.startsWith(".") ? id : `#${id}`)});return [Number(n.min),Number(n.max),Number(n.step)]})()`,
       ),
       [spec.min, spec.max, spec.step],
     );

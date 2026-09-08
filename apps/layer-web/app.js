@@ -1,6 +1,7 @@
 import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
 import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
+import { createCustomization } from "./customization.js";
 
 // The static packager fills this map with fingerprinted artwork filenames.
 const assetPaths = {};
@@ -30,7 +31,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences;
+let refreshPreferences, customization;
 let gpuStarting = false;
 let gpuReady = false;
 let servicingRequests = false;
@@ -250,6 +251,29 @@ function fullscreenButton() {
 }
 function draggable(node, item) {
   node.draggable = true;
+  let pointer;
+  node.addEventListener("workspace-context-claimed", () => { pointer = null; });
+  node.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" || e.button !== 0) return;
+    pointer = { id: e.pointerId, x: e.clientX, y: e.clientY, dragging: false };
+    node.setPointerCapture(e.pointerId);
+  });
+  node.addEventListener("pointermove", (e) => {
+    if (pointer?.id !== e.pointerId) return;
+    if (!pointer.dragging && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 8) {
+      pointer.dragging = true; dragItem = item; node.classList.add("drag-source"); updateZen();
+    }
+    if (pointer.dragging) { e.preventDefault(); showDropHint(dropHint(e, item)); }
+  });
+  const endPointer = (e) => {
+    if (pointer?.id !== e.pointerId) return;
+    const moved = pointer.dragging; pointer = null;
+    if (!moved) return;
+    revealPointer = e.pointerId;
+    if (e.type === "pointerup") dropItem(item, dropHint(e, item));
+    dragItem = null; dropIndicator.hidden = true; node.classList.remove("drag-source"); updateZen();
+  };
+  for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) node.addEventListener(event, endPointer);
   node.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData("text/layer-dock", JSON.stringify(item));
     e.dataTransfer.effectAllowed = "move";
@@ -268,32 +292,10 @@ function grip(item) {
   node.title = "Drag to move panel";
   node.setAttribute(
     "aria-label",
-    item.kind === "group" ? "Move all tabs" : "Move " + panelNames[item.panel],
+    item.kind === "group" ? "Move all tabs" : "Move " + (customization?.view(item.panel)?.title || panelNames[item.panel] || "toolbar"),
   );
   node.append(icon("grip"));
   return draggable(node, item);
-}
-function tilePopover(name, label, control) {
-  const node = button("", () => {}, "tile-button");
-  node.append(icon(name));
-  node.title = label;
-  node.setAttribute("aria-label", label);
-  const popover = element("div", "tile-popover");
-  popover.popover = "auto";
-  popover.append(element("label", "", label), control);
-  workspace.append(popover);
-  node.addEventListener("click", () => {
-    for (const menu of document.querySelectorAll("details[open]"))
-      menu.open = false;
-    const b = node.getBoundingClientRect();
-    Object.assign(popover.style, {
-      left: Math.min(b.left, innerWidth - 220) + "px",
-      top: Math.min(b.bottom + 6, innerHeight - 120) + "px",
-    });
-    popover.togglePopover();
-  });
-  popover.addEventListener("toggle", updateZen);
-  return node;
 }
 const dropIndicator = element("div", "drop-indicator");
 dropIndicator.hidden = true;
@@ -301,7 +303,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if (action.type === "move_panel" || action.type === "move_group")
+    if (["move_panel", "move_group", "move_tile"].includes(action.type))
       action = {
         ...action,
         viewport: [workspace.clientWidth, workspace.clientHeight],
@@ -396,47 +398,53 @@ function arrange() {
     let node = groups.get(group.id);
     if (!node) {
       node = element("section", "dock-group");
+      const clip = element("div", "panel-columns");
+      clip.append(element("div", "panel-preview")); node.append(clip);
       groups.set(group.id, node);
       workspace.append(node);
     }
-    const key = `${group.panels.join(",")}:${group.active}`;
+    const key = JSON.stringify([group.panels.map((id) => {
+      const view = customization.view(id); return [id, view.title, view.tab_style];
+    }), group.active, group.tabs_visible]);
     if (node.dataset.key !== key) {
       node.dataset.key = key;
       node.dataset.panel = group.active;
       node.dataset.group = group.id;
-      node.setAttribute("aria-label", panelNames[group.active]);
-      node.className = `dock-group ${group.active === "toolbar" ? "toolbar" : ""}`;
+      node.setAttribute("aria-label", customization.view(group.active).title);
+      node.classList.toggle("toolbar", !!group.tiles);
+      const preview = node.querySelector(".panel-preview");
       const tabs = element("nav", "dock-tabs");
+      customization.target(tabs, { kind: "group", group: group.id });
       tabs.setAttribute("aria-label", "Panel tabs");
       if (group.tabs_visible) {
         const labels = element("div", "tab-list");
         group.panels.forEach((panel, index) => {
           const tab = button(
-            panelNames[panel],
+            "",
             () =>
               dispatch({ type: "select_panel_tab", group: group.id, panel }),
             "dock-tab",
           );
           tab.dataset.index = index;
           tab.dataset.panel = panel;
+          const view = customization.view(panel);
+          tab.title = view.title; tab.setAttribute("aria-label", view.title);
+          if (view.tab_style === "icon") tab.append(icon(view.icon));
+          else tab.textContent = view.title;
+          customization.target(tab, { kind: "panel", panel });
           tab.setAttribute("aria-selected", String(panel === group.active));
           labels.append(draggable(tab, { kind: "panel", panel }));
         });
         tabs.append(labels, grip({ kind: "group", group: group.id }));
-        node.replaceChildren(tabs, panels.get(group.active).parentElement);
-      } else node.replaceChildren(panels.get(group.active).parentElement);
+        preview.replaceChildren(tabs, panels.get(group.active).parentElement);
+      } else preview.replaceChildren(panels.get(group.active).parentElement);
     }
     place(node, group.bounds);
     if (group.tiles) {
       const strip = node.querySelector(".toolbar-controls");
       const geometry = group.tiles;
       strip.dataset.axis = group.axis;
-      const handle = strip.querySelector(".panel-grip");
-      handle.hidden = !geometry.grip;
-      if (geometry.grip) place(handle, geometry.grip);
-      [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) =>
-        place(tile, geometry.tiles[i]),
-      );
+      customization.layoutTiles(strip, geometry);
     }
   }
   for (const [id, node] of groups)
@@ -489,6 +497,7 @@ function arrange() {
       node.remove();
       dividers.delete(key);
     }
+  customization.arrange(layout);
   place($("canvas-status"), layout.status);
   // The help occupies the same unobstructed area used for fitting the document.
   // Panels remain native UI siblings above the full-window drawing surface.
@@ -523,46 +532,8 @@ function buildPanels() {
     panels.set(name, panel);
     panelFrame(panel, kind !== "tiles");
   }
-  const toolbar = element("div", "toolbar-controls");
-  toolbar.append(grip({ kind: "panel", panel: "toolbar" }));
-  const color = element("input");
-  color.type = "color";
-  color.id = "color";
-  color.title = "Paint color";
-  color.setAttribute("aria-label", "Paint color");
-  color.addEventListener("input", () =>
-    dispatch({
-      type: "set_color",
-      rgba: [1, 3, 5]
-        .map((i) => parseInt(color.value.slice(i, i + 2), 16) / 255)
-        .concat(1),
-    }),
-  );
-  const opacity = element("input");
-  opacity.type = "range";
-  numericControl(opacity, catalog.opacity);
-  opacity.id = "opacity";
-  opacity.setAttribute("aria-label", "Brush opacity");
-  opacity.addEventListener("input", () =>
-    dispatch({ type: "set_brush_opacity", value: Number(opacity.value) }),
-  );
-  for (const item of catalog.toolbar) {
-    switch (item.kind) {
-      case "command":
-        toolbar.append(iconButton(item.command));
-        break;
-      case "color":
-        toolbar.append(tilePopover("color", "Brush color", color));
-        break;
-      case "opacity":
-        toolbar.append(tilePopover("opacity", "Brush opacity", opacity));
-        break;
-      default:
-        throw new Error(`Unsupported toolbar control: ${item.kind}`);
-    }
-  }
-  panels.get("toolbar").append(toolbar);
   const list = element("div", "brush-list");
+  list.dataset.control = "brushes";
   for (const { label: category, brushes } of catalog.brush_categories) {
     list.append(element("h3", "", category));
     for (const brush of brushes) {
@@ -584,6 +555,7 @@ function buildPanels() {
   }
   panels.get("brushes").append(list);
   const controls = element("div", "size-controls");
+  controls.dataset.control = "brush_size";
   for (const type of ["range", "number"]) {
     const input = element("input");
     input.id = `size-${type}`;
@@ -605,6 +577,7 @@ function buildPanels() {
     );
   }
   const grid = element("div", "size-grid");
+  grid.dataset.control = "size_presets";
   for (const value of catalog.brush_sizes) {
     const choice = button(
       "",
@@ -627,8 +600,10 @@ function buildPanels() {
   panels.get("sizes").append(controls, grid);
   const layers = element("div", "layers-content");
   const tools = element("div", "layer-tools");
+  tools.dataset.control = "layer_actions";
   for (const id of catalog.layer_commands) tools.append(iconButton(id));
   const rows = element("div", "layer-rows");
+  rows.dataset.control = "layers";
   rows.id = "layer-rows";
   const label = element("label", "", "Layer opacity");
   label.htmlFor = "layer-opacity";
@@ -642,11 +617,13 @@ function buildPanels() {
       opacity: Number(layerOpacity.value),
     }),
   );
-  layers.append(tools, rows, label, layerOpacity);
+  const opacityRow = element("div", "layer-opacity-control");
+  opacityRow.dataset.control = "layer_opacity"; opacityRow.append(label, layerOpacity);
+  layers.append(tools, rows, opacityRow);
   panels.get("layers").append(layers);
 }
 function update(regions) {
-  if (regions & 1) arrange();
+  if (regions & (1 | 2 | 4 | 8 | 128)) customization.refresh();
   if (regions & 2) {
     for (const [id, button] of brushButtons)
       button.setAttribute("aria-pressed", String(id === state.brush.preset));
@@ -657,16 +634,6 @@ function update(regions) {
       );
     setRange($("size-range"), state.brush.diameter);
     setNumber($("size-number"), state.brush.diameter);
-    setRange($("opacity"), state.brush.opacity);
-    $("color").value = `#${state.brush.color
-      .slice(0, 3)
-      .map((v) =>
-        Math.round(v * 255)
-          .toString(16)
-          .padStart(2, "0"),
-      )
-      .join("")}`;
-    workspace.style.setProperty("--paint-color", $("color").value);
   }
   if (regions & 4) {
     const tab = state.tabs[0];
@@ -722,6 +689,7 @@ function update(regions) {
     }
     setRange($("layer-opacity"), state.layers.find((l) => l.selected).opacity);
   }
+  if (regions & (1 | 4 | 128)) arrange();
   if (regions & (4 | 8))
     for (const command of state.commands)
       for (const node of commands.get(command.id) || []) {
@@ -796,6 +764,7 @@ function chromeInput(event) {
     event,
     viewport: [workspace.clientWidth, workspace.clientHeight],
     facts: {
+      expanded_panel: customization?.placement(),
       contact_tab: event.kind === "contact"
         ? document.elementFromPoint(...event.position)?.closest(".dock-tab")?.dataset.panel ?? null
         : null,
@@ -1061,14 +1030,13 @@ function dropHint(e, item) {
     }),
   );
   try {
-    return app.drop_hint(
-      workspace.clientWidth,
-      workspace.clientHeight,
-      e.clientX,
-      e.clientY,
+    return app.drop_hint({
+      viewport: [workspace.clientWidth, workspace.clientHeight],
+      position: [e.clientX, e.clientY],
       tabs,
       item,
-    );
+      expansion: customization.placement(),
+    });
   } catch {
     return null;
   } // Invalid/foreign payloads have no accepted core target.
@@ -1082,16 +1050,24 @@ function draggedItem(e) {
   }
   return null;
 }
+function showDropHint(hint) {
+  dropIndicator.hidden = !hint;
+  if (hint) { place(dropIndicator, hint.bounds); dropIndicator.dataset.kind = hint.target.kind; }
+}
+function dropItem(item, hint) {
+  if (!hint) return;
+  const { kind, ...source } = item;
+  dispatch({ type: kind === "group" ? "move_group" : kind === "tile" ? "move_tile" : "move_panel",
+    ...source, target: hint.target });
+}
 workspace.addEventListener("dragover", (e) => {
   if (!e.dataTransfer.types.includes("text/layer-dock")) return;
   e.preventDefault();
   const item = draggedItem(e);
   if (!item) return;
   const hint = dropHint(e, item);
-  dropIndicator.hidden = !hint;
+  showDropHint(hint);
   if (hint) {
-    place(dropIndicator, hint.bounds);
-    dropIndicator.dataset.kind = hint.target.kind;
     e.dataTransfer.dropEffect = "move";
   }
 });
@@ -1104,14 +1080,7 @@ workspace.addEventListener("drop", (e) => {
   const item = draggedItem(e);
   if (!item) return;
   const hint = dropHint(e, item);
-  if (hint) {
-    const { kind, ...source } = item;
-    dispatch({
-      type: kind === "group" ? "move_group" : "move_panel",
-      ...source,
-      target: hint.target,
-    });
-  }
+  dropItem(item, hint);
 });
 try {
   await init();
@@ -1143,7 +1112,10 @@ try {
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   buildHeader();
   buildPanels();
-  update(127);
+  customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
+    element, button, icon, spin, setNumber, setRange, numericControl, panelFrame,
+    dispatch, draggable, grip, place, updateZen });
+  update(255);
   $("status").textContent = "";
   if (restoreError) message(restoreError);
   new ResizeObserver(arrange).observe(workspace);

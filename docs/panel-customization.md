@@ -100,24 +100,7 @@ no third-party code or assets are imported.
 - Context-menu contents, picker validation/search/selection, control visibility,
   and tile drop targets are generated/validated by Rust, not duplicated in hosts.
 
-## Completion checklist
-
-These are required gates, not claims of completion.
-
-- [x] Shared dynamic configuration, backward-compatible restore and atomic validation.
-- [ ] Unique toolbar creation with multi-select, search, cancel and validation.
-- [ ] All panel/group/tile/ribbon context targets on mouse, pen and touch.
-- [ ] Individual/group tab-name/icon switching with tooltip/accessibility names.
-- [ ] Expanded live panel, hidden controls, visibility editing and outside/Escape
-  dismissal; selected-tab single-tap toggle without consuming control editing.
-- [ ] Tile remove/insert/append and same/cross-toolbar drag with exact blue line.
-- [ ] Dynamic ribbon wrapping, docking, tabbing and resize without fixed counts.
-- [ ] Full workspace round-trip and non-destructive layout reset.
-- [ ] GTK native control and interaction tests; light/dark screenshots inspected.
-- [ ] Web parity and interaction tests; light/dark screenshots inspected.
-- [ ] No host-only business logic, stale targets, orphan widgets or GPU regression.
-
-## Implementation checkpoints
+## Implementation and verification
 
 The shared model now implements dynamic panel configuration, stable tile IDs,
 transactional creation/insertion, context menu targeting, picker search/selection,
@@ -137,6 +120,54 @@ not physical tablet/touch delivery or compositor timing.
 Tabbed ribbons reserve one padded lane below the header; further overflow clips.
 GTK tool ribbons are explicitly clipped and never gain a scroller.
 
-Web presentation/event wiring and final cross-platform parity are still pending.
-Final host tests must also cover clipped ribbons, not just ribbons that can grow
-to fit on screen; this is not yet a completed cross-platform feature.
+Web uses `customization.js` for DOM context menus, picker widgets, live controls
+and expansion presentation. `app.js` keeps event routing and the existing panel
+widgets; toolbars now consume the dynamic Rust tile views instead of a fixed
+six-button list. The Wasm adapter exposes the same context, picker, tile layout,
+expanded geometry and validated drop APIs. Touch uses pointer capture for moving
+tiles/tabs and a cancellable long-press recognizer for context menus; mouse/pen
+secondary click uses the browser context event. Disabled command buttons remain
+inside an enabled drag/context target, so they can still be removed or moved.
+
+The web expansion animates the existing group's two columns with one CSS
+`drop-shadow` on their common ancestor. GTK wraps the whole group's snapshot in
+one GSK shadow. Both include the preview, tabs and drawer, without darkening their
+internal seam. DOM content heights are measured on layout changes, not every
+animation frame; interpolation and placement stay in Rust. Switching tabs uses
+the currently displayed bounds as the animation origin. Docking into an expanded
+group keeps its configuration synchronized with the group's active tab.
+
+Regression coverage:
+
+| Contract | Evidence |
+| --- | --- |
+| Named toolbars, transactional multi-selection, search/cancel/validation | Core customization tests; GTK and web picker controls |
+| Panel/group/tile/empty-ribbon menus and individual/group tab styles | Core context models; GTK gesture/action signals; browser pointer/hold events |
+| Live controls, visibility, selected-tab toggle, different-tab switch, outside/Escape dismissal | Core interaction tests; native expansion test; browser customization test |
+| Same/cross-toolbar moves, stable IDs and insertion previews | Core slot/move tests; native drop signal; browser native-DND and touch movement |
+| Dynamic wrapping, tabbing, clipped overflow and resize | Core allocation tests; GTK ribbon captures; web customization/parity checks |
+| Combined shadow, all four expansion edges, seamless corners, 11pt controls | Dark/light GTK and browser captures; web geometry/shadow comparison |
+| Workspace restore, reset retaining custom toolbars, malformed/stale targets | Core validation tests and both host round trips |
+| Zen drag/dismiss lifecycle and no accidental ink | Core input tests; native expansion test; browser customization/parity tests |
+
+Run the native tests separately (GTK initialization is thread-affine):
+
+```sh
+cargo test --release -p layer-linux native_panel_customization -- --ignored --test-threads=1
+cargo test --release -p layer-linux native_panel_expansion -- --ignored --test-threads=1
+cargo test --release -p layer-linux native_web_parity_reference -- --ignored --test-threads=1
+```
+
+Use isolated `LAYER_SETTINGS_FILE` paths and a Wayland/Vulkan display. After
+building/serving the web client, run `node apps/layer-web/test.mjs --customization`
+and `--parity` against `LAYER_WEB_URL`. Captures are under the ignored
+`artifacts/ui/customization/` and `artifacts/ui/parity/` directories. The browser
+harness uses a temporary profile; its software Canvas2D context only inspects
+captured PNGs, never renders the application's canvas.
+
+These tests exercise native bindings and browser-injected input, not physical
+tablet delivery or an iPad device. They do not claim a new latency benchmark;
+customization leaves the GPU brush/raster path unchanged. Static packaging
+includes and fingerprints the new module and its importing app, so service
+worker versions follow the changed runtime content. Generated bundles/captures
+remain ignored and no third-party code or assets are added.

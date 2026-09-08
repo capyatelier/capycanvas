@@ -528,6 +528,47 @@ fn native_panel_customization() {
         );
         send(CustomizationAction::CancelTools);
         pump(250);
+        // A large tabbed ribbon keeps all tiles but clips overflow rather than
+        // installing a scroller that would compete with drag-to-reorder.
+        let mut overflow = state(&w).workspace;
+        let group = overflow.layout.panel_group(Panel::Sizes).unwrap();
+        let many = overflow
+            .layout
+            .add_toolbar(
+                group,
+                &format!("Many tools {theme:?}"),
+                &vec![
+                    ToolbarControl::Command {
+                        command: CommandId::Brush
+                    };
+                    80
+                ],
+            )
+            .unwrap();
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: overflow,
+        });
+        pump(200);
+        let strip = w.panel_widget(many);
+        assert_eq!(strip.overflow(), gtk::Overflow::Hidden);
+        assert!(strip.is::<TileStrip>());
+        let resolved = w.resolved();
+        let group = resolved.groups.iter().find(|g| g.active == many).unwrap();
+        let tiles = &group.tiles.as_ref().unwrap().tiles;
+        assert_eq!(tiles.len(), 80);
+        assert!(tiles.last().unwrap().y >= group.bounds.height - TAB_BAR_HEIGHT);
+        capture_reference(&w, &format!("{dir}/clipped-ribbon-{theme:?}.png"), 1.0);
+        w.dispatch(UiAction::MovePanel {
+            panel: many,
+            target: DockTarget::Edge {
+                edge: Edge::Left,
+                outer: false,
+            },
+            viewport: [1200.0, 900.0],
+        });
+        pump(200);
+        assert!(w.panel_widget(many).width() > (TILE_SIZE * 2.0) as i32);
+        capture_reference(&w, &format!("{dir}/wrapped-ribbon-{theme:?}.png"), 1.0);
     }
     w.window.destroy();
     pump(150);
