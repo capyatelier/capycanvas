@@ -1,6 +1,7 @@
 // Real packaged-app checks, using the existing browser harness and a disposable
 // loopback server. No deployment, browser installation or OS input injection.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,9 +12,21 @@ export async function servePackage() {
   const source = resolve("dist/capycanvas");
   assert.ok(readFileSync(join(source, ".capy-package"), "utf8").trim(), "Build the package first");
   const fixture = mkdtempSync(join(tmpdir(), "capy-pwa-test-"));
-  cpSync(source, join(fixture, "update"), { recursive: true });
-  writeFileSync(join(fixture, "update/index.html"), readFileSync(join(source, "index.html"), "utf8").replace("</head>", "<!-- package-update-test --></head>"));
-  writeWorker(join(fixture, "update"));
+  const update = join(fixture, "update");
+  cpSync(source, update, { recursive: true });
+  let html = readFileSync(join(update, "index.html"), "utf8");
+  // A real changed JS/CSS release, not merely a changed HTML comment. Old URLs
+  // stay immutable; only the updated HTML/worker point at the new fingerprints.
+  for (const [type, suffix] of [["js", '\nglobalThis.capyTestRelease = "updated";'], ["css", "\n:root { --capy-test-release: updated; }"]]) {
+    const old = html.match(new RegExp(`assets/[^"/]+\\.[0-9a-f]{20}\\.${type}`))[0];
+    const data = readFileSync(join(update, old), "utf8") + suffix;
+    const path = old.replace(/\.[0-9a-f]{20}\./, `.${createHash("sha256").update(data).digest("hex").slice(0, 20)}.`);
+    writeFileSync(join(update, path), data);
+    rmSync(join(update, old));
+    html = html.replaceAll(old, path);
+  }
+  writeFileSync(join(update, "index.html"), html);
+  writeWorker(update);
   const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png" };
   const state = { online: true, update: false, broken: false, requests: [] };
   const server = createServer((req, res) => {
@@ -27,7 +40,8 @@ export async function servePackage() {
     if (!file.startsWith(directory + "/")) { res.writeHead(403); res.end(); return; }
     try {
       const body = state.broken && path.endsWith(".wasm") ? Buffer.from("mismatched release") : readFileSync(file);
-      res.writeHead(200, { "Content-Type": mime[extname(file)] || "text/plain", "Cache-Control": "no-store" });
+      res.writeHead(200, { "Content-Type": mime[extname(file)] || "text/plain",
+        "Cache-Control": path.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache" });
       res.end(body);
     } catch { res.writeHead(404); res.end(); }
   });
@@ -114,6 +128,45 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
 
 export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
   await checkFullscreen({ call, evaluate, settle, canvasPixels });
+  const point = (selector) => evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+  const background = (selector) => evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).backgroundColor`);
+  const tap = async (selector) => {
+    await call("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [await point(selector)] });
+    await call("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await settle();
+    assert.equal(await evaluate("document.documentElement.hasAttribute('data-touch')"), true);
+  };
+  const settings = '#header-end [data-command="settings"]', menu = ".header-menu > summary", zen = '[data-command="zen_mode"]';
+  for (const theme of ["light", "dark"]) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 650, y: 450 });
+    const idle = await background(settings), menuIdle = await background(menu);
+    await tap(settings);
+    assert.equal(await evaluate("document.querySelector('#settings').open"), true);
+    await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+    assert.equal(await background(settings), idle, "Touch leaves no stuck Settings hover");
+    for (const pointerType of ["mouse", "pen"]) {
+      await call("Input.dispatchMouseEvent", { type: "mouseMoved", ...await point(settings), pointerType });
+      await settle();
+      assert.equal(await evaluate("document.documentElement.hasAttribute('data-touch')"), false);
+      assert.notEqual(await background(settings), idle, `${pointerType} hover returns after touch`);
+      await tap(settings);
+      await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+      assert.equal(await background(settings), idle);
+    }
+    await tap(menu);
+    assert.equal(await background(menu), menuIdle, "Menu names do not retain touch hover");
+    assert.equal(await evaluate("document.querySelector('.header-menu').open"), true);
+    await tap(menu);
+    assert.equal(await evaluate("document.querySelector('.header-menu').open"), false);
+    await tap(zen);
+    assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true", "Touch preserves intentional toggle selection");
+    assert.notEqual(await background(zen), idle);
+    await tap(zen);
+    assert.equal(await background(zen), idle, "Zen returns to its idle color when toggled off by touch");
+  }
+  await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 650, y: 450 });
+  console.log("Touch controls: Settings, menus, Zen and mouse/pen switching passed in both themes");
   const ready = async (previous) => {
     const start = Date.now();
     while (Date.now() - start < 25000) {
@@ -140,6 +193,13 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
   };
   await call("Network.enable");
   await call("Network.setCacheDisabled", { cacheDisabled: true });
+  assert.ok(await evaluate("[document.querySelector('#canvas'), ...document.querySelectorAll('#canvas-cursor, #canvas-cursor *')].every(n=>{const s=getComputedStyle(n);return s.userSelect==='none'&&s.webkitUserSelect==='none'&&s.webkitUserDrag==='none'})"), "Canvas and pen-tip artwork cannot be selected or dragged");
+  assert.ok(await evaluate("[...document.querySelectorAll('#canvas-cursor, #canvas-cursor *')].every(n=>getComputedStyle(n).pointerEvents==='none')"));
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#document-title')).userSelect"), "text", "Document names remain copyable");
+  for (const path of filesIn(join(host.source, "assets"))) {
+    const hash = createHash("sha256").update(readFileSync(join(host.source, "assets", path))).digest("hex").slice(0, 20);
+    assert.ok(path.includes(`.${hash}.`), `Final asset bytes match their fingerprint: ${path}`);
+  }
   for (const path of ["", "nested/capy/"]) {
     await navigate(host.url + path);
     const manifest = await call("Page.getAppManifest");
@@ -193,6 +253,9 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
   }
 
   await navigate(host.url);
+  await call("Network.setCacheDisabled", { cacheDisabled: false });
+  const previousAssets = await evaluate("[document.querySelector('script[type=module]').src, document.querySelector('link[rel=stylesheet]').href]");
+  assert.equal(await evaluate("globalThis.capyTestRelease ?? null"), null);
   const snapshot = "JSON.stringify(layerApp.state(),(_,v)=>typeof v==='bigint'?String(v):v)";
   const before = await evaluate(snapshot);
   const keys = await evaluate("caches.keys()");
@@ -206,18 +269,24 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
   await evaluate(`(async()=>{const r=await navigator.serviceWorker.getRegistration();const seen=new Promise(resolve=>r.addEventListener('updatefound',()=>{const w=r.installing;w.addEventListener('statechange',()=>{if(w.state==='installed')resolve(true)})},{once:true}));await r.update();return seen})()`);
   assert.ok(await evaluate("navigator.serviceWorker.getRegistration().then(r=>!!r.waiting)"));
   assert.equal(await evaluate(snapshot), before, "Waiting update must not change the live session");
-  assert.ok(!await evaluate("document.documentElement.outerHTML.includes('package-update-test')"));
+  assert.equal(await evaluate("globalThis.capyTestRelease ?? null"), null);
+  assert.deepEqual(await evaluate("[document.querySelector('script[type=module]').src, document.querySelector('link[rel=stylesheet]').href]"), previousAssets);
   await call("Page.navigate", { url: "about:blank" });
   // The old worker has no clients now; activation occurs without forcing reloads.
   await new Promise((resolve) => setTimeout(resolve, 500));
   await navigate(host.url);
-  assert.ok(await evaluate("document.documentElement.outerHTML.includes('package-update-test')"));
+  assert.equal(await evaluate("globalThis.capyTestRelease"), "updated", "Updated fingerprinted JS actually executes");
+  assert.equal(await evaluate("getComputedStyle(document.documentElement).getPropertyValue('--capy-test-release').trim()"), "updated", "Updated fingerprinted CSS actually applies");
+  const nextAssets = await evaluate("[document.querySelector('script[type=module]').src, document.querySelector('link[rel=stylesheet]').href]");
+  assert.ok(nextAssets.every((url, i) => url !== previousAssets[i]), "HTML points at new JS/CSS URLs");
   const currentKeys = await evaluate("caches.keys()");
   assert.equal(currentKeys.filter((key) => key.startsWith(`capycanvas:${host.url}:`)).length, 1);
   assert.ok(currentKeys.includes(keys.find((key) => key.startsWith(`capycanvas:${host.url}nested/capy/:`))), "Root update must preserve the subpath installation");
   await offline(true);
+  await call("Network.setCacheDisabled", { cacheDisabled: true });
   await reload();
+  assert.equal(await evaluate("globalThis.capyTestRelease"), "updated", "The upgraded app also starts offline without HTTP cache");
   await offline(false);
   assert.ok(!filesIn(host.source).some((path) => /\.rs$|\.d\.ts$|\.map$|\.toml$/.test(path)));
-  console.log("PWA failed-update recovery, deferred activation and scope isolation: passed");
+  console.log("PWA fingerprinted JS/CSS upgrade, failed-update recovery, deferred activation and scope isolation: passed");
 }

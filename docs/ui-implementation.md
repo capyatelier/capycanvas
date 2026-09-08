@@ -47,6 +47,13 @@ root, keeping Settings dialogs and the full UI visible. Unsupported fullscreen
 is disabled and rejected requests leave a usable button with a brief message.
 Canvas resizing uses the existing resize path; there is no GPU reinitialization
 or shared-session fullscreen state, and GTK is unchanged.
+The web canvas and its SVG cursor paths explicitly disable selection, image
+dragging, tap highlighting and Safari touch callouts. The cursor stays outside
+pointer hit testing; copyable document names and text fields are unchanged.
+Hover styling follows the most recent pointer event, not a device/browser
+allowlist: touch suppresses sticky hover until a mouse or pen moves or presses.
+Pressed feedback and intentional selected/toggle colors remain unchanged,
+including Zen mode. Hybrid touch/pen/mouse devices can switch immediately.
 Both hosts leave 8px between the visible grip dots and the trailing panel edge,
 matching the first tab label's left inset. The drag targets remain 20×24px
 (24×20px at the bottom of vertical ribbons).

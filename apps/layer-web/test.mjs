@@ -69,7 +69,7 @@ chrome.stdio[4].on("data", (data) => {
       ["error", "warning"].includes(event.params.entry.level) &&
       !event.params.entry.text.includes("favicon")
     )
-      errors.push(event.params.entry.text);
+      errors.push([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
   }
 });
 function call(method, params = {}, sessionId = session) {

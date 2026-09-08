@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const web = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +41,49 @@ export function checkRuntime(data, name) {
   }
 }
 
+function replaceRequired(text, from, to) {
+  if (!text.includes(from)) throw new Error(`Missing package reference: ${from}`);
+  return text.replaceAll(from, to);
+}
+
+export function fingerprintAssets(directory) {
+  const files = filesIn(directory), names = {};
+  const publish = (path, data = readFileSync(join(directory, path))) => {
+    checkRuntime(data, path);
+    const extension = extname(path);
+    const name = `${path.slice(0, -extension.length)}.${digest(data).digest("hex").slice(0, 20)}${extension}`;
+    writeFileSync(join(directory, name), data);
+    rmSync(join(directory, path));
+    names[path] = name;
+  };
+  // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
+  // Hash final bytes, after rewriting dependencies; no bundler or runtime fetch.
+  const modules = ["preferences.js", "gpu.js", "pkg/layer_web.js", "app.js"];
+  for (const path of files) {
+    if (path.endsWith(".js") && !modules.includes(path))
+      throw new Error(`Add the new module to the package dependency order: ${path}`);
+    if (!path.endsWith(".js") && path !== "style.css") publish(path);
+  }
+  const css = read(join(directory, "style.css")).replace(/url\((["']?)([^"')]+)\1\)/g, (reference, _quote, path) => {
+    if (/^(data:|https?:|\/|#)/.test(path)) return reference;
+    const name = names[path.replace(/^\.\//, "")];
+    if (!name) throw new Error(`Missing CSS asset: ${path}`);
+    return `url(${JSON.stringify(name)})`;
+  });
+  publish("style.css", css);
+  publish("preferences.js");
+  publish("gpu.js");
+  publish("pkg/layer_web.js", replaceRequired(read(join(directory, "pkg/layer_web.js")),
+    "'layer_web_bg.wasm'", JSON.stringify(basename(names["pkg/layer_web_bg.wasm"]))));
+  let app = read(join(directory, "app.js"));
+  for (const path of modules.slice(0, -1))
+    app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
+  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews)\//.test(path)));
+  app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
+  publish("app.js", app);
+  return names;
+}
+
 export function writeWorker(directory, template = read(join(web, "sw.js"))) {
   const files = filesIn(directory).filter((path) => !["sw.js", ".capy-package"].includes(path)).map((path) => ({
     path, integrity: `sha256-${digest(readFileSync(join(directory, path))).digest("base64")}`,
@@ -75,7 +118,7 @@ export function packageWeb() {
   }
   mkdirSync(join(root, "target"), { recursive: true });
   const staging = mkdtempSync(join(root, "target/capy-web-package-"));
-  const site = join(staging, "site"), runtime = join(site, "assets/runtime");
+  const site = join(staging, "site"), runtime = join(site, "assets");
   mkdirSync(runtime, { recursive: true });
   try {
     const sysroot = run("rustc", ["--print", "sysroot"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
@@ -114,15 +157,8 @@ export function packageWeb() {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="76.8" fill="#767676"/>${mark}</svg>`;
     for (const size of [32, 180, 192, 512])
       run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), "-", join(runtime, `icon-${size}.png`)], { input: svg, stdio: ["pipe", "inherit", "inherit"] });
-    const runtimeFiles = filesIn(runtime);
-    const hash = createHash("sha256");
-    for (const path of runtimeFiles) {
-      const data = readFileSync(join(runtime, path));
-      checkRuntime(data, path);
-      hash.update(path + "\0").update(data);
-    }
-    const version = hash.digest("hex").slice(0, 20), base = `assets/${version}/`;
-    renameSync(runtime, join(site, base));
+    const names = fingerprintAssets(runtime);
+    const asset = (path) => `assets/${names[path]}`;
 
     const notices = ["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"];
     for (const path of notices) cpSync(join(root, path), join(site, path));
@@ -140,15 +176,15 @@ export function packageWeb() {
       id: "./", name: "Capy Canvas", short_name: "Capy Canvas",
       description: "A GPU-powered drawing workspace.", start_url: "./", scope: "./",
       display: "standalone", background_color: "#333333", theme_color: "#333333",
-      icons: [192, 512].map((size) => ({ src: `${base}icon-${size}.png`, sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
+      icons: [192, 512].map((size) => ({ src: asset(`icon-${size}.png`), sizes: `${size}x${size}`, type: "image/png", purpose: "any" })),
     }, null, 2) + "\n");
     const metadata = `<link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="${base}icon-180.png" />
+    <link rel="apple-touch-icon" href="${asset("icon-180.png")}" />
     <link rel="license" href="./licenses.html" />`;
     writeFileSync(join(site, "index.html"), read(join(web, "index.html"))
-      .replace('href="data:,"', `type="image/png" sizes="32x32" href="${base}icon-32.png"`)
-      .replace('href="style.css"', `href="${base}style.css"`)
-      .replace('src="app.js"', `src="${base}app.js"`)
+      .replace('href="data:,"', `type="image/png" sizes="32x32" href="${asset("icon-32.png")}"`)
+      .replace('href="style.css"', `href="${asset("style.css")}"`)
+      .replace('src="app.js"', `src="${asset("app.js")}"`)
       .replace("<!-- Packager inserts install metadata here; development never registers a worker. -->", metadata)
       .replace("</body>", `<script>addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js", {updateViaCache: "none"}).catch(console.error); });</script>\n  </body>`));
     writeFileSync(join(site, ".nojekyll"), "");

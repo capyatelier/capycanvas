@@ -6,14 +6,16 @@ body { margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input, select, summary { font: inherit; accent-color: var(--accent); }
 button, select, input[type="color"], summary { min-height: 34px; border: 0; border-radius: 6px; background: transparent; color: var(--text); padding: 5px 17px; }
 button, summary { cursor: default; font-weight: 700; line-height: 24px; }
-button:hover:not(:disabled):not(.panel-grip), summary:hover, select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+:where(:root:not([data-touch])) button:hover:not(:disabled):not(.panel-grip), :where(:root:not([data-touch])) summary:hover, :where(:root:not([data-touch])) select:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
 button:active:not(:disabled):not(.panel-grip), summary:active { background: color-mix(in srgb, var(--text) 16%, transparent); }
 button:disabled { opacity: .36; cursor: default; }
 button[aria-pressed="true"], button[aria-selected="true"] { background: var(--selected); }
 :focus-visible { outline: none; }
 /* Chrome is a control surface, not a text document. Preserve text editing and
    copyable labels. Pen-first chrome intentionally has no focus/tap halo. */
-.chrome, .dock-group, .tile-popover, dialog, #canvas { user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.chrome, .dock-group, .tile-popover, dialog, #canvas, #canvas-cursor, #canvas-cursor * { user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+/* Safari can select SVG artwork independently of pointer hit testing. */
+#canvas, #canvas-cursor, #canvas-cursor * { -webkit-touch-callout: none; -webkit-user-drag: none; }
 #document-title, #view-info, #status, input:not([type="range"]):not([type="checkbox"]):not([type="color"]), textarea { user-select: text; -webkit-user-select: text; }
 .brush-preview, svg { -webkit-user-drag: none; pointer-events: none; }
 #canvas:focus { outline: none; }
@@ -48,7 +50,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #canvas-cursor .cursor-marker-front { stroke: white; }
 #header { position: absolute; inset: 0 0 auto; height: 48px; padding: 6px; display: flex; align-items: center; justify-content: space-between; background: transparent; z-index: 5; }
 #header nav > button, .header-menu > summary, #document-title { background: var(--bg); border-radius: 6px; }
-#header nav > button:hover, .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
+:where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
 #header-start > button[aria-pressed="true"] { background: var(--selected); }
 #header nav { display: flex; align-items: center; gap: 6px; z-index: 1; }
@@ -91,8 +93,8 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel button { min-height: 28px; padding: 4px 12px; line-height: 20px; }
 .scroll-thumb { position: absolute; right: 0; width: 8px; min-height: 28px; padding: 2px; cursor: default; touch-action: none; opacity: 0; transition: opacity 180ms; }
 .scroll-thumb::after { content: ""; display: block; height: 100%; border-radius: 8px; background: color-mix(in srgb, var(--text) 35%, transparent); }
-.panel-frame:hover > .scroll-thumb, .panel-frame:focus-within > .scroll-thumb { opacity: 1; }
-.scroll-thumb:hover, .scroll-thumb:active { padding: 1px; }
+:where(:root:not([data-touch])) .panel-frame:hover > .scroll-thumb, .panel-frame:focus-within > .scroll-thumb { opacity: 1; }
+:where(:root:not([data-touch])) .scroll-thumb:hover, .scroll-thumb:active { padding: 1px; }
 .panel.tile-panel { padding: 0; position: relative; }
 .toolbar-controls { position: relative; width: 100%; height: 100%; }
 .toolbar-controls > button { position: absolute; min-height: 0; padding: 0; }

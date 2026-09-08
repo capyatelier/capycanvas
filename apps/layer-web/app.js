@@ -2,8 +2,9 @@ import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
 import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
 
-// Resolve assets beside the module, including in a versioned static package.
-const asset = (path) => new URL(path, import.meta.url).href;
+// The static packager fills this map with fingerprinted artwork filenames.
+const assetPaths = {};
+const asset = (path) => new URL(assetPaths[path.replace(/^\.\//, "")] || path, import.meta.url).href;
 
 const panels = new Map(),
   groups = new Map(),
@@ -833,9 +834,16 @@ function buildHeader() {
     $("header-start").append(menu(spec.label, spec.commands));
   $("header-end").append(fullscreenButton(), iconButton("settings"));
 }
+function pointerStyle(e) {
+  // Touch leaves :hover stuck until the next tap; track actual pointer input
+  // instead of disabling hover for a whole device that may also have a pen/mouse.
+  const touch = e.pointerType === "touch", root = document.documentElement;
+  if (root.hasAttribute("data-touch") !== touch) root.toggleAttribute("data-touch", touch);
+}
 window.addEventListener(
   "pointermove",
   (e) => {
+    pointerStyle(e);
     if (!e.buttons) chromeHeld = false;
     chromeInput({ kind: "motion", position: [e.clientX, e.clientY] });
     cursorInput(e);
@@ -849,6 +857,7 @@ document.addEventListener("pointerleave", (e) => {
 window.addEventListener(
   "pointerdown",
   (e) => {
+    pointerStyle(e);
     revealPointer = null;
     if (e.target.closest("#header")) chromeHeld = true;
     const reply = chromeInput({

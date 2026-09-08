@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, symlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { checkRuntime, dependencyNotices, filesIn, writeWorker } from "./package.mjs";
+import { checkRuntime, dependencyNotices, filesIn, fingerprintAssets, writeWorker } from "./package.mjs";
 import { gpuEnvironment, gpuProblem } from "./gpu.js";
 
 test("GPU help distinguishes missing support, insecure access and no adapter", () => {
@@ -59,6 +60,64 @@ function fixture(t) {
   writeFileSync(join(dir, "app.js"), "export const app = true;");
   return dir;
 }
+
+function runtimeFixture(t, changes = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const [path, data] of Object.entries({
+    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nconst assetPaths = {};',
+    "preferences.js": "export function createPreferences() {}",
+    "gpu.js": "export function showGpuNotice() {}",
+    "pkg/layer_web.js": "export default new URL('layer_web_bg.wasm', import.meta.url);",
+    "pkg/layer_web_bg.wasm": Buffer.from([0, 97, 115, 109]),
+    "style.css": 'body { color: black; mask: url("icons/pen.svg"); }',
+    "icons/pen.svg": "<svg/>",
+    "brush-previews/1-dark.png": Buffer.from([137, 80, 78, 71]),
+    ...changes,
+  })) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), data);
+  }
+  return dir;
+}
+
+test("every runtime filename hashes its final bytes and all dependency references follow it", (t) => {
+  const dir = runtimeFixture(t), names = fingerprintAssets(dir);
+  assert.deepEqual(filesIn(dir).sort(), Object.values(names).sort(), "No unversioned runtime copies remain");
+  for (const [original, name] of Object.entries(names)) {
+    const hash = createHash("sha256").update(readFileSync(join(dir, name))).digest("hex").slice(0, 20);
+    const extension = extname(original);
+    assert.equal(name, `${original.slice(0, -extension.length)}.${hash}${extension}`);
+  }
+  const app = readFileSync(join(dir, names["app.js"]), "utf8");
+  for (const path of ["preferences.js", "gpu.js", "pkg/layer_web.js"])
+    assert.ok(app.includes(`from "./${names[path]}"`));
+  for (const path of ["icons/pen.svg", "brush-previews/1-dark.png"])
+    assert.ok(app.includes(JSON.stringify(names[path])));
+  assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
+  assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
+  assert.deepEqual(fingerprintAssets(runtimeFixture(t)), names, "An identical rebuild keeps every URL stable");
+});
+
+test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
+  const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
+  for (const path of ["app.js", "style.css", "gpu.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png"]) {
+    const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
+    const next = fingerprintAssets(dir);
+    assert.notEqual(next[path], names[path], path);
+    assert.equal(next["preferences.js"], names["preferences.js"], "Unchanged dependencies retain their URL");
+    assert.equal(next["style.css"] === names["style.css"], !["style.css", "icons/pen.svg"].includes(path));
+    assert.equal(next["app.js"] === names["app.js"], path === "style.css", "Module/artwork changes invalidate their consumer");
+    assert.equal(next["pkg/layer_web.js"] === names["pkg/layer_web.js"], path !== "pkg/layer_web_bg.wasm");
+    assert.notEqual(writeWorker(dir).version, first.version, "Every content change updates the PWA cache version");
+  }
+});
+
+test("new modules or changed rewrite anchors fail packaging rather than shipping stale references", (t) => {
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "extra.js": "export const extra = true;" })), /new module/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "app.js": "changed module layout" })), /Missing package reference/);
+  assert.throws(() => fingerprintAssets(runtimeFixture(t, { "style.css": 'body { mask: url("missing.svg"); }' })), /Missing CSS asset/);
+});
 
 test("worker version covers every file and is stable across repeat builds", (t) => {
   const dir = fixture(t);

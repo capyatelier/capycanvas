@@ -38,16 +38,24 @@ The build:
    180/192/512 px PNG installation icons from the shared capybara SVG, all with
    the same rounded corners, preserving its separate branding terms. Manifest
    icons use `purpose: any`, since the artwork already has its own shape.
-4. Puts matching JS, Wasm, CSS and artwork under one content-addressed asset
-   directory. Relative module/asset URLs require no deployment-specific base
-   path and keep a release's JS/Wasm pair together.
+4. Fingerprints every runtime asset with the first 20 hex digits of its own
+   SHA-256: `assets/app.<sha>.js`, `assets/style.<sha>.css`, and similarly for
+   imported JS, Wasm, SVGs and PNGs. Dependencies are renamed first; rewritten
+   JS/CSS is then hashed, so its filename covers its final bytes and dependency
+   URLs, including the CSS checkbox mask. A build-time artwork map handles
+   dynamic icon/brush-preview lookups.
+   HTML and manifest references use the new names; no unversioned runtime
+   copies remain. Relative URLs work at any hosting subpath. Identical rebuilds
+   retain identical URLs; unrelated assets retain their hashes.
 5. Includes project/branding licenses, original notices for the Wasm dependency
    graph (including build-time dependencies), and the installed Rust toolchain's
    complete copyright notice. Generic missing-license placeholders fail the
    package build; the `profiling` notice is retrieved from its recorded upstream
    revision and checked against a pinned checksum.
 6. Generates a relative-scope manifest, content-versioned service worker,
-   integrity-checked precache list and `.nojekyll` marker.
+   integrity-checked precache list and `.nojekyll` marker. The worker/cache
+   version is automatically SHA-256-derived from the complete package and
+   worker template on every build; there is no manual version to forget.
 
 Output is **`dist/capycanvas/`**. It is ignored, as are intermediate files in
 `target/` and development bindings in `apps/layer-web/pkg/`. No generated files
@@ -84,13 +92,22 @@ covers the web-only fullscreen button beside Settings (real entry/exit, an
 external exit event, unavailable/denied requests, dialogs and GPU drawing after
 resizing), and captures both fullscreen themes. It also checks
 cold offline Wasm startup with HTTP cache disabled, real GPU ink, all brush
-previews in both themes, integrity-mismatched update recovery, waiting updates that preserve
-the live session, activation after leaving the old page, and isolation between
+previews in both themes, nonselectable canvas/cursor artwork, real touch taps
+without sticky hover and switching back to mouse/pen hover, integrity-mismatched
+update recovery, waiting updates that preserve the live session, activation after
+leaving the old page, and isolation between
 installations on different paths. The test never installs an OS app, injects OS
 pointer events, touches an existing browser profile or deploys anything.
 Packaging/unit checks do not need a GPU; the browser test does. OS-specific
 installation UI, mobile browsers and real offline storage eviction still require
 device testing.
+
+The update fixture changes actual JS and CSS, including their SHA filenames,
+HTML references and service-worker version. It serves assets with one-year
+immutable caching, checks that the old app stays intact while an update waits,
+and verifies the new JS executes and CSS applies after activation, including
+another cold offline start. Unit tests cover hash reproducibility, dependency
+invalidation, artwork/Wasm changes and worker-only updates.
 
 ## Runtime and updates
 
@@ -196,6 +213,16 @@ enabled by this browser-help fix.
 
 ### Offline updates
 
+Only fingerprinted `assets/**` files are suitable for
+`Cache-Control: public, max-age=31536000, immutable`. Keep `index.html`, `sw.js`,
+`manifest.webmanifest` and the license pages at stable URLs with revalidation
+(`Cache-Control: no-cache`, where the host permits header configuration).
+The package cannot set a hosting provider's response headers. Never apply a
+blanket immutable policy to the whole site. Publish a complete package together;
+retain previous hashed assets during a non-atomic rollout so an HTML response
+already in flight can still load its dependencies. See
+[HTTP cache busting](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Caching#cache_busting).
+
 After the first successful online install, the worker precaches the whole
 package. Runtime assets are served from that complete version; failed or
 integrity-mismatched installs retain the previous working version. New workers
@@ -203,6 +230,10 @@ wait for the old app's tabs/windows to close: no `skipWaiting`, forced reload or
 mid-drawing JS/Wasm replacement. Cache names include the exact installation
 scope; cleanup never deletes a neighboring app's cache. Unknown URLs, APIs,
 non-GET requests and user data are not cached by this worker.
+Registration uses `updateViaCache: "none"` and precaching uses reload requests
+with content integrity, so the worker update does not trust stale HTTP cache
+entries. Filename hashes do not force an open drawing to reload. See the
+[service-worker lifecycle](https://web.dev/articles/service-worker-lifecycle).
 
 **Offline app availability is not document autosave.** The current drawing is
 still in memory; reloading or closing the app discards it. Applied preferences
