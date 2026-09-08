@@ -83,7 +83,14 @@ About Capy Canvas. Shortcuts/About deep-link to the same editor; calling
 This follows GNOME's placement of application-level entries in the main menu.
 [GNOME menu guidance](https://developer.gnome.org/hig/patterns/controls/menus.html).
 All native header menus use `GMenu`/`GtkPopoverMenu`, with enabled/check states
-and accelerator hints from the shared command model. View includes Zen Mode.
+and accelerator hints from the shared command model. Rust defines menu sections:
+New Window is separate from Preferences/Keyboard Shortcuts/About; View separates
+Fit Canvas, the appearance/visibility toggles (including Zen Mode), and Reset Layout.
+Undo/Redo remain one group. GTK renders native section separators; web renders
+horizontal rules at the same boundaries. GNOME Settings keeps its support entries
+together, and Text Editor separates this final group from document/window actions:
+[Settings menu](https://github.com/GNOME/gnome-control-center/blob/main/shell/cc-window.blp),
+[Text Editor menu](https://github.com/GNOME/gnome-text-editor/blob/main/src/editor-window.ui).
 Header text buttons retain libadwaita's 17px horizontal padding.
 
 Web uses a gear opening Preferences directly, with the same sidebar/page flow,

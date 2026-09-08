@@ -25,7 +25,7 @@ export async function checkParity({ call, evaluate, settle }) {
     await evaluate(
       "[...document.querySelectorAll('.header-menu')].map(m=>[...m.querySelectorAll('button')].map(b=>b.dataset.command))",
     ),
-    catalog.menus.map((m) => m.commands),
+    catalog.menus.map((m) => m.sections.flat()),
   );
   assert.deepEqual(
     await evaluate(

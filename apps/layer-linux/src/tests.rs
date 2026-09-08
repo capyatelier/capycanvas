@@ -102,6 +102,87 @@ fn capture_reference(w: &Workspace, path: &str, scale: f32) {
 }
 
 #[test]
+#[ignore = "native menu sections: requires a Wayland/Vulkan display"]
+fn native_menu_sections() {
+    let app = native_test_app("dev.layer.MenuTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(500);
+    let dir = "../../artifacts/ui/menus";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (label, sections) in MENUS
+            .iter()
+            .map(|m| (m.label, m.sections))
+            .chain([("Main Menu", PRIMARY_MENU)])
+        {
+            let menu = w
+                .popovers
+                .borrow()
+                .iter()
+                .filter_map(|p| p.upgrade())
+                .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
+                .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(label))
+                .unwrap();
+            let root = menu.menu_model().unwrap();
+            assert_eq!(root.n_items() as usize, sections.len());
+            for (index, commands) in sections.iter().enumerate() {
+                let model = root.item_link(index as i32, "section").unwrap();
+                assert_eq!(model.n_items() as usize, commands.len());
+                for (index, command) in commands.iter().enumerate() {
+                    assert_eq!(
+                        model
+                            .item_attribute_value(index as i32, "label", None)
+                            .unwrap()
+                            .str(),
+                        Some(command.label())
+                    );
+                }
+            }
+            menu.popup();
+            pump(200);
+            // Complete allocation even if Wayland has occluded the test window.
+            menu.allocate(menu.width(), menu.height(), -1, None);
+            let snapshot = gtk::Snapshot::new();
+            let mut child = menu.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                menu.snapshot_child(&widget, &snapshot);
+            }
+            menu.renderer()
+                .unwrap()
+                .render_texture(&snapshot.to_node().unwrap(), None)
+                .save_to_png(format!("{dir}/{label}-{theme:?}.png"))
+                .unwrap();
+            menu.popdown();
+            pump(100);
+        }
+    }
+    // Replacing an accelerator must update an item inside its section, not
+    // replace a section in the root or leave the old hint on screen.
+    let mut settings = state(&w).settings;
+    settings
+        .shortcuts
+        .insert(CommandId::Settings.shortcut_id(), vec![]);
+    w.dispatch(UiAction::RestoreSettings { settings });
+    let menus = w.menus.borrow();
+    let section = menus
+        .iter()
+        .find(|m| m.commands.contains(&CommandId::Settings))
+        .unwrap();
+    assert_eq!(section.model.n_items(), 3);
+    assert_eq!(
+        section
+            .model
+            .item_attribute_value(0, "accel", None)
+            .unwrap()
+            .str(),
+        Some("")
+    );
+}
+
+#[test]
 #[ignore = "GTK visual reference for the web: requires a Wayland display"]
 fn native_web_parity_reference() {
     let app = native_test_app("dev.layer.ParityTest");

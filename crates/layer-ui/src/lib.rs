@@ -130,27 +130,32 @@ pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct MenuSpec {
     pub label: &'static str,
-    pub commands: &'static [CommandId],
+    /// Related commands; hosts draw separators between these sections.
+    pub sections: &'static [&'static [CommandId]],
 }
-pub const PRIMARY_MENU: &[CommandId] = &[
-    CommandId::NewWindow,
-    CommandId::Settings,
-    CommandId::KeyboardShortcuts,
-    CommandId::About,
+pub const PRIMARY_MENU: &[&[CommandId]] = &[
+    &[CommandId::NewWindow],
+    &[
+        CommandId::Settings,
+        CommandId::KeyboardShortcuts,
+        CommandId::About,
+    ],
 ];
 pub const MENUS: &[MenuSpec] = &[
     MenuSpec {
         label: "Edit",
-        commands: &[CommandId::Undo, CommandId::Redo],
+        sections: &[&[CommandId::Undo, CommandId::Redo]],
     },
     MenuSpec {
         label: "View",
-        commands: &[
-            CommandId::FitCanvas,
-            CommandId::ZenMode,
-            CommandId::ToggleTheme,
-            CommandId::TogglePanels,
-            CommandId::ResetLayout,
+        sections: &[
+            &[CommandId::FitCanvas],
+            &[
+                CommandId::ZenMode,
+                CommandId::ToggleTheme,
+                CommandId::TogglePanels,
+            ],
+            &[CommandId::ResetLayout],
         ],
     },
 ];

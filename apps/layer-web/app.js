@@ -805,7 +805,7 @@ function updateZen() {
   chromeInput({ kind: "refresh" });
 }
 function buildHeader() {
-  function menu(label, ids, icon) {
+  function menu(label, sections, icon) {
     const details = element("details", "header-menu");
     details.name = "workspace-menu";
     const summary = element("summary", "", icon || label);
@@ -816,14 +816,17 @@ function buildHeader() {
         popup.hidePopover();
     });
     const contents = element("div", "popover");
-    for (const id of ids) {
-      const control = commandButton(id, id);
-      control.replaceChildren(element("span", "command-label"), element("span", "shortcut-hint"));
-      control.addEventListener("click", () => {
-        details.open = false;
-        updateZen();
-      });
-      contents.append(control);
+    for (const [index, ids] of sections.entries()) {
+      if (index) contents.append(element("hr"));
+      for (const id of ids) {
+        const control = commandButton(id, id);
+        control.replaceChildren(element("span", "command-label"), element("span", "shortcut-hint"));
+        control.addEventListener("click", () => {
+          details.open = false;
+          updateZen();
+        });
+        contents.append(control);
+      }
     }
     details.append(summary, contents);
     details.addEventListener("toggle", updateZen);
@@ -831,7 +834,7 @@ function buildHeader() {
   }
   $("header-start").append(iconButton("zen_mode"));
   for (const spec of catalog.menus)
-    $("header-start").append(menu(spec.label, spec.commands));
+    $("header-start").append(menu(spec.label, spec.sections));
   $("header-end").append(fullscreenButton(), iconButton("settings"));
 }
 function pointerStyle(e) {

@@ -1138,6 +1138,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Static presentation data changes with the applied keymap/platform,
         // not every pen event or frame's command-availability update.
         for command in &mut self.state.commands {
+            command.bindings = self.state.settings.keys(&command.id.shortcut_id());
             command.shortcut = self
                 .state
                 .settings
@@ -1924,6 +1925,38 @@ mod tests {
         assert_eq!(s.engine.backend().dabs, dabs);
     }
     #[test]
+    fn menu_sections_are_nonempty_unique_and_keep_toggles_together() {
+        for sections in MENUS.iter().map(|m| m.sections).chain([PRIMARY_MENU]) {
+            assert!(!sections.is_empty());
+            let mut seen = Vec::new();
+            for &section in sections {
+                assert!(!section.is_empty());
+                for &command in section {
+                    assert_eq!(command.is_toggle(), section[0].is_toggle());
+                    assert!(!seen.contains(&command));
+                    seen.push(command);
+                }
+            }
+        }
+        assert_eq!(PRIMARY_MENU[0], &[CommandId::NewWindow]);
+        assert_eq!(
+            PRIMARY_MENU[1],
+            &[
+                CommandId::Settings,
+                CommandId::KeyboardShortcuts,
+                CommandId::About
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(MENUS).unwrap()[1]["sections"],
+            serde_json::json!([
+                ["fit_canvas"],
+                ["zen_mode", "toggle_theme", "toggle_panels"],
+                ["reset_layout"]
+            ])
+        );
+    }
+    #[test]
     fn catalog_covers_each_brush_panel_and_declared_command() {
         let catalog = ui_catalog();
         let mut ids = catalog
@@ -1943,7 +1976,9 @@ mod tests {
         for id in catalog
             .menus
             .iter()
-            .flat_map(|m| m.commands)
+            .flat_map(|m| m.sections)
+            .chain(PRIMARY_MENU)
+            .flat_map(|s| s.iter())
             .chain(catalog.layer_commands)
         {
             assert!(session.state.commands.iter().any(|c| c.id == *id));
@@ -2313,6 +2348,11 @@ mod tests {
         );
         s.dispatch(UiAction::ApplySettings).unwrap();
         assert_eq!(s.command(CommandId::Brush).shortcut, "B / Ctrl+Y");
+        for command in &s.state.commands {
+            let current = s.command(command.id);
+            assert_eq!(command.bindings, current.bindings);
+            assert_eq!(command.shortcut, current.shortcut);
+        }
         invoke(&mut s, CommandId::Eraser);
         assert!(key(&mut s, "y", true, true, false).handled);
         assert_eq!(s.state.brush.tool, Tool::Brush);

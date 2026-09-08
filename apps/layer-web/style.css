@@ -62,6 +62,7 @@ summary::-webkit-details-marker { display: none; }
 .popover { position: absolute; top: 40px; left: 0; background: var(--popover); padding: 6px; min-width: 168px; border-radius: 10px; box-shadow: 0 6px 20px #0005; }
 #header-end .popover { left: auto; right: 0; }
 .popover button { display: flex; gap: 24px; width: 100%; text-align: left; white-space: nowrap; }
+.popover hr { border: 0; height: 1px; margin: 6px 0; background: color-mix(in srgb, var(--text) 15%, transparent); }
 .command-label { flex: 1; }
 .shortcut-hint { opacity: .55; font-weight: 400; white-space: nowrap; }
 #canvas-status { position: absolute; padding: 0 4px; display: flex; justify-content: flex-end; align-items: flex-end; background: transparent; color: var(--text); font-size: var(--ui-text-size); }

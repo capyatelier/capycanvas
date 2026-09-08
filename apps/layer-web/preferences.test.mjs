@@ -44,6 +44,16 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await action({ type: "cancel_settings" });
   for (const theme of ["dark", "light"]) {
     await action({ type: "set_theme", theme });
+    const menus = await evaluate("layerApp.app.catalog().menus");
+    for (const [index, spec] of menus.entries()) {
+      const selector = `.header-menu:nth-of-type(${index + 1})`;
+      await click(`${selector} summary`);
+      const items = await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).querySelector('.popover').children].map(n=>n.tagName==='HR'?'separator':n.dataset.command)`);
+      assert.deepEqual(items, spec.sections.flatMap((section, i) => i ? ['separator', ...section] : section));
+      assert.ok(await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).querySelectorAll('hr')].every(n=>getComputedStyle(n).height==='1px'&&getComputedStyle(n).backgroundColor!=='rgba(0, 0, 0, 0)')`));
+      await capture(`menu-${spec.label.toLowerCase()}-${theme}`);
+      await click(`${selector} summary`);
+    }
     await click('#header-end [data-command="settings"]');
     assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), content=document.querySelector('.preferences-content').getBoundingClientRect(); return Math.abs(sidebar.bottom-content.bottom)<1; })()`), "sidebar extends alongside the content footer");
     assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "input", "shortcuts", "about"]);

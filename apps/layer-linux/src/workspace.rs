@@ -707,7 +707,7 @@ impl Workspace {
         self.header.pack_start(&zen);
         for menu in MENUS {
             self.header
-                .pack_start(&self.chrome_menu(menu.label, menu.commands));
+                .pack_start(&self.chrome_menu(menu.label, menu.sections));
         }
         let primary = self.chrome_menu("Main Menu", PRIMARY_MENU);
         primary.set_icon_name("layer-menu-symbolic");
@@ -768,7 +768,7 @@ impl Workspace {
         self.window.add_controller(motion);
     }
 
-    fn chrome_menu(self: &Rc<Self>, label: &str, commands: &[CommandId]) -> gtk::MenuButton {
+    fn chrome_menu(self: &Rc<Self>, label: &str, sections: &[&[CommandId]]) -> gtk::MenuButton {
         let menu = gtk::MenuButton::builder()
             .label(label)
             .tooltip_text(label)
@@ -776,30 +776,35 @@ impl Workspace {
         menu.add_css_class("flat");
         menu.add_css_class("chrome-control");
         menu.set_direction(gtk::ArrowType::None);
-        let model = gtk::gio::Menu::new();
-        for &id in commands {
-            let name = id.shortcut_id();
-            let action = if id.is_toggle() {
-                gtk::gio::SimpleAction::new_stateful(&name, None, &false.to_variant())
-            } else {
-                gtk::gio::SimpleAction::new(&name, None)
-            };
-            action.connect_activate(glib::clone!(
-                #[weak(rename_to = this)]
-                self,
-                move |_, _| this.dispatch(UiAction::Invoke { command: id })
-            ));
-            self.menu_actions.add_action(&action);
-            model.append(Some(id.label()), Some(&format!("editor.{name}")));
+        let root = gtk::gio::Menu::new();
+        for &commands in sections {
+            let model = gtk::gio::Menu::new();
+            for &id in commands {
+                let name = id.shortcut_id();
+                let action = if id.is_toggle() {
+                    gtk::gio::SimpleAction::new_stateful(&name, None, &false.to_variant())
+                } else {
+                    gtk::gio::SimpleAction::new(&name, None)
+                };
+                action.connect_activate(glib::clone!(
+                    #[weak(rename_to = this)]
+                    self,
+                    move |_, _| this.dispatch(UiAction::Invoke { command: id })
+                ));
+                self.menu_actions.add_action(&action);
+                model.append(Some(id.label()), Some(&format!("editor.{name}")));
+            }
+            root.append_section(None, &model);
+            // Keep each section's model so shortcut updates target its own items.
+            self.menus.borrow_mut().push(NativeMenu {
+                model,
+                commands: commands.to_vec(),
+                accelerators: vec![String::new(); commands.len()],
+            });
         }
-        let popover = gtk::PopoverMenu::from_model(Some(&model));
+        let popover = gtk::PopoverMenu::from_model(Some(&root));
         self.watch_popover(popover.upcast_ref());
         menu.set_popover(Some(&popover));
-        self.menus.borrow_mut().push(NativeMenu {
-            model,
-            commands: commands.to_vec(),
-            accelerators: vec![String::new(); commands.len()],
-        });
         menu
     }
 
