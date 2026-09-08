@@ -143,7 +143,6 @@ export function packageWeb() {
       icons: [192, 512].map((size) => ({ src: `${base}icon-${size}.png`, sizes: `${size}x${size}`, type: "image/png", purpose: "any maskable" })),
     }, null, 2) + "\n");
     const metadata = `<link rel="manifest" href="./manifest.webmanifest" />
-    <meta name="theme-color" content="#333333" />
     <link rel="apple-touch-icon" href="${base}icon-180.png" />
     <link rel="license" href="./licenses.html" />`;
     writeFileSync(join(site, "index.html"), read(join(web, "index.html"))

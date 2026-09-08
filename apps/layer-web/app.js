@@ -36,7 +36,14 @@ let servicingRequests = false;
 const settingsKey = "layer.preferences.v1";
 const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
-document.body.dataset.theme = systemTheme.matches ? "dark" : "light";
+applyTheme(systemTheme.matches ? "dark" : "light");
+
+function applyTheme(theme) {
+  document.body.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  document.querySelector('meta[name="color-scheme"]').content = theme;
+  document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#333333" : "#b8b8b8";
+}
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -699,7 +706,7 @@ function update(regions) {
         }
       }
   if (regions & 16) {
-    document.body.dataset.theme = state.theme;
+    applyTheme(state.theme);
     for (const [id, button] of brushButtons)
       button.querySelector("img").src =
         asset(`brush-previews/${id}-${state.theme}.png`);

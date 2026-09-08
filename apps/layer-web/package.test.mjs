@@ -7,15 +7,20 @@ import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, writeWorker } from "./package.mjs";
 import { gpuProblem } from "./gpu.js";
 
-test("GPU help uses short, plain messages without exposing technical errors", () => {
-  assert.match(gpuProblem({ secure: false, api: false })[0], /secure link/);
-  assert.match(gpuProblem({ secure: true, api: false })[1], /Update your browser/);
-  assert.equal(gpuProblem({ secure: true, api: true })[0], "Drawing isn’t available");
-  for (const api of [true, false]) {
-    const text = gpuProblem({ secure: true, api }).join(" ");
-    assert.ok(text.split(/\s+/).length < 25);
-    assert.doesNotMatch(text, /GPU|adapter|API|driver|renderer/);
-  }
+test("GPU help distinguishes missing support, insecure access and no adapter", () => {
+  assert.match(gpuProblem({ secure: false, api: false })[1], /secure connection/);
+  assert.match(gpuProblem({ secure: true, api: false })[1], /does not have WebGPU enabled/);
+  assert.deepEqual(gpuProblem({ secure: true, api: true }), [
+    "Could not initialize canvas", "Your browser could not find a GPU adapter.",
+  ]);
+});
+
+test("the source page opts out of Dark Reader before loading app styles", () => {
+  const html = readFileSync(new URL("index.html", import.meta.url), "utf8");
+  assert.match(html, /<meta name="darkreader-lock"/);
+  assert.ok(html.indexOf('name="darkreader-lock"') < html.indexOf('rel="stylesheet"'));
+  assert.match(html, /name="color-scheme" content="dark light"/);
+  assert.match(html, /name="theme-color" content="#333333"/);
 });
 
 function fixture(t) {

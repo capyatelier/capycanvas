@@ -1,55 +1,63 @@
 // Original help UI. Browser settings URLs must be copied into the address bar:
 // browsers deliberately prevent web pages from opening their internal settings.
 export function gpuProblem({ secure, api }) {
-  if (!secure) return ["Open a secure link", "Use an address starting with https://, or localhost if you’re running the app locally."];
-  if (!api) return ["This browser can’t draw here", "Update your browser, or try opening Capy Canvas in Chrome or Edge."];
-  return ["Drawing isn’t available", "Your browser couldn’t start the canvas."];
+  const title = "Could not initialize canvas";
+  if (!secure) return [title, "Your browser needs a secure connection to access the GPU."];
+  if (!api) return [title, "Your browser does not have WebGPU enabled."];
+  return [title, "Your browser could not find a GPU adapter."];
 }
 
 export function showGpuNotice({ container, error, retry, element, button }) {
   const [title, reason] = gpuProblem({ secure: isSecureContext, api: !!navigator.gpu });
   const content = element("div", "gpu-help");
-  content.append(element("h1", "", title), element("p", "", reason));
+  content.append(element("h1", "", title), element("p", "gpu-cause", reason),
+    element("p", "gpu-intro", "Capy Canvas is a GPU-accelerated drawing app. It needs WebGPU to use your graphics hardware. Try the steps below to start drawing."));
   const chromium = /Chrome\/|Chromium\/|Edg\//.test(navigator.userAgent);
-  const browser = /Edg\//.test(navigator.userAgent) ? "Edge" : "Chrome";
-  const scheme = browser.toLowerCase();
-  if (isSecureContext && chromium) {
-    const steps = element("ol");
-    for (const text of [
-      `Open ${browser} Settings → System.`,
-      "Turn on “Use graphics acceleration when available”.",
-      `Restart ${browser}, then come back here.`,
-    ]) steps.append(element("li", "", text));
-    content.append(steps);
-  }
-  content.append(button("Try again", retry, "gpu-retry"));
-  const details = (parent, label) => {
-    const node = element("details");
-    node.append(element("summary", "", label));
-    parent.append(node);
-    return node;
-  };
-  const address = (parent, url, instruction) => {
+  const address = (parent, url) => {
     const row = element("div", "gpu-address");
     const copy = button("Copy", async () => {
       try { await navigator.clipboard.writeText(url); copy.textContent = "Copied"; }
       catch { copy.textContent = "Copy manually"; }
     });
+    copy.setAttribute("aria-label", `Copy ${url}`);
     row.append(element("code", "", url), copy);
-    parent.append(element("p", "", instruction), row);
+    parent.append(row);
   };
-  const help = details(content, "More help");
-  help.append(element("p", "", "Still not working? Update your browser or try another device."));
-  address(help, `${scheme}://settings/system`, `For ${browser} settings, paste this into a new tab:`);
-  address(help, `${scheme}://gpu`, "For a graphics report:");
-  const advanced = details(help, "Experimental options");
-  address(advanced, `${scheme}://flags/#enable-unsafe-webgpu`, "Unsafe WebGPU may enable experimental support, but can cause crashes. Restore Default if it causes problems.");
-  const guide = element("a", "", "Troubleshooting guide");
-  guide.href = "https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips";
-  guide.target = "_blank";
-  guide.rel = "noopener noreferrer";
-  help.append(guide);
-  const technical = details(help, "Technical details");
+  if (!isSecureContext) {
+    content.append(element("h2", "", "Open a secure link"),
+      element("p", "", "Use an https:// address, or localhost if you’re running the app yourself."));
+  } else if (chromium) {
+    content.append(element("h2", "", "Try these steps in Chrome"),
+      element("p", "gpu-hint", "Copy each address into a new tab."),
+      element("p", "gpu-caution", "Steps 2–3 are experimental and may reduce browser protections or cause crashes. Restore Default if they cause problems."));
+    const steps = element("ol", "gpu-steps");
+    for (const [heading, text, url] of [
+      ["Update Chrome", "", "chrome://settings/help"],
+      ["Enable WebGPU", "Set “Unsafe WebGPU” to Enabled.", "chrome://flags/#enable-unsafe-webgpu"],
+      ["Allow blocked graphics hardware if needed", "Try setting “Override software rendering list” to Enabled.", "chrome://flags/#ignore-gpu-blocklist"],
+      ["Relaunch Chrome", "Use the Relaunch button on the flags page."],
+      ["Return to Capy Canvas", "Click Try again below."],
+    ]) {
+      const step = element("li");
+      step.append(element("h3", "", heading));
+      if (text) step.append(element("p", "", text));
+      if (url) address(step, url);
+      steps.append(step);
+    }
+    content.append(steps);
+  } else {
+    content.append(element("h2", "", "Try an updated browser"),
+      element("p", "", "Update your browser, or open Capy Canvas in Chrome. If drawing still won’t start, try another device."));
+  }
+  content.append(button("Try again", retry, "gpu-retry"));
+  const technical = element("details");
+  technical.append(element("summary", "", "Technical details"));
+  if (isSecureContext && chromium) {
+    technical.append(element("p", "", "Still not working? Update your graphics driver or try another device."));
+    technical.append(element("p", "", "Check Chrome’s graphics report:"));
+    address(technical, "chrome://gpu");
+  }
   technical.append(element("pre", "", String(error)));
+  content.append(technical);
   container.replaceChildren(content);
 }

@@ -94,10 +94,15 @@ and `application/wasm` for `.wasm`. WebGPU support and a suitable hardware adapt
 are required for drawing; packaging cannot enable unsupported browser/GPU features.
 The Rust UI session starts before GPU initialization. Without a GPU, menus,
 panels and preferences still work, and the canvas area shows theme-matched help.
-The main message uses plain language and short Chrome/Edge settings steps.
-Copyable settings addresses, diagnostics and technical details stay collapsed
-under More help. Experimental flags are explicitly cautioned, not enabled by
-the app. Retry attaches a GPU to the existing session without resetting it.
+The help shows the failure reason, a short GPU requirement explanation and five
+Chrome troubleshooting steps with copyable addresses. Experimental flags carry
+a visible warning and are never enabled by the app. Missing WebGPU and insecure
+connections get appropriate explanations; there are no other-platform guides.
+Technical details and Chrome’s graphics report stay collapsed. Retry attaches
+a GPU to the existing session without resetting it.
+The document advertises the active light/dark color scheme and matching browser
+theme color. A static Dark Reader lock preserves the app’s themes and artwork
+colors without adding an extension dependency.
 No paint input is queued and no render loop runs before attachment; this is
 not a CPU renderer or an invisible drawing mode. GPU initialization is a
 separate async object so it never borrows the Rust UI session across `await`.
@@ -138,3 +143,4 @@ first-time deployment usable.
 - [cargo-about license harvesting](https://embarkstudios.github.io/cargo-about/cli/generate/index.html)
 - [Chrome: WebGPU troubleshooting](https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips)
 - [Darkly GPU help](https://github.com/darkly-art/darkly/blob/dev/frontend/src/ui/GpuErrorPage.svelte): UX reference only for actionable settings/diagnostics; no code, text or assets imported.
+- [Dark Reader site opt-out](https://github.com/darkreader/darkreader/blob/main/CONTRIBUTING.md#disabling-dark-reader-on-your-site)
