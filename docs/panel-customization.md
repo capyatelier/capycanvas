@@ -7,8 +7,8 @@ GTK and web translate native events and render its menu/dialog/control models.
 This feature does not add another canvas/rendering path.
 
 - A panel tab or panel body opens that panel's context menu: **Tab Name** /
-  **Tab Icon** and **Show All Controls**. Double-tapping the tab/header opens
-  Show All Controls too; double-clicks within inputs retain native behavior.
+  **Tab Icon** and **Configure Panel…**. Double-tapping the tab/header opens
+  configuration too; double-clicks within inputs retain native behavior.
 - Empty tab-header space and the group grip target the whole tab group:
   **Tab Names** / **Tab Icons** and **New Toolbar…**. Group changes apply to
   every current tab; an individual tab can subsequently override its style.
@@ -20,11 +20,25 @@ This feature does not add another canvas/rendering path.
   Native gesture recognition owns timing/slop; the deepest applicable target
   wins. Recognized hold/drag suppresses the ordinary click, and scrolling cancels
   a pending hold. Existing input/context menus inside text inputs remain native.
-- **Show All Controls** temporarily opens an expanded floating panel above the
-  canvas, without modifying dock geometry or saving an expanded layout. Outside
-  tap or Escape closes it. All controls supported by that panel are visible;
-  per-control visibility choices determine the compact panel after closing.
-  Existing controls are reused, not a second independent settings model.
+- **Configure Panel…** raises the existing tab group and animates its bounds
+  into a two-column layout. The original column remains a live preview of the
+  compact panel; a wider configuration column opens on the canvas-facing side.
+  Its controls edit the same Rust state, and visibility checkboxes immediately
+  show/hide controls in the preview. Existing preview widgets stay parented;
+  there is no popover, duplicate tab bar, scaled text or second settings model.
+  Outside tap, a tap anywhere on the original tab header, or Escape reverses
+  the animation without changing saved docking. Header dismissal consumes the
+  contact rather than selecting a tab or dragging. There is no close button.
+- The columns share the height needed by the taller content, never reducing the
+  original panel height. The configuration column starts below the original
+  tabs, aligned with the preview's content area; their bottoms align. Expansion
+  uses squared internal seams and a concave tab-to-column transition, with
+  rounding only on the exposed outer corners, so the surface reads as one panel.
+  It is constrained to the window; oversized content scrolls. Left/right panels
+  preserve their preview width. Top/bottom
+  panels form a compact two-column arrangement growing down/up, anchored to the
+  nearest side. Neighboring panels, the reserved dock slot and canvas fit stay
+  unchanged. Controls remain 11pt throughout the animation.
 - Toolbar creation and insertion use one searchable multi-select picker with
   icons, descriptions and explicit confirmation/cancel. Creation also asks for
   a trimmed, case-insensitively unique name. Invalid names leave the draft open.
@@ -35,10 +49,18 @@ This feature does not add another canvas/rendering path.
   They do not scroll: dragging remains reserved for tile reordering. Clipping
   preserves every configured tile, so resizing can reveal it again. Insertion
   previews only target visible slots and are clipped to the same boundary.
+- Zen keeps chrome visible for the complete drag lifecycle, including pointer
+  leave and focus loss while the native DND grab owns input. Drop or cancellation
+  releases that pin; blur still cancels canvas input but does not end UI dragging.
 
-The expanded view is a contextual inspector, not an enlargement of the saved
-dock. This avoids changing canvas fitting and neighboring panels just to inspect
-hidden controls. Complex creation/selection uses a dialog, following GNOME's
+Expansion is transient presentation, not a change to the saved dock. Shared Rust
+geometry accepts the host's measured content heights and animation fraction;
+GTK drives that fraction with a 200ms
+[AdwTimedAnimation](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/class.TimedAnimation.html),
+respecting the system animation setting. The same existing group is reordered
+within its parent for both drawing and hit testing, using
+[GTK's same-parent reordering](https://docs.gtk.org/gtk4/method.Widget.insert_after.html).
+Complex creation/selection uses a dialog, following GNOME's
 [popover guidance](https://developer.gnome.org/hig/patterns/containers/popovers.html).
 GTK uses [native long-press recognition](https://docs.gtk.org/gtk4/class.GestureLongPress.html).
 The compact/all-controls distinction follows the interaction described in
@@ -57,7 +79,7 @@ no third-party code or assets are imported.
   includes application commands, brush presets, size presets and color/opacity
   buttons; control values and execution remain in the existing Rust session.
 - System-panel control catalogs define allowed controls and compact defaults.
-  The expanded inspector shows that catalog, including hidden controls. This is
+  The configuration column shows that catalog, including hidden controls. This is
   metadata for native controls, not a generic widget-tree abstraction.
 - Missing configuration in older workspaces receives the original defaults.
   Restore validates references, IDs, names, controls, active tabs and allocator
@@ -94,8 +116,8 @@ variable-count ribbon allocation. Old workspace JSON receives the original panel
 configuration. Tests cover these policies and native/Wasm type checks pass.
 
 GTK now renders dynamic toolbars, native contextual menus, the searchable picker
-and an expanded live inspector. The inspector temporarily reparents existing
-controls; closing restores the dock without changing its saved geometry. Native
+and in-place two-column configuration. The original group and preview controls
+stay in their parents; closing restores its allocation without changing saved geometry. Native
 checks exercise group/panel/tile/empty-ribbon targets, name/icon choices,
 creation/insertion, control visibility and editing, a GTK drop signal, restore
 and reset. Dark/light GTK widget captures are inspected in

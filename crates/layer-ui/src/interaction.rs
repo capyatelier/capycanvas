@@ -33,6 +33,9 @@ pub struct ChromeFacts {
     pub held: bool,
     pub dragging: bool,
     pub popup_open: bool,
+    /// Actual animated columns from shared layout, for outside contact.
+    #[serde(default)]
+    pub expanded_panel: Option<crate::PanelExpansion>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

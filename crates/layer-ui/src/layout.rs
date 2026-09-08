@@ -311,6 +311,14 @@ pub enum DockNode {
     },
 }
 impl DockNode {
+    fn group_for(&self, panel: Panel) -> Option<u32> {
+        match self {
+            Self::Tabs { id, panels, .. } => panels.contains(&panel).then_some(*id),
+            Self::Split { first, second, .. } => {
+                first.group_for(panel).or_else(|| second.group_for(panel))
+            }
+        }
+    }
     pub fn id(&self) -> u32 {
         match self {
             Self::Tabs { id, .. } | Self::Split { id, .. } => *id,
@@ -525,6 +533,148 @@ pub struct ResolvedLayout {
     pub status: Bounds,
     pub groups: Vec<GroupPlacement>,
     pub dividers: Vec<Divider>,
+}
+
+/// Transient two-column presentation; coordinates of the columns are local to
+/// `bounds`. Hosts supply measured content heights and an animation fraction.
+/// No saved docking dimensions, neighbor allocations or canvas fit are changed.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct PanelExpansion {
+    pub group: u32,
+    pub bounds: Bounds,
+    pub preview: Bounds,
+    pub configuration: Bounds,
+}
+impl PanelExpansion {
+    pub fn contains(self, point: [f32; 2]) -> bool {
+        let local = [point[0] - self.bounds.x, point[1] - self.bounds.y];
+        self.bounds.contains(point[0], point[1])
+            && (self.preview.contains(local[0], local[1])
+                || self.configuration.contains(local[0], local[1]))
+    }
+    pub fn header_contains(self, point: [f32; 2]) -> bool {
+        let mut header = self.preview;
+        header.x += self.bounds.x;
+        header.y += self.bounds.y;
+        header.height = self.configuration.y.min(header.height);
+        header.contains(point[0], point[1])
+    }
+}
+
+pub const PANEL_CONFIGURATION_WIDTH: f32 = 380.0;
+pub const PANEL_EXPANSION_MS: u32 = 200;
+
+impl DockLayout {
+    pub fn panel_group(&self, panel: Panel) -> Option<u32> {
+        self.bands.iter().find_map(|b| b.root.group_for(panel))
+    }
+
+    pub fn expanded_panel(
+        &self,
+        viewport: [f32; 2],
+        panel: Panel,
+        content_heights: [f32; 2],
+        progress: f32,
+    ) -> Option<PanelExpansion> {
+        if !viewport
+            .into_iter()
+            .chain(content_heights)
+            .chain([progress])
+            .all(f32::is_finite)
+            || viewport[0] < 1.0
+            || viewport[1] < 1.0
+        {
+            return None;
+        }
+        let band = self
+            .bands
+            .iter()
+            .find(|b| b.root.group_for(panel).is_some())?;
+        let resolved = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        let group = resolved.groups.iter().find(|g| g.panels.contains(&panel))?;
+        let docked = group.bounds;
+        let gap = crate::WORKSPACE_SPACING;
+        let available = Bounds {
+            x: gap,
+            y: crate::HEADER_HEIGHT,
+            width: (viewport[0] - gap * 2.0).max(1.0),
+            height: (viewport[1] - crate::HEADER_HEIGHT - gap).max(1.0),
+        };
+        let side = matches!(band.edge, Edge::Left | Edge::Right);
+        let preview_width = if side {
+            docked.width
+        } else {
+            docked.width.min(280.0)
+        }
+        .min(available.width * 0.5);
+        let config_width = PANEL_CONFIGURATION_WIDTH.min(available.width - preview_width);
+        let tab_height = if group.tabs_visible {
+            TAB_BAR_HEIGHT
+        } else {
+            0.0
+        };
+        let width = preview_width + config_width;
+        let height = docked
+            .height
+            .max(content_heights[0])
+            .max(content_heights[1] + tab_height)
+            .min(available.height);
+        // Side panels open inward. Top/bottom panels retain their nearest
+        // horizontal anchor and grow down/up rather than outside the window.
+        let config_left = band.edge == Edge::Right
+            || (!side && docked.x + docked.width * 0.5 > viewport[0] * 0.5);
+        let x = if config_left {
+            docked.x + docked.width - width
+        } else {
+            docked.x
+        };
+        let y = if band.edge == Edge::Bottom {
+            docked.y + docked.height - height
+        } else {
+            docked.y
+        };
+        let end = Bounds {
+            x: x.clamp(available.x, available.x + available.width - width),
+            y: y.clamp(available.y, available.y + available.height - height),
+            width,
+            height,
+        };
+        let p = progress.clamp(0.0, 1.0);
+        let mix = |a, b| a + (b - a) * p;
+        let bounds = Bounds {
+            x: mix(docked.x, end.x),
+            y: mix(docked.y, end.y),
+            width: mix(docked.width, end.width),
+            height: mix(docked.height, end.height),
+        };
+        let preview_width = mix(docked.width, preview_width);
+        let revealed = (bounds.width - preview_width).max(0.0);
+        Some(PanelExpansion {
+            group: group.id,
+            bounds,
+            preview: Bounds {
+                x: if config_left { revealed } else { 0.0 },
+                y: 0.0,
+                width: preview_width,
+                height: bounds.height,
+            },
+            configuration: Bounds {
+                x: if config_left {
+                    revealed - config_width
+                } else {
+                    preview_width
+                },
+                y: tab_height,
+                width: config_width,
+                height: (bounds.height - tab_height).max(0.0),
+            },
+        })
+    }
 }
 
 impl Default for DockLayout {
@@ -1634,6 +1784,81 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expanded_columns_open_inward_and_only_grow_to_content() {
+        let mut layout = DockLayout::default();
+        let viewport = [1200.0, 900.0];
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            layout.bands = vec![DockBand {
+                id: 3,
+                edge,
+                extent: 232.0,
+                root: DockNode::Tabs {
+                    id: 5,
+                    panels: vec![Panel::Sizes],
+                    active: Panel::Sizes,
+                },
+            }];
+            let before = layout.clone();
+            let normal = layout.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            );
+            let docked = normal.groups[0].bounds;
+            let start = layout
+                .expanded_panel(viewport, Panel::Sizes, [340.0, 480.0], 0.0)
+                .unwrap();
+            let end = layout
+                .expanded_panel(viewport, Panel::Sizes, [340.0, 480.0], 1.0)
+                .unwrap();
+            let middle = layout
+                .expanded_panel(viewport, Panel::Sizes, [340.0, 480.0], 0.5)
+                .unwrap();
+            assert_eq!(start.bounds, docked);
+            assert_eq!(end.bounds.height, docked.height.max(480.0 + TAB_BAR_HEIGHT));
+            assert_eq!(
+                middle.bounds.height,
+                (docked.height + end.bounds.height) * 0.5
+            );
+            assert_eq!(
+                end.preview.height,
+                end.configuration.height + TAB_BAR_HEIGHT
+            );
+            assert_eq!(end.configuration.y, TAB_BAR_HEIGHT);
+            assert_eq!(
+                end.bounds.width,
+                end.preview.width + end.configuration.width
+            );
+            if matches!(edge, Edge::Left | Edge::Right) {
+                assert_eq!(end.preview.width, docked.width);
+            }
+            if edge == Edge::Right {
+                assert_eq!(end.configuration.x, 0.0);
+            }
+            if edge == Edge::Left {
+                assert_eq!(end.preview.x, 0.0);
+            }
+            assert!(end.bounds.x >= 6.0 && end.bounds.y >= crate::HEADER_HEIGHT);
+            assert!(end.bounds.x + end.bounds.width <= viewport[0] - 6.0);
+            assert!(end.bounds.y + end.bounds.height <= viewport[1] - 6.0);
+            assert_eq!(layout, before);
+            for small in [[640.0, 480.0], [320.0, 400.0]] {
+                let expanded = layout
+                    .expanded_panel(small, Panel::Sizes, [2000.0; 2], 1.0)
+                    .unwrap();
+                assert!(expanded.bounds.x + expanded.bounds.width <= small[0]);
+                assert!(expanded.bounds.y + expanded.bounds.height <= small[1]);
+            }
+        }
+        assert!(
+            layout
+                .expanded_panel(viewport, Panel::Sizes, [f32::NAN, 10.0], 1.0)
+                .is_none()
+        );
+    }
     #[test]
     fn clipped_ribbons_keep_tiles_but_only_offer_visible_drop_slots() {
         for axis in [Axis::Horizontal, Axis::Vertical] {

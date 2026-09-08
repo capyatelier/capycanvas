@@ -20,6 +20,123 @@ mod allocation {
     use super::*;
 
     #[derive(Default)]
+    pub struct PanelColumns {
+        pub preview: RefCell<Option<gtk::Widget>>,
+        pub configuration: RefCell<Option<gtk::Widget>>,
+        pub expansion: Cell<Option<PanelExpansion>>,
+        pub join: RefCell<Option<gtk::DrawingArea>>,
+    }
+    #[glib::object_subclass]
+    impl ObjectSubclass for PanelColumns {
+        const NAME: &'static str = "CapyPanelColumns";
+        type Type = super::PanelColumns;
+        type ParentType = gtk::Widget;
+    }
+    impl ObjectImpl for PanelColumns {
+        fn dispose(&self) {
+            if let Some(join) = self.join.take() {
+                join.unparent();
+            }
+            for child in [self.preview.take(), self.configuration.take()]
+                .into_iter()
+                .flatten()
+            {
+                child.unparent();
+            }
+        }
+    }
+    impl WidgetImpl for PanelColumns {
+        fn contains(&self, x: f64, y: f64) -> bool {
+            self.expansion.get().map_or_else(
+                || self.parent_contains(x, y),
+                |e| e.contains([e.bounds.x + x as f32, e.bounds.y + y as f32]),
+            )
+        }
+        fn measure(&self, _: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
+            (0, 0, -1, -1)
+        }
+        fn size_allocate(&self, width: i32, height: i32, _: i32) {
+            let normal = Bounds {
+                x: 0.0,
+                y: 0.0,
+                width: width as f32,
+                height: height as f32,
+            };
+            for (child, bounds) in [
+                (
+                    self.preview.borrow().clone(),
+                    self.expansion.get().map_or(normal, |e| e.preview),
+                ),
+                (
+                    self.configuration.borrow().clone(),
+                    self.expansion.get().map_or(normal, |e| e.configuration),
+                ),
+            ] {
+                if let Some(child) = child {
+                    allocate_at(&child, bounds);
+                }
+            }
+            if let Some(join) = self.join.borrow().as_ref() {
+                let expanded = self.expansion.get();
+                join.set_visible(expanded.is_some_and(|e| e.configuration.y > 0.0));
+                if let Some(e) = expanded {
+                    let left = e.configuration.x < e.preview.x;
+                    let class = if left {
+                        "configuration-left"
+                    } else {
+                        "configuration-right"
+                    };
+                    let other = if left {
+                        "configuration-right"
+                    } else {
+                        "configuration-left"
+                    };
+                    self.obj().remove_css_class(other);
+                    self.obj().add_css_class(class);
+                    if e.configuration.y == 0.0 {
+                        self.obj().add_css_class("configuration-flush");
+                    } else {
+                        self.obj().remove_css_class("configuration-flush");
+                    }
+                    let x = if left {
+                        e.preview.x - 8.0
+                    } else {
+                        e.preview.x + e.preview.width
+                    };
+                    if join.is_visible() {
+                        allocate_at(
+                            join.upcast_ref(),
+                            Bounds {
+                                x,
+                                y: e.configuration.y - 8.0,
+                                width: 8.0,
+                                height: 8.0,
+                            },
+                        );
+                        join.queue_draw();
+                    }
+                }
+            }
+        }
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            for child in [
+                self.preview.borrow().clone(),
+                self.configuration.borrow().clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                self.obj().snapshot_child(&child, snapshot);
+            }
+            if let Some(join) = self.join.borrow().as_ref()
+                && join.is_visible()
+            {
+                self.obj().snapshot_child(join, snapshot);
+            }
+        }
+    }
+
+    #[derive(Default)]
     pub struct DockSurface {
         pub(super) layout: RefCell<DockLayout>,
         pub(super) children: RefCell<Vec<(Slot, gtk::Widget)>>,
@@ -55,6 +172,11 @@ mod allocation {
                 HEADER_HEIGHT,
                 STATUS_HEIGHT,
             );
+            let expansion = self
+                .owner
+                .borrow()
+                .upgrade()
+                .and_then(|w| w.customization.geometry(&w));
             for (slot, child) in self.children.borrow().iter() {
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
@@ -71,11 +193,22 @@ mod allocation {
                         height: HEADER_HEIGHT,
                     }),
                     Slot::Status => Some(resolved.status),
-                    Slot::Group(id) => resolved
-                        .groups
-                        .iter()
-                        .find(|g| g.id == *id)
-                        .map(|g| g.bounds),
+                    Slot::Group(id) => {
+                        let expanded = expansion.filter(|e| e.group == *id);
+                        child
+                            .downcast_ref::<super::PanelColumns>()
+                            .unwrap()
+                            .imp()
+                            .expansion
+                            .set(expanded);
+                        expanded.map(|e| e.bounds).or_else(|| {
+                            resolved
+                                .groups
+                                .iter()
+                                .find(|g| g.id == *id)
+                                .map(|g| g.bounds)
+                        })
+                    }
                     Slot::Divider(id) => resolved
                         .dividers
                         .iter()
@@ -83,14 +216,7 @@ mod allocation {
                         .map(|d| d.bounds),
                 };
                 if let Some(b) = bounds {
-                    let transform =
-                        gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(b.x, b.y));
-                    child.allocate(
-                        b.width.max(1.0).round() as i32,
-                        b.height.max(1.0).round() as i32,
-                        -1,
-                        Some(transform),
-                    );
+                    allocate_at(child, b);
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
@@ -112,7 +238,19 @@ mod allocation {
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             for (_, child) in self.children.borrow().iter() {
+                let expanded = child.has_css_class("expanded-panel");
+                if expanded {
+                    snapshot.push_shadow(&[gtk::gsk::Shadow::new(
+                        gdk::RGBA::new(0.0, 0.0, 0.0, 0.3),
+                        0.0,
+                        8.0,
+                        24.0,
+                    )]);
+                }
                 self.obj().snapshot_child(child, snapshot);
+                if expanded {
+                    snapshot.pop();
+                }
             }
             if let Some(owner) = self.owner.borrow().upgrade()
                 && let Some(hint) = owner.drop_hint.borrow().as_ref()
@@ -124,6 +262,66 @@ mod allocation {
                 );
             }
         }
+    }
+}
+
+fn allocate_at(child: &gtk::Widget, b: Bounds) {
+    child.allocate(
+        b.width.max(1.0).round() as i32,
+        b.height.max(1.0).round() as i32,
+        -1,
+        Some(gtk::gsk::Transform::new().translate(&gtk::graphene::Point::new(b.x, b.y))),
+    );
+}
+
+glib::wrapper! {
+    pub struct PanelColumns(ObjectSubclass<allocation::PanelColumns>)
+        @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+impl PanelColumns {
+    fn new(preview: &gtk::Box) -> Self {
+        let this: Self = glib::Object::new();
+        this.add_css_class("dock-panel");
+        this.set_overflow(gtk::Overflow::Hidden);
+        preview.set_parent(&this);
+        preview.add_css_class("panel-preview");
+        preview.set_overflow(gtk::Overflow::Hidden);
+        *this.imp().preview.borrow_mut() = Some(preview.clone().upcast());
+        // The same concave foot as the tabs, joining the two content surfaces
+        // without rounding their shared seam into two separate bubbles.
+        let join = gtk::DrawingArea::new();
+        join.add_css_class("panel-column-join");
+        join.set_can_target(false);
+        join.set_visible(false);
+        join.set_draw_func(|area, cr, width, height| {
+            let color = area.color();
+            cr.set_source_rgba(
+                color.red().into(),
+                color.green().into(),
+                color.blue().into(),
+                color.alpha().into(),
+            );
+            let left = area
+                .parent()
+                .is_some_and(|p| p.has_css_class("configuration-left"));
+            let x = if left { width as f64 } else { 0.0 };
+            let direction = if left { -1.0 } else { 1.0 };
+            concave_foot(cr, x, height as f64, width as f64, direction);
+            let _ = cr.fill();
+        });
+        join.set_parent(&this);
+        *this.imp().join.borrow_mut() = Some(join);
+        this
+    }
+    fn set_configuration(&self, widget: Option<&gtk::Widget>) {
+        if let Some(old) = self.imp().configuration.take() {
+            old.unparent();
+        }
+        if let Some(widget) = widget {
+            widget.set_parent(self);
+        }
+        *self.imp().configuration.borrow_mut() = widget.cloned();
+        self.queue_allocate();
     }
 }
 
@@ -140,6 +338,17 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl DockSurface {
+    fn raise_group(&self, id: u32) {
+        let mut children = self.imp().children.borrow_mut();
+        if let Some(index) = children
+            .iter()
+            .position(|(slot, _)| *slot == Slot::Group(id))
+        {
+            let item = children.remove(index);
+            item.1.insert_after(self, children.last().map(|(_, w)| w));
+            children.push(item);
+        }
+    }
     fn add(&self, slot: Slot, child: &impl IsA<gtk::Widget>) {
         child.set_parent(self);
         self.imp()
@@ -165,6 +374,7 @@ struct NativeDockItem(DockItem);
 
 struct GroupView {
     id: u32,
+    root: PanelColumns,
     panels: Vec<Panel>,
     stack: gtk::Stack,
     tabs: Vec<(Panel, gtk::Button)>,
@@ -248,17 +458,22 @@ fn tab_joins(header: &gtk::Box) -> gtk::DrawingArea {
                     (bounds.x() as f64, -1.0),
                     ((bounds.x() + bounds.width()) as f64, 1.0),
                 ] {
-                    cr.move_to(x, y - 6.0);
-                    cr.line_to(x, y);
-                    cr.line_to(x + direction * 6.0, y);
-                    cr.curve_to(x + direction * 2.686, y, x, y - 2.686, x, y - 6.0);
-                    cr.close_path();
+                    concave_foot(cr, x, y, 6.0, direction);
                 }
                 let _ = cr.fill();
             }
         }
     ));
     joins
+}
+
+fn concave_foot(cr: &gtk::cairo::Context, x: f64, y: f64, radius: f64, direction: f64) {
+    let k = radius * 0.447_715;
+    cr.move_to(x, y - radius);
+    cr.line_to(x, y);
+    cr.line_to(x + direction * radius, y);
+    cr.curve_to(x + direction * k, y, x, y - k, x, y - radius);
+    cr.close_path();
 }
 
 pub struct Workspace {
@@ -679,6 +894,23 @@ impl Workspace {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_, event| {
+                if matches!(
+                    event.event_type(),
+                    gdk::EventType::ButtonPress | gdk::EventType::TouchBegin
+                ) && this.customization.placement().is_some()
+                    && let Some((x, y)) = event.position()
+                {
+                    let offset = this.window.surface_transform();
+                    if this
+                        .chrome_event(ChromeEvent::Contact {
+                            position: [(x + offset.0) as f32, (y + offset.1) as f32],
+                            canvas: false,
+                        })
+                        .handled
+                    {
+                        return glib::Propagation::Stop;
+                    }
+                }
                 let was_held = this.chrome_held.get();
                 if event.event_type() == gdk::EventType::ButtonPress
                     && event.position().is_some_and(|(_, y)| {
@@ -780,6 +1012,7 @@ impl Workspace {
 
     fn chrome_event(&self, event: ChromeEvent) -> InputReply {
         let facts = ChromeFacts {
+            expanded_panel: self.customization.placement(),
             held: self.chrome_held.get(),
             dragging: self.dragging.get(),
             popup_open: self
@@ -807,6 +1040,11 @@ impl Workspace {
             })
             .unwrap_or_default();
         self.present_interaction(reply);
+        if reply.change.regions != 0
+            && let Some(owner) = self.surface.imp().owner.borrow().upgrade()
+        {
+            owner.changed(Ok(reply.change));
+        }
         reply
     }
 
@@ -1207,7 +1445,12 @@ impl Workspace {
         if regions & regions::LAYOUT != 0 {
             self.reconcile_layout(&state.workspace.layout);
         }
-        if regions & (regions::CUSTOMIZATION | regions::LAYOUT | regions::BRUSH | regions::COMMANDS)
+        if regions
+            & (regions::CUSTOMIZATION
+                | regions::LAYOUT
+                | regions::BRUSH
+                | regions::COMMANDS
+                | regions::DOCUMENT)
             != 0
         {
             self.customization.refresh(self);
@@ -1260,8 +1503,8 @@ impl Workspace {
             self.surface.clear_docks();
             self.groups.borrow_mut().clear();
             for group in &resolved.groups {
-                let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                root.add_css_class("dock-panel");
+                let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let root = PanelColumns::new(&column);
                 if !group.tabs_visible {
                     root.add_css_class("tool-strip");
                 }
@@ -1305,7 +1548,7 @@ impl Workspace {
                     self.install_panel_drag(&grip, DockItem::Group { group: group.id });
                     header.append(&grip);
                     self.install_context(&header, ContextTarget::Group { group: group.id }, false);
-                    root.append(&header);
+                    column.append(&header);
                 }
                 let stack = gtk::Stack::new();
                 stack.set_hexpand(true);
@@ -1316,10 +1559,11 @@ impl Workspace {
                     let widget = self.panel_widget(panel);
                     stack.add_named(&widget, Some(&format!("{panel:?}")));
                 }
-                root.append(&stack);
+                column.append(&stack);
                 self.surface.add(Slot::Group(group.id), &root);
                 self.groups.borrow_mut().push(GroupView {
                     id: group.id,
+                    root,
                     panels: group.panels.clone(),
                     stack,
                     tabs,
@@ -1415,6 +1659,7 @@ impl Workspace {
             [x, y],
             &tabs,
             item,
+            self.customization.placement(),
         )
     }
     fn install_drop_target(self: &Rc<Self>) {

@@ -184,6 +184,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let was_hidden = self.interaction.hidden;
                 self.interaction.facts = facts;
                 self.interaction.viewport = Some(viewport);
+                if let ChromeEvent::Contact { position, .. } = event
+                    && self.state.customization.expanded.is_some()
+                    && !facts.popup_open
+                    && !facts
+                        .expanded_panel
+                        .is_some_and(|e| e.contains(position) && !e.header_contains(position))
+                {
+                    reply.change = self.dispatch(UiAction::Customize {
+                        action: CustomizationAction::CloseExpanded,
+                    })?;
+                    reply.handled = true;
+                }
                 match event {
                     ChromeEvent::Motion { position } | ChromeEvent::Contact { position, .. } => {
                         self.interaction.hover = Some(position);
@@ -228,6 +240,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if matches!(key.as_str(), "tab" | "escape") {
                         self.interaction.keyboard_chrome = true;
                         reply.dismiss_popups = key == "escape";
+                    }
+                    if key == "escape"
+                        && self.state.customization.expanded.is_some()
+                        && !self.interaction.facts.popup_open
+                    {
+                        reply.change = self.dispatch(UiAction::Customize {
+                            action: CustomizationAction::CloseExpanded,
+                        })?;
+                        reply.handled = true;
                     }
                     let blocked = editing
                         || self.state.settings_draft.is_some()
@@ -332,7 +353,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.pan_key = None;
                 self.interaction.keyboard_chrome = false;
                 self.interaction.facts.held = false;
-                self.interaction.facts.dragging = false;
+                // A native DND grab can blur the window without ending the
+                // drag. Only the host's drag-end/cancel lifecycle releases it.
                 self.interaction.hover = None;
                 self.divider_drag = None;
                 self.touch.clear();
@@ -341,7 +363,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_chrome();
         if let Some((was_hidden, popup_open)) = contact {
             reply.dismiss_popups = popup_open;
-            reply.handled = popup_open || (was_hidden && !self.interaction.hidden);
+            reply.handled |= popup_open || (was_hidden && !self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
         reply.pan_cursor = self.interaction.pan_key.is_some();
@@ -354,6 +376,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.interaction.facts.popup_open
             || self.interaction.keyboard_chrome
             || self.state.settings_draft.is_some()
+            || self.state.customization.is_open()
             || self.divider_drag.is_some();
         if !self.state.workspace.zen_mode || pinned {
             self.interaction.hidden = false;
@@ -395,6 +418,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         position: [f32; 2],
         tabs: &[TabHit],
         item: DockItem,
+        expansion: Option<PanelExpansion>,
     ) -> Option<DropHint> {
         if !viewport.into_iter().all(|v| v.is_finite() && v > 0.0)
             || !position.into_iter().all(f32::is_finite)
@@ -408,7 +432,45 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return None;
         }
-        let resolved = self.layout(viewport);
+        let mut resolved = self.layout(viewport);
+        if let Some(expansion) = expansion
+            && expansion.bounds.contains(position[0], position[1])
+        {
+            let mut preview = expansion.preview;
+            preview.x += expansion.bounds.x;
+            preview.y += expansion.bounds.y;
+            // The configuration column is not a docking destination.
+            if !preview.contains(position[0], position[1]) {
+                return None;
+            }
+            let index = resolved
+                .groups
+                .iter()
+                .position(|g| g.id == expansion.group)?;
+            let mut group = resolved.groups.remove(index);
+            group.bounds = preview;
+            if group.tiles.is_some() {
+                group.tiles = Some(tile_layout(
+                    preview.width,
+                    preview.height
+                        - if group.tabs_visible {
+                            TAB_BAR_HEIGHT
+                        } else {
+                            0.0
+                        },
+                    group.axis,
+                    self.state
+                        .workspace
+                        .layout
+                        .panel(group.active)
+                        .ok()?
+                        .tiles()
+                        .len(),
+                    !group.tabs_visible,
+                ));
+            }
+            resolved.groups.insert(0, group);
+        }
         let hint = if matches!(item, DockItem::Tile { .. }) {
             resolved.tile_drop_hint(position, &self.state.workspace.layout)?
         } else {
@@ -640,7 +702,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SelectPanelTab { group, panel } => {
                 self.state.workspace.layout.select_tab(group, panel)?;
-                (LAYOUT, false)
+                if let Some(previous) = self.state.customization.expanded {
+                    self.state.customization.expanded =
+                        (self.state.workspace.layout.panel_group(previous) == Some(group))
+                            .then_some(panel);
+                }
+                (LAYOUT | CUSTOMIZATION, false)
             }
             UiAction::MoveTile {
                 panel,
@@ -1398,6 +1465,31 @@ mod tests {
         assert!(chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
     }
     #[test]
+    fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
+        let mut s = session();
+        invoke(&mut s, CommandId::ZenMode);
+        let dragging = ChromeFacts {
+            dragging: true,
+            ..ChromeFacts::default()
+        };
+        assert!(
+            !chrome(
+                &mut s,
+                ChromeEvent::Motion {
+                    position: [600.0, 450.0]
+                },
+                dragging
+            )
+            .chrome_hidden
+        );
+        assert!(!chrome(&mut s, ChromeEvent::Leave { touch: false }, dragging).chrome_hidden);
+        assert!(!s.input(UiInput::Blur).unwrap().chrome_hidden);
+        assert!(!chrome(&mut s, ChromeEvent::Refresh, dragging).chrome_hidden);
+        // Both successful drop and cancellation end the host-owned drag.
+        assert!(chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden);
+    }
+
+    #[test]
     fn shortcuts_share_modifiers_editing_guards_and_repeat_policy() {
         let mut s = session();
         assert!(!key(&mut s, "e", true, true, false).handled);
@@ -1746,6 +1838,7 @@ mod tests {
                 ],
                 &[],
                 item,
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -1759,16 +1852,20 @@ mod tests {
             .unwrap();
         assert!(app.state.workspace.layout.validate().is_ok());
         assert!(
-            app.drop_hint(viewport, [f32::NAN, 10.0], &[], item)
+            app.drop_hint(viewport, [f32::NAN, 10.0], &[], item, None)
                 .is_none()
         );
-        assert!(app.drop_hint(viewport, [-1.0, 10.0], &[], item).is_none());
+        assert!(
+            app.drop_hint(viewport, [-1.0, 10.0], &[], item, None)
+                .is_none()
+        );
         assert!(
             app.drop_hint(
                 viewport,
                 [1000.0, 400.0],
                 &[],
-                DockItem::Group { group: u32::MAX }
+                DockItem::Group { group: u32::MAX },
+                None
             )
             .is_none()
         );
@@ -2095,7 +2192,7 @@ mod tests {
         );
     }
     #[test]
-    fn panel_inspector_shows_hidden_controls_live_without_changing_docking() {
+    fn panel_configuration_keeps_compact_preview_live_without_changing_docking() {
         let mut app = session();
         let before = app.state.workspace.clone();
         assert_eq!(
@@ -2103,7 +2200,7 @@ mod tests {
                 .unwrap()
                 .controls
                 .iter()
-                .filter(|c| c.shown)
+                .filter(|c| c.visible_in_panel)
                 .count(),
             1
         );
@@ -2114,12 +2211,14 @@ mod tests {
         })
         .unwrap();
         assert_eq!(app.state.workspace, before);
-        assert!(
+        assert_eq!(
             app.panel_view(Panel::Brushes)
                 .unwrap()
                 .controls
                 .iter()
-                .all(|c| c.shown)
+                .filter(|c| c.visible_in_panel)
+                .count(),
+            1
         );
         app.dispatch(UiAction::SetBrushOpacity { value: 0.4 })
             .unwrap();
@@ -2141,7 +2240,7 @@ mod tests {
                 .unwrap()
                 .controls
                 .iter()
-                .filter(|c| c.shown)
+                .filter(|c| c.visible_in_panel)
                 .map(|c| c.control)
                 .collect::<Vec<_>>(),
             [PanelControl::Brushes, PanelControl::BrushOpacity]
@@ -2155,6 +2254,89 @@ mod tests {
         app.dispatch(UiAction::RestoreWorkspace { workspace: before })
             .unwrap();
         assert!(!app.state.customization.is_open());
+    }
+
+    #[test]
+    fn expanded_panel_dismissal_is_core_policy_and_never_paints() {
+        let mut app = session();
+        let open = |app: &mut UiSession<Recorder>| {
+            app.dispatch(UiAction::Customize {
+                action: CustomizationAction::ShowAllControls {
+                    panel: Panel::Sizes,
+                },
+            })
+            .unwrap();
+        };
+        open(&mut app);
+        let facts = ChromeFacts {
+            expanded_panel: Some(PanelExpansion {
+                group: 6,
+                bounds: Bounds {
+                    x: 10.0,
+                    y: 100.0,
+                    width: 600.0,
+                    height: 400.0,
+                },
+                preview: Bounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 220.0,
+                    height: 400.0,
+                },
+                configuration: Bounds {
+                    x: 220.0,
+                    y: TAB_BAR_HEIGHT,
+                    width: 380.0,
+                    height: 400.0 - TAB_BAR_HEIGHT,
+                },
+            }),
+            ..ChromeFacts::default()
+        };
+        let inside = chrome(
+            &mut app,
+            ChromeEvent::Contact {
+                position: [400.0, 200.0],
+                canvas: false,
+            },
+            facts,
+        );
+        assert!(!inside.handled);
+        assert_eq!(app.state.customization.expanded, Some(Panel::Sizes));
+        let outside = chrome(
+            &mut app,
+            ChromeEvent::Contact {
+                position: [800.0, 700.0],
+                canvas: true,
+            },
+            facts,
+        );
+        assert!(outside.handled && !outside.paint);
+        assert_ne!(outside.change.regions & regions::CUSTOMIZATION, 0);
+        assert!(app.state.customization.expanded.is_none());
+        open(&mut app);
+        let header = chrome(
+            &mut app,
+            ChromeEvent::Contact {
+                position: [80.0, 115.0],
+                canvas: false,
+            },
+            facts,
+        );
+        assert!(header.handled);
+        assert!(app.state.customization.expanded.is_none());
+        open(&mut app);
+        let reply = app
+            .input(UiInput::Key {
+                key: "escape".into(),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::default(),
+                editing: true,
+                divider: None,
+            })
+            .unwrap();
+        assert!(reply.handled);
+        assert!(app.state.customization.expanded.is_none());
     }
     #[test]
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {

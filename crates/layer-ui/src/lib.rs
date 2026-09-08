@@ -26,7 +26,8 @@ pub use interaction::{
 };
 pub use layout::{
     Axis, Bounds, Divider, DockBand, DockItem, DockLayout, DockNode, DockTarget, Edge,
-    GroupPlacement, Panel, ResolvedLayout,
+    GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel, PanelExpansion,
+    ResolvedLayout,
 };
 pub use layout::{DropHint, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout, tile_layout};
 pub use session::UiSession;
@@ -234,6 +235,7 @@ pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
 pub struct UiCatalog {
     pub app_name: &'static str,
     pub text_size_pt: u8,
+    pub panel_expansion_ms: u32,
     pub cursors: &'static [(CursorMode, &'static str)],
     pub icons: &'static [&'static str],
     pub panels: Vec<PanelChoice>,
@@ -251,6 +253,7 @@ pub fn ui_catalog() -> UiCatalog {
     UiCatalog {
         app_name: APP_NAME,
         text_size_pt: UI_TEXT_PT,
+        panel_expansion_ms: PANEL_EXPANSION_MS,
         cursors: CursorMode::CHOICES,
         icons: &[
             "brush",

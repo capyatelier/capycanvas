@@ -101,17 +101,54 @@ fn capture_reference(w: &Workspace, path: &str, scale: f32) {
     });
 }
 
+fn capture_popover(popover: &gtk::Popover, path: &str) {
+    popover.present();
+    pump(100);
+    // An occluded Wayland popup can still be awaiting configure. Complete its
+    // real native allocation for widget inspection, not a presentation timing test.
+    let width = popover
+        .width()
+        .max(popover.measure(gtk::Orientation::Horizontal, -1).1);
+    let height = popover
+        .height()
+        .max(popover.measure(gtk::Orientation::Vertical, width).1);
+    popover.allocate(width, height, -1, None);
+    let snapshot = gtk::Snapshot::new();
+    let mut child = popover.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        popover.snapshot_child(&widget, &snapshot);
+    }
+    popover
+        .renderer()
+        .unwrap()
+        .render_texture(snapshot.to_node().unwrap_or_else(|| panic!(
+            "Empty popup capture {path}: visible={}, mapped={}, size={}x{}, opacity={}, child={:?}",
+            popover.is_visible(), popover.is_mapped(), popover.width(), popover.height(), popover.opacity(),
+            popover.first_child().map(|c| (c.is_visible(), c.is_mapped(), c.width(), c.height()))
+        )), None)
+        .save_to_png(path)
+        .unwrap();
+}
+
 #[test]
 #[ignore = "workspace customization: requires a Wayland/Vulkan display"]
 fn native_panel_customization() {
     let app = native_test_app("dev.layer.CustomizationTest");
+    // This test checks native controls and static snapshots. Test expansion
+    // animation separately; occluded popups do not receive animation frames.
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
     let w = Workspace::new(&app);
     w.window.present();
     pump(600);
     let dir = "../../artifacts/ui/customization";
     std::fs::create_dir_all(dir).unwrap();
     let send = |action| w.dispatch(UiAction::Customize { action });
+    let hold_count = Cell::new(0);
     let hold = |widget: &gtk::Widget, x: f64, y: f64| {
+        hold_count.set(hold_count.get() + 1);
         assert!(
             widget.width() > 0 && widget.height() > 0,
             "unallocated context target {}: {}x{}",
@@ -147,36 +184,23 @@ fn native_panel_customization() {
                     .then(|| p.downcast::<gtk::PopoverMenu>().ok())
                     .flatten()
             })
-            .unwrap()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Context menu did not stay open after hold {}",
+                    hold_count.get()
+                )
+            })
     };
     let snapshot_popover = |popover: &gtk::Popover, file: &str| {
-        popover.present();
-        pump(100);
-        // Like the window capture, complete allocation if Wayland deferred a
-        // configure for an occluded test popup. This inspects GTK's real widgets,
-        // not compositor delivery or physical long-press recognition.
-        let width = popover
-            .width()
-            .max(popover.measure(gtk::Orientation::Horizontal, -1).1);
-        let height = popover
-            .height()
-            .max(popover.measure(gtk::Orientation::Vertical, width).1);
-        popover.allocate(width, height, -1, None);
-        let snapshot = gtk::Snapshot::new();
-        let mut child = popover.first_child();
-        while let Some(widget) = child {
-            child = widget.next_sibling();
-            popover.snapshot_child(&widget, &snapshot);
-        }
-        popover
-            .renderer()
-            .unwrap()
-            .render_texture(snapshot.to_node().unwrap(), None)
-            .save_to_png(format!("{dir}/{file}.png"))
-            .unwrap();
+        capture_popover(popover, &format!("{dir}/{file}.png"));
     };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        send(CustomizationAction::SetControlVisible {
+            panel: Panel::Sizes,
+            control: PanelControl::BrushOpacity,
+            visible: false,
+        });
         pump(250);
         capture_reference(&w, &format!("{dir}/initial-{theme:?}.png"), 1.0);
         let initial = state(&w).workspace;
@@ -210,20 +234,43 @@ fn native_panel_customization() {
             style: TabStyle::Name,
         });
 
+        let original_panel = w.panel_widget(Panel::Sizes);
+        let original_parent = original_panel.parent().unwrap();
+        let original_root = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.panels.contains(&Panel::Sizes))
+            .unwrap()
+            .root
+            .clone();
         send(CustomizationAction::ShowAllControls {
             panel: Panel::Sizes,
         });
-        pump(200);
-        let inspector = w
-            .popovers
-            .borrow()
-            .iter()
-            .filter_map(|p| p.upgrade())
-            .find(|p| p.has_css_class("expanded-panel"))
-            .unwrap();
-        assert!(inspector.is_visible());
+        pump(300);
+        capture_reference(
+            &w,
+            &format!("{dir}/expanded-sizes-before-{theme:?}.png"),
+            1.0,
+        );
+        let inspector = original_root;
+        assert!(inspector.has_css_class("expanded-panel"));
+        assert_eq!(original_panel.parent().unwrap(), original_parent);
+        assert!(
+            w.popovers
+                .borrow()
+                .iter()
+                .filter_map(|p| p.upgrade())
+                .all(|p| !p.has_css_class("expanded-panel"))
+        );
         assert_eq!(state(&w).workspace.layout.bands, initial.layout.bands);
-        let opacity = find_named(inspector.upcast_ref(), "panel-field-Sizes-BrushOpacity").unwrap();
+        let compact_opacity = find_named(
+            original_panel.upcast_ref(),
+            "panel-field-Sizes-BrushOpacity",
+        )
+        .unwrap();
+        assert!(!compact_opacity.is_visible());
+        let opacity = find_named(inspector.upcast_ref(), "configure-Sizes-BrushOpacity").unwrap();
         assert!(opacity.is_visible());
         let input = opacity.last_child().and_downcast::<gtk::Scale>().unwrap();
         input.set_value(0.42);
@@ -234,16 +281,18 @@ fn native_panel_customization() {
             .unwrap();
         visible.set_active(true);
         pump(100);
-        snapshot_popover(&inspector, &format!("expanded-sizes-{theme:?}"));
-        inspector.popdown();
-        pump(200);
+        assert!(compact_opacity.is_visible());
+        capture_reference(&w, &format!("{dir}/expanded-sizes-{theme:?}.png"), 1.0);
+        assert!(w.reveal_chrome_at(850.0, 850.0));
+        pump(300);
         assert!(state(&w).customization.expanded.is_none());
         assert!(
             w.panel_widget(Panel::Sizes)
                 .parent()
                 .is_some_and(|p| p.is::<gtk::Stack>())
         );
-        assert!(opacity.is_visible());
+        assert!(compact_opacity.is_visible());
+        assert_eq!(original_panel.parent().unwrap(), original_parent);
 
         let header = w
             .groups
@@ -532,19 +581,7 @@ fn native_menu_sections() {
             }
             menu.popup();
             pump(200);
-            // Complete allocation even if Wayland has occluded the test window.
-            menu.allocate(menu.width(), menu.height(), -1, None);
-            let snapshot = gtk::Snapshot::new();
-            let mut child = menu.first_child();
-            while let Some(widget) = child {
-                child = widget.next_sibling();
-                menu.snapshot_child(&widget, &snapshot);
-            }
-            menu.renderer()
-                .unwrap()
-                .render_texture(snapshot.to_node().unwrap(), None)
-                .save_to_png(format!("{dir}/{label}-{theme:?}.png"))
-                .unwrap();
+            capture_popover(menu.upcast_ref(), &format!("{dir}/{label}-{theme:?}.png"));
             menu.popdown();
             pump(100);
         }
@@ -569,6 +606,119 @@ fn native_menu_sections() {
             .unwrap()
             .str(),
         Some("")
+    );
+}
+
+#[test]
+#[ignore = "two-column panel expansion: requires a Wayland/Vulkan display"]
+fn native_panel_expansion() {
+    let app = native_test_app("dev.layer.ExpansionTest");
+    // Static geometry/picking captures also verify the reduced-motion path.
+    // Interpolation fractions are covered by the shared layout tests.
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(600);
+    let initial = state(&w).workspace;
+    let dir = "../../artifacts/ui/customization";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: initial.clone(),
+            });
+            w.dispatch(UiAction::MovePanel {
+                panel: Panel::Sizes,
+                target: DockTarget::Edge { edge, outer: false },
+                viewport: [1200.0, 900.0],
+            });
+            pump(100);
+            let saved = state(&w).workspace;
+            let panel = w.panel_widget(Panel::Sizes);
+            let parent = panel.parent().unwrap();
+            let root = w
+                .groups
+                .borrow()
+                .iter()
+                .find(|g| g.panels.contains(&Panel::Sizes))
+                .unwrap()
+                .root
+                .clone();
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::ShowAllControls {
+                    panel: Panel::Sizes,
+                },
+            });
+            pump(300);
+            capture_reference(&w, &format!("{dir}/expanded-{edge:?}-{theme:?}.png"), 1.0);
+            let placement = w.customization.placement().unwrap();
+            assert_eq!(panel.parent().unwrap(), parent);
+            assert_eq!(
+                placement.preview.height,
+                placement.configuration.height + TAB_BAR_HEIGHT
+            );
+            assert_eq!(placement.configuration.y, TAB_BAR_HEIGHT);
+            assert!(placement.configuration.width > placement.preview.width);
+            let point = gtk::graphene::Point::new(
+                placement.bounds.x + placement.configuration.x + 16.0,
+                placement.bounds.y + 80.0,
+            );
+            let picked = w
+                .surface
+                .pick(point.x() as f64, point.y() as f64, gtk::PickFlags::DEFAULT)
+                .unwrap();
+            assert!(
+                picked.is_ancestor(&root),
+                "configuration must be the actual raised group, not a popover"
+            );
+            let check = find_named(root.upcast_ref(), "panel-visible-BrushColor")
+                .unwrap()
+                .downcast::<gtk::CheckButton>()
+                .unwrap();
+            check.set_active(true);
+            pump(100);
+            assert!(
+                find_named(&panel, "panel-field-Sizes-BrushColor")
+                    .unwrap()
+                    .is_visible()
+            );
+            check.set_active(false);
+            let reply = w.chrome_event(ChromeEvent::Contact {
+                position: [
+                    placement.bounds.x + placement.preview.x + 12.0,
+                    placement.bounds.y + 12.0,
+                ],
+                canvas: false,
+            });
+            assert!(reply.handled);
+            pump(300);
+            assert!(w.customization.placement().is_none());
+            assert_eq!(state(&w).workspace, saved);
+            assert_eq!(panel.parent().unwrap(), parent);
+        }
+    }
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
+    w.dragging.set(true);
+    w.update_zen();
+    assert!(!w.interact(UiInput::Blur).chrome_hidden);
+    for group in w.groups.borrow().iter() {
+        assert!(!group.root.has_css_class("zen-hidden"));
+        assert!(group.root.can_target());
+    }
+    capture_reference(&w, &format!("{dir}/zen-drag-Light.png"), 1.0);
+    w.dragging.set(false);
+    w.update_zen();
+    assert!(
+        w.groups
+            .borrow()
+            .iter()
+            .all(|g| g.root.has_css_class("zen-hidden"))
     );
 }
 

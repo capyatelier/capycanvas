@@ -286,7 +286,7 @@ impl DockLayout {
                     vec![
                         self.tab_style_items(target, &[panel])?,
                         vec![entry(
-                            "Show All Controls",
+                            "Configure Panel…",
                             CustomizationAction::ShowAllControls { panel },
                         )],
                     ],
@@ -506,7 +506,6 @@ pub struct PanelControlView {
     pub control: PanelControl,
     pub label: &'static str,
     pub visible_in_panel: bool,
-    pub shown: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct TileView {
@@ -522,6 +521,8 @@ pub struct PanelView {
     pub icon: &'static str,
     pub tab_style: TabStyle,
     pub expanded: bool,
+    pub configuration_title: String,
+    pub configuration_hint: &'static str,
     pub controls: Vec<PanelControlView>,
     pub tiles: Vec<TileView>,
 }
@@ -535,7 +536,6 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
             control,
             label: control.label(),
             visible_in_panel: config.shows(control),
-            shown: expanded || config.shows(control),
         })
         .collect();
     let tiles = config
@@ -572,6 +572,12 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         icon: panel.icon(),
         tab_style: config.tab_style,
         expanded,
+        configuration_title: format!("Configure {}", config.title()),
+        configuration_hint: if panel.kind() == crate::PanelKind::Tiles {
+            "Add buttons here; drag buttons in the preview to reorder them."
+        } else {
+            "Choose the controls shown in the panel."
+        },
         controls,
         tiles,
     })
@@ -678,9 +684,12 @@ impl CustomizationState {
             }
             ShowAllControls { panel } => {
                 layout.panel(panel)?;
+                let group = layout.panel_group(panel).ok_or("Panel is not docked")?;
+                layout.select_tab(group, panel)?;
                 self.picker = None;
                 self.control = None;
                 self.expanded = Some(panel);
+                changed |= regions::LAYOUT;
             }
             CloseExpanded => self.expanded = None,
             SetControlVisible {
@@ -1115,7 +1124,7 @@ mod tests {
                 panel: Panel::Brushes,
             })
             .unwrap();
-        assert_eq!(panel.sections[1][0].label, "Show All Controls");
+        assert_eq!(panel.sections[1][0].label, "Configure Panel…");
         let tile = layout.panel(custom).unwrap().tiles()[0].id;
         assert_eq!(
             layout

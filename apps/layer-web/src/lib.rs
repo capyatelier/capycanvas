@@ -237,6 +237,34 @@ impl WebApp {
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())
     }
+    pub fn panel_view(&self, panel: JsValue) -> Result<JsValue, JsValue> {
+        let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
+        serialize(&self.session.panel_view(panel).map_err(js)?)
+    }
+    pub fn tool_picker(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.tool_picker())
+    }
+    pub fn context_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
+        let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
+        serialize(&self.session.context_menu(target).map_err(js)?)
+    }
+    pub fn expanded_panel(
+        &self,
+        width: f32,
+        height: f32,
+        panel: JsValue,
+        preview_height: f32,
+        configuration_height: f32,
+        progress: f32,
+    ) -> Result<JsValue, JsValue> {
+        let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
+        serialize(&self.session.state().workspace.layout.expanded_panel(
+            [width, height],
+            panel,
+            [preview_height, configuration_height],
+            progress,
+        ))
+    }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {
         let action: UiAction = serde_wasm_bindgen::from_value(action).map_err(js)?;
         serialize(&self.session.dispatch(action).map_err(js)?)
@@ -259,10 +287,18 @@ impl WebApp {
         y: f32,
         tabs: JsValue,
         item: JsValue,
+        expansion: Option<JsValue>,
     ) -> Result<JsValue, JsValue> {
         let tabs: Vec<layer_ui::TabHit> = serde_wasm_bindgen::from_value(tabs).map_err(js)?;
         let item: layer_ui::DockItem = serde_wasm_bindgen::from_value(item).map_err(js)?;
-        match self.session.drop_hint([width, height], [x, y], &tabs, item) {
+        let expansion = expansion
+            .map(serde_wasm_bindgen::from_value)
+            .transpose()
+            .map_err(js)?;
+        match self
+            .session
+            .drop_hint([width, height], [x, y], &tabs, item, expansion)
+        {
             Some(hint) => serialize(&hint),
             None => Ok(JsValue::NULL),
         }

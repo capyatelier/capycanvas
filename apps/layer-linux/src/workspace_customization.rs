@@ -14,18 +14,17 @@ enum FieldValue {
     Size(gtk::SpinButton),
     Opacity(gtk::Scale),
     Color(gtk::ColorDialogButton),
+    Brush(gtk::DropDown),
+    Layer(gtk::DropDown),
+    LayerOpacity(gtk::Scale),
+    Commands(Vec<(CommandId, gtk::Button)>),
 }
 struct ControlWidget {
     panel: Panel,
     control: PanelControl,
     widget: gtk::Widget,
     value: Option<FieldValue>,
-}
-struct Expanded {
-    panel: Panel,
-    stack: glib::WeakRef<gtk::Stack>,
-    widget: gtk::Widget,
-    ribbon: Option<(Axis, bool)>,
+    configuration: bool,
 }
 
 pub(super) struct Customization {
@@ -45,9 +44,11 @@ pub(super) struct Customization {
     picker_shown: Cell<bool>,
     updating: Cell<bool>,
     controls: RefCell<Vec<ControlWidget>>,
-    inspector: gtk::Popover,
-    expanded: RefCell<Option<Expanded>>,
-    inspector_body: gtk::Box,
+    expanded: Cell<Option<Panel>>,
+    progress: Cell<f64>,
+    closing: Cell<bool>,
+    animation: RefCell<Option<adw::TimedAnimation>>,
+    expanded_root: RefCell<Option<PanelColumns>>,
     visibility: RefCell<Vec<(PanelControl, gtk::CheckButton)>>,
 }
 
@@ -77,36 +78,21 @@ impl Customization {
             picker_shown: Cell::new(false),
             updating: Cell::new(false),
             controls: RefCell::new(Vec::new()),
-            inspector: gtk::Popover::new(),
-            expanded: RefCell::new(None),
-            inspector_body: gtk::Box::new(gtk::Orientation::Vertical, 8),
+            expanded: Cell::new(None),
+            progress: Cell::new(0.0),
+            closing: Cell::new(false),
+            animation: RefCell::new(None),
+            expanded_root: RefCell::new(None),
             visibility: RefCell::new(Vec::new()),
         }
     }
 
     pub fn bind(&self, w: &Rc<Workspace>) {
-        for popover in [
-            self.context.upcast_ref::<gtk::Popover>(),
-            &self.popup,
-            &self.inspector,
-        ] {
+        for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
             popover.set_parent(&w.surface);
             popover.add_css_class("panel-context-menu");
             w.watch_popover(popover);
         }
-        self.inspector.add_css_class("expanded-panel");
-        self.inspector_body.add_css_class("dock-panel");
-        self.inspector.set_child(Some(&self.inspector_body));
-        self.inspector.connect_closed(glib::clone!(
-            #[weak]
-            w,
-            move |_| {
-                if w.customization.expanded.borrow().is_some() {
-                    w.customization.collapse_panel();
-                    w.customize(CustomizationAction::CloseExpanded);
-                }
-            }
-        ));
         self.popup.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -201,11 +187,7 @@ impl Customization {
 
     pub fn dispose(&self) {
         self.collapse_panel();
-        for popover in [
-            self.context.upcast_ref::<gtk::Popover>(),
-            &self.popup,
-            &self.inspector,
-        ] {
+        for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
             popover.unparent();
         }
     }
@@ -213,11 +195,7 @@ impl Customization {
     // Popovers parented to a custom widget need the native layout hook, unlike
     // those owned by a GtkMenuButton. Keep them placed on window reallocations.
     pub fn present_popovers(&self) {
-        for popover in [
-            self.context.upcast_ref::<gtk::Popover>(),
-            &self.popup,
-            &self.inspector,
-        ] {
+        for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
             if popover.is_visible() {
                 popover.present();
             }
@@ -230,119 +208,188 @@ impl Customization {
             control,
             widget: widget.clone().upcast(),
             value: None,
+            configuration: false,
         });
     }
 
     pub fn collapse_panel(&self) {
-        let expanded = self.expanded.borrow_mut().take();
-        if let Some(expanded) = expanded {
-            self.inspector_body.remove(&expanded.widget);
-            expanded.widget.set_size_request(-1, -1);
-            if let Some(stack) = expanded.stack.upgrade() {
-                stack.add_named(&expanded.widget, Some(&format!("{:?}", expanded.panel)));
-            }
-            if let Some((axis, standalone)) = expanded.ribbon {
-                expanded
-                    .widget
-                    .downcast_ref::<TileStrip>()
-                    .unwrap()
-                    .configure(axis, standalone);
-            }
-            self.inspector.popdown();
+        if let Some(animation) = self.animation.take() {
+            animation.pause();
         }
+        if let Some(root) = self.expanded_root.take() {
+            root.set_configuration(None);
+            root.remove_css_class("expanded-panel");
+            root.imp().expansion.set(None);
+        }
+        self.expanded.set(None);
+        self.progress.set(0.0);
+        self.closing.set(false);
+        self.visibility.borrow_mut().clear();
+        self.controls.borrow_mut().retain(|c| !c.configuration);
     }
 
-    fn refresh_inspector(&self, w: &Rc<Workspace>, views: &[PanelView]) {
-        let view = views.iter().find(|v| v.expanded);
-        if self.expanded.borrow().as_ref().map(|e| e.panel) != view.map(|v| v.id) {
-            self.collapse_panel();
-            if let Some(view) = view {
-                while let Some(child) = self.inspector_body.first_child() {
-                    self.inspector_body.remove(&child);
+    pub fn geometry(&self, w: &Workspace) -> Option<PanelExpansion> {
+        let panel = self.expanded.get()?;
+        let root = self.expanded_root.borrow().clone()?;
+        let viewport = [
+            w.surface.width().max(1) as f32,
+            w.surface.height().max(1) as f32,
+        ];
+        let layout = w.surface.imp().layout.borrow();
+        let sizing = layout.expanded_panel(viewport, panel, [0.0; 2], 1.0)?;
+        let preview = w.panel_widget(panel);
+        let preview_content = preview
+            .downcast_ref::<gtk::ScrolledWindow>()
+            .and_then(|s| s.child())
+            .unwrap_or(preview);
+        let preview_height = preview_content
+            .measure(gtk::Orientation::Vertical, sizing.preview.width as i32)
+            .1 as f32
+            + TAB_BAR_HEIGHT;
+        let config = root.imp().configuration.borrow().clone()?;
+        let config_content = config
+            .downcast_ref::<gtk::ScrolledWindow>()
+            .and_then(|s| s.child())
+            .unwrap_or(config);
+        let config_height = config_content
+            .measure(
+                gtk::Orientation::Vertical,
+                sizing.configuration.width as i32,
+            )
+            .1 as f32;
+        layout.expanded_panel(
+            viewport,
+            panel,
+            [preview_height, config_height],
+            self.progress.get() as f32,
+        )
+    }
+
+    pub fn placement(&self) -> Option<PanelExpansion> {
+        self.expanded_root.borrow().as_ref()?.imp().expansion.get()
+    }
+
+    fn animate(&self, w: &Rc<Workspace>, opening: bool) {
+        if let Some(animation) = self.animation.take() {
+            animation.pause();
+        }
+        self.closing.set(!opening);
+        let target = adw::CallbackAnimationTarget::new(glib::clone!(
+            #[weak]
+            w,
+            move |value| {
+                w.customization.progress.set(value);
+                w.surface.queue_allocate();
+            }
+        ));
+        let animation = adw::TimedAnimation::new(
+            &w.surface,
+            self.progress.get(),
+            if opening { 1.0 } else { 0.0 },
+            PANEL_EXPANSION_MS,
+            target,
+        );
+        animation.set_easing(adw::Easing::EaseOutCubic);
+        animation.connect_done(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                if w.customization.closing.get() {
+                    w.customization.collapse_panel();
                 }
-                self.visibility.borrow_mut().clear();
-                let header = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-                margins(&header, 8);
-                let title = gtk::Label::new(Some(&view.title));
+                w.surface.queue_allocate();
+            }
+        ));
+        *self.animation.borrow_mut() = Some(animation.clone());
+        animation.play();
+    }
+
+    fn refresh_expansion(&self, w: &Rc<Workspace>, views: &[PanelView]) {
+        let view = views.iter().find(|v| v.expanded);
+        if view.is_none() {
+            if self.expanded.get().is_some() && !self.closing.get() {
+                self.animate(w, false);
+            }
+            return;
+        }
+        if self.expanded.get() != view.map(|v| v.id) {
+            let same_group = self.expanded.get().zip(view).is_some_and(|(old, new)| {
+                let layout = w.surface.imp().layout.borrow();
+                layout.panel_group(old) == layout.panel_group(new.id)
+            });
+            let progress = if same_group { self.progress.get() } else { 0.0 };
+            self.collapse_panel();
+            self.progress.set(progress);
+            if let Some(view) = view {
+                let root = w
+                    .groups
+                    .borrow()
+                    .iter()
+                    .find(|g| g.panels.contains(&view.id))
+                    .map(|g| (g.id, g.root.clone()));
+                let Some((group, root)) = root else {
+                    return;
+                };
+                let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                margins(&body, 12);
+                let title = gtk::Label::new(Some(&view.configuration_title));
                 title.add_css_class("heading");
                 title.set_hexpand(true);
                 title.set_xalign(0.0);
-                header.append(&title);
-                let close = w.action_button(
-                    "",
-                    UiAction::Customize {
-                        action: CustomizationAction::CloseExpanded,
-                    },
-                );
-                close.set_icon_name("window-close-symbolic");
-                close.set_tooltip_text(Some("Close"));
-                header.append(&close);
-                self.inspector_body.append(&header);
-                if !view.controls.is_empty() {
-                    let visibility = gtk::Box::new(gtk::Orientation::Vertical, 6);
-                    margins(&visibility, 8);
-                    let label = gtk::Label::new(Some("Show in panel"));
-                    label.set_xalign(0.0);
-                    label.add_css_class("dim-label");
-                    visibility.append(&label);
-                    let grid = gtk::FlowBox::builder()
-                        .selection_mode(gtk::SelectionMode::None)
-                        .min_children_per_line(2)
-                        .max_children_per_line(2)
-                        .column_spacing(12)
-                        .row_spacing(6)
-                        .build();
-                    for control in &view.controls {
-                        let check = gtk::CheckButton::with_label(control.label);
-                        check.set_widget_name(&format!("panel-visible-{:?}", control.control));
-                        check.set_active(control.visible_in_panel);
-                        let panel = view.id;
-                        let control = control.control;
-                        check.connect_toggled(glib::clone!(
-                            #[weak]
-                            w,
-                            move |check| {
-                                w.customize(CustomizationAction::SetControlVisible {
-                                    panel,
-                                    control,
-                                    visible: check.is_active(),
-                                });
-                            }
-                        ));
-                        grid.insert(&check, -1);
-                        self.visibility.borrow_mut().push((control, check));
-                    }
-                    visibility.append(&grid);
-                    self.inspector_body.append(&visibility);
+                body.append(&title);
+                let label = gtk::Label::new(Some(view.configuration_hint));
+                label.set_wrap(true);
+                label.set_xalign(0.0);
+                label.add_css_class("dim-label");
+                body.append(&label);
+                for control in &view.controls {
+                    let row = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                    let check = gtk::CheckButton::with_label(control.label);
+                    check.set_widget_name(&format!("panel-visible-{:?}", control.control));
+                    check.set_active(control.visible_in_panel);
+                    let panel = view.id;
+                    let id = control.control;
+                    check.connect_toggled(glib::clone!(
+                        #[weak]
+                        w,
+                        move |check| {
+                            w.customize(CustomizationAction::SetControlVisible {
+                                panel,
+                                control: id,
+                                visible: check.is_active(),
+                            });
+                        }
+                    ));
+                    row.append(&check);
+                    self.visibility.borrow_mut().push((id, check));
+                    w.configuration_control(panel, id, &row);
+                    body.append(&row);
                 }
-                let widget = w.panel_widget(view.id);
-                if let Some(stack) = widget.parent().and_downcast::<gtk::Stack>() {
-                    stack.remove(&widget);
-                    widget.set_size_request(360, 320);
-                    self.inspector_body.append(&widget);
-                    if let Ok(strip) = widget.clone().downcast::<TileStrip>() {
-                        strip.configure(Axis::Horizontal, false);
-                    }
-                    *self.expanded.borrow_mut() = Some(Expanded {
-                        panel: view.id,
-                        stack: stack.downgrade(),
-                        widget,
-                        ribbon: (view.id.kind() == PanelKind::Tiles).then(|| {
-                            let resolved = w.resolved();
-                            let group = resolved
-                                .groups
-                                .iter()
-                                .find(|g| g.panels.contains(&view.id))
-                                .unwrap();
-                            (group.axis, !group.tabs_visible)
-                        }),
-                    });
-                    let [x, y] = self.anchor.get();
-                    self.inspector
-                        .set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                    self.inspector.popup();
+                if view.controls.is_empty() {
+                    body.append(&w.action_button(
+                        "Add Tools…",
+                        UiAction::Customize {
+                            action: CustomizationAction::InsertTools {
+                                panel: view.id,
+                                before: None,
+                            },
+                        },
+                    ));
                 }
+                let scroll = gtk::ScrolledWindow::builder()
+                    .hscrollbar_policy(gtk::PolicyType::Never)
+                    .child(&body)
+                    .build();
+                scroll.add_css_class("panel-configuration");
+                root.set_configuration(Some(scroll.upcast_ref()));
+                root.add_css_class("expanded-panel");
+                *self.expanded_root.borrow_mut() = Some(root);
+                self.expanded.set(Some(view.id));
+                w.surface.raise_group(group);
+                self.animate(w, true);
             }
+        } else if self.closing.get() {
+            self.animate(w, true);
         }
         if let Some(view) = view {
             for (control, check) in self.visibility.borrow().iter() {
@@ -469,7 +516,7 @@ impl Customization {
                 w.color.rgba()
             ));
         }
-        self.refresh_inspector(w, &views);
+        self.refresh_expansion(w, &views);
         let brush = w
             .gpu
             .borrow()
@@ -484,8 +531,8 @@ impl Customization {
                 .iter()
                 .find(|v| v.id == field.panel)
                 .and_then(|v| v.controls.iter().find(|c| c.control == field.control))
-                .is_some_and(|c| c.shown);
-            field.widget.set_visible(shown);
+                .is_some_and(|c| c.visible_in_panel);
+            field.widget.set_visible(field.configuration || shown);
             match &field.value {
                 Some(FieldValue::Size(input)) => input.set_value(brush.diameter as f64),
                 Some(FieldValue::Opacity(input)) => input.set_value(brush.opacity as f64),
@@ -494,6 +541,28 @@ impl Customization {
                     input.set_rgba(&gdk::RGBA::new(r, g, b, a));
                 }
                 None => (),
+                Some(FieldValue::Brush(input)) => input.set_selected(
+                    brush_categories()
+                        .flat_map(|c| c.brushes)
+                        .position(|b| b.id == brush.preset)
+                        .unwrap_or(0) as u32,
+                ),
+                Some(FieldValue::Layer(input)) => {
+                    let gpu = w.gpu.borrow();
+                    let state = gpu.as_ref().unwrap().session.state();
+                    let names: Vec<_> = state.layers.iter().map(|l| l.label.as_str()).collect();
+                    input.set_model(Some(&gtk::StringList::new(&names)));
+                    input.set_selected(
+                        state.layers.iter().position(|l| l.selected).unwrap_or(0) as u32
+                    );
+                }
+                Some(FieldValue::LayerOpacity(input)) => input.set_value(w.layer_opacity.value()),
+                Some(FieldValue::Commands(buttons)) => {
+                    let gpu = w.gpu.borrow();
+                    for (id, button) in buttons {
+                        button.set_sensitive(gpu.as_ref().unwrap().session.command(*id).enabled);
+                    }
+                }
             }
         }
         if self.popup_control.get() != control {
@@ -603,53 +672,7 @@ impl Workspace {
             let label = gtk::Label::new(Some(control.label()));
             label.set_xalign(0.0);
             group.append(&label);
-            let value = match control {
-                PanelControl::BrushSize => {
-                    let spec = BRUSH_SIZE_CONTROL;
-                    let input = gtk::SpinButton::with_range(spec.min, spec.max, spec.step);
-                    input.set_digits(spec.digits);
-                    shared_spin_icons(input.upcast_ref());
-                    input.connect_value_changed(glib::clone!(
-                        #[weak(rename_to = w)]
-                        self,
-                        move |input| w.dispatch(UiAction::SetBrushSize {
-                            value: input.value() as f32
-                        })
-                    ));
-                    group.append(&input);
-                    FieldValue::Size(input)
-                }
-                PanelControl::BrushOpacity => {
-                    let input = scale(OPACITY_CONTROL);
-                    input.connect_value_changed(glib::clone!(
-                        #[weak(rename_to = w)]
-                        self,
-                        move |input| w.dispatch(UiAction::SetBrushOpacity {
-                            value: input.value() as f32
-                        })
-                    ));
-                    group.append(&input);
-                    FieldValue::Opacity(input)
-                }
-                PanelControl::BrushColor => {
-                    let input = gtk::ColorDialogButton::new(Some(
-                        gtk::ColorDialog::builder().with_alpha(false).build(),
-                    ));
-                    input.connect_rgba_notify(glib::clone!(
-                        #[weak(rename_to = w)]
-                        self,
-                        move |input| {
-                            let c = input.rgba();
-                            w.dispatch(UiAction::SetColor {
-                                rgba: [c.red(), c.green(), c.blue(), c.alpha()],
-                            });
-                        }
-                    ));
-                    group.append(&input);
-                    FieldValue::Color(input)
-                }
-                _ => unreachable!("system controls already built"),
-            };
+            let value = self.panel_field(control, &group);
             group.set_visible(false);
             body.append(&group);
             self.customization
@@ -659,9 +682,165 @@ impl Workspace {
                     panel,
                     control,
                     widget: group.upcast(),
-                    value: Some(value),
+                    value,
+                    configuration: false,
                 });
         }
+    }
+
+    fn configuration_control(
+        self: &Rc<Self>,
+        panel: Panel,
+        control: PanelControl,
+        body: &gtk::Box,
+    ) {
+        let group = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        group.set_widget_name(&format!("configure-{panel:?}-{control:?}"));
+        let value = self.panel_field(control, &group);
+        body.append(&group);
+        self.customization
+            .controls
+            .borrow_mut()
+            .push(ControlWidget {
+                panel,
+                control,
+                widget: group.upcast(),
+                value,
+                configuration: true,
+            });
+    }
+
+    fn panel_field(self: &Rc<Self>, control: PanelControl, group: &gtk::Box) -> Option<FieldValue> {
+        Some(match control {
+            PanelControl::BrushSize => {
+                let spec = BRUSH_SIZE_CONTROL;
+                let input = gtk::SpinButton::with_range(spec.min, spec.max, spec.step);
+                input.set_digits(spec.digits);
+                shared_spin_icons(input.upcast_ref());
+                input.connect_value_changed(glib::clone!(
+                    #[weak(rename_to = w)]
+                    self,
+                    move |input| w.dispatch(UiAction::SetBrushSize {
+                        value: input.value() as f32
+                    })
+                ));
+                group.append(&input);
+                FieldValue::Size(input)
+            }
+            PanelControl::BrushOpacity => {
+                let input = scale(OPACITY_CONTROL);
+                input.connect_value_changed(glib::clone!(
+                    #[weak(rename_to = w)]
+                    self,
+                    move |input| w.dispatch(UiAction::SetBrushOpacity {
+                        value: input.value() as f32
+                    })
+                ));
+                group.append(&input);
+                FieldValue::Opacity(input)
+            }
+            PanelControl::BrushColor => {
+                let input = gtk::ColorDialogButton::new(Some(
+                    gtk::ColorDialog::builder().with_alpha(false).build(),
+                ));
+                input.connect_rgba_notify(glib::clone!(
+                    #[weak(rename_to = w)]
+                    self,
+                    move |input| {
+                        let c = input.rgba();
+                        w.dispatch(UiAction::SetColor {
+                            rgba: [c.red(), c.green(), c.blue(), c.alpha()],
+                        });
+                    }
+                ));
+                group.append(&input);
+                FieldValue::Color(input)
+            }
+            PanelControl::Brushes => {
+                let brushes: Vec<_> = brush_categories().flat_map(|c| c.brushes).collect();
+                let labels: Vec<_> = brushes.iter().map(|b| b.label).collect();
+                let input = gtk::DropDown::from_strings(&labels);
+                input.connect_selected_notify(glib::clone!(
+                    #[weak(rename_to = w)]
+                    self,
+                    move |input| {
+                        if let Some(choice) = brushes.get(input.selected() as usize) {
+                            w.dispatch(UiAction::SelectBrush { id: choice.id });
+                        }
+                    }
+                ));
+                group.append(&input);
+                FieldValue::Brush(input)
+            }
+            PanelControl::Layers => {
+                let input = gtk::DropDown::from_strings(&[]);
+                input.connect_selected_notify(glib::clone!(
+                    #[weak(rename_to = w)]
+                    self,
+                    move |input| {
+                        let id = w.gpu.borrow().as_ref().and_then(|g| {
+                            g.session
+                                .state()
+                                .layers
+                                .get(input.selected() as usize)
+                                .map(|l| l.id)
+                        });
+                        if let Some(id) = id {
+                            w.dispatch(UiAction::SelectLayer { id });
+                        }
+                    }
+                ));
+                group.append(&input);
+                FieldValue::Layer(input)
+            }
+            PanelControl::LayerOpacity => {
+                let input = scale(OPACITY_CONTROL);
+                input.connect_value_changed(glib::clone!(
+                    #[weak(rename_to = w)]
+                    self,
+                    move |input| {
+                        w.dispatch(UiAction::SetLayerOpacity {
+                            id: None,
+                            opacity: input.value() as f32,
+                        });
+                    }
+                ));
+                group.append(&input);
+                FieldValue::LayerOpacity(input)
+            }
+            PanelControl::SizePresets | PanelControl::LayerActions => {
+                let grid = gtk::FlowBox::builder()
+                    .selection_mode(gtk::SelectionMode::None)
+                    .min_children_per_line(2)
+                    .max_children_per_line(6)
+                    .column_spacing(2)
+                    .row_spacing(2)
+                    .build();
+                if control == PanelControl::SizePresets {
+                    for &value in BRUSH_SIZES {
+                        grid.insert(
+                            &self.action_button(
+                                &value.to_string(),
+                                UiAction::SetBrushSize { value },
+                            ),
+                            -1,
+                        );
+                    }
+                } else {
+                    let mut buttons = Vec::new();
+                    for command in CommandId::LAYERS {
+                        let button =
+                            self.action_button(command.label(), UiAction::Invoke { command });
+                        grid.insert(&button, -1);
+                        buttons.push((command, button));
+                    }
+                    group.append(&grid);
+                    return Some(FieldValue::Commands(buttons));
+                }
+                group.append(&grid);
+                return None;
+            }
+        })
     }
     fn customize(self: &Rc<Self>, action: CustomizationAction) {
         if !self.customization.updating.get() {
