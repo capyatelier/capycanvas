@@ -36,6 +36,9 @@ pub struct ChromeFacts {
     /// Actual animated columns from shared layout, for outside contact.
     #[serde(default)]
     pub expanded_panel: Option<crate::PanelExpansion>,
+    /// Native/DOM tab hit for the current contact; labels have host-measured widths.
+    #[serde(default)]
+    pub contact_tab: Option<crate::Panel>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -105,6 +108,7 @@ pub(crate) struct Interaction {
     pub hidden: bool,
     pub pan_key: Option<String>,
     pub keyboard_chrome: bool,
+    pub keep_chrome_until_contact: bool,
     pub hover: Option<[f32; 2]>,
     pub facts: ChromeFacts,
     pub viewport: Option<[f32; 2]>,

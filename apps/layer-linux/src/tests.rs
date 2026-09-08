@@ -146,6 +146,14 @@ fn native_panel_customization() {
     let dir = "../../artifacts/ui/customization";
     std::fs::create_dir_all(dir).unwrap();
     let send = |action| w.dispatch(UiAction::Customize { action });
+    // Signal-driven holds have no Wayland input serial for a popup grab. Keep
+    // this control/snapshot test independent of external desktop focus changes;
+    // production retains native autohide and actions still dismiss the menu.
+    for popover in w.popovers.borrow().iter().filter_map(|p| p.upgrade()) {
+        if popover.has_css_class("panel-context-menu") {
+            popover.set_autohide(false);
+        }
+    }
     let hold_count = Cell::new(0);
     let hold = |widget: &gtk::Widget, x: f64, y: f64| {
         hold_count.set(hold_count.get() + 1);
@@ -624,6 +632,30 @@ fn native_panel_expansion() {
     let initial = state(&w).workspace;
     let dir = "../../artifacts/ui/customization";
     std::fs::create_dir_all(dir).unwrap();
+    let tap_tab = |panel| {
+        let tab = w
+            .groups
+            .borrow()
+            .iter()
+            .flat_map(|g| &g.tabs)
+            .find(|(p, _)| *p == panel)
+            .unwrap()
+            .1
+            .clone();
+        let bounds = tab.compute_bounds(&w.surface).unwrap();
+        let reply = w.chrome_event(ChromeEvent::Contact {
+            position: [
+                bounds.x() + bounds.width() * 0.5,
+                bounds.y() + bounds.height() * 0.5,
+            ],
+            canvas: false,
+        });
+        assert!(
+            !reply.handled,
+            "tab press must remain available for native drag/hold"
+        );
+        click(&tab);
+    };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(250);
@@ -648,11 +680,7 @@ fn native_panel_expansion() {
                 .unwrap()
                 .root
                 .clone();
-            w.dispatch(UiAction::Customize {
-                action: CustomizationAction::ShowAllControls {
-                    panel: Panel::Sizes,
-                },
-            });
+            tap_tab(Panel::Sizes);
             pump(300);
             capture_reference(&w, &format!("{dir}/expanded-{edge:?}-{theme:?}.png"), 1.0);
             let placement = w.customization.placement().unwrap();
@@ -687,19 +715,46 @@ fn native_panel_expansion() {
                     .is_visible()
             );
             check.set_active(false);
-            let reply = w.chrome_event(ChromeEvent::Contact {
-                position: [
-                    placement.bounds.x + placement.preview.x + 12.0,
-                    placement.bounds.y + 12.0,
-                ],
-                canvas: false,
-            });
-            assert!(reply.handled);
+            tap_tab(Panel::Sizes);
             pump(300);
             assert!(w.customization.placement().is_none());
             assert_eq!(state(&w).workspace, saved);
             assert_eq!(panel.parent().unwrap(), parent);
         }
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            target: DockTarget::Tab {
+                group: 8,
+                index: None,
+            },
+            viewport: [1200.0, 900.0],
+        });
+        pump(100);
+        let preview_parent = w.panel_widget(Panel::Sizes).parent().unwrap();
+        for (panel, name, concave) in [
+            (Panel::Sizes, "second", false),
+            (Panel::Layers, "first", true),
+        ] {
+            tap_tab(panel);
+            pump(150);
+            capture_reference(
+                &w,
+                &format!("{dir}/expanded-left-{name}-tab-{theme:?}.png"),
+                1.0,
+            );
+            let placement = w.customization.placement().unwrap();
+            assert_eq!(placement.concave_join, concave);
+            assert_eq!(state(&w).customization.expanded, Some(panel));
+            assert_eq!(
+                w.panel_widget(Panel::Sizes).parent().unwrap(),
+                preview_parent
+            );
+        }
+        tap_tab(Panel::Layers);
+        assert!(state(&w).customization.expanded.is_none());
     }
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
@@ -714,6 +769,17 @@ fn native_panel_expansion() {
     capture_reference(&w, &format!("{dir}/zen-drag-Light.png"), 1.0);
     w.dragging.set(false);
     w.update_zen();
+    assert!(
+        w.groups
+            .borrow()
+            .iter()
+            .all(|g| !g.root.has_css_class("zen-hidden"))
+    );
+    let hide = w.chrome_event(ChromeEvent::Contact {
+        position: [600.0, 350.0],
+        canvas: true,
+    });
+    assert!(hide.handled && hide.chrome_hidden);
     assert!(
         w.groups
             .borrow()

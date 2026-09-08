@@ -544,8 +544,29 @@ pub struct PanelExpansion {
     pub bounds: Bounds,
     pub preview: Bounds,
     pub configuration: Bounds,
+    /// Only the first active tab reaches the left edge with the content color.
+    /// Other joins meet the darker tab strip and must stay flat.
+    pub concave_join: bool,
 }
 impl PanelExpansion {
+    /// One interpolation for opening, closing and changing tabs. Starting from
+    /// the last presented placement also makes interrupted animations continuous.
+    pub fn interpolate_from(self, from: Self, progress: f32) -> Self {
+        let p = progress.clamp(0.0, 1.0);
+        let mix = |a: f32, b: f32| a + (b - a) * p;
+        let rect = |a: Bounds, b: Bounds| Bounds {
+            x: mix(a.x, b.x),
+            y: mix(a.y, b.y),
+            width: mix(a.width, b.width),
+            height: mix(a.height, b.height),
+        };
+        Self {
+            bounds: rect(from.bounds, self.bounds),
+            preview: rect(from.preview, self.preview),
+            configuration: rect(from.configuration, self.configuration),
+            ..self
+        }
+    }
     pub fn contains(self, point: [f32; 2]) -> bool {
         let local = [point[0] - self.bounds.x, point[1] - self.bounds.y];
         self.bounds.contains(point[0], point[1])
@@ -657,6 +678,9 @@ impl DockLayout {
         Some(PanelExpansion {
             group: group.id,
             bounds,
+            concave_join: config_left
+                && group.tabs_visible
+                && group.panels.first() == Some(&group.active),
             preview: Bounds {
                 x: if config_left { revealed } else { 0.0 },
                 y: 0.0,
@@ -1229,12 +1253,14 @@ impl DockLayout {
         *self = next;
         Ok(())
     }
-    pub fn select_tab(&mut self, group: u32, panel: Panel) -> Result<(), String> {
+    /// Select a tab, returning whether the active tab changed.
+    pub fn select_tab(&mut self, group: u32, panel: Panel) -> Result<bool, String> {
         if let Some(DockNode::Tabs { panels, active, .. }) = self.node_mut(group)
             && panels.contains(&panel)
         {
+            let changed = *active != panel;
             *active = panel;
-            Ok(())
+            Ok(changed)
         } else {
             Err("Panel is not in this tab group".into())
         }
@@ -1837,9 +1863,11 @@ mod tests {
             }
             if edge == Edge::Right {
                 assert_eq!(end.configuration.x, 0.0);
+                assert!(end.concave_join);
             }
             if edge == Edge::Left {
                 assert_eq!(end.preview.x, 0.0);
+                assert!(!end.concave_join);
             }
             assert!(end.bounds.x >= 6.0 && end.bounds.y >= crate::HEADER_HEIGHT);
             assert!(end.bounds.x + end.bounds.width <= viewport[0] - 6.0);
@@ -1858,6 +1886,65 @@ mod tests {
                 .expanded_panel(viewport, Panel::Sizes, [f32::NAN, 10.0], 1.0)
                 .is_none()
         );
+        layout.bands[0].edge = Edge::Right;
+        layout.bands[0].root = DockNode::Tabs {
+            id: 5,
+            panels: vec![Panel::Layers, Panel::Sizes],
+            active: Panel::Sizes,
+        };
+        assert!(
+            !layout
+                .expanded_panel(viewport, Panel::Sizes, [300.0, 400.0], 1.0)
+                .unwrap()
+                .concave_join
+        );
+    }
+    #[test]
+    fn tab_size_changes_interpolate_from_the_presented_bounds() {
+        let mut layout = DockLayout::default();
+        layout.bands = vec![DockBand {
+            id: 3,
+            edge: Edge::Bottom,
+            extent: 160.0,
+            root: DockNode::Tabs {
+                id: 5,
+                panels: vec![Panel::Layers, Panel::Sizes],
+                active: Panel::Sizes,
+            },
+        }];
+        let shape = |height, progress| {
+            layout
+                .expanded_panel([1200.0, 900.0], Panel::Sizes, [240.0, height], progress)
+                .unwrap()
+        };
+        let from = shape(320.0, 1.0);
+        let to = shape(480.0, 1.0);
+        let check = |actual: PanelExpansion, expected: PanelExpansion| {
+            assert_eq!(actual.bounds, expected.bounds);
+            assert_eq!(actual.preview, expected.preview);
+            assert_eq!(actual.configuration, expected.configuration);
+        };
+        check(to.interpolate_from(from, 0.0), from);
+        check(to.interpolate_from(from, 1.0), to);
+        let middle = to.interpolate_from(from, 0.5);
+        assert_eq!(
+            middle.bounds.height,
+            (from.bounds.height + to.bounds.height) * 0.5
+        );
+        assert_eq!(middle.bounds.y, (from.bounds.y + to.bounds.y) * 0.5);
+        assert_eq!(
+            middle.preview.height,
+            middle.configuration.height + TAB_BAR_HEIGHT
+        );
+        // Switching again or closing midway must start exactly at this frame.
+        let next = shape(280.0, 1.0);
+        check(next.interpolate_from(middle, 0.0), middle);
+        let closing = shape(280.0, 0.0);
+        check(closing.interpolate_from(middle, 0.0), middle);
+        check(closing.interpolate_from(middle, 1.0), closing);
+        for progress in [0.0, 0.25, 0.5, 1.0] {
+            check(from.interpolate_from(from, progress), from);
+        }
     }
     #[test]
     fn clipped_ribbons_keep_tiles_but_only_offer_visible_drop_slots() {

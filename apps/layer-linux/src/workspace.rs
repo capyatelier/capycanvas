@@ -78,7 +78,7 @@ mod allocation {
             }
             if let Some(join) = self.join.borrow().as_ref() {
                 let expanded = self.expansion.get();
-                join.set_visible(expanded.is_some_and(|e| e.configuration.y > 0.0));
+                join.set_visible(expanded.is_some_and(|e| e.concave_join));
                 if let Some(e) = expanded {
                     let left = e.configuration.x < e.preview.x;
                     let class = if left {
@@ -240,8 +240,10 @@ mod allocation {
             for (_, child) in self.children.borrow().iter() {
                 let expanded = child.has_css_class("expanded-panel");
                 if expanded {
+                    // One shadow around the complete stepped silhouette:
+                    // preview, tabs and drawer, with no shadow at their seam.
                     snapshot.push_shadow(&[gtk::gsk::Shadow::new(
-                        gdk::RGBA::new(0.0, 0.0, 0.0, 0.3),
+                        gdk::RGBA::new(0.0, 0.0, 0.0, 0.4),
                         0.0,
                         8.0,
                         24.0,
@@ -1011,7 +1013,26 @@ impl Workspace {
     }
 
     fn chrome_event(&self, event: ChromeEvent) -> InputReply {
+        let contact_tab = if let ChromeEvent::Contact { position, .. } = event {
+            let picked = self.surface.pick(
+                position[0] as f64,
+                position[1] as f64,
+                gtk::PickFlags::DEFAULT,
+            );
+            self.groups
+                .borrow()
+                .iter()
+                .flat_map(|g| &g.tabs)
+                .find_map(|(panel, tab)| {
+                    let picked = picked.as_ref()?;
+                    (picked == tab.upcast_ref::<gtk::Widget>() || picked.is_ancestor(tab))
+                        .then_some(*panel)
+                })
+        } else {
+            None
+        };
         let facts = ChromeFacts {
+            contact_tab,
             expanded_panel: self.customization.placement(),
             held: self.chrome_held.get(),
             dragging: self.dragging.get(),
@@ -1527,7 +1548,7 @@ impl Workspace {
                         tab.add_css_class("flat");
                         tab.set_valign(gtk::Align::Center);
                         self.install_panel_drag(&tab, DockItem::Panel { panel });
-                        self.install_context(&tab, ContextTarget::Panel { panel }, true);
+                        self.install_context(&tab, ContextTarget::Panel { panel });
                         labels.append(&tab);
                         tabs.push((panel, tab));
                     }
@@ -1547,7 +1568,7 @@ impl Workspace {
                     grip.set_valign(gtk::Align::Center);
                     self.install_panel_drag(&grip, DockItem::Group { group: group.id });
                     header.append(&grip);
-                    self.install_context(&header, ContextTarget::Group { group: group.id }, false);
+                    self.install_context(&header, ContextTarget::Group { group: group.id });
                     column.append(&header);
                 }
                 let stack = gtk::Stack::new();

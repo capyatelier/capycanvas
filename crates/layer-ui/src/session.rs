@@ -165,6 +165,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply::default();
         let mut contact = None;
+        let mut released_chrome_pin = false;
         match input {
             UiInput::Chrome {
                 event,
@@ -182,14 +183,29 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Invalid chrome position".into());
                 }
                 let was_hidden = self.interaction.hidden;
+                if self.interaction.facts.dragging
+                    && !facts.dragging
+                    && self.state.workspace.zen_mode
+                {
+                    self.interaction.keep_chrome_until_contact = true;
+                }
                 self.interaction.facts = facts;
                 self.interaction.viewport = Some(viewport);
+                if matches!(event, ChromeEvent::Contact { .. }) {
+                    released_chrome_pin =
+                        std::mem::take(&mut self.interaction.keep_chrome_until_contact);
+                }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
                     && !facts.popup_open
-                    && !facts
-                        .expanded_panel
-                        .is_some_and(|e| e.contains(position) && !e.header_contains(position))
+                    && !facts.expanded_panel.is_some_and(|e| {
+                        // Tabs activate on release. Leave the press available
+                        // for native drag/hold recognition, even on the active tab.
+                        let tab = facts.contact_tab.is_some_and(|tab| {
+                            self.state.workspace.layout.panel_group(tab) == Some(e.group)
+                        });
+                        e.contains(position) && (!e.header_contains(position) || tab)
+                    })
                 {
                     reply.change = self.dispatch(UiAction::Customize {
                         action: CustomizationAction::CloseExpanded,
@@ -363,7 +379,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_chrome();
         if let Some((was_hidden, popup_open)) = contact {
             reply.dismiss_popups = popup_open;
-            reply.handled |= popup_open || (was_hidden && !self.interaction.hidden);
+            reply.handled |= popup_open
+                || (was_hidden && !self.interaction.hidden)
+                || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
         reply.pan_cursor = self.interaction.pan_key.is_some();
@@ -371,10 +389,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_chrome(&mut self) {
+        if !self.state.workspace.zen_mode {
+            self.interaction.keep_chrome_until_contact = false;
+        }
         let pinned = self.interaction.facts.held
             || self.interaction.facts.dragging
             || self.interaction.facts.popup_open
             || self.interaction.keyboard_chrome
+            || self.interaction.keep_chrome_until_contact
             || self.state.settings_draft.is_some()
             || self.state.customization.is_open()
             || self.divider_drag.is_some();
@@ -549,6 +571,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
         use regions::*;
         let revision = self.engine.document().revision;
+        let was_expanded = self.state.customization.expanded.is_some();
         let save_settings = matches!(
             &action,
             UiAction::ApplySettings
@@ -701,8 +724,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (LAYOUT, false)
             }
             UiAction::SelectPanelTab { group, panel } => {
-                self.state.workspace.layout.select_tab(group, panel)?;
-                if let Some(previous) = self.state.customization.expanded {
+                let changed = self.state.workspace.layout.select_tab(group, panel)?;
+                if !changed {
+                    let action = if self.state.customization.expanded == Some(panel) {
+                        CustomizationAction::CloseExpanded
+                    } else {
+                        CustomizationAction::ShowAllControls { panel }
+                    };
+                    self.state.customization.edit(
+                        &mut self.state.workspace.layout,
+                        action,
+                        self.state.platform,
+                    )?;
+                } else if let Some(previous) = self.state.customization.expanded {
                     self.state.customization.expanded =
                         (self.state.workspace.layout.panel_group(previous) == Some(group))
                             .then_some(panel);
@@ -862,6 +896,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS, false)
             }
         };
+        if was_expanded && self.state.customization.expanded.is_none() {
+            self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
+        }
         if save_settings {
             self.request(HostRequestKind::SaveSettings {
                 settings: Box::new(self.state.settings.clone()),
@@ -1485,8 +1522,27 @@ mod tests {
         assert!(!chrome(&mut s, ChromeEvent::Leave { touch: false }, dragging).chrome_hidden);
         assert!(!s.input(UiInput::Blur).unwrap().chrome_hidden);
         assert!(!chrome(&mut s, ChromeEvent::Refresh, dragging).chrome_hidden);
-        // Both successful drop and cancellation end the host-owned drag.
-        assert!(chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden);
+        // Drop/cancel releases the drag, but never hides its result immediately.
+        assert!(!chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden);
+        assert!(
+            !chrome(
+                &mut s,
+                ChromeEvent::Motion {
+                    position: [600.0, 450.0]
+                },
+                ChromeFacts::default()
+            )
+            .chrome_hidden
+        );
+        let next = chrome(
+            &mut s,
+            ChromeEvent::Contact {
+                position: [600.0, 450.0],
+                canvas: true,
+            },
+            ChromeFacts::default(),
+        );
+        assert!(next.handled && next.chrome_hidden && !next.paint);
     }
 
     #[test]
@@ -2259,6 +2315,7 @@ mod tests {
     #[test]
     fn expanded_panel_dismissal_is_core_policy_and_never_paints() {
         let mut app = session();
+        invoke(&mut app, CommandId::ZenMode);
         let open = |app: &mut UiSession<Recorder>| {
             app.dispatch(UiAction::Customize {
                 action: CustomizationAction::ShowAllControls {
@@ -2271,6 +2328,7 @@ mod tests {
         let facts = ChromeFacts {
             expanded_panel: Some(PanelExpansion {
                 group: 6,
+                concave_join: false,
                 bounds: Bounds {
                     x: 10.0,
                     y: 100.0,
@@ -2311,8 +2369,39 @@ mod tests {
             facts,
         );
         assert!(outside.handled && !outside.paint);
+        assert!(
+            !outside.chrome_hidden,
+            "closing a drawer must not also hide the workspace"
+        );
         assert_ne!(outside.change.regions & regions::CUSTOMIZATION, 0);
         assert!(app.state.customization.expanded.is_none());
+        assert!(
+            !chrome(
+                &mut app,
+                ChromeEvent::Motion {
+                    position: [600.0, 600.0]
+                },
+                ChromeFacts::default()
+            )
+            .chrome_hidden
+        );
+        assert!(
+            !chrome(
+                &mut app,
+                ChromeEvent::Leave { touch: false },
+                ChromeFacts::default()
+            )
+            .chrome_hidden
+        );
+        let second = chrome(
+            &mut app,
+            ChromeEvent::Contact {
+                position: [600.0, 600.0],
+                canvas: true,
+            },
+            ChromeFacts::default(),
+        );
+        assert!(second.handled && second.chrome_hidden && !second.paint);
         open(&mut app);
         let header = chrome(
             &mut app,
@@ -2338,6 +2427,84 @@ mod tests {
         assert!(reply.handled);
         assert!(app.state.customization.expanded.is_none());
     }
+    #[test]
+    fn selected_tab_toggles_drawer_and_other_tabs_preserve_its_open_state() {
+        let mut app = session();
+        app.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            target: DockTarget::Tab {
+                group: 8,
+                index: None,
+            },
+            viewport: [1200.0, 900.0],
+        })
+        .unwrap();
+        // Moving Sizes into the group selected it. One activation opens it.
+        let activate = |app: &mut UiSession<Recorder>, panel| {
+            app.dispatch(UiAction::SelectPanelTab { group: 8, panel })
+                .unwrap();
+        };
+        app.dispatch(UiAction::SelectPanelTab {
+            group: 8,
+            panel: Panel::Sizes,
+        })
+        .unwrap();
+        assert_eq!(app.state.customization.expanded, Some(Panel::Sizes));
+        let expanded = app
+            .state
+            .workspace
+            .layout
+            .expanded_panel([1200.0, 900.0], Panel::Sizes, [400.0; 2], 1.0)
+            .unwrap();
+        let event = ChromeEvent::Contact {
+            position: [
+                expanded.bounds.x + expanded.preview.x + 10.0,
+                expanded.bounds.y + 10.0,
+            ],
+            canvas: false,
+        };
+        let facts = ChromeFacts {
+            expanded_panel: Some(expanded),
+            contact_tab: Some(Panel::Layers),
+            ..ChromeFacts::default()
+        };
+        assert!(!chrome(&mut app, event, facts).handled);
+        assert_eq!(app.state.customization.expanded, Some(Panel::Sizes));
+        activate(&mut app, Panel::Layers);
+        assert_eq!(app.state.customization.expanded, Some(Panel::Layers));
+        // Press alone never toggles: it must remain available for a drag/hold.
+        assert!(!chrome(&mut app, event, facts).handled);
+        assert_eq!(app.state.customization.expanded, Some(Panel::Layers));
+        activate(&mut app, Panel::Layers);
+        assert!(app.state.customization.expanded.is_none());
+        activate(&mut app, Panel::Sizes);
+        assert!(app.state.customization.expanded.is_none());
+        activate(&mut app, Panel::Sizes);
+        assert_eq!(app.state.customization.expanded, Some(Panel::Sizes));
+        assert!(
+            chrome(
+                &mut app,
+                event,
+                ChromeFacts {
+                    contact_tab: None,
+                    ..facts
+                }
+            )
+            .handled
+        );
+        assert!(app.state.customization.expanded.is_none());
+        let saved = app.state.workspace.clone();
+        assert!(
+            app.dispatch(UiAction::SelectPanelTab {
+                group: 8,
+                panel: Panel::Brushes,
+            })
+            .is_err()
+        );
+        assert_eq!(app.state.workspace, saved);
+        assert!(app.state.customization.expanded.is_none());
+    }
+
     #[test]
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
         let mut app = session();

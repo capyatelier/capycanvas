@@ -7,8 +7,8 @@ GTK and web translate native events and render its menu/dialog/control models.
 This feature does not add another canvas/rendering path.
 
 - A panel tab or panel body opens that panel's context menu: **Tab Name** /
-  **Tab Icon** and **Configure Panel…**. Double-tapping the tab/header opens
-  configuration too; double-clicks within inputs retain native behavior.
+  **Tab Icon** and **Configure Panel…**. A single tap on the selected tab toggles
+  configuration; an inactive tab selects it. Inputs retain native behavior.
 - Empty tab-header space and the group grip target the whole tab group:
   **Tab Names** / **Tab Icons** and **New Toolbar…**. Group changes apply to
   every current tab; an individual tab can subsequently override its style.
@@ -26,19 +26,27 @@ This feature does not add another canvas/rendering path.
   Its controls edit the same Rust state, and visibility checkboxes immediately
   show/hide controls in the preview. Existing preview widgets stay parented;
   there is no popover, duplicate tab bar, scaled text or second settings model.
-  Outside tap, a tap anywhere on the original tab header, or Escape reverses
-  the animation without changing saved docking. Header dismissal consumes the
-  contact rather than selecting a tab or dragging. There is no close button.
+  Outside tap, a tap on the active tab or empty header space, or Escape reverses
+  the animation without changing saved docking. Tapping another tab switches
+  the preview and configuration without closing the drawer, animating any size
+  change from the currently displayed bounds. Dismissal consumes
+  the contact rather than activating another control. There is no close button.
+  In Zen mode, dismissing the drawer keeps the other panels visible through
+  motion/leave; a subsequent canvas-center tap can hide chrome. Both dismissal
+  taps are consumed rather than depositing ink.
 - The columns share the height needed by the taller content, never reducing the
   original panel height. The configuration column starts below the original
   tabs, aligned with the preview's content area; their bottoms align. Expansion
-  uses squared internal seams and a concave tab-to-column transition, with
-  rounding only on the exposed outer corners, so the surface reads as one panel.
+  uses squared internal seams. A concave tab-to-column transition appears only
+  when opening left with the first tab active, where the content colors match;
+  right-opening drawers and later tabs have a flat join against the tab strip.
+  Exposed outer corners stay rounded, so the surface reads as one panel.
   It is constrained to the window; oversized content scrolls. Left/right panels
   preserve their preview width. Top/bottom
   panels form a compact two-column arrangement growing down/up, anchored to the
   nearest side. Neighboring panels, the reserved dock slot and canvas fit stay
-  unchanged. Controls remain 11pt throughout the animation.
+  unchanged. Controls remain 11pt throughout the animation. An open drawer has
+  a stronger shadow around the combined surface, not between its columns.
 - Toolbar creation and insertion use one searchable multi-select picker with
   icons, descriptions and explicit confirmation/cancel. Creation also asks for
   a trimmed, case-insensitively unique name. Invalid names leave the draft open.
@@ -51,7 +59,9 @@ This feature does not add another canvas/rendering path.
   previews only target visible slots and are clipped to the same boundary.
 - Zen keeps chrome visible for the complete drag lifecycle, including pointer
   leave and focus loss while the native DND grab owns input. Drop or cancellation
-  releases that pin; blur still cancels canvas input but does not end UI dragging.
+  changes that pin to the same wait-for-another-contact state as drawer dismissal,
+  so the resulting layout stays visible. Blur still cancels canvas input but
+  does not end UI dragging.
 
 Expansion is transient presentation, not a change to the saved dock. Shared Rust
 geometry accepts the host's measured content heights and animation fraction;
@@ -99,7 +109,7 @@ These are required gates, not claims of completion.
 - [ ] All panel/group/tile/ribbon context targets on mouse, pen and touch.
 - [ ] Individual/group tab-name/icon switching with tooltip/accessibility names.
 - [ ] Expanded live panel, hidden controls, visibility editing and outside/Escape
-  dismissal; header double-tap without consuming control editing.
+  dismissal; selected-tab single-tap toggle without consuming control editing.
 - [ ] Tile remove/insert/append and same/cross-toolbar drag with exact blue line.
 - [ ] Dynamic ribbon wrapping, docking, tabbing and resize without fixed counts.
 - [ ] Full workspace round-trip and non-destructive layout reset.

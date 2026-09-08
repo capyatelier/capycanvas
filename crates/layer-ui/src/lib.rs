@@ -551,6 +551,8 @@ pub enum UiAction {
         target: DockTarget,
         viewport: [f32; 2],
     },
+    /// Activate a tab. The selected tab toggles its drawer; another tab switches
+    /// content while preserving an open drawer in the same group.
     SelectPanelTab {
         group: u32,
         panel: Panel,

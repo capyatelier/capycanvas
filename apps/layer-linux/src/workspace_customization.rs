@@ -46,6 +46,7 @@ pub(super) struct Customization {
     controls: RefCell<Vec<ControlWidget>>,
     expanded: Cell<Option<Panel>>,
     progress: Cell<f64>,
+    transition_from: Cell<Option<PanelExpansion>>,
     closing: Cell<bool>,
     animation: RefCell<Option<adw::TimedAnimation>>,
     expanded_root: RefCell<Option<PanelColumns>>,
@@ -80,6 +81,7 @@ impl Customization {
             controls: RefCell::new(Vec::new()),
             expanded: Cell::new(None),
             progress: Cell::new(0.0),
+            transition_from: Cell::new(None),
             closing: Cell::new(false),
             animation: RefCell::new(None),
             expanded_root: RefCell::new(None),
@@ -104,7 +106,7 @@ impl Customization {
         ));
         for (panel, widget) in &w.panels {
             if panel.kind() != PanelKind::Tiles {
-                w.install_context(widget, ContextTarget::Panel { panel: *panel }, false);
+                w.install_context(widget, ContextTarget::Panel { panel: *panel });
             }
         }
         let view = adw::ToolbarView::new();
@@ -223,12 +225,20 @@ impl Customization {
         }
         self.expanded.set(None);
         self.progress.set(0.0);
+        self.transition_from.set(None);
         self.closing.set(false);
         self.visibility.borrow_mut().clear();
         self.controls.borrow_mut().retain(|c| !c.configuration);
     }
 
     pub fn geometry(&self, w: &Workspace) -> Option<PanelExpansion> {
+        let target = self.target_geometry(w, !self.closing.get())?;
+        Some(self.transition_from.get().map_or(target, |from| {
+            target.interpolate_from(from, self.progress.get() as f32)
+        }))
+    }
+
+    fn target_geometry(&self, w: &Workspace, expanded: bool) -> Option<PanelExpansion> {
         let panel = self.expanded.get()?;
         let root = self.expanded_root.borrow().clone()?;
         let viewport = [
@@ -261,7 +271,7 @@ impl Customization {
             viewport,
             panel,
             [preview_height, config_height],
-            self.progress.get() as f32,
+            if expanded { 1.0 } else { 0.0 },
         )
     }
 
@@ -269,11 +279,16 @@ impl Customization {
         self.expanded_root.borrow().as_ref()?.imp().expansion.get()
     }
 
-    fn animate(&self, w: &Rc<Workspace>, opening: bool) {
+    fn animate(&self, w: &Rc<Workspace>, opening: bool, from: Option<PanelExpansion>) {
         if let Some(animation) = self.animation.take() {
             animation.pause();
         }
         self.closing.set(!opening);
+        self.transition_from.set(
+            from.or_else(|| self.placement())
+                .or_else(|| self.target_geometry(w, false)),
+        );
+        self.progress.set(0.0);
         let target = adw::CallbackAnimationTarget::new(glib::clone!(
             #[weak]
             w,
@@ -282,13 +297,7 @@ impl Customization {
                 w.surface.queue_allocate();
             }
         ));
-        let animation = adw::TimedAnimation::new(
-            &w.surface,
-            self.progress.get(),
-            if opening { 1.0 } else { 0.0 },
-            PANEL_EXPANSION_MS,
-            target,
-        );
+        let animation = adw::TimedAnimation::new(&w.surface, 0.0, 1.0, PANEL_EXPANSION_MS, target);
         animation.set_easing(adw::Easing::EaseOutCubic);
         animation.connect_done(glib::clone!(
             #[weak]
@@ -296,6 +305,8 @@ impl Customization {
             move |_| {
                 if w.customization.closing.get() {
                     w.customization.collapse_panel();
+                } else {
+                    w.customization.transition_from.set(None);
                 }
                 w.surface.queue_allocate();
             }
@@ -308,7 +319,7 @@ impl Customization {
         let view = views.iter().find(|v| v.expanded);
         if view.is_none() {
             if self.expanded.get().is_some() && !self.closing.get() {
-                self.animate(w, false);
+                self.animate(w, false, None);
             }
             return;
         }
@@ -317,9 +328,8 @@ impl Customization {
                 let layout = w.surface.imp().layout.borrow();
                 layout.panel_group(old) == layout.panel_group(new.id)
             });
-            let progress = if same_group { self.progress.get() } else { 0.0 };
+            let from = same_group.then(|| self.placement()).flatten();
             self.collapse_panel();
-            self.progress.set(progress);
             if let Some(view) = view {
                 let root = w
                     .groups
@@ -386,10 +396,10 @@ impl Customization {
                 *self.expanded_root.borrow_mut() = Some(root);
                 self.expanded.set(Some(view.id));
                 w.surface.raise_group(group);
-                self.animate(w, true);
+                self.animate(w, true, from);
             }
         } else if self.closing.get() {
-            self.animate(w, true);
+            self.animate(w, true, None);
         }
         if let Some(view) = view {
             for (control, check) in self.visibility.borrow().iter() {
@@ -422,7 +432,7 @@ impl Customization {
                     let grip = tiles::grip();
                     w.install_panel_drag(&grip, DockItem::Panel { panel: config.id });
                     strip.set_grip(&grip);
-                    w.install_context(&strip, ContextTarget::Ribbon { panel: config.id }, false);
+                    w.install_context(&strip, ContextTarget::Ribbon { panel: config.id });
                     toolbars.push(ToolbarView {
                         id: config.id,
                         strip,
@@ -477,7 +487,7 @@ impl Customization {
                 button.set_vexpand(true);
                 tile_root.append(&button);
                 w.install_panel_drag(&tile_root, DockItem::Tile { panel, tile: id });
-                w.install_context(&tile_root, ContextTarget::Tile { panel, tile: id }, false);
+                w.install_context(&tile_root, ContextTarget::Tile { panel, tile: id });
                 toolbar.strip.append(&tile_root);
                 toolbar.buttons.push(button);
             }
@@ -868,7 +878,6 @@ impl Workspace {
         self: &Rc<Self>,
         widget: &impl IsA<gtk::Widget>,
         target: ContextTarget,
-        double_tap: bool,
     ) {
         widget.add_css_class("customizable-target");
         let click = gtk::GestureClick::new();
@@ -878,7 +887,7 @@ impl Workspace {
         click.connect_pressed(glib::clone!(
             #[weak(rename_to = w)]
             self,
-            move |gesture, n, x, y| {
+            move |gesture, _, x, y| {
                 let Some(widget) = gesture.widget() else {
                     return;
                 };
@@ -888,13 +897,6 @@ impl Workspace {
                 if gesture.current_button() == 3 {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     w.show_context(&widget, target, x, y);
-                } else if double_tap
-                    && n == 2
-                    && matches!(gesture.current_button(), 0 | 1)
-                    && let ContextTarget::Panel { panel } = target
-                {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    w.customize(CustomizationAction::ShowAllControls { panel });
                 }
             }
         ));

@@ -418,6 +418,7 @@ function arrange() {
             "dock-tab",
           );
           tab.dataset.index = index;
+          tab.dataset.panel = panel;
           tab.setAttribute("aria-selected", String(panel === group.active));
           labels.append(draggable(tab, { kind: "panel", panel }));
         });
@@ -795,6 +796,9 @@ function chromeInput(event) {
     event,
     viewport: [workspace.clientWidth, workspace.clientHeight],
     facts: {
+      contact_tab: event.kind === "contact"
+        ? document.elementFromPoint(...event.position)?.closest(".dock-tab")?.dataset.panel ?? null
+        : null,
       held: chromeHeld,
       dragging: dragItem !== null,
       popup_open:
