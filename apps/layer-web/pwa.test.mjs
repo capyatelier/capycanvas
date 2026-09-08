@@ -96,12 +96,12 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
         const pixels=ctx.getImageData(0,0,32,32).data;
         const alpha=(x,y)=>pixels[(y*32+x)*4+3];
         return {width:image.naturalWidth,height:image.naturalHeight,
-          corners:[alpha(0,0),alpha(31,0),alpha(0,31),alpha(31,31)],edge:alpha(16,0)};
+          corners:[alpha(0,0),alpha(31,0),alpha(0,31),alpha(31,31)],background:[...pixels.slice(16*4,17*4)]};
       }));
     })()`);
     assert.deepEqual(icons, [32, 180, 192, 512].map(size => ({
-      width: size, height: size, corners: [0, 0, 0, 0], edge: 255,
-    })), "Favicon and app icons load offline with matching rounded corners");
+      width: size, height: size, corners: [0, 0, 0, 0], background: [65, 65, 65, 255],
+    })), "Favicon and app icons load offline with rounded corners and panel-gray backgrounds");
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     assert.ok(await evaluate("Promise.all([...document.querySelectorAll('.brush-preview')].map(i=>i.decode())).then(()=>true)"));
