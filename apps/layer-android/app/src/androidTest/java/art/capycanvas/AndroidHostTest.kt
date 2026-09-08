@@ -12,9 +12,11 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Before
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.json.JSONObject
@@ -24,19 +26,40 @@ import java.util.concurrent.TimeUnit
 
 /** Real native widgets, JNI and Vulkan in the tablet emulator. No fake renderer. */
 class AndroidHostTest {
-    companion object { private val runId = System.currentTimeMillis().toString() }
+    companion object {
+        private val runId = System.currentTimeMillis().toString()
+        // Ask an isolated, GPU-less Rust session for its defaults, not a Kotlin
+        // copy of the workspace schema. Repeated runs must not collect toolbars.
+        private val defaultWorkspace by lazy {
+            val handle = Native.create(false)
+            try { JSONObject(Native.snapshot(handle)!!).getJSONObject("state").getJSONObject("workspace").toString() }
+            finally { Native.destroy(handle) }
+        }
+    }
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private val host get() = compose.activity.host
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    private var originalWorkspace: JSONObject? = null
     @Before fun ready() {
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("gpu_ready") == true || host.failure != null }
         assertNull("GPU initialization", host.failure)
+        originalWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         compose.runOnIdle {
             host.dispatch(obj("type" to "cancel_settings"))
             host.dispatch(obj("type" to "set_theme", "theme" to "light"))
-            host.invoke("reset_layout")
+            host.dispatch(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
         }
-        compose.waitUntil(10_000) { host.snapshot?.getJSONObject("state")?.optString("theme") == "light" }
+        waitState { it.optString("theme") == "light" && it.getJSONObject("workspace").toString() == defaultWorkspace }
+        compose.waitForIdle()
+    }
+    @After fun restoreWorkspace() {
+        originalWorkspace?.let { workspace ->
+            compose.runOnIdle {
+                host.dispatch(obj("type" to "cancel_settings"))
+                host.dispatch(obj("type" to "restore_workspace", "workspace" to workspace))
+            }
+            waitState { it.getJSONObject("workspace").toString() == workspace.toString() }
+        }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
@@ -258,17 +281,21 @@ class AndroidHostTest {
 
     @Test fun nativeContextMenuCreatesToolbarAndToolsCanBeReordered() {
         compose.onAllNodesWithContentDescription("Move panel group").onFirst().performTouchInput { longClick() }
+        capture("27-panel-menu")
         compose.onNodeWithText("New Toolbar…").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") != null }
         val picker = host.snapshot!!.getJSONObject("picker")
         val name = "Quick tools $runId"
         picker.optString("name_label").takeIf { it.isNotEmpty() }?.let { label ->
-            compose.onNodeWithText(label).performTextReplacement(name)
+            val field = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("toolbar-name")))
+            field.performTextReplacement(name)
+            field.performImeAction()
         }
         val choices = picker.array("choices").objects().take(3)
         choices.forEach { choice ->
             compose.onAllNodes(hasText(choice.getString("label")) and isToggleable()).onFirst().performScrollTo().performClick()
         }
+        capture("28-tool-picker")
         compose.onNodeWithText(picker.getString("confirm_label")).performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") == null }
         val custom = host.snapshot!!.array("panels").objects().first { it.getString("title") == name }
@@ -284,6 +311,51 @@ class AndroidHostTest {
         }
         capture("12-custom-toolbar")
         assertNull(host.actionError)
+    }
+
+    @Test fun editorGeometryStaysConsistent() {
+        val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
+        val firstTile = toolbar.array("tiles").objects().first().getInt("id")
+        compose.onNodeWithTag("tile-toolbar-$firstTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
+        compose.onNodeWithContentDescription("Zen mode").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
+        compose.onNodeWithTag("number-Brush size").assertHeightIsEqualTo(31.dp)
+        val brush = state().getJSONObject("brush").getInt("preset")
+        compose.onNodeWithTag("brush-preview-$brush", useUnmergedTree = true).assertHeightIsEqualTo(40.dp)
+        compose.onAllNodesWithContentDescription("Move panel group").onFirst().assertWidthIsEqualTo(20.dp)
+        compose.onAllNodesWithText("Brushes").onFirst().assertHeightIsEqualTo(36.dp)
+        compose.runOnIdle { host.invoke("fit_canvas") }
+        capture("25-editor-default-light")
+        compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
+        waitState { it.getString("theme") == "dark" }
+        capture("26-editor-default-dark")
+        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithTag("preferences-surface").assertWidthIsEqualTo(960.dp)
+        compose.onNodeWithText("Back").performClick()
+    }
+
+    @Test fun compactNumberInputAndVerticalRibbonStayUsable() {
+        val field = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("number-Brush size")))
+        field.performTextReplacement("42.5")
+        waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
+        compose.onNodeWithContentDescription("Increase Brush size").performClick()
+        val step = host.catalog.getJSONObject("brush_size").number("step")
+        waitState { it.getJSONObject("brush").number("diameter") == 42.5f + step }
+        field.assertTextEquals("%.1f".format(java.util.Locale.ROOT, 42.5f + step))
+        compose.onNodeWithContentDescription("Decrease Brush size").performClick()
+        waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
+
+        val grip = compose.onNodeWithContentDescription("Move toolbar")
+        val origin = grip.fetchSemanticsNode().boundsInRoot.topLeft
+        val density = compose.activity.resources.displayMetrics.density
+        grip.performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(density, 200 * density) - origin, 700) }
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
+            it.getString("active") == "toolbar" && it.getString("axis") == "vertical"
+        } }
+        val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
+        val lastTile = toolbar.array("tiles").objects().last().getInt("id")
+        val tile = compose.onNodeWithTag("tile-toolbar-$lastTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
+        assertTrue("Vertical ribbon grip is below its tools", grip.fetchSemanticsNode().boundsInRoot.top >= tile.fetchSemanticsNode().boundsInRoot.bottom)
+        capture("31-vertical-ribbon")
     }
 
     @Test fun tabDragAppendsAndWholeGroupDragPreservesTabs() {
@@ -399,6 +471,13 @@ class AndroidHostTest {
         capture("16-workspace-portrait")
         compose.onNodeWithContentDescription("Preferences").performClick()
         capture("17-settings-portrait")
+        compose.onNodeWithText("Pen & Input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        compose.onNodeWithText("Prediction horizon (ms)").assertExists()
+        capture("29-settings-portrait-detail")
+        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithText("Canvas").assertExists()
+        capture("30-settings-portrait-back")
         assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0))
     }
 
@@ -418,7 +497,7 @@ class AndroidHostTest {
             .onChildren().filterToOne(hasClickAction()).performClick()
         capture("20-cursor-choices")
         val selection = (kind.getInt("selected") + 1) % kind.array("options").length()
-        compose.onNodeWithText(kind.array("options").getString(selection)).performClick()
+        compose.onNode(hasText(kind.array("options").getString(selection)) and hasAnyAncestor(isPopup())).performClick()
         compose.onNodeWithText("About").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "about" }
         compose.onNodeWithText("capycanvas.art").assertExists()

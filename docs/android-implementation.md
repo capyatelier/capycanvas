@@ -1,6 +1,8 @@
 # Android native host
 
-Status: native tablet prototype implemented and emulator-validated.
+Status: native tablet prototype implemented and emulator-validated. The
+[editor visual audit](android-ui-audit.md) records GTK/web alignment and native
+adaptive settings behavior.
 Physical-tablet latency and stylus feel are not yet validated.
 
 ## Required acceptance
@@ -95,14 +97,15 @@ presentation must be measured, not inferred from that setting.
   pinned-wrapper `run.sh headless` build/install/launch flow have been exercised.
 - Four Rust host tests pass: GPU-unavailable UI, malformed input, shared touch
   routing, and unchanged-input snapshot suppression with state/error/resize updates.
-- Eleven emulator tests pass: visible stylus paint and pixel-checked undo/redo;
+- Thirteen emulator tests pass: visible stylus paint and pixel-checked undo/redo;
   preferences/search/theme; animated drawer and divider resizing; native context
   menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
   shortcut recording, saving and activity recreation; two-finger navigation,
   coalesced history, cancellation, background/foreground surface recovery and
   display rotation; high-rate input/render/compositor measurement; menus, cursor
   choices and About links; palm rejection and pixel-checked erasing; Zen drawer
-  dismissal and panel dragging without hiding the workspace. All 71 shared Rust
+  dismissal and panel dragging without hiding the workspace; editor geometry;
+  compact number editing and vertical-ribbon placement. All 71 shared Rust
   UI tests also pass.
 - Android lint completes without errors. Remaining warnings concern pinned
   dependency updates, optional Kotlin/Compose conventions and development

@@ -16,9 +16,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -27,6 +31,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import org.json.JSONArray
 import org.json.JSONObject
@@ -39,6 +46,8 @@ internal class DockInteraction(val host: CanvasHost) {
     var dragging by mutableStateOf(false)
     var expansion by mutableStateOf<JSONObject?>(null)
     var contextMenu by mutableStateOf<JSONObject?>(null)
+    var contextAnchor = Rect.Zero
+    val anchors = mutableMapOf<String, Rect>()
     var popupOpen = false
     var configurationHeight by mutableFloatStateOf(0f)
     val tabs = mutableMapOf<String, JSONObject>()
@@ -50,8 +59,12 @@ internal class DockInteraction(val host: CanvasHost) {
     private var position = Offset.Zero
     fun facts() = obj("held" to false, "dragging" to dragging, "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion)
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())
-    fun context(target: JSONObject) = host.query(obj("type" to "context", "target" to target)) {
-        contextMenu = it as? JSONObject; refresh()
+    fun anchorKey(item: JSONObject) = "${item.optString("kind").replace("ribbon", "panel")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
+    fun context(target: JSONObject) {
+        val anchor = anchors[anchorKey(target)] ?: return
+        host.query(obj("type" to "context", "target" to target)) {
+            contextAnchor = anchor; contextMenu = it as? JSONObject; refresh()
+        }
     }
     fun closeContext() { contextMenu = null; refresh() }
     private fun query() = obj("type" to "drop", "item" to activeItem, "position" to JSONArray(listOf(position.x, position.y)),
@@ -94,11 +107,19 @@ private suspend fun CanvasHost.awaitQuery(query: JSONObject): JSONObject? = susp
 @Composable internal fun dragSource(modifier: Modifier, dock: DockInteraction, item: JSONObject): Modifier {
     var origin by remember { mutableStateOf(Offset.Zero) }
     var point by remember { mutableStateOf(Offset.Zero) }
-    return modifier.onGloballyPositioned { origin = (it.boundsInRoot().topLeft - dock.origin) / dock.density }
+    val key = dock.anchorKey(item)
+    DisposableEffect(dock, key) { onDispose { dock.anchors.remove(key) } }
+    return modifier.onGloballyPositioned {
+        val bounds = it.boundsInRoot().translate(-dock.origin)
+        dock.anchors[key] = bounds
+        origin = bounds.topLeft / dock.density
+    }
         .pointerInput(item.toString()) {
             detectDragGestures(onDragStart = { local -> point = origin + local / dock.density; dock.start(item, point) },
-                onDragCancel = { dock.finish(true) }, onDragEnd = { dock.finish(false) }) { change, amount ->
-                change.consume(); point += amount / dock.density; dock.move(point)
+                onDragCancel = { dock.finish(true) }, onDragEnd = { dock.finish(false) }) { change, _ ->
+                // onDragStart already includes the touch-slop crossing. Adding
+                // that first delta again shifts the drop away from the pointer.
+                change.consume(); point = origin + change.position / dock.density; dock.move(point)
             }
         }
 }
@@ -120,17 +141,23 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             }
         }
     }
-    MaterialTheme(colorScheme = scheme.copy(surface = colors.panel, background = colors.surround,
+    val textSize = (host.catalog.optDouble("text_size_pt", 11.0) * 4 / 3).sp
+    val textStyle = TextStyle(fontSize = textSize, lineHeight = 18.sp, letterSpacing = 0.sp)
+    val typography = Typography().let { it.copy(bodyLarge = textStyle, bodyMedium = textStyle,
+        bodySmall = textStyle, labelLarge = textStyle.copy(fontWeight = FontWeight.Bold),
+        labelMedium = textStyle, labelSmall = textStyle,
+        titleMedium = textStyle.copy(fontWeight = FontWeight.Bold)) }
+    MaterialTheme(typography = typography, colorScheme = scheme.copy(surface = colors.panel, background = colors.surround,
         onSurface = colors.text, onBackground = colors.text, primary = colors.accent,
-        onPrimary = if (colors.dark) colors.surround else Color.White,
+        onPrimary = Color.White,
         surfaceContainer = colors.panel, surfaceContainerHigh = colors.panel,
         surfaceContainerHighest = colors.tabs, surfaceContainerLow = colors.input,
         surfaceContainerLowest = colors.surround, surfaceTint = Color.Transparent,
         secondaryContainer = colors.active, onSecondaryContainer = colors.text,
-        surfaceVariant = colors.tabs, onSurfaceVariant = colors.secondary, outline = colors.secondary,
+        surfaceVariant = colors.tabs, onSurfaceVariant = colors.settingsSecondary, outline = colors.secondary,
         primaryContainer = colors.active, onPrimaryContainer = colors.text)) {
-        CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host) {
-            ProvideTextStyle(MaterialTheme.typography.bodyMedium.copy(fontSize = (host.catalog.optDouble("text_size_pt", 11.0) * 4 / 3).sp, color = colors.text)) {
+        CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
+            ProvideTextStyle(textStyle) {
                 Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime))) {
                     Workspace(host, snapshot)
                     host.actionError?.let { message ->
@@ -200,7 +227,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 key(group.getInt("id")) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }
                     val bounds = expansion?.getJSONObject("bounds") ?: group.getJSONObject("bounds")
-                    val shape = expansion?.let { expandedShape(it, density) } ?: RoundedCornerShape(10.dp)
+                    val shape = expansion?.let { expandedShape(it, density) } ?: RoundedCornerShape(8.dp)
                     Box(Modifier.placed(bounds, density).shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
@@ -222,37 +249,45 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 Box(Modifier.placed(rect, density).testTag("divider-${divider.getInt("id")}").onGloballyPositioned { origin = (it.boundsInRoot().topLeft - dock.origin) / density }
                     .pointerInput(divider.getInt("id")) {
                         detectDragGestures(onDragStart = { point = origin + it / density; resize("down") },
-                            onDragEnd = { resize("up") }, onDragCancel = { resize("cancel") }) { change, amount ->
-                            change.consume(); point += amount / density; resize("move")
+                            onDragEnd = { resize("up") }, onDragCancel = { resize("cancel") }) { change, _ ->
+                            change.consume(); point = origin + change.position / density; resize("move")
                         }
                     })
             }
             val camera = state.getJSONObject("camera")
-            Row(Modifier.placed(layout.getJSONObject("status"), density), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = colors.surround, shape = RoundedCornerShape(6.dp)) {
-                    Text("${(camera.number("zoom", 1.0) * 100).roundToInt()}%  ·  ${(camera.number("rotation") * 180 / Math.PI).roundToInt()}°",
-                        Modifier.clickable { host.invoke("fit_canvas") }.padding(horizontal = 10.dp, vertical = 2.dp))
+            Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
+                Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {
+                    Text("${(camera.number("zoom", 1.0) * 100).roundToInt()}% · ${(camera.number("rotation") * 180 / Math.PI).roundToInt()}°",
+                        Modifier.clickable { host.invoke("fit_canvas") }.padding(horizontal = 10.dp, vertical = 3.dp))
                 }
             }
         }
         dock.hint?.getJSONObject("bounds")?.let { Box(Modifier.placed(it, density).background(colors.accent)) }
-    }
-    dock.contextMenu?.let { menu ->
-        AlertDialog(onDismissRequest = dock::closeContext, title = { Text(menu.getString("title")) }, text = {
-            Column {
+        dock.contextMenu?.let { menu ->
+            val anchor = dock.contextAnchor
+            Box(Modifier.offset { IntOffset(anchor.left.roundToInt(), anchor.top.roundToInt()) }
+                .size((anchor.width / density).dp, (anchor.height / density).dp)) {
+            DropdownMenu(true, dock::closeContext, modifier = Modifier.widthIn(min = 200.dp),
+                shape = RoundedCornerShape(10.dp), containerColor = colors.panel) {
+                Text(menu.getString("title"), Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = colors.secondary, fontWeight = FontWeight.Bold)
                 menu.array("sections").values().forEachIndexed { index, section ->
-                    if (index > 0) HorizontalDivider()
+                    if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.divider)
                     (section as JSONArray).objects().forEach { item ->
-                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable {
+                        Row(Modifier.fillMaxWidth().heightIn(min = 36.dp).padding(horizontal = 6.dp).clip(RoundedCornerShape(6.dp)).clickable {
                             host.customize(item.getJSONObject("action")); dock.closeContext()
-                        }, verticalAlignment = Alignment.CenterVertically) {
-                            if (!item.isNull("selected")) RadioButton(item.getBoolean("selected"), onClick = null)
-                            Text(item.getString("label"), Modifier.padding(8.dp))
+                        }.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!item.isNull("selected")) CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                                RadioButton(item.getBoolean("selected"), onClick = null, modifier = Modifier.size(20.dp))
+                            }
+                            Text(item.getString("label"), color = colors.text, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
-        }, confirmButton = { TextButton(dock::closeContext) { Text("Done") } })
+            }
+        }
     }
 }
 
@@ -263,23 +298,29 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val left = preview.number("x") * density
     val right = left + preview.number("width") * density
     val top = configuration.number("y") * density
-    val radius = minOf(10 * density, size.height / 2, size.width / 2)
+    val radius = minOf(8 * density, size.height / 2, size.width / 2)
     moveTo(left + radius, 0f)
-    lineTo(right - radius, 0f); quadraticBezierTo(right, 0f, right, radius)
-    if (right < size.width) { lineTo(right, top); lineTo(size.width - radius, top); quadraticBezierTo(size.width, top, size.width, top + radius) }
-    lineTo(size.width, size.height - radius); quadraticBezierTo(size.width, size.height, size.width - radius, size.height)
-    lineTo(radius, size.height); quadraticBezierTo(0f, size.height, 0f, size.height - radius)
+    lineTo(right - radius, 0f); quadraticTo(right, 0f, right, radius)
+    if (right < size.width) { lineTo(right, top); lineTo(size.width - radius, top); quadraticTo(size.width, top, size.width, top + radius) }
+    lineTo(size.width, size.height - radius); quadraticTo(size.width, size.height, size.width - radius, size.height)
+    lineTo(radius, size.height); quadraticTo(0f, size.height, 0f, size.height - radius)
     if (left > 0f) {
-        lineTo(0f, top + radius); quadraticBezierTo(0f, top, radius, top)
-        if (expansion.optBoolean("concave_join")) { lineTo(left - radius, top); quadraticBezierTo(left, top, left, top - radius) }
+        lineTo(0f, top + radius); quadraticTo(0f, top, radius, top)
+        if (expansion.optBoolean("concave_join")) { lineTo(left - radius, top); quadraticTo(left, top, left, top - radius) }
         else lineTo(left, top)
     }
-    lineTo(left, radius); quadraticBezierTo(left, 0f, left + radius, 0f); close()
+    lineTo(left, radius); quadraticTo(left, 0f, left + radius, 0f); close()
 }
 
 @Composable private fun Header(host: CanvasHost, state: JSONObject, dock: DockInteraction) {
     val colors = LocalPalette.current
-    Row(Modifier.fillMaxWidth().height(48.dp).padding(6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).padding(6.dp)) {
+      if (maxWidth >= 600.dp) state.array("tabs").optJSONObject(0)?.let { tab ->
+        Text("${tab.optString("title")} · ${tab.optInt("width")} × ${tab.optInt("height")}",
+            Modifier.align(Alignment.Center).background(colors.surround, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 8.dp),
+            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+      Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         IconTile("zen", "Zen mode", state.getJSONObject("workspace").optBoolean("zen_mode")) { host.invoke("zen_mode") }
         host.catalog.array("menus").objects().forEach { menu ->
             var open by remember { mutableStateOf(false) }
@@ -288,15 +329,25 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                 onDispose { if (open) { dock.popupOpen = false; dock.refresh() } }
             }
             Box {
-                Text(menu.getString("label"), Modifier.clickable { open = true }.padding(8.dp))
-                DropdownMenu(open, { open = false }) {
+                Box(Modifier.height(36.dp).clip(RoundedCornerShape(6.dp)).background(colors.surround)
+                    .clickable { open = true }.padding(horizontal = 17.dp), contentAlignment = Alignment.Center) {
+                    Text(menu.getString("label"), fontWeight = FontWeight.Bold)
+                }
+                DropdownMenu(open, { open = false }, shape = RoundedCornerShape(10.dp), containerColor = colors.panel) {
                     menu.array("sections").values().forEachIndexed { index, section ->
-                        if (index > 0) HorizontalDivider()
+                        if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.divider)
                         (section as JSONArray).values().forEach { id ->
                             state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
-                                DropdownMenuItem(text = { Text(command.getString("label")) }, enabled = command.getBoolean("enabled"),
-                                    trailingIcon = { if (command.optBoolean("selected")) SharedIcon("check", null) else Text(command.optString("shortcut"), color = colors.secondary) },
-                                    onClick = { open = false; host.invoke(id.toString()) })
+                                Row(Modifier.widthIn(min = 200.dp).fillMaxWidth().heightIn(min = 36.dp)
+                                    .padding(horizontal = 6.dp).clip(RoundedCornerShape(6.dp))
+                                    .clickable(enabled = command.getBoolean("enabled")) { open = false; host.invoke(id.toString()) }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    Text(command.getString("label"), Modifier.weight(1f), fontWeight = FontWeight.Bold,
+                                        color = if (command.getBoolean("enabled")) colors.text else colors.secondary)
+                                    if (command.optBoolean("selected")) SharedIcon("check", null)
+                                    command.optString("shortcut").takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.secondary) }
+                                }
                             }
                         }
                     }
@@ -304,9 +355,8 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
         }
         Spacer(Modifier.weight(1f))
-        Text(state.array("tabs").optJSONObject(0)?.optString("title") ?: "Capy Canvas", color = colors.secondary)
-        Spacer(Modifier.weight(1f))
         IconTile("settings", "Preferences") { host.invoke("settings") }
+      }
     }
 }
 
@@ -332,20 +382,32 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                                 val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
                                 dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index,
                                     "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
-                            }.height(36.dp).background(if (selected) colors.panel else Color.Transparent, RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
+                            }.height(36.dp).zIndex(if (selected) 1f else 0f)
+                            .drawBehind {
+                                if (selected) {
+                                    val r = 6.dp.toPx(); val w = size.width; val h = size.height
+                                    val path = Path().apply {
+                                        moveTo(r, 0f); lineTo(w-r, 0f); quadraticTo(w, 0f, w, r)
+                                        lineTo(w, h-r); quadraticTo(w, h, w+r, h)
+                                        lineTo(-r, h); quadraticTo(0f, h, 0f, h-r)
+                                        lineTo(0f, r); quadraticTo(0f, 0f, r, 0f); close()
+                                    }
+                                    drawPath(path, colors.panel)
+                                }
+                            }
                             .combinedClickable(onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to id)) },
-                                onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 10.dp)
+                                onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 8.dp)
                         Box(tab, contentAlignment = Alignment.Center) {
-                            if (p.getString("tab_style") == "icon") SharedIcon(p.getString("icon"), p.getString("title")) else Text(p.getString("title"))
+                            if (p.getString("tab_style") == "icon") SharedIcon(p.getString("icon"), p.getString("title")) else Text(p.getString("title"), fontWeight = FontWeight.Bold)
                         }
                     }
                 }
-                Box(dragSource(Modifier.width(24.dp).fillMaxHeight(), dock, obj("kind" to "group", "group" to group.getInt("id")))
+                Box(dragSource(Modifier.width(20.dp).height(24.dp), dock, obj("kind" to "group", "group" to group.getInt("id")))
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                        onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { SharedIcon("grip", "Move panel group") }
+                        onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
             }
-            if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize())
-            else PanelControls(host, state, panel, false, Modifier.fillMaxSize())
+            if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")
+            else PanelControls(host, state, panel, Modifier.fillMaxSize())
         }
     }
 }
