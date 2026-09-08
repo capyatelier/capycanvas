@@ -6,7 +6,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, url }) {
   const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>20000)reject(new Error('GPU test timed out: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
-  const checkPanelStyle = async () => assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),panel=getComputedStyle(document.querySelector('.dock-group'));return ['backgroundColor','color','borderRadius','boxShadow'].every(key=>help[key]===panel[key])})()"), "GPU help shares the panel background, text, corners and shadow");
+  const checkPanelStyle = async () => {
+    assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),panel=getComputedStyle(document.querySelector('.dock-group'));return ['backgroundColor','color','borderRadius','boxShadow'].every(key=>help[key]===panel[key])})()"), "GPU help shares the panel background, text, corners and shadow");
+    assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice').getBoundingClientRect(),h=document.querySelector('.gpu-help').getBoundingClientRect();return Math.abs((n.top+n.bottom-h.top-h.bottom)/2)<1})()"), "Help panel is vertically centered");
+    assert.ok(await evaluate("(()=>{const h=document.querySelector('.gpu-help');return [...h.querySelectorAll('p')].every(p=>getComputedStyle(p).color===getComputedStyle(h).color)})()"), "Help text uses a consistent color");
+  };
   const capture = async (name) => {
     const dir = "artifacts/ui/gpu-startup";
     await mkdir(dir, { recursive: true });
@@ -63,13 +67,15 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     await action({ type: "invoke", command: "add_layer" });
     assert.equal(await evaluate("window.frameCalls"), 0, "No paint loop while the GPU is unavailable");
     if (mode !== "pending") {
-      assert.equal(await evaluate("document.querySelectorAll('.gpu-help details[open]').length"), 0);
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-help details, .gpu-help pre, .gpu-retry').length"), 0);
+      assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help button')].every(n=>n.closest('.gpu-address'))"), "Only address Copy buttons remain");
       const visibleText = await evaluate("document.querySelector('.gpu-help').innerText");
       assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
       assert.match(visibleText, /Capy Canvas is a GPU-accelerated drawing app/);
       assert.ok(visibleText.split(/\s+/).length < 150, "Instructions stay concise");
       assert.doesNotMatch(visibleText, /Instructions for other platforms|edge:\/\/|brave:\/\/|opera:\/\//);
-      assert.equal(await evaluate("document.querySelectorAll('.gpu-steps > li').length"), chromeSteps ? (linuxSteps ? 5 : 4) : 0);
+      assert.doesNotMatch(visibleText, /Experimental flags may cause|Restore Default if needed/);
+      assert.equal(await evaluate("document.querySelectorAll('.gpu-steps > li').length"), chromeSteps ? 4 : 0);
       if (chromeSteps) {
         assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-steps > li')].slice(0,4).map(n=>n.firstChild.textContent)"), [
           "Open your browser’s system settings:",
@@ -78,15 +84,16 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           "Reload this page.",
         ]);
         if (linuxSteps) {
-          assert.match(visibleText, /Experimental.*crashes.*protections/);
           assert.match(visibleText, /On Linux, if it still fails, set “Override software rendering list” to Enabled/);
           assert.match(visibleText, /If that still doesn’t work, set “Unsafe WebGPU” to Enabled/);
+          assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help > p')].some(n=>n.textContent.startsWith('On Linux,'))"), "Linux help is an unnumbered paragraph");
           assert.equal(await evaluate("document.querySelectorAll('.gpu-steps ol').length"), 0, "No nested troubleshooting steps");
         } else assert.doesNotMatch(visibleText, /Linux|experimental|chrome:\/\/flags|Unsafe WebGPU/i);
-        assert.match(visibleText, /Check Chrome’s graphics report:/);
+        assert.match(visibleText, /Vulkan should be enabled in Chrome's graphics report/);
         assert.match(visibleText, /chrome:\/\/gpu/);
         const addresses = linuxSteps ? ["chrome://settings/system", "chrome://flags/#ignore-gpu-blocklist", "chrome://flags/#enable-unsafe-webgpu", "chrome://gpu"] : ["chrome://settings/system", "chrome://gpu"];
         assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-address code')].map(n=>n.textContent)"), addresses);
+        assert.ok(await evaluate("(()=>{const rows=[...document.querySelectorAll('.gpu-address code')];return rows.every(n=>Math.abs(n.getBoundingClientRect().left-rows[0].getBoundingClientRect().left)<1)})()"), "All addresses share one left indent");
         assert.equal(await evaluate("document.querySelectorAll('.gpu-steps h3').length"), 0, "Simple steps, not separate cards");
         assert.equal(await evaluate("getComputedStyle(document.querySelector('.gpu-address code')).userSelect"), "text");
         for (let index = 0; index < addresses.length; index++) {
@@ -102,8 +109,6 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         assert.doesNotMatch(visibleText, /chrome:\/\/flags|experimental/);
         assert.match(visibleText, mode === "insecure" ? /secure connection/ : /WebGPU is not available/);
       }
-      assert.equal(await evaluate("document.querySelector('.gpu-retry').textContent"), "Try again");
-      assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice').getBoundingClientRect(),b=document.querySelector('.gpu-retry').getBoundingClientRect();return b.bottom<=n.bottom})()"), "Retry is visible at the desktop size without scrolling");
       await capture(mode + "-dark");
       await action({ type: "set_theme", theme: "light" });
       await checkPanelStyle();
@@ -117,6 +122,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         for (const [width, height] of [[1280, 720], [900, 700]]) {
           await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
           await settle();
+          await checkPanelStyle();
           assert.deepEqual(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return [n.scrollWidth-n.clientWidth,n.scrollHeight-n.clientHeight]})()"), [0, 0], `All instructions fit without scrolling at ${width}×${height}`);
           await capture(`${mode}-${width}x${height}`);
         }
@@ -124,7 +130,8 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         await settle();
       }
       assert.equal(await evaluate("window.adapterRequests"), missingApi || mode === "insecure" ? 0 : ["no-adapter", "non-linux"].includes(mode) ? 2 : 1);
-      await evaluate("window.restoreGpu();document.querySelector('.gpu-retry').click()");
+      await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+      await call("Page.reload");
     } else {
       await action({ type: "set_theme", theme: null });
       for (const value of ["light", "dark"]) {
@@ -135,10 +142,11 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
         assert.equal(await evaluate("getComputedStyle(document.documentElement).colorScheme"), value);
       }
       await evaluate("window.releaseAdapter();window.restoreGpu()");
+      await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
     }
     await waitFor("document.body.dataset.gpu === 'ready'");
-    assert.equal(await evaluate("layerApp.state().brush.diameter"), 37);
-    assert.equal(await evaluate("layerApp.state().layers.length"), layerCount + 1);
+    if (mode === "pending") assert.equal(await evaluate("layerApp.state().brush.diameter"), 37);
+    assert.equal(await evaluate("layerApp.state().layers.length"), layerCount + (mode === "pending" ? 1 : 0));
     assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), true);
     await action({ type: "set_theme", theme: "light" });
     await action({ type: "invoke", command: "fit_canvas" });
@@ -147,8 +155,9 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 850, y: 450, button: "left", buttons: 1 });
     await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: 850, y: 450, button: "left", buttons: 0, clickCount: 1 });
     await settle();
-    assert.ok((await canvasPixels()).white < before.white - 50, "GPU drawing works after attachment/retry");
-    await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
-    console.log(`GPU startup: ${mode}, usable UI, no invisible painting, preserved session and recovery passed`);
+    await waitFor("layerApp.state().commands.find(c=>c.id==='undo').enabled");
+    const after = await canvasPixels();
+    assert.ok(after.white < before.white - 50, `GPU drawing works after attachment/reload: ${JSON.stringify({ before, after })}`);
+    console.log(`GPU startup: ${mode}, usable UI, no invisible painting and ${mode === "pending" ? "preserved session" : "reload recovery"} passed`);
   }
 }

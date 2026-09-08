@@ -7,11 +7,11 @@ export function gpuProblem({ secure, api }) {
   return [title, "Your browser could not find a GPU adapter."];
 }
 
-export function showGpuNotice({ container, error, retry, element, button }) {
+export function showGpuNotice({ container, element, button }) {
   const [title, reason] = gpuProblem({ secure: isSecureContext, api: !!navigator.gpu });
   const content = element("div", "gpu-help");
   content.append(element("h1", "", title), element("p", "gpu-cause", reason),
-    element("p", "gpu-intro", "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU."));
+    element("p", "", "Capy Canvas is a GPU-accelerated drawing app and needs access to your GPU."));
   const chromium = /Chrome\/|Chromium\/|Edg\//.test(navigator.userAgent);
   const address = (parent, url) => {
     const row = element("div", "gpu-address");
@@ -36,27 +36,19 @@ export function showGpuNotice({ container, error, retry, element, button }) {
       "Restart the browser.",
       "Reload this page.",
     ]) steps.append(element("li", "", text));
+    content.append(steps);
     const linux = /Linux/.test(navigator.userAgent) && !/Android|CrOS/.test(navigator.userAgent);
     if (linux) {
-      const extra = element("li", "", "On Linux, if it still fails, set “Override software rendering list” to Enabled.");
-      address(extra, "chrome://flags/#ignore-gpu-blocklist");
-      extra.append(element("p", "", "If that still doesn’t work, set “Unsafe WebGPU” to Enabled."));
-      address(extra, "chrome://flags/#enable-unsafe-webgpu");
-      steps.append(extra);
+      content.append(element("p", "", "On Linux, if it still fails, set “Override software rendering list” to Enabled."));
+      address(content, "chrome://flags/#ignore-gpu-blocklist");
+      content.append(element("p", "", "If that still doesn’t work, set “Unsafe WebGPU” to Enabled."));
+      address(content, "chrome://flags/#enable-unsafe-webgpu");
     }
-    content.append(steps, element("p", "", "Check Chrome’s graphics report:"));
+    content.append(element("p", "", "Vulkan should be enabled in Chrome's graphics report"));
     address(content, "chrome://gpu");
-    if (linux) content.append(element("p", "gpu-caution", "Experimental flags may cause crashes or reduce browser protections. Restore Default if needed."));
   } else {
     content.append(element("h2", "", "Try an updated browser"),
-      element("p", "", "Update your browser or open Capy Canvas in Chrome, then try again."));
+      element("p", "", "Update your browser or open Capy Canvas in Chrome, then reload this page."));
   }
-  const actions = element("div", "gpu-actions");
-  actions.append(button("Try again", retry, "gpu-retry"));
-  const technical = element("details");
-  technical.append(element("summary", "", "Technical details"));
-  technical.append(element("pre", "", String(error)));
-  actions.append(technical);
-  content.append(actions);
   container.replaceChildren(content);
 }

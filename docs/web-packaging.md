@@ -72,7 +72,7 @@ node --test apps/layer-web/run.test.mjs apps/layer-web/package.test.mjs
 # Actual Chrome + WebGPU + service workers; starts its own local test server.
 node apps/layer-web/test.mjs --package
 
-# Inject unavailable API/adapter/device and delayed startup; verify UI + retry.
+# Inject unavailable API/adapter/device and delayed startup; verify UI + reload.
 node apps/layer-web/test.mjs --package --gpu-startup
 ```
 
@@ -96,15 +96,18 @@ The Rust UI session starts before GPU initialization. Without a GPU, menus,
 panels and preferences still work, and the canvas area shows theme-matched help.
 The help shows the failure reason, a short GPU requirement explanation and a
 compact settings → acceleration → restart → reload checklist. Only Linux gets
-a fifth item with two flat, conditional instructions and exact flag addresses.
-Chrome’s graphics report is visible below the steps; every address has a Copy button.
+two additional unnumbered paragraphs with conditional instructions and exact flag addresses.
+A reminder to check that Vulkan is enabled appears above Chrome’s graphics report
+address; every address has a Copy button.
 The help container shares the panels’ background, text color, corners and shadow
-in both themes. The default instructions and retry fit without
-scrolling at 1280×720 and 900×700. Experimental flags carry a visible warning and
-are never enabled by the app. Missing WebGPU and insecure
+in both themes, with roomier padding and vertical centering in the canvas area.
+All copyable addresses have the same left indent, and explanatory text uses the
+same color as the instructions. Extra space below the subtitle and numbered steps
+separates the sections. The default instructions fit without scrolling at 1280×720
+and 900×700. Browser flags are never enabled by the app. Missing WebGPU and insecure
 connections get appropriate explanations; there are no other-platform guides.
-Only the raw technical error stays collapsed. Retry attaches
-a GPU to the existing session without resetting it.
+There are no retry or technical-details controls. Reload the page after fixing
+browser settings; technical errors are logged to the browser console only.
 The document advertises the active light/dark color scheme and matching browser
 theme color. A static Dark Reader lock preserves the app’s themes and artwork
 colors without adding an extension dependency.
