@@ -23,16 +23,20 @@ It remains synchronous and Wasm-portable; OS objects and I/O live in the hosts.
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; Zen reveal and keep-visible distances |
+| Appearance | System/Light/Dark; 9/11/13 pt panel text; Zen reveal and keep-visible distances |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
-| Pen & Input | Pressure response; feedback enable, prediction horizon and tip lock; platform predictions where supplied |
-| Keyboard Shortcuts | Commands, brushes, size presets and momentary pan; record, clear, reset, conflict replacement |
+| Pen & Input | Pressure response; feedback enable, prediction horizon up to 64 ms and tip lock; platform predictions where supplied |
+| Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
 | About | Capy Canvas version, application license, platform renderer, Website and Source Code links |
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
 Defaults preserve the previous drawing behavior: System theme, 80px edge reveal,
 40px keep-visible margin, linear pressure, normal scroll speeds, 8ms prediction.
+Panel text defaults to 11 pt, including tabs and section headings. A discrete
+slider selects 9, 11 or 13 pt. Text-bearing controls and inline step symbols
+scale with the font; tool icons, brush previews, sliders and checkboxes do not.
+Hosts also expose the same typography role for future panel context menus.
 
 ## Native presentation and research
 
@@ -43,6 +47,17 @@ GTK requires libadwaita 1.9. Use `AdwDialog` containing
 components supply native adaptive navigation and window controls.
 [ViewSwitcherSidebar](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1.9/class.ViewSwitcherSidebar.html),
 [NavigationSplitView](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/1.9/class.NavigationSplitView.html).
+Dialog presentation follows open/closed transitions from the model, not GTK
+root membership: a closing sheet stays rooted during its animation and must
+still be presentable if reopened immediately.
+
+The sidebar extends to the bottom of the dialog; Apply/Cancel belong to the
+content pane. A stock `edit-find-symbolic` search toggle at the sidebar's
+top-left reveals its search entry and result list. Search results and their
+destination actions come from Rust. Keyboard Shortcuts has a separate search
+entry. Touch suppresses stale pointer-hover styling without removing selected
+or pressed feedback. This follows the structure of
+[GNOME Settings](https://github.com/GNOME/gnome-control-center/blob/main/shell/cc-window.blp).
 
 The stock `AdwPreferencesDialog` is useful for conventional preferences but
 does not provide this explicit persistent sidebar layout; the general
@@ -65,6 +80,9 @@ About Capy Canvas. Shortcuts/About deep-link to the same editor; calling
 `OpenSettings { page }` from another element preserves the current draft.
 This follows GNOME's placement of application-level entries in the main menu.
 [GNOME menu guidance](https://developer.gnome.org/hig/patterns/controls/menus.html).
+All native header menus use `GMenu`/`GtkPopoverMenu`, with enabled/check states
+and accelerator hints from the shared command model. View includes Zen Mode.
+Header text buttons retain libadwaita's 17px horizontal padding.
 
 Web uses a gear opening Preferences directly, with the same sidebar/page flow,
 native input behavior, original shared SVGs, copyable information values and
@@ -89,10 +107,13 @@ of a desktop modal; there are no toolkit types in the shared model.
   take precedence. Application shortcuts do not inhibit desktop-global keys.
 - Conflicts require explicit replacement. Replacing one alternative preserves
   the other action's remaining alternatives. Reset cannot silently steal a
-  shortcut; Reset All restores defaults in the draft. Clear disables a binding.
-- Up to four alternatives can be supplied programmatically; the initial
-  recording UI replaces the selected action's alternatives with one chord.
-  Menu hints update from applied core state, not an uncommitted draft.
+  shortcut; Reset All restores defaults in the draft. Removing the last
+  alternative disables the action's keyboard binding.
+- Each row opens an editor showing current alternatives and original defaults.
+  Add records another chord; Remove and Reset operate in this dialog, not the
+  table. Up to four alternatives are supported in both hosts. Duplicates and
+  limits are validated in Rust. Menu hints update from applied core state,
+  not an uncommitted draft; GTK's native hint shows the first alternative.
 - The browser cannot own browser/OS-reserved combinations. The core rejects
   common reserved browser chords rather than claiming they will work.
 - Pan stores the actually pressed key. Releasing it clears the momentary mode
@@ -154,12 +175,31 @@ remain separate work, not nonfunctional controls in this dialog.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.
 
-Validation caveat (2026-09-07): native settings/links pass with test file I/O
-disabled (`env -u LAYER_SETTINGS_FILE`). The isolated persistence variant reaches
-the save/reopen checks but crashes in `gdk_surface_handle_event` after destroying
-the additional window. That teardown issue is not fixed by the About-link work;
-do not treat the full native persistence suite as passing.
+Validation caveat (2026-09-07): an intermittent native extra-window teardown
+crash was traced to a `GDK_PAD_GROUP_MODE` event with a NULL surface, before any
+application event controller runs. GTK 4.22.4's Wayland tablet-pad mode handler
+constructs this event from `seat->keyboard_focus` without checking for NULL;
+`gdk_surface_handle_event` then dereferences it. The same handler remains on
+upstream main. See [GTK's handler](https://github.com/GNOME/gtk/blob/4.22.4/gdk/wayland/gdkseat-wayland.c#L3562).
+This is not a preferences file-I/O failure. An isolated control run with
+`GDK_WAYLAND_DISABLE=zwp_tablet_manager_v2` passes the complete settings,
+atomic save/restore and teardown suite with fatal GTK warnings enabled.
+That switch is **test-only**: it disables stylus support too, so the application
+does not set it. Normal tablet-enabled teardown remains affected and needs a
+GTK dependency fix. The app separately releases its GPU worker before window
+fields during final ownership teardown. Divider and repeated-window tests also
+run with normal tablet support; they do not prove the intermittent GTK bug fixed.
 
 No simulation of physical tablet delivery or display scanout is implied by
 these UI tests. Native event/presentation measurements remain documented in
 `artifacts/benchmarks/gtk-wayland.md`.
+
+Browser validation on this machine also has an environment caveat: Chrome's
+Wayland DMA-BUF import currently fails inside ANGLE. The optional `--headless`
+test mode uses hardware Vulkan/WebGPU without that window-system path, following
+[Chromium's GPU testing guidance](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/gpu/using-gpu-hardware-in-headless-chrome.md).
+All preferences interaction, typography, persistence and cursor-preview assertions
+pass there, but the suite's strict empty-log check reports a rendering warning
+during GPU startup (`A valid external Instance reference no longer exists`).
+It is not filtered out. Headless captures validate the DOM controls only: their
+canvas is black, so they do not validate composed GPU ink or display delivery.

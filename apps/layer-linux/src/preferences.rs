@@ -17,6 +17,7 @@ static SAVE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 
 enum Field {
     Choice(adw::ComboRow),
+    Scale(adw::ActionRow, gtk::Scale),
     Number(adw::SpinRow),
     Switch(adw::SwitchRow),
     Info(adw::ActionRow),
@@ -25,6 +26,7 @@ impl Field {
     fn widget(&self) -> &gtk::Widget {
         match self {
             Self::Choice(w) => w.upcast_ref(),
+            Self::Scale(w, _) => w.upcast_ref(),
             Self::Number(w) => w.upcast_ref(),
             Self::Switch(w) => w.upcast_ref(),
             Self::Info(w) => w.upcast_ref(),
@@ -35,6 +37,9 @@ impl Field {
         self.widget().set_visible(row.visible);
         match (self, &row.kind) {
             (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
+            (Self::Scale(_, w), PreferenceKind::Scale { selected, .. }) => {
+                w.set_value(*selected as f64)
+            }
             (Self::Number(w), PreferenceKind::Number { value, .. }) => w.set_value(*value as f64),
             (Self::Switch(w), PreferenceKind::Switch { active }) => w.set_active(*active),
             _ => {}
@@ -46,19 +51,29 @@ pub struct Preferences {
     stack: adw::ViewStack,
     split: adw::NavigationSplitView,
     content_page: adw::NavigationPage,
+    content_view: adw::ToolbarView,
+    sidebar: adw::ViewSwitcherSidebar,
+    search_toggle: gtk::ToggleButton,
+    search_bar: gtk::SearchBar,
+    search_results: gtk::ListBox,
     search: gtk::SearchEntry,
+    shortcut_search: gtk::SearchEntry,
     empty: gtk::Label,
     error: gtk::Label,
     apply: gtk::Button,
     fields: RefCell<BTreeMap<PreferenceId, Field>>,
     groups: RefCell<Vec<(SettingsPage, usize, adw::PreferencesGroup)>>,
     shortcuts: adw::PreferencesGroup,
-    shortcut_rows: RefCell<Vec<(String, adw::ActionRow, gtk::Label, gtk::Button)>>,
+    shortcut_rows: RefCell<Vec<(String, adw::ActionRow, gtk::Label)>>,
+    editor: adw::Dialog,
+    editor_body: gtk::Box,
+    editor_signature: RefCell<String>,
     capture: adw::Dialog,
     capture_label: gtk::Label,
     capture_key: gtk::Label,
     capture_error: gtk::Label,
     confirm: gtk::Button,
+    shown: Cell<[bool; 3]>,
     updating: Cell<bool>,
     servicing: Cell<bool>,
 }
@@ -82,6 +97,15 @@ fn action_button(label: &str, w: &Rc<Workspace>, action: UiAction) -> gtk::Butto
     ));
     button
 }
+fn text_row(title: &str, subtitle: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    // GObject may apply builder text properties before use-markup. Set plain
+    // text mode first, including for user-defined shortcut names containing &.
+    row.set_use_markup(false);
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    row
+}
 impl Preferences {
     pub fn new() -> Self {
         let dialog = adw::Dialog::builder()
@@ -95,10 +119,16 @@ impl Preferences {
         let stack = adw::ViewStack::new();
         let sidebar = adw::ViewSwitcherSidebar::builder().stack(&stack).build();
         let sidebar_view = adw::ToolbarView::new();
+        sidebar_view.set_widget_name("preferences-sidebar");
         let sidebar_header = adw::HeaderBar::new();
         sidebar_header.set_show_end_title_buttons(false);
+        let search_toggle = gtk::ToggleButton::builder()
+            .icon_name("edit-find-symbolic")
+            .tooltip_text("Search preferences")
+            .build();
+        search_toggle.set_widget_name("preferences-search-toggle");
+        sidebar_header.pack_start(&search_toggle);
         sidebar_view.add_top_bar(&sidebar_header);
-        sidebar_view.set_content(Some(&sidebar));
         let content_view = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
         header.set_show_start_title_buttons(false);
@@ -107,15 +137,28 @@ impl Preferences {
             .placeholder_text("Search preferences")
             .build();
         search.set_widget_name("settings-search");
-        margins(&search, 12);
-        content_view.add_top_bar(&search);
+        margins(&search, 6);
+        let search_bar = gtk::SearchBar::new();
+        search_bar.set_child(Some(&search));
+        search_bar.connect_entry(&search);
+        sidebar_view.add_top_bar(&search_bar);
+        let search_results = gtk::ListBox::new();
+        search_results.set_selection_mode(gtk::SelectionMode::None);
+        search_results.add_css_class("navigation-sidebar");
+        let sidebar_body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        sidebar_body.append(&sidebar);
+        sidebar_body.append(&search_results);
         let empty = gtk::Label::new(Some("No matching preferences"));
         empty.add_css_class("dim-label");
         empty.set_visible(false);
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&stack));
-        overlay.add_overlay(&empty);
-        content_view.set_content(Some(&overlay));
+        sidebar_body.append(&empty);
+        let scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&sidebar_body)
+            .vexpand(true)
+            .build();
+        sidebar_view.set_content(Some(&scroll));
+        content_view.set_content(Some(&stack));
         let content_page = adw::NavigationPage::new(&content_view, "Appearance");
         let split = adw::NavigationSplitView::builder()
             .sidebar(&adw::NavigationPage::new(&sidebar_view, "Preferences"))
@@ -149,12 +192,34 @@ impl Preferences {
         capture_key.add_css_class("title-2");
         let capture_error = gtk::Label::builder().wrap(true).build();
         capture_error.add_css_class("warning");
+        let editor = adw::Dialog::builder()
+            .title("Keyboard Shortcut")
+            .content_width(460)
+            .build();
+        editor.add_css_class("layer-preferences");
+        editor.set_widget_name("shortcut-editor");
+        let editor_body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let editor_view = adw::ToolbarView::new();
+        editor_view.add_top_bar(&adw::HeaderBar::new());
+        margins(&editor_body, 18);
+        editor_view.set_content(Some(&editor_body));
+        editor.set_child(Some(&editor_view));
+        let shortcut_search = gtk::SearchEntry::builder()
+            .placeholder_text("Search shortcuts")
+            .build();
+        shortcut_search.set_widget_name("shortcuts-search");
         Self {
             dialog,
             stack,
             split,
             content_page,
+            content_view,
+            sidebar,
+            search_toggle,
+            search_bar,
+            search_results,
             search,
+            shortcut_search,
             empty,
             error,
             apply: gtk::Button::with_label("Apply"),
@@ -162,18 +227,49 @@ impl Preferences {
             groups: RefCell::default(),
             shortcuts: adw::PreferencesGroup::new(),
             shortcut_rows: RefCell::default(),
+            editor,
+            editor_body,
+            editor_signature: RefCell::default(),
             capture,
             capture_label,
             capture_key,
             capture_error,
             confirm: gtk::Button::with_label("Set Shortcut"),
+            shown: Cell::new([false; 3]),
             updating: Cell::new(false),
             servicing: Cell::new(false),
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
-        let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        body.append(&self.split);
+        // Touch has no hover position. Native mouse emulation can leave a row
+        // prelit; suppress that visual until an actual pointing device returns.
+        let pointer = gtk::EventControllerLegacy::new();
+        pointer.set_propagation_phase(gtk::PropagationPhase::Capture);
+        pointer.connect_event(glib::clone!(
+            #[weak]
+            w,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, event| {
+                if matches!(
+                    event.event_type(),
+                    gtk::gdk::EventType::TouchBegin
+                        | gtk::gdk::EventType::TouchUpdate
+                        | gtk::gdk::EventType::TouchEnd
+                ) {
+                    w.preferences.dialog.add_css_class("touch-input");
+                } else if !event.is_pointer_emulated()
+                    && matches!(
+                        event.event_type(),
+                        gtk::gdk::EventType::MotionNotify | gtk::gdk::EventType::ButtonPress
+                    )
+                {
+                    w.preferences.dialog.remove_css_class("touch-input");
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+        self.dialog.add_controller(pointer);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         margins(&footer, 12);
         self.error.set_hexpand(true);
@@ -187,8 +283,8 @@ impl Preferences {
             move |_| w.dispatch(UiAction::ApplySettings)
         ));
         footer.append(&self.apply);
-        body.append(&footer);
-        self.dialog.set_child(Some(&body));
+        self.content_view.add_bottom_bar(&footer);
+        self.dialog.set_child(Some(&self.split));
         self.dialog.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -224,6 +320,50 @@ impl Preferences {
                 }
             )
         ));
+        self.search_toggle.connect_toggled(glib::clone!(
+            #[weak]
+            w,
+            move |button| {
+                send(
+                    &w,
+                    PreferenceAction::ToggleSearch {
+                        open: button.is_active(),
+                    },
+                );
+            }
+        ));
+        self.search_bar
+            .connect_search_mode_enabled_notify(glib::clone!(
+                #[weak]
+                w,
+                move |bar| {
+                    send(
+                        &w,
+                        PreferenceAction::ToggleSearch {
+                            open: bar.is_search_mode(),
+                        },
+                    );
+                }
+            ));
+        self.shortcut_search.connect_search_changed(glib::clone!(
+            #[weak]
+            w,
+            move |entry| {
+                send(
+                    &w,
+                    PreferenceAction::SearchShortcuts {
+                        query: entry.text().into(),
+                    },
+                );
+            }
+        ));
+        self.editor.connect_closed(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                send(&w, PreferenceAction::CloseShortcutEditor);
+            }
+        ));
         let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
         body.append(&adw::HeaderBar::new());
         for label in [&self.capture_label, &self.capture_key, &self.capture_error] {
@@ -232,12 +372,13 @@ impl Preferences {
         }
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         margins(&footer, 12);
-        for (label, action) in [
-            ("Cancel", PreferenceAction::CancelShortcut),
-            ("Clear", PreferenceAction::ClearShortcut),
-        ] {
-            footer.append(&action_button(label, w, UiAction::Preferences { action }));
-        }
+        footer.append(&action_button(
+            "Cancel",
+            w,
+            UiAction::Preferences {
+                action: PreferenceAction::CancelShortcut,
+            },
+        ));
         self.confirm.add_css_class("suggested-action");
         self.confirm.set_widget_name("confirm-shortcut");
         self.confirm.set_hexpand(true);
@@ -271,6 +412,28 @@ impl Preferences {
                 }
             }
         ));
+        // Dialogs have their own shortcut scope. Record before its native
+        // bindings consume Escape, Space, arrows or accelerators.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(glib::clone!(
+            #[weak]
+            w,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, _, modifiers| {
+                w.interact(crate::input::key_input(key, true, modifiers, false, None));
+                glib::Propagation::Stop
+            }
+        ));
+        keys.connect_key_released(glib::clone!(
+            #[weak]
+            w,
+            move |_, key, _, modifiers| {
+                w.interact(crate::input::key_input(key, false, modifiers, false, None));
+            }
+        ));
+        self.capture.add_controller(keys);
     }
     fn build(&self, w: &Rc<Workspace>, view: &PreferencesView) {
         for page in &view.pages {
@@ -280,7 +443,43 @@ impl Preferences {
                 for row in &group.rows {
                     let id = row.id;
                     let field = match &row.kind {
-                        PreferenceKind::Choice { options, .. } => {
+                        PreferenceKind::Scale { options, .. } => {
+                            let control = text_row(&row.title, &row.description);
+                            let scale = gtk::Scale::with_range(
+                                gtk::Orientation::Horizontal,
+                                0.0,
+                                (options.len() - 1) as f64,
+                                1.0,
+                            );
+                            scale.set_round_digits(0);
+                            scale.set_width_request(180);
+                            scale.set_valign(gtk::Align::Center);
+                            for (index, label) in options.iter().enumerate() {
+                                scale.add_mark(
+                                    index as f64,
+                                    gtk::PositionType::Bottom,
+                                    Some(label),
+                                );
+                            }
+                            scale.connect_value_changed(glib::clone!(
+                                #[weak]
+                                w,
+                                move |scale| {
+                                    send(
+                                        &w,
+                                        PreferenceAction::Edit {
+                                            id,
+                                            value: PreferenceValue::Choice(
+                                                scale.value().round() as u32
+                                            ),
+                                        },
+                                    );
+                                }
+                            ));
+                            control.add_suffix(&scale);
+                            Field::Scale(control, scale)
+                        }
+                        PreferenceKind::Choice { options, icons, .. } => {
                             let model = gtk::StringList::new(
                                 &options.iter().map(String::as_str).collect::<Vec<_>>(),
                             );
@@ -290,6 +489,42 @@ impl Preferences {
                                 .subtitle(&row.description)
                                 .model(&model)
                                 .build();
+                            if !icons.is_empty() {
+                                let factory = gtk::SignalListItemFactory::new();
+                                factory.connect_setup(|_, item| {
+                                    let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                                    row.append(&gtk::Image::builder().pixel_size(24).build());
+                                    row.append(&gtk::Label::new(None));
+                                    item.set_child(Some(&row));
+                                });
+                                let options = options.clone();
+                                let icons = icons.clone();
+                                factory.connect_bind(move |_, item| {
+                                    let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+                                    let text = item
+                                        .item()
+                                        .and_downcast::<gtk::StringObject>()
+                                        .unwrap()
+                                        .string();
+                                    let row = item.child().unwrap();
+                                    let image =
+                                        row.first_child().and_downcast::<gtk::Image>().unwrap();
+                                    let label =
+                                        row.last_child().and_downcast::<gtk::Label>().unwrap();
+                                    label.set_text(&text);
+                                    if let Some(index) =
+                                        options.iter().position(|s| s == text.as_str())
+                                    {
+                                        image.set_icon_name(Some(&format!(
+                                            "layer-{}-symbolic",
+                                            icons[index]
+                                        )));
+                                    }
+                                });
+                                control.set_factory(Some(&factory));
+                                control.set_list_factory(Some(&factory));
+                            }
                             control.connect_selected_notify(glib::clone!(
                                 #[weak]
                                 w,
@@ -344,11 +579,7 @@ impl Preferences {
                             Field::Switch(control)
                         }
                         PreferenceKind::Info { .. } | PreferenceKind::Link { .. } => {
-                            let control = adw::ActionRow::builder()
-                                .use_markup(false)
-                                .title(&row.title)
-                                .subtitle(&row.description)
-                                .build();
+                            let control = text_row(&row.title, &row.description);
                             if let PreferenceKind::Link { label, url } = &row.kind {
                                 let link = gtk::LinkButton::with_label(url, label);
                                 link.set_valign(gtk::Align::Center);
@@ -372,8 +603,12 @@ impl Preferences {
                 self.groups.borrow_mut().push((page.id, index, native));
             }
             if page.id == SettingsPage::Shortcuts {
+                let search_group = adw::PreferencesGroup::new();
+                search_group.add(&self.shortcut_search);
+                content.add(&search_group);
                 self.shortcuts.set_title("Shortcuts");
-                self.shortcuts.set_description(Some("Select an action to record a shortcut. Escape cancels recording. Unassigned actions show Disabled."));
+                self.shortcuts
+                    .set_description(Some("Select an action to edit its shortcuts."));
                 let reset = action_button(
                     "Reset All",
                     w,
@@ -395,16 +630,47 @@ impl Preferences {
     }
     pub fn refresh(&self, w: &Rc<Workspace>, view: Option<PreferencesView>) {
         self.updating.set(true);
+        let open = [
+            view.is_some(),
+            view.as_ref().is_some_and(|v| v.shortcut_editor.is_some()),
+            view.as_ref().is_some_and(|v| v.capture.is_some()),
+        ];
+        let was_open = self.shown.replace(open);
         if let Some(view) = view {
             if self.fields.borrow().is_empty() {
                 self.build(w, &view);
             }
             self.content_page.set_title(view.page.title());
             self.empty.set_visible(view.empty);
-            self.stack.set_visible(!view.empty);
             self.stack.set_visible_child_name(view.page.key());
+            self.search_toggle.set_active(view.searching);
+            let opening_search = view.searching && !self.search_bar.is_search_mode();
+            self.search_bar.set_search_mode(view.searching);
+            self.sidebar.set_visible(view.query.is_empty());
+            self.search_results.set_visible(!view.query.is_empty());
             if self.search.text().as_str() != view.query {
                 self.search.set_text(&view.query);
+            }
+            if opening_search {
+                self.search.grab_focus();
+            }
+            self.search_results.remove_all();
+            for result in &view.search_results {
+                let row = text_row(&result.title, &result.description);
+                row.set_activatable(true);
+                let action = result.action.clone();
+                row.connect_activated(glib::clone!(
+                    #[weak]
+                    w,
+                    move |_| {
+                        send(&w, action.clone());
+                        w.preferences.split.set_show_content(true);
+                    }
+                ));
+                self.search_results.append(&row);
+            }
+            if self.shortcut_search.text().as_str() != view.shortcut_query {
+                self.shortcut_search.set_text(&view.shortcut_query);
             }
             for row in view
                 .pages
@@ -434,57 +700,124 @@ impl Preferences {
                 .map(|r| &r.0)
                 .ne(view.shortcuts.iter().map(|r| &r.id))
             {
-                for (_, row, _, _) in self.shortcut_rows.borrow_mut().drain(..) {
+                for (_, row, _) in self.shortcut_rows.borrow_mut().drain(..) {
                     self.shortcuts.remove(&row);
                 }
                 for spec in &view.shortcuts {
-                    let row = adw::ActionRow::builder()
-                        .use_markup(false)
-                        .title(&spec.label)
-                        .subtitle(&spec.group)
-                        .activatable(true)
-                        .build();
+                    let row = text_row(&spec.label, &spec.group);
+                    row.set_activatable(true);
                     let id = spec.id.clone();
                     row.connect_activated(glib::clone!(
                         #[weak]
                         w,
-                        move |_| send(&w, PreferenceAction::BeginShortcut { id: id.clone() })
+                        move |_| send(&w, PreferenceAction::EditShortcut { id: id.clone() })
                     ));
                     let binding = gtk::Label::new(None);
                     binding.add_css_class("dim-label");
                     row.add_suffix(&binding);
-                    let reset = action_button(
-                        "Reset",
-                        w,
-                        UiAction::Preferences {
-                            action: PreferenceAction::ResetShortcut {
-                                id: spec.id.clone(),
-                            },
-                        },
-                    );
-                    reset.set_valign(gtk::Align::Center);
-                    row.add_suffix(&reset);
                     row.set_widget_name(&format!("shortcut-{}", spec.id));
                     self.shortcuts.add(&row);
                     self.shortcut_rows
                         .borrow_mut()
-                        .push((spec.id.clone(), row, binding, reset));
+                        .push((spec.id.clone(), row, binding));
                 }
             }
-            for ((_, row, binding, reset), spec) in
-                self.shortcut_rows.borrow().iter().zip(&view.shortcuts)
+            for ((_, row, binding), spec) in self.shortcut_rows.borrow().iter().zip(&view.shortcuts)
             {
                 row.set_visible(spec.visible);
-                reset.set_sensitive(spec.modified);
                 binding.set_text(if spec.shortcut.is_empty() {
                     "Disabled"
                 } else {
                     &spec.shortcut
                 });
             }
-            if self.dialog.root().is_none() {
+            // A closing dialog remains rooted during its animation. Present
+            // on the model's closed -> open transition, even while rooted.
+            if !was_open[0] {
                 self.dialog.present(Some(&w.window));
                 self.split.set_show_content(true);
+            }
+            if let Some(editor) = &view.shortcut_editor {
+                let signature = serde_json::to_string(&(editor, &view.error)).unwrap();
+                if *self.editor_signature.borrow() != signature {
+                    while let Some(child) = self.editor_body.first_child() {
+                        self.editor_body.remove(&child);
+                    }
+                    self.editor.set_title(&editor.label);
+                    let description = gtk::Label::new(Some(&editor.group));
+                    description.add_css_class("dim-label");
+                    self.editor_body.append(&description);
+                    let list = gtk::ListBox::new();
+                    list.set_selection_mode(gtk::SelectionMode::None);
+                    list.add_css_class("boxed-list");
+                    for (index, binding) in editor.bindings.iter().enumerate() {
+                        let row = text_row(binding, "");
+                        let remove = action_button(
+                            "Remove",
+                            w,
+                            UiAction::Preferences {
+                                action: PreferenceAction::RemoveShortcut {
+                                    id: editor.id.clone(),
+                                    index,
+                                },
+                            },
+                        );
+                        remove.set_valign(gtk::Align::Center);
+                        row.add_suffix(&remove);
+                        list.append(&row);
+                    }
+                    self.editor_body.append(&list);
+                    let defaults = gtk::Label::builder()
+                        .label(format!(
+                            "Default: {}",
+                            if editor.defaults.is_empty() {
+                                "Disabled".into()
+                            } else {
+                                editor.defaults.join(" / ")
+                            }
+                        ))
+                        .wrap(true)
+                        .xalign(0.0)
+                        .build();
+                    defaults.add_css_class("dim-label");
+                    self.editor_body.append(&defaults);
+                    if let Some(error) = &view.error {
+                        let label = gtk::Label::builder().label(error).wrap(true).build();
+                        label.add_css_class("error");
+                        self.editor_body.append(&label);
+                    }
+                    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    for (label, action, enabled) in [
+                        (
+                            "Reset",
+                            PreferenceAction::ResetShortcut {
+                                id: editor.id.clone(),
+                            },
+                            editor.modified,
+                        ),
+                        (
+                            "Add Shortcut",
+                            PreferenceAction::BeginShortcut {
+                                id: editor.id.clone(),
+                            },
+                            editor.can_add,
+                        ),
+                        ("Done", PreferenceAction::CloseShortcutEditor, true),
+                    ] {
+                        let button = action_button(label, w, UiAction::Preferences { action });
+                        button.set_sensitive(enabled);
+                        button.set_hexpand(true);
+                        if label == "Add Shortcut" {
+                            button.set_widget_name("add-shortcut");
+                        }
+                        buttons.append(&button);
+                    }
+                    self.editor_body.append(&buttons);
+                    *self.editor_signature.borrow_mut() = signature;
+                }
+                if !was_open[1] {
+                    self.editor.present(Some(&self.dialog));
+                }
             }
             if let Some(capture) = view.capture {
                 self.capture_label.set_text(&capture.label);
@@ -509,21 +842,28 @@ impl Preferences {
                 } else {
                     "Set Shortcut"
                 });
-                if self.capture.root().is_none() {
-                    self.capture.present(Some(&self.dialog));
+                if !was_open[2] {
+                    self.capture.present(Some(if self.editor.root().is_some() {
+                        &self.editor
+                    } else {
+                        &self.dialog
+                    }));
                 }
-            } else if self.capture.root().is_some() {
-                self.capture.close();
             }
-        } else {
-            if self.capture.root().is_some() {
-                self.capture.close();
-            }
-            if self.dialog.root().is_some() {
-                self.dialog.close();
+        }
+        for (index, dialog) in [&self.dialog, &self.editor, &self.capture]
+            .into_iter()
+            .enumerate()
+            .rev()
+        {
+            if was_open[index] && !open[index] {
+                dialog.close();
             }
         }
         self.updating.set(false);
+    }
+    pub fn recording(&self) -> bool {
+        self.capture.root().is_some()
     }
     /// Ordered host services. Disk I/O runs on GIO's pool, never on the drawing
     /// event loop. A request stays in the core until the host acknowledges it.

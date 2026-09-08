@@ -16,7 +16,7 @@ use std::{cell::RefCell, rc::Rc};
 fn main() -> gtk::glib::ExitCode {
     glib::set_application_name(layer_ui::APP_NAME);
     let app = adw::Application::builder()
-        .application_id("dev.layer.Copilot")
+        .application_id("art.capycanvas.CapyCanvas")
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|_| {
@@ -153,7 +153,7 @@ fn with_canvas_snapshot<T>(workspace: &workspace::Workspace, capture: impl FnOnc
     let context = gtk::glib::MainContext::default();
     let until = std::time::Instant::now() + std::time::Duration::from_millis(50);
     while std::time::Instant::now() < until {
-        while context.pending() {
+        while context.pending() && std::time::Instant::now() < until {
             context.iteration(false);
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -164,13 +164,22 @@ fn with_canvas_snapshot<T>(workspace: &workspace::Workspace, capture: impl FnOnc
 }
 
 fn snapshot_window(window: &adw::ApplicationWindow, scale: f32) -> gtk::gdk::Texture {
-    let paintable = gtk::WidgetPaintable::new(Some(window));
-    // A queued native allocation can briefly invalidate WidgetPaintable's
-    // scene. Capture a fresh frame, never an old screenshot or fabricated pixels.
+    // Capture the current native scene, including pending allocations.
     for _ in 0..60 {
+        // Explicit capture may run while Wayland has stopped frame callbacks
+        // for an occluded window. Complete its pending native allocation at
+        // the actual window size before asking GTK for the render tree.
+        window.allocate(window.width(), window.height(), -1, None);
         let snapshot = gtk::Snapshot::new();
         snapshot.scale(scale, scale);
-        paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
+        // Snapshot the actual dialog host, including its modal sheets. A
+        // WidgetPaintable of the toplevel can have an empty cached scene while
+        // the compositor has occluded it; that is not an empty application.
+        let mut child = window.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            window.snapshot_child(&widget, &snapshot);
+        }
         if let Some(node) = snapshot.to_node() {
             return window.renderer().unwrap().render_texture(&node, None);
         }

@@ -166,6 +166,52 @@ struct GroupView {
     tabs: Vec<(Panel, gtk::Button)>,
     tab_joins: gtk::DrawingArea,
 }
+struct NativeMenu {
+    model: gtk::gio::Menu,
+    commands: Vec<CommandId>,
+    accelerators: Vec<String>,
+}
+fn native_accelerator(chord: &KeyChord) -> String {
+    let name = match chord.key.as_str() {
+        " " | "space" => "space",
+        "arrowleft" => "Left",
+        "arrowright" => "Right",
+        "arrowup" => "Up",
+        "arrowdown" => "Down",
+        "enter" => "Return",
+        "backspace" => "BackSpace",
+        "delete" => "Delete",
+        "insert" => "Insert",
+        "home" => "Home",
+        "end" => "End",
+        "escape" => "Escape",
+        "tab" => "Tab",
+        "pageup" => "Page_Up",
+        "pagedown" => "Page_Down",
+        other => other,
+    };
+    let key = if name.chars().count() == 1 {
+        // GDK returns a valid keyval for a Unicode scalar.
+        unsafe {
+            glib::translate::from_glib(gdk::unicode_to_keyval(name.chars().next().unwrap().into()))
+        }
+    } else {
+        gdk::Key::from_name(name)
+            .or_else(|| gdk::Key::from_name(&name.to_uppercase()))
+            .unwrap_or(gdk::Key::VoidSymbol)
+    };
+    let mut modifiers = gdk::ModifierType::empty();
+    if chord.command {
+        modifiers |= gdk::ModifierType::CONTROL_MASK;
+    }
+    if chord.alt {
+        modifiers |= gdk::ModifierType::ALT_MASK;
+    }
+    if chord.shift {
+        modifiers |= gdk::ModifierType::SHIFT_MASK;
+    }
+    gtk::accelerator_name(key, modifiers).into()
+}
 
 // GTK CSS has no pseudo-elements. This non-interactive native overlay paints
 // only the selected tab's two concave feet; native buttons still own all input.
@@ -226,7 +272,8 @@ pub struct Workspace {
     panels: [(Panel, gtk::Widget); Panel::ALL.len()],
     groups: RefCell<Vec<GroupView>>,
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
-    shortcut_hints: RefCell<Vec<(CommandId, gtk::Label)>>,
+    menus: RefCell<Vec<NativeMenu>>,
+    menu_actions: gtk::gio::SimpleActionGroup,
     brush_buttons: RefCell<Vec<(u32, gtk::Button)>>,
     brush_previews: RefCell<Vec<(u32, gtk::Picture)>>,
     size_buttons: RefCell<Vec<(f32, gtk::Button)>>,
@@ -244,6 +291,13 @@ pub struct Workspace {
     ticking: Cell<bool>,
     frame_deadline: Cell<u64>,
 }
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        // Weak unrealize callbacks cannot upgrade once the final Rc is gone.
+        // Join the GPU worker before any native window/surface fields drop.
+        self.gpu.get_mut().take();
+    }
+}
 
 impl Workspace {
     pub fn new(app: &adw::Application) -> Rc<Self> {
@@ -259,6 +313,7 @@ impl Workspace {
             .default_width(1200)
             .default_height(900)
             .build();
+        window.set_icon_name(Some("art.capycanvas.CapyCanvas"));
         if !adw::StyleManager::default().is_dark() {
             window.add_css_class("light-theme");
         }
@@ -341,7 +396,8 @@ impl Workspace {
                 )
             }),
             commands: RefCell::new(Vec::new()),
-            shortcut_hints: RefCell::new(Vec::new()),
+            menus: RefCell::new(Vec::new()),
+            menu_actions: gtk::gio::SimpleActionGroup::new(),
             brush_buttons: RefCell::new(Vec::new()),
             brush_previews: RefCell::new(Vec::new()),
             size_buttons: RefCell::new(Vec::new()),
@@ -579,6 +635,9 @@ impl Workspace {
             glib::Propagation::Proceed,
             move |_, key, _, modifiers| {
                 this.update_zen();
+                if this.preferences.recording() {
+                    return glib::Propagation::Proceed;
+                }
                 let editing = gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
                     w.is::<gtk::Text>()
                         || w.is::<gtk::Entry>()
@@ -628,6 +687,8 @@ impl Workspace {
     }
 
     fn install_chrome(self: &Rc<Self>) {
+        self.window
+            .insert_action_group("editor", Some(&self.menu_actions));
         // Leave the default manager following the system; apply explicit
         // overrides only to the display manager, so system changes stay observable.
         adw::StyleManager::default().connect_dark_notify(glib::clone!(
@@ -715,34 +776,30 @@ impl Workspace {
         menu.add_css_class("flat");
         menu.add_css_class("chrome-control");
         menu.set_direction(gtk::ArrowType::None);
-        let popover = gtk::Popover::new();
-        let contents = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        margins(&contents, 6);
+        let model = gtk::gio::Menu::new();
         for &id in commands {
-            let button = self.command_button(id);
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
-            let label = gtk::Label::builder()
-                .label(id.label())
-                .xalign(0.0)
-                .hexpand(true)
-                .build();
-            let hint = gtk::Label::new(None);
-            hint.add_css_class("dim-label");
-            hint.add_css_class("shortcut-hint");
-            row.append(&label);
-            row.append(&hint);
-            button.set_child(Some(&row));
-            self.shortcut_hints.borrow_mut().push((id, hint));
-            button.connect_clicked(glib::clone!(
-                #[weak]
-                popover,
-                move |_| popover.popdown()
+            let name = id.shortcut_id();
+            let action = if id.is_toggle() {
+                gtk::gio::SimpleAction::new_stateful(&name, None, &false.to_variant())
+            } else {
+                gtk::gio::SimpleAction::new(&name, None)
+            };
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                move |_, _| this.dispatch(UiAction::Invoke { command: id })
             ));
-            contents.append(&button);
+            self.menu_actions.add_action(&action);
+            model.append(Some(id.label()), Some(&format!("editor.{name}")));
         }
-        popover.set_child(Some(&contents));
-        self.watch_popover(&popover);
+        let popover = gtk::PopoverMenu::from_model(Some(&model));
+        self.watch_popover(popover.upcast_ref());
         menu.set_popover(Some(&popover));
+        self.menus.borrow_mut().push(NativeMenu {
+            model,
+            commands: commands.to_vec(),
+            accelerators: vec![String::new(); commands.len()],
+        });
         menu
     }
 
@@ -1123,13 +1180,46 @@ impl Workspace {
                     selected(button, command.selected);
                 }
             }
-            for (id, hint) in self.shortcut_hints.borrow().iter() {
-                if let Some(command) = state.commands.iter().find(|c| c.id == *id) {
-                    hint.set_text(&command.shortcut);
+            for menu in self.menus.borrow_mut().iter_mut() {
+                for (index, id) in menu.commands.iter().enumerate() {
+                    if let Some(command) = state.commands.iter().find(|c| c.id == *id) {
+                        let action = self
+                            .menu_actions
+                            .lookup_action(&id.shortcut_id())
+                            .unwrap()
+                            .downcast::<gtk::gio::SimpleAction>()
+                            .unwrap();
+                        action.set_enabled(command.enabled);
+                        if action.state().is_some() {
+                            action.set_state(&command.selected.to_variant());
+                        }
+                        let accel = command
+                            .bindings
+                            .first()
+                            .map(native_accelerator)
+                            .unwrap_or_default();
+                        if menu.accelerators[index] != accel {
+                            let item = gtk::gio::MenuItem::new(
+                                Some(command.label),
+                                Some(&format!("editor.{}", id.shortcut_id())),
+                            );
+                            item.set_attribute_value("accel", Some(&accel.to_variant()));
+                            menu.model.remove(index as i32);
+                            menu.model.insert_item(index as i32, &item);
+                            menu.accelerators[index] = accel;
+                        }
+                    }
                 }
             }
         }
         if regions & regions::SETTINGS != 0 {
+            for class in self.window.css_classes() {
+                if class.starts_with("panel-text-") {
+                    self.window.remove_css_class(&class);
+                }
+            }
+            self.window
+                .add_css_class(&format!("panel-text-{}", state.settings.panel_text_pt));
             for (id, preview) in self.brush_previews.borrow().iter() {
                 preview.set_paintable(Some(&crate::previews::texture(*id, state.theme)));
             }
@@ -1179,13 +1269,27 @@ impl Workspace {
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
         *self.surface.imp().layout.borrow_mut() = layout.clone();
         let resolved = self.resolved();
-        let same = self
+        let same_groups = self
             .groups
             .borrow()
             .iter()
             .map(|g| (g.id, &g.panels))
             .eq(resolved.groups.iter().map(|g| (g.id, &g.panels)));
-        if !same {
+        let same_dividers = self
+            .surface
+            .imp()
+            .children
+            .borrow()
+            .iter()
+            .filter_map(|(slot, _)| {
+                if let Slot::Divider(id) = slot {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .eq(resolved.dividers.iter().map(|d| d.id));
+        if !same_groups || !same_dividers {
             for (_, panel) in &self.panels {
                 if let Some(stack) = panel.parent().and_downcast::<gtk::Stack>() {
                     stack.remove(panel);
@@ -1405,18 +1509,27 @@ impl Workspace {
         drag.connect_drag_begin(glib::clone!(
             #[weak(rename_to = this)]
             self,
-            move |gesture, _, _| {
-                if let Some(position) = this.event_point(gesture) {
+            move |gesture, x, y| {
+                // Use the gesture's press coordinates. Recognition can happen
+                // without an EventController current-event snapshot.
+                if let Some(point) = gesture.widget().and_then(|widget| {
+                    widget.compute_point(
+                        &this.surface,
+                        &gtk::graphene::Point::new(x as f32, y as f32),
+                    )
+                }) {
                     this.dispatch(UiAction::DragDivider {
                         id: divider.id,
                         phase: ContactPhase::Down,
-                        position,
+                        position: [point.x(), point.y()],
                         viewport: [this.surface.width() as f32, this.surface.height() as f32],
                     });
+                    this.dragging.set(true);
+                    this.update_zen();
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                } else {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
                 }
-                this.dragging.set(true);
-                this.update_zen();
-                gesture.set_state(gtk::EventSequenceState::Claimed);
             }
         ));
         drag.connect_drag_update(glib::clone!(

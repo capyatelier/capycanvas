@@ -15,7 +15,9 @@ const profile = await mkdtemp(join(tmpdir(), "layer-chrome-"));
 const chrome = spawn(
   process.env.CHROME || "google-chrome",
   [
-    "--ozone-platform=wayland",
+    ...(process.argv.includes("--headless")
+      ? ["--headless=new", "--ozone-platform=headless", "--enable-features=Vulkan", "--disable-vulkan-surface"]
+      : ["--ozone-platform=wayland"]),
     "--remote-debugging-pipe",
     `--user-data-dir=${profile}`,
     "--no-first-run",
@@ -68,8 +70,10 @@ chrome.stdio[4].on("data", (data) => {
       event.method === "Log.entryAdded" &&
       ["error", "warning"].includes(event.params.entry.level) &&
       !event.params.entry.text.includes("favicon")
-    )
+    ) {
+      if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(`${JSON.stringify(event.params.entry)}\n`);
       errors.push([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
+    }
   }
 });
 function call(method, params = {}, sessionId = session) {

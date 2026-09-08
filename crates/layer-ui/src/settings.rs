@@ -3,6 +3,7 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+const PANEL_TEXT_SIZES: [u8; 3] = [9, 11, 13];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +31,7 @@ impl Platform {
 pub struct Settings {
     pub version: u32,
     pub theme: Option<Theme>,
+    pub panel_text_pt: u8,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub zen_reveal: f32,
@@ -50,6 +52,7 @@ impl Default for Settings {
         Self {
             version: 1,
             theme: None,
+            panel_text_pt: 11,
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             zen_reveal: 80.0,
@@ -69,6 +72,9 @@ impl Settings {
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported settings version".into());
+        }
+        if !PANEL_TEXT_SIZES.contains(&self.panel_text_pt) {
+            return Err("Panel text size must be 9, 11 or 13 pt".into());
         }
         for row in self
             .pages(Platform::Gtk)
@@ -146,6 +152,7 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
+    PanelTextSize,
     ZenReveal,
     ZenHide,
     Cursor,
@@ -166,6 +173,7 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::PanelTextSize => "panel-text-size",
             Self::ZenReveal => "zen-reveal",
             Self::ZenHide => "zen-hide",
             Self::Cursor => "cursor",
@@ -210,11 +218,29 @@ impl PreferenceValue {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceKind {
-    Choice { options: Vec<String>, selected: u32 },
-    Number { control: NumericControl, value: f32 },
-    Switch { active: bool },
-    Info { value: String },
-    Link { label: String, url: String },
+    Choice {
+        options: Vec<String>,
+        selected: u32,
+        icons: Vec<String>,
+    },
+    Scale {
+        options: Vec<String>,
+        selected: u32,
+    },
+    Number {
+        control: NumericControl,
+        value: f32,
+    },
+    Switch {
+        active: bool,
+    },
+    Info {
+        value: String,
+    },
+    Link {
+        label: String,
+        url: String,
+    },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferenceRow {
@@ -242,6 +268,9 @@ pub struct PreferencePage {
 pub struct PreferencesState {
     pub page: SettingsPage,
     pub query: String,
+    pub searching: bool,
+    pub shortcut_query: String,
+    pub editing_shortcut: Option<String>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
 }
@@ -250,11 +279,31 @@ pub struct PreferencesView {
     pub pages: Vec<PreferencePage>,
     pub page: SettingsPage,
     pub query: String,
+    pub searching: bool,
+    pub search_results: Vec<PreferenceSearchResult>,
+    pub shortcut_query: String,
+    pub shortcut_editor: Option<ShortcutEditor>,
     pub shortcuts: Vec<ShortcutRow>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
     pub dirty: bool,
     pub empty: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct PreferenceSearchResult {
+    pub title: String,
+    pub description: String,
+    pub action: PreferenceAction,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ShortcutEditor {
+    pub id: String,
+    pub label: String,
+    pub group: String,
+    pub bindings: Vec<String>,
+    pub defaults: Vec<String>,
+    pub modified: bool,
+    pub can_add: bool,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -265,6 +314,12 @@ pub enum PreferenceAction {
     Search {
         query: String,
     },
+    ToggleSearch {
+        open: bool,
+    },
+    SearchShortcuts {
+        query: String,
+    },
     Edit {
         id: PreferenceId,
         value: PreferenceValue,
@@ -272,11 +327,18 @@ pub enum PreferenceAction {
     BeginShortcut {
         id: String,
     },
+    EditShortcut {
+        id: String,
+    },
+    CloseShortcutEditor,
+    RemoveShortcut {
+        id: String,
+        index: usize,
+    },
     ConfirmShortcut {
         replace: bool,
     },
     CancelShortcut,
-    ClearShortcut,
     ResetShortcut {
         id: String,
     },
@@ -359,7 +421,7 @@ impl Settings {
                 "Maximum lookahead; lower values reduce overshoot.",
                 self.prediction_ms,
                 0.0,
-                32.0,
+                64.0,
                 1.0,
             ),
             number(
@@ -391,19 +453,37 @@ impl Settings {
             vec![
                 PreferenceGroup {
                     title: "Interface".into(),
-                    rows: vec![row(
-                        Theme,
-                        "Appearance",
-                        "Follow the system theme, or choose an override.",
-                        PreferenceKind::Choice {
-                            options: vec!["System".into(), "Light".into(), "Dark".into()],
-                            selected: match self.theme {
-                                None => 0,
-                                Some(crate::Theme::Light) => 1,
-                                Some(crate::Theme::Dark) => 2,
+                    rows: vec![
+                        row(
+                            Theme,
+                            "Appearance",
+                            "Follow the system theme, or choose an override.",
+                            PreferenceKind::Choice {
+                                icons: Vec::new(),
+                                options: vec!["System".into(), "Light".into(), "Dark".into()],
+                                selected: match self.theme {
+                                    None => 0,
+                                    Some(crate::Theme::Light) => 1,
+                                    Some(crate::Theme::Dark) => 2,
+                                },
                             },
-                        },
-                    )],
+                        ),
+                        row(
+                            PanelTextSize,
+                            "Panel text size",
+                            "Text and text controls; tool icons stay the same size.",
+                            PreferenceKind::Scale {
+                                options: PANEL_TEXT_SIZES
+                                    .iter()
+                                    .map(|v| format!("{v} pt"))
+                                    .collect(),
+                                selected: PANEL_TEXT_SIZES
+                                    .iter()
+                                    .position(|v| *v == self.panel_text_pt)
+                                    .unwrap_or(1) as u32,
+                            },
+                        ),
+                    ],
                 },
                 PreferenceGroup {
                     title: "Zen mode".into(),
@@ -435,9 +515,18 @@ impl Settings {
                     rows: vec![row(
                         Cursor,
                         "Canvas cursor",
-                        "The live outline follows the brush shape, pressure and rotation.",
+                        "Outline follows the brush tip.",
                         PreferenceKind::Choice {
                             options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
+                            icons: [
+                                "cursor-brush",
+                                "cursor-brush-cross",
+                                "cursor-cross",
+                                "cursor-dot",
+                                "cursor-none",
+                            ]
+                            .map(String::from)
+                            .to_vec(),
                             selected: CursorMode::CHOICES
                                 .iter()
                                 .position(|c| c.0 == self.cursor)
@@ -520,7 +609,7 @@ impl Settings {
                         "Source Code",
                         "",
                         PreferenceKind::Link {
-                            label: "GitHub".into(),
+                            label: "github.com/capyatelier/capycanvas".into(),
                             url: "https://github.com/capyatelier/capycanvas".into(),
                         },
                     ),
@@ -559,7 +648,7 @@ impl Settings {
             (PreferenceKind::Number { control, .. }, _) => {
                 control.validate(value.number().ok_or("Expected a number")?, &field.title)?
             }
-            (PreferenceKind::Choice { options, .. }, _)
+            (PreferenceKind::Choice { options, .. } | PreferenceKind::Scale { options, .. }, _)
                 if value.choice().is_some_and(|v| (v as usize) < options.len()) => {}
             (PreferenceKind::Switch { .. }, PreferenceValue::Bool(_)) => {}
             _ => return Err("Invalid setting value".into()),
@@ -574,6 +663,9 @@ impl Settings {
                 }
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
+            PanelTextSize => {
+                self.panel_text_pt = PANEL_TEXT_SIZES[value.choice().unwrap() as usize]
+            }
             Pressure => self.pressure_gamma = n,
             ZenReveal => self.zen_reveal = n,
             ZenHide => self.zen_hide = n,
@@ -600,24 +692,34 @@ impl PreferencesState {
         platform: Platform,
     ) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
-        let mut pages = draft.pages(platform);
-        for page in &mut pages {
-            for group in &mut page.groups {
-                for row in &mut group.rows {
+        let pages = draft.pages(platform);
+        let mut search_results = Vec::new();
+        for page in &pages {
+            for group in &page.groups {
+                for row in &group.rows {
                     let value = match &row.kind {
                         PreferenceKind::Info { value } => value.as_str(),
                         PreferenceKind::Link { url, .. } => url.as_str(),
                         _ => "",
                     };
-                    row.visible = format!(
-                        "{} {} {} {} {}",
-                        page.title, group.title, row.title, row.description, value
-                    )
-                    .to_lowercase()
-                    .contains(&query);
+                    if !query.is_empty()
+                        && format!(
+                            "{} {} {} {} {}",
+                            page.title, group.title, row.title, row.description, value
+                        )
+                        .to_lowercase()
+                        .contains(&query)
+                    {
+                        search_results.push(PreferenceSearchResult {
+                            title: row.title.clone(),
+                            description: page.title.clone(),
+                            action: PreferenceAction::Page { page: page.id },
+                        });
+                    }
                 }
             }
         }
+        let shortcut_query = self.shortcut_query.trim().to_lowercase();
         let shortcuts: Vec<_> = crate::shortcuts::definitions(draft, platform)
             .into_iter()
             .map(|(definition, group)| ShortcutRow {
@@ -625,31 +727,57 @@ impl PreferencesState {
                 modified: draft.shortcuts.contains_key(&definition.id),
                 visible: format!("{group} {}", definition.label)
                     .to_lowercase()
-                    .contains(&query),
+                    .contains(&shortcut_query),
                 id: definition.id,
                 label: definition.label,
                 group: group.into(),
             })
             .collect();
-        let matches = |page: &PreferencePage| {
-            page.groups.iter().flat_map(|g| &g.rows).any(|r| r.visible)
-                || (page.id == SettingsPage::Shortcuts && shortcuts.iter().any(|r| r.visible))
-        };
-        let page = if !query.is_empty() && !pages.iter().any(|p| p.id == self.page && matches(p)) {
-            pages
-                .iter()
-                .find(|p| matches(p))
-                .map_or(self.page, |p| p.id)
-        } else {
-            self.page
-        };
+        for row in &shortcuts {
+            if !query.is_empty()
+                && format!("keyboard shortcuts {} {}", row.group, row.label)
+                    .to_lowercase()
+                    .contains(&query)
+            {
+                search_results.push(PreferenceSearchResult {
+                    title: row.label.clone(),
+                    description: SettingsPage::Shortcuts.title().into(),
+                    action: PreferenceAction::EditShortcut { id: row.id.clone() },
+                });
+            }
+        }
+        let shortcut_editor = self.editing_shortcut.as_ref().and_then(|id| {
+            let row = shortcuts.iter().find(|r| &r.id == id)?;
+            let bindings: Vec<_> = draft.keys(id).iter().map(|k| k.label(platform)).collect();
+            Some(ShortcutEditor {
+                id: id.clone(),
+                label: row.label.clone(),
+                group: row.group.clone(),
+                can_add: bindings.len() < crate::shortcuts::MAX_SHORTCUTS,
+                bindings,
+                defaults: crate::shortcuts::defaults(id)
+                    .iter()
+                    .map(|k| k.label(platform))
+                    .collect(),
+                modified: row.modified,
+            })
+        });
         PreferencesView {
-            empty: !pages.iter().any(matches),
+            empty: !query.is_empty() && search_results.is_empty(),
             pages,
-            page,
+            page: self.page,
             query: self.query.clone(),
+            searching: self.searching,
+            search_results,
+            shortcut_query: self.shortcut_query.clone(),
+            shortcut_editor,
             shortcuts,
-            capture: self.capture.clone(),
+            capture: self.capture.clone().map(|mut c| {
+                if self.error.is_some() {
+                    c.error = self.error.clone();
+                }
+                c
+            }),
             error: self.error.clone(),
             dirty: draft != active,
         }
@@ -672,6 +800,8 @@ impl PreferencesState {
             PreferenceAction::Page { page } => {
                 self.page = page;
                 self.query.clear();
+                self.searching = false;
+                self.editing_shortcut = None;
                 self.capture = None;
             }
             PreferenceAction::Search { query } => {
@@ -679,13 +809,57 @@ impl PreferencesState {
                     return Err("Search is too long".into());
                 }
                 self.query = query;
+                self.searching = true;
+            }
+            PreferenceAction::ToggleSearch { open } => {
+                self.searching = open;
+                if !open {
+                    self.query.clear();
+                }
+            }
+            PreferenceAction::SearchShortcuts { query } => {
+                if query.len() > 256 {
+                    return Err("Search is too long".into());
+                }
+                self.shortcut_query = query;
             }
             PreferenceAction::Edit { id, value } => draft.edit(id, value, platform)?,
+            PreferenceAction::EditShortcut { id } => {
+                if !crate::shortcuts::definitions(draft, platform)
+                    .iter()
+                    .any(|(d, _)| d.id == id)
+                {
+                    return Err("Unknown shortcut action".into());
+                }
+                self.page = SettingsPage::Shortcuts;
+                self.query.clear();
+                self.searching = false;
+                self.editing_shortcut = Some(id);
+                self.capture = None;
+            }
+            PreferenceAction::CloseShortcutEditor => {
+                self.editing_shortcut = None;
+                self.capture = None;
+            }
+            PreferenceAction::RemoveShortcut { id, index } => {
+                if self.editing_shortcut.as_ref() != Some(&id) {
+                    return Err("Shortcut editor is not open".into());
+                }
+                let mut keys = draft.keys(&id);
+                if index >= keys.len() {
+                    return Err("Unknown shortcut binding".into());
+                }
+                keys.remove(index);
+                draft.shortcuts.insert(id, keys);
+            }
             PreferenceAction::BeginShortcut { id } => {
                 let (definition, _) = crate::shortcuts::definitions(draft, platform)
                     .into_iter()
                     .find(|(d, _)| d.id == id)
                     .ok_or("Unknown shortcut action")?;
+                if draft.keys(&id).len() >= crate::shortcuts::MAX_SHORTCUTS {
+                    return Err("Remove a shortcut before adding another".into());
+                }
                 self.capture = Some(ShortcutCapture {
                     id,
                     label: definition.label,
@@ -696,10 +870,6 @@ impl PreferencesState {
                 });
             }
             PreferenceAction::CancelShortcut => self.capture = None,
-            PreferenceAction::ClearShortcut => {
-                let capture = self.capture.take().ok_or("No shortcut is being recorded")?;
-                draft.shortcuts.insert(capture.id, Vec::new());
-            }
             PreferenceAction::ConfirmShortcut { replace } => {
                 let capture = self
                     .capture
@@ -713,6 +883,13 @@ impl PreferencesState {
                 if !chord.available(platform) {
                     return Err("This shortcut is reserved by the browser".into());
                 }
+                let mut keys = draft.keys(&capture.id);
+                if keys.contains(&chord) {
+                    return Err("This shortcut is already assigned to this action".into());
+                }
+                if keys.len() >= crate::shortcuts::MAX_SHORTCUTS {
+                    return Err("Remove a shortcut before adding another".into());
+                }
                 if let Some(conflict) = draft.conflict(&capture.id, &chord, platform) {
                     if !replace {
                         return Err(format!("Already assigned to {}", conflict.label));
@@ -724,7 +901,8 @@ impl PreferencesState {
                         .collect();
                     draft.shortcuts.insert(conflict.id, keys);
                 }
-                draft.shortcuts.insert(capture.id.clone(), vec![chord]);
+                keys.push(chord);
+                draft.shortcuts.insert(capture.id.clone(), keys);
                 self.capture = None;
             }
             PreferenceAction::ResetShortcut { id } => {
@@ -759,6 +937,7 @@ impl PreferencesState {
         Ok(())
     }
     pub(crate) fn record(&mut self, draft: &Settings, chord: KeyChord, platform: Platform) {
+        self.error = None;
         if KeyChord::modifier(&chord.key) {
             return;
         }

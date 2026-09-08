@@ -735,6 +735,7 @@ function update(regions) {
       }
   if (regions & 16) {
     applyTheme(state.theme);
+    document.documentElement.style.setProperty("--panel-text-size", `${state.settings.panel_text_pt}pt`);
     for (const [id, button] of brushButtons)
       button.querySelector("img").src =
         asset(`brush-previews/${id}-${state.theme}.png`);

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Capy Canvas
+Comment=Draw and paint with a GPU-accelerated canvas
+Exec=capycanvas
+Icon=art.capycanvas.CapyCanvas
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+Keywords=Drawing;Painting;Illustration;
+StartupNotify=true
+StartupWMClass=art.capycanvas.CapyCanvas

@@ -133,11 +133,14 @@ line in the tab row, clamped before the fixed trailing grip if tabs overflow.
 Tab labels scroll horizontally without moving the grip.
 Tabs have the same 36px button height as tool tiles, in a shared 36px tab bar
 with no outer padding. The active surface joins directly into its panel.
-Panel content and status labels use the brush-size caption's 12.026px font;
-panel section headings, tabs, and the window header keep the 14.667px base font.
-Interior inputs/buttons are 28px high, checkboxes are 16px, and toolbar icons
-remain 16px in 36px tiles; brush-size sample cells keep their preview
-space. Both hosts keep resize handles transparent even during hover/drag.
+Panel text, tabs and section headings share a core preference: 9/11/13 pt,
+default 11 pt. Text-bearing inputs/buttons and inline +/− symbols scale with it;
+the header and status text are unchanged. Checkboxes stay 16px, sliders retain
+their dimensions, and toolbar icons remain 16px in 36px tiles; brush-size sample
+cells keep their preview space. Future panel context menus use the same
+typography role. Both hosts keep resize handles transparent during hover/drag.
+Native divider widgets are reconciled by split identity, not only panel identity,
+and drag start uses the gesture's widget coordinates mapped into the dock surface.
 Horizontal splits preserve the source and destination widths, growing the dock
 into available canvas space; vertical splits share the existing height equally.
 Moves carry the logical viewport just like resize actions, so preview validation

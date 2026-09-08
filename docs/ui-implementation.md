@@ -58,12 +58,13 @@ Both hosts leave 8px between the visible grip dots and the trailing panel edge,
 matching the first tab label's left inset. The drag targets remain 20×24px
 (24×20px at the bottom of vertical ribbons).
 
-Both hosts use the brush-size caption's 12.026px font throughout panel content
-and the status HUD; panel section headings, tabs, and the header keep their
-14.667px base text. The web matches native control measurements: bold button
-labels, 61px brush entries with 2px gaps, 28px scales/spins, a 114px brush-size
-spin, 16px checkboxes, unchanged 36px tool tiles with 16px icons, and 53px size
-buttons inside 3px-padded grid cells. One overlay scrollbar
+Both hosts use the shared Panel text size preference throughout panel content,
+tabs and section headings: 9, 11 or 13 pt, default 11 pt. Text-bearing controls
+and inline +/− icons scale in font-relative units. The window header and status
+HUD keep their existing typography; sliders, 16px checkboxes, 40px brush previews
+and 36px tool tiles with 16px icons stay fixed. Brush entries retain 2px gaps and
+size samples retain their preview space inside 3px-padded grid cells. Future
+panel context menus use the same panel typography role. One overlay scrollbar
 wrapper keeps the browser's native scrolling without consuming preview width.
 Layer rows are reconciled only when their identity/order/labels change; opacity
 and visibility updates keep controls mounted, including during pointer capture.
@@ -84,7 +85,8 @@ not control semantics, shortcuts, or editable-field keyboard handling.
 Application icons have one original SVG bank in `apps/layer-web/icons`, served
 directly by web and embedded as a GTK resource by the native build. Command icon
 identity comes from Rust, including layer controls; grips, spins and checkboxes
-use the same assets. GTK keeps native check/spin widgets and device-scale vector
+use the same assets. Settings search uses GTK's installed `edit-find-symbolic`;
+web uses the project's own search SVG. GTK keeps native check/spin widgets and device-scale vector
 rendering. Number inputs use tabular numerals in both hosts, with no separator
 border beside the step buttons. No GNOME artwork or fonts are vendored; web
 uses locally installed Adwaita Sans with a system-font fallback. Font metrics on
@@ -385,6 +387,8 @@ preferences_test_dir=$(mktemp -d /tmp/capy-preferences-XXXXXX)
 GDK_BACKEND=wayland GSK_RENDERER=vulkan LAYER_SETTINGS_FILE="$preferences_test_dir/settings.json" \
   cargo test --release -p layer-linux native_preferences_and_shortcuts -- --ignored --test-threads=1
 node apps/layer-web/test.mjs --preferences
+# Headless real-GPU UI checks when Chrome's Wayland import path is unavailable:
+node apps/layer-web/test.mjs --package --preferences --headless
 ```
 
 The browser test supplies the Linux Vulkan flags documented by the

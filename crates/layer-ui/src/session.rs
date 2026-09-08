@@ -415,6 +415,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: id.label(),
             enabled,
             selected,
+            bindings: self.state.settings.keys(&id.shortcut_id()),
             shortcut: self
                 .state
                 .settings
@@ -1050,13 +1051,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     fn open_settings(&mut self, page: SettingsPage) {
-        self.state
+        let draft = self
+            .state
             .settings_draft
             .get_or_insert_with(|| self.state.settings.clone());
-        self.state.preferences.page = page;
-        self.state.preferences.query.clear();
-        self.state.preferences.capture = None;
-        self.state.preferences.error = None;
+        self.state
+            .preferences
+            .edit(draft, PreferenceAction::Page { page }, self.state.platform);
     }
     fn apply_settings(&mut self, settings: Settings) -> Result<(), String> {
         self.engine
@@ -2113,7 +2114,7 @@ mod tests {
                     ("Website", "capycanvas.art", "https://capycanvas.art/"),
                     (
                         "Source Code",
-                        "GitHub",
+                        "github.com/capyatelier/capycanvas",
                         "https://github.com/capyatelier/capycanvas"
                     ),
                 ]
@@ -2132,14 +2133,11 @@ mod tests {
             let view = s.preferences().unwrap();
             assert_eq!(view.page, SettingsPage::About);
             assert_eq!(
-                view.pages
+                view.search_results
                     .iter()
-                    .flat_map(|p| &p.groups)
-                    .flat_map(|g| &g.rows)
-                    .filter(|r| r.visible)
-                    .map(|r| r.id)
+                    .map(|r| r.title.as_str())
                     .collect::<Vec<_>>(),
-                [PreferenceId::SourceCode]
+                ["Source Code"]
             );
         }
     }
@@ -2173,13 +2171,16 @@ mod tests {
                 query: "pressure response".into(),
             },
         );
+        let view = s.preferences().unwrap();
+        assert_eq!(
+            view.page,
+            SettingsPage::Shortcuts,
+            "search does not replace the content page"
+        );
+        assert_eq!(view.search_results.len(), 1);
+        assert_eq!(view.search_results[0].title, "Pressure response");
+        preference(&mut s, view.search_results[0].action.clone());
         assert_eq!(s.preferences().unwrap().page, SettingsPage::Input);
-        let visible = rows(&s)
-            .into_iter()
-            .filter(|r| r.visible)
-            .map(|r| r.id)
-            .collect::<Vec<_>>();
-        assert_eq!(visible, vec![PreferenceId::Pressure]);
         preference(
             &mut s,
             PreferenceAction::Search {
@@ -2311,7 +2312,7 @@ mod tests {
             "preserve Redo's other accelerator"
         );
         s.dispatch(UiAction::ApplySettings).unwrap();
-        assert_eq!(s.command(CommandId::Brush).shortcut, "Ctrl+Y");
+        assert_eq!(s.command(CommandId::Brush).shortcut, "B / Ctrl+Y");
         invoke(&mut s, CommandId::Eraser);
         assert!(key(&mut s, "y", true, true, false).handled);
         assert_eq!(s.state.brush.tool, Tool::Brush);
@@ -2366,7 +2367,17 @@ mod tests {
         );
         record_shortcut(&mut s, &target, "tab", false);
         assert!(s.preferences().unwrap().capture.unwrap().error.is_some());
-        preference(&mut s, PreferenceAction::ClearShortcut);
+        preference(
+            &mut s,
+            PreferenceAction::EditShortcut { id: target.clone() },
+        );
+        preference(
+            &mut s,
+            PreferenceAction::RemoveShortcut {
+                id: target.clone(),
+                index: 0,
+            },
+        );
         assert!(
             s.state
                 .settings_draft
@@ -2413,12 +2424,145 @@ mod tests {
         key(&mut s, "j", false, false, true);
         assert!(key(&mut s, "j", true, false, false).handled);
         assert_eq!(s.state.brush.diameter, 42.0);
-        assert!(!key(&mut s, " ", true, false, false).pan_cursor);
+        assert!(key(&mut s, " ", true, false, false).pan_cursor);
+        key(&mut s, " ", false, false, false);
         assert!(key(&mut s, "g", true, false, false).pan_cursor);
         assert!(
             !key(&mut s, "g", false, true, true).pan_cursor,
             "release clears pan even if modifiers/focus changed"
         );
+    }
+    #[test]
+    fn panel_typography_is_portable_discrete_and_backward_compatible() {
+        assert_eq!(
+            serde_json::from_str::<Settings>("{}")
+                .unwrap()
+                .panel_text_pt,
+            11
+        );
+        for platform in [Platform::Gtk, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::Settings);
+            for (index, points) in [9, 11, 13].into_iter().enumerate() {
+                edit_preference(
+                    &mut s,
+                    PreferenceId::PanelTextSize,
+                    PreferenceValue::Choice(index as u32),
+                );
+                assert_eq!(
+                    s.state.settings_draft.as_ref().unwrap().panel_text_pt,
+                    points
+                );
+                assert!(s.preferences().unwrap().error.is_none());
+            }
+            let before = s.state.settings_draft.clone();
+            edit_preference(
+                &mut s,
+                PreferenceId::PanelTextSize,
+                PreferenceValue::Choice(3),
+            );
+            assert_eq!(s.state.settings_draft, before);
+            let invalid = Settings {
+                panel_text_pt: 10,
+                ..Settings::default()
+            };
+            assert!(invalid.validate().is_err());
+            s.dispatch(UiAction::CancelSettings).unwrap();
+            assert_eq!(s.state.settings.panel_text_pt, 11);
+        }
+    }
+    #[test]
+    fn shortcut_editor_preserves_alternatives_and_owns_search_limits_and_defaults() {
+        for platform in [Platform::Gtk, Platform::Web] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::KeyboardShortcuts);
+            let id = CommandId::Brush.shortcut_id();
+            preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
+            let editor = s.preferences().unwrap().shortcut_editor.unwrap();
+            assert_eq!(editor.bindings, ["B"]);
+            assert_eq!(editor.defaults, ["B"]);
+            for name in ["j", "k", "l"] {
+                record_shortcut(&mut s, &id, name, false);
+                preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
+                assert!(s.preferences().unwrap().error.is_none());
+            }
+            let view = s.preferences().unwrap();
+            assert_eq!(
+                view.shortcut_editor.as_ref().unwrap().bindings,
+                ["B", "J", "K", "L"]
+            );
+            assert!(!view.shortcut_editor.unwrap().can_add);
+            preference(&mut s, PreferenceAction::BeginShortcut { id: id.clone() });
+            assert!(s.preferences().unwrap().capture.is_none());
+            preference(
+                &mut s,
+                PreferenceAction::RemoveShortcut {
+                    id: id.clone(),
+                    index: 2,
+                },
+            );
+            assert_eq!(
+                s.preferences().unwrap().shortcut_editor.unwrap().bindings,
+                ["B", "J", "L"]
+            );
+            record_shortcut(&mut s, &id, "j", false);
+            let before = s.state.settings_draft.clone();
+            preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+            assert_eq!(
+                s.state.settings_draft, before,
+                "duplicate addition is atomic"
+            );
+            preference(&mut s, PreferenceAction::CancelShortcut);
+            preference(&mut s, PreferenceAction::ResetShortcut { id });
+            assert_eq!(
+                s.preferences().unwrap().shortcut_editor.unwrap().bindings,
+                ["B"]
+            );
+            preference(&mut s, PreferenceAction::CloseShortcutEditor);
+            preference(
+                &mut s,
+                PreferenceAction::SearchShortcuts {
+                    query: "eraser".into(),
+                },
+            );
+            assert!(
+                s.preferences()
+                    .unwrap()
+                    .shortcuts
+                    .iter()
+                    .filter(|r| r.visible)
+                    .all(|r| r.label.to_lowercase().contains("eraser"))
+            );
+            preference(
+                &mut s,
+                PreferenceAction::Page {
+                    page: SettingsPage::Input,
+                },
+            );
+            edit_preference(
+                &mut s,
+                PreferenceId::PredictionHorizon,
+                PreferenceValue::Number(64.0),
+            );
+            assert!(s.preferences().unwrap().error.is_none());
+            s.state
+                .settings_draft
+                .as_ref()
+                .unwrap()
+                .feedback_config()
+                .validate()
+                .unwrap();
+            let before = s.state.settings_draft.clone();
+            edit_preference(
+                &mut s,
+                PreferenceId::PredictionHorizon,
+                PreferenceValue::Number(65.0),
+            );
+            assert!(s.preferences().unwrap().error.is_some());
+            assert_eq!(s.state.settings_draft, before);
+        }
     }
     #[test]
     fn applied_settings_emit_durable_host_requests_and_configure_input() {

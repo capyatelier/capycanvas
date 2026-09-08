@@ -26,8 +26,8 @@ pub use layout::{DropHint, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLay
 pub use session::UiSession;
 pub use settings::{
     HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
-    PreferenceKind, PreferencePage, PreferenceRow, PreferenceValue, PreferencesState,
-    PreferencesView, Settings, SettingsPage,
+    PreferenceKind, PreferencePage, PreferenceRow, PreferenceSearchResult, PreferenceValue,
+    PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor,
 };
 pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
 pub use workspace::WorkspaceState;
@@ -145,6 +145,7 @@ pub const MENUS: &[MenuSpec] = &[
         label: "View",
         commands: &[
             CommandId::FitCanvas,
+            CommandId::ZenMode,
             CommandId::ToggleTheme,
             CommandId::TogglePanels,
             CommandId::ResetLayout,
@@ -255,6 +256,11 @@ pub fn ui_catalog() -> UiCatalog {
             "keyboard",
             "info",
             "search",
+            "cursor-brush",
+            "cursor-brush-cross",
+            "cursor-cross",
+            "cursor-dot",
+            "cursor-none",
         ],
         panels: Panel::ALL
             .into_iter()
@@ -331,6 +337,10 @@ pub enum CommandId {
     About,
 }
 impl CommandId {
+    /// Retained on/off commands can be presented as checkable menu items.
+    pub fn is_toggle(self) -> bool {
+        matches!(self, Self::ZenMode | Self::TogglePanels | Self::ToggleTheme)
+    }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
             Self::Brush => "brush",
@@ -403,6 +413,7 @@ pub struct CommandState {
     pub enabled: bool,
     pub selected: bool,
     pub shortcut: String,
+    pub bindings: Vec<KeyChord>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

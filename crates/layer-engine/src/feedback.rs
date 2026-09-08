@@ -3,7 +3,7 @@
 use layer_core::{Point, StrokePoint};
 
 const MAX_FINALIZATION_LAG_MICROS: u32 = 50_000;
-const MAX_PREDICTION_HORIZON_MICROS: u32 = 50_000;
+const MAX_PREDICTION_HORIZON_MICROS: u32 = 64_000;
 const MAX_PREDICTION_DISTANCE_PX: f32 = 512.0;
 
 /// Runtime-tunable instant-feedback policy. This is interaction state, not part

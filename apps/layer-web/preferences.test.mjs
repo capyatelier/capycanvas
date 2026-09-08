@@ -19,15 +19,48 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 900, deviceScaleFactor: 1, mobile: false });
   assert.equal(await evaluate("layerApp.app.catalog().app_name"), "Capy Canvas");
   assert.equal(await evaluate("document.querySelector('#header-end [data-command=settings] svg').dataset.asset"), "settings");
+  let previousSpin = 0;
+  for (const [index, points] of [9, 11, 13].entries()) {
+    await action({ type: "open_settings", page: "appearance" });
+    await evaluate(`(() => { const input=document.querySelector('#setting-panel-text-size'); input.value=${index}; input.dispatchEvent(new Event('input')); })()`);
+    assert.equal(await evaluate("layerApp.state().settings_draft.panel_text_pt"), points);
+    await click('#apply-settings');
+    const metrics = await evaluate(`(() => {
+      const style = selector => getComputedStyle(document.querySelector(selector));
+      return { fonts:['.dock-tab','.brush-list h3','.size-button','.spin input'].map(s=>parseFloat(style(s).fontSize)),
+        spin:document.querySelector('.panel .spin').getBoundingClientRect().width,
+        step:parseFloat(style('.panel .spin button svg').width), tool:parseFloat(style('.tile-button svg').width),
+        tile:document.querySelector('.tile-button').getBoundingClientRect().height,
+        preview:document.querySelector('.brush-preview').getBoundingClientRect().height,
+        slider:document.querySelector('.size-controls input[type=range]').getBoundingClientRect().height,
+        layerIconButton:document.querySelector('.layer-tools button').getBoundingClientRect().height};
+    })()`);
+    for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
+    assert.ok(metrics.spin > previousSpin); previousSpin = metrics.spin;
+    assert.ok(Math.abs(metrics.step - points * 4 / 3 * 1.16) < .1);
+    assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 28); assert.equal(metrics.layerIconButton, 28);
+    await capture(`text-${points}pt`);
+  }
+  await action({ type: "open_settings", page: "appearance" });
+  await preference({ type: "edit", id: "panel_text_size", value: 1 }); await click('#apply-settings');
   for (const theme of ["dark", "light"]) {
     await action({ type: "set_theme", theme });
     await click('#header-end [data-command="settings"]');
+    assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), content=document.querySelector('.preferences-content').getBoundingClientRect(); return Math.abs(sidebar.bottom-content.bottom)<1; })()`), "sidebar extends alongside the content footer");
     assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "input", "shortcuts", "about"]);
     for (const page of ["appearance", "canvas", "input", "shortcuts", "about"]) {
       await click(`[data-settings-page="${page}"]`);
       await capture(`${page}-${theme}`);
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
+      if (page === "canvas") {
+        await click('.preference-choice summary');
+        assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 5);
+        await capture(`cursor-choices-${theme}`);
+        await click('.preference-options [data-choice="2"]');
+        assert.equal(await evaluate("layerApp.state().settings_draft.cursor"), "cross");
+        await preference({ type: "edit", id: "cursor", value: 0 });
+      }
       if (page === "about") {
         assert.ok(await evaluate(`layerApp.app.preferences().pages.flatMap(p=>p.groups.flatMap(g=>g.rows)).filter(r=>r.kind.type==='link').every(row=>{
           const a=document.querySelector('#setting-'+row.id.replaceAll('_','-'));
@@ -39,6 +72,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await action({ type: "cancel_settings" });
   }
   await click('#header-end [data-command="settings"]');
+  await click('.preferences-search-toggle');
+  assert.equal(await evaluate("document.querySelector('#settings-search').hidden"), false);
   await preference({ type: "register_action", definition: {
     id: "custom.test-size", label: "Test size", repeat: false,
     action: { kind: "action", action: { type: "set_brush_size", value: 42 } },
@@ -50,6 +85,9 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("const emptySearch=document.querySelector('#settings-search');emptySearch.value='no-such-preference';emptySearch.dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelector('.preferences-empty').hidden"), false);
   await evaluate("const search=document.querySelector('#settings-search');search.value='pressure response';search.dispatchEvent(new Event('input'))");
+  assert.equal(await evaluate("document.querySelectorAll('.preferences-search-results button').length"), 1);
+  await capture("search");
+  await click('.preferences-search-results button');
   assert.equal(await evaluate("layerApp.app.preferences().page"), "input");
   assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), "input");
   await click('[data-settings-page="input"]');
@@ -64,7 +102,17 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1);
   await action({ type: "open_settings", page: "shortcuts" });
   assert.equal(await evaluate("layerApp.state().settings_draft.pressure_gamma"), 1.5, "deep link preserves draft");
+  await evaluate("const shortcutsSearch=document.querySelector('#shortcuts-search');shortcutsSearch.value='eraser';shortcutsSearch.dispatchEvent(new Event('input'))");
+  assert.ok(await evaluate("[...document.querySelectorAll('[data-shortcut]:not([hidden])')].every(row=>row.textContent.toLowerCase().includes('eraser'))"));
+  await preference({ type: "search_shortcuts", query: "" });
   await click('[data-shortcut="command.Brush"] .shortcut-choose');
+  assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), true);
+  assert.equal(await evaluate("document.querySelector('#shortcut-capture').open"), false);
+  await click('#shortcut-editor .preference-row button');
+  assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), []);
+  await click('#shortcut-editor footer button:first-child');
+  assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), ["B"]);
+  await click('#add-shortcut');
   await key("Control", { ctrlKey: true });
   assert.equal(await evaluate("layerApp.app.preferences().capture.chord ?? null"), null);
   await key("w", { ctrlKey: true });
@@ -77,13 +125,18 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await click('#confirm-shortcut');
   assert.equal(await evaluate("layerApp.state().settings_draft.shortcuts['command.Eraser'].length"), 0);
   assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='brush').shortcut"), "B");
+  assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), ["B", "E"]);
+  await capture("shortcut-editor");
+  await click('#close-shortcut-editor');
   await click('[data-shortcut="command.Settings"] .shortcut-choose');
+  await click('#add-shortcut');
   await key("j", { ctrlKey: true });
   await click('#confirm-shortcut');
+  await click('#close-shortcut-editor');
   await click('#apply-settings');
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
   assert.equal(await evaluate("layerApp.state().requests.length"), 0);
-  assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='settings').shortcut"), "Ctrl+J");
+  assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='settings').shortcut"), "Ctrl+, / Ctrl+J");
   await action({ type: "invoke", command: "eraser" });
   await evaluate("layerApp.canvas.focus()"); await key("e");
   assert.equal(await evaluate("layerApp.state().brush.tool"), "brush");
@@ -91,7 +144,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("document.querySelector('#settings').open"), true);
   await action({ type: "cancel_settings" });
   const saved = await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1'))");
-  assert.equal(saved.shortcuts["command.Brush"][0].key, "e");
+  assert.deepEqual(saved.shortcuts["command.Brush"].map(c => c.key), ["b", "e"]);
   await call("Page.reload");
   await evaluate("new Promise((resolve,reject)=>{const start=performance.now();function ready(){if(window.layerApp)resolve();else if(performance.now()-start>20000)reject(new Error('reload failed'));else setTimeout(ready,50)}ready()})");
   assert.deepEqual(await evaluate("layerApp.state().settings"), saved);
@@ -100,7 +153,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await preference({ type: "page", page: "shortcuts" });
   await preference({ type: "reset_all_shortcuts" });
   await action({ type: "cancel_settings" });
-  assert.equal(await evaluate("layerApp.state().settings.shortcuts['command.Brush'][0].key"), "e", "cancel reset keeps applied bindings");
+  assert.equal(await evaluate("layerApp.state().settings.shortcuts['command.Brush'][1].key"), "e", "cancel reset keeps applied bindings");
   await action({ type: "open_settings", page: "canvas" });
   await call("Emulation.setDeviceMetricsOverride", { width: 640, height: 600, deviceScaleFactor: 1, mobile: false });
   await capture("narrow");

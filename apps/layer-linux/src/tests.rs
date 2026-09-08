@@ -10,7 +10,7 @@ fn pump(ms: u64) {
     let until = Instant::now() + Duration::from_millis(ms);
     let context = glib::MainContext::default();
     while Instant::now() < until {
-        while context.pending() {
+        while context.pending() && Instant::now() < until {
             context.iteration(false);
         }
         std::thread::sleep(Duration::from_millis(1));
@@ -20,7 +20,23 @@ fn state(w: &Workspace) -> UiState {
     w.gpu.borrow().as_ref().unwrap().session.state().clone()
 }
 
-fn native_test_app(id: &str) -> adw::Application {
+struct NativeTestApp(adw::Application);
+impl std::ops::Deref for NativeTestApp {
+    type Target = adw::Application;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Drop for NativeTestApp {
+    fn drop(&mut self) {
+        // A failed assertion must not leave GPU workers alive while the test
+        // process tears down GTK and the Vulkan driver.
+        for window in self.0.windows() {
+            window.destroy();
+        }
+    }
+}
+fn native_test_app(id: &str) -> NativeTestApp {
     adw::init().unwrap();
     let css = gtk::CssProvider::new();
     css.load_from_string(include_str!("style.css"));
@@ -34,17 +50,19 @@ fn native_test_app(id: &str) -> adw::Application {
         .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    app
+    NativeTestApp(app)
 }
 
 fn command(w: &Workspace, id: CommandId) -> gtk::Button {
-    w.commands
-        .borrow()
-        .iter()
-        .find(|(c, _)| *c == id)
-        .unwrap()
-        .1
-        .clone()
+    if let Some((_, button)) = w.commands.borrow().iter().find(|(c, _)| *c == id) {
+        return button.clone();
+    }
+    // Menu commands are native GActions, not ad-hoc GtkButtons.
+    let action = w.menu_actions.lookup_action(&id.shortcut_id()).unwrap();
+    let button = gtk::Button::new();
+    button.set_sensitive(action.is_enabled());
+    button.connect_clicked(move |_| action.activate(None));
+    button
 }
 fn click(button: &gtk::Button) {
     assert!(button.is_sensitive());
@@ -161,6 +179,143 @@ fn native_web_parity_reference() {
 }
 
 #[test]
+#[ignore = "native divider hit testing: requires a Wayland display"]
+fn native_stacked_divider() {
+    let app = native_test_app("art.capycanvas.DividerTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(800);
+    let divider = w
+        .resolved()
+        .dividers
+        .into_iter()
+        .find(|d| d.id == 4)
+        .unwrap();
+    let b = divider.bounds;
+    let point = [b.x + b.width * 0.5, b.y + b.height * 0.5];
+    let picked = w
+        .surface
+        .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT)
+        .unwrap();
+    let handle = w
+        .surface
+        .imp()
+        .children
+        .borrow()
+        .iter()
+        .find(|(slot, _)| *slot == Slot::Divider(4))
+        .unwrap()
+        .1
+        .clone();
+    assert_eq!(
+        picked, handle,
+        "the horizontal divider must own its complete hit area"
+    );
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let controllers = handle.observe_controllers();
+    let drag = (0..controllers.n_items())
+        .find_map(|i| controllers.item(i).and_downcast::<gtk::GestureDrag>())
+        .unwrap();
+    drag.emit_by_name::<()>(
+        "drag-begin",
+        &[&(b.width as f64 * 0.5), &(b.height as f64 * 0.5)],
+    );
+    for dy in [-100.0, 50.0, -70.0] {
+        w.dispatch(UiAction::DragDivider {
+            id: 4,
+            phase: ContactPhase::Move,
+            position: [point[0], point[1] + dy],
+            viewport,
+        });
+        pump(50);
+        let actual = handle.compute_bounds(&w.surface).unwrap();
+        assert!(
+            (actual.y() - b.y - dy).abs() <= 1.0,
+            "divider y={} expected {}",
+            actual.y(),
+            b.y + dy
+        );
+    }
+    w.dispatch(UiAction::DragDivider {
+        id: 4,
+        phase: ContactPhase::Up,
+        position: point,
+        viewport,
+    });
+    let mut workspace = state(&w).workspace;
+    if let DockNode::Split { id, .. } = &mut workspace.layout.bands[0].root {
+        *id = 40;
+    }
+    let mut json = serde_json::to_value(&workspace).unwrap();
+    json["layout"]["next_id"] = 41.into();
+    workspace = serde_json::from_value(json).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(100);
+    assert!(
+        w.surface
+            .imp()
+            .children
+            .borrow()
+            .iter()
+            .any(|(s, _)| *s == Slot::Divider(40)),
+        "same panels with a new split must replace the old native handle"
+    );
+    let tab = w.groups.borrow()[0].tabs[0].1.clone();
+    let tool = command(&w, CommandId::Brush);
+    let tool_size = [tool.width(), tool.height()];
+    let mut previous_spin = 0;
+    std::fs::create_dir_all("../../artifacts/ui/preferences").unwrap();
+    for points in [9, 11, 13] {
+        let settings = Settings {
+            panel_text_pt: points,
+            ..state(&w).settings
+        };
+        w.dispatch(UiAction::RestoreSettings { settings });
+        pump(100);
+        capture_reference(
+            &w,
+            &format!("../../artifacts/ui/preferences/gtk-text-{points}pt.png"),
+            1.0,
+        );
+        let font = tab.pango_context().font_description().unwrap();
+        assert!(
+            (font.size() as f64 / gtk::pango::SCALE as f64 - points as f64 * 4.0 / 3.0).abs()
+                < 0.02,
+            "expected {points}pt, got {font}"
+        );
+        assert_eq!([tool.width(), tool.height()], tool_size);
+        let width = w.size_number.measure(gtk::Orientation::Horizontal, -1).1;
+        assert!(width > previous_spin);
+        previous_spin = width;
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "multiple-window native teardown: requires a Wayland display"]
+fn native_window_lifecycle() {
+    let app = native_test_app("art.capycanvas.LifecycleTest");
+    let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
+    crate::install_actions(&app, &windows);
+    app.activate_action("new-window", None);
+    let first = windows.borrow()[0].clone();
+    pump(200);
+    for _ in 0..12 {
+        app.activate_action("new-window", None);
+        pump(100);
+        let next = windows.borrow().last().unwrap().clone();
+        next.window.destroy();
+        pump(150);
+        assert!(next.gpu.borrow().is_none());
+        assert_eq!(windows.borrow().len(), 1);
+    }
+    first.window.destroy();
+    pump(100);
+    assert!(windows.borrow().is_empty());
+}
+
+#[test]
 #[ignore = "native GTK widgets: requires a Wayland display"]
 fn native_ribbon_allocation() {
     adw::init().unwrap();
@@ -232,6 +387,7 @@ fn native_preferences_and_shortcuts() {
     pump(100);
     assert_eq!(state(&second).settings, state(&w).settings);
     second.window.destroy();
+    w.window.present();
     pump(100);
     assert_eq!(windows.borrow().len(), 1);
     let dir = "../../artifacts/ui/preferences";
@@ -241,6 +397,28 @@ fn native_preferences_and_shortcuts() {
         for page in SettingsPage::ALL {
             w.dispatch(UiAction::OpenSettings { page });
             pump(400);
+            let search_toggle: gtk::ToggleButton = find_named(
+                w.preferences.dialog.upcast_ref(),
+                "preferences-search-toggle",
+            )
+            .unwrap()
+            .downcast()
+            .unwrap();
+            assert_eq!(
+                search_toggle.icon_name().as_deref(),
+                Some("edit-find-symbolic")
+            );
+            let sidebar =
+                find_named(w.preferences.dialog.upcast_ref(), "preferences-sidebar").unwrap();
+            let sidebar_bounds = sidebar.compute_bounds(&w.window).unwrap();
+            let apply = find_named(w.preferences.dialog.upcast_ref(), "apply-settings")
+                .unwrap()
+                .compute_bounds(&w.window)
+                .unwrap();
+            assert!(
+                sidebar_bounds.y() + sidebar_bounds.height() > apply.y() + apply.height(),
+                "sidebar must extend beside the bottom action bar"
+            );
             assert_eq!(
                 w.gpu
                     .borrow()
@@ -309,17 +487,19 @@ fn native_preferences_and_shortcuts() {
         .unwrap();
     search.set_text("pressure response");
     pump(300);
-    assert_eq!(
-        w.gpu
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .session
-            .preferences()
-            .unwrap()
-            .page,
-        SettingsPage::Input
-    );
+    let results = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .preferences()
+        .unwrap()
+        .search_results;
+    assert_eq!(results.len(), 1);
+    w.dispatch(UiAction::Preferences {
+        action: results[0].action.clone(),
+    });
     search.set_text("");
     pump(300);
     let feedback: adw::SwitchRow =
@@ -354,7 +534,14 @@ fn native_preferences_and_shortcuts() {
             .unwrap();
     row.emit_by_name::<()>("activated", &[]);
     pump(200);
-    let controllers = w.window.observe_controllers();
+    click(
+        &find_named(w.window.upcast_ref(), "add-shortcut")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    let capture_dialog = find_named(w.window.upcast_ref(), "shortcut-capture").unwrap();
+    let controllers = capture_dialog.observe_controllers();
     let keys = (0..controllers.n_items())
         .find_map(|i| {
             controllers
@@ -384,21 +571,24 @@ fn native_preferences_and_shortcuts() {
     click(&confirm);
     assert!(state(&w).preferences.capture.is_none());
     assert_eq!(
-        state(&w).settings_draft.as_ref().unwrap().shortcuts["command.Brush"][0].key,
+        state(&w).settings_draft.as_ref().unwrap().shortcuts["command.Brush"][1].key,
         "e"
     );
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::CloseShortcutEditor,
+    });
+    pump(250);
     click(&find_button(w.preferences.dialog.upcast_ref(), "Apply").unwrap());
     assert!(
         state(&w).requests.is_empty(),
         "host acknowledged the saved snapshot"
     );
-    assert!(
-        w.shortcut_hints
-            .borrow()
+    assert!(w.menus.borrow().iter().any(|menu| {
+        menu.commands
             .iter()
-            .filter(|(id, _)| *id == CommandId::Settings)
-            .all(|(_, label)| label.text() == "Ctrl+,")
-    );
+            .zip(&menu.accelerators)
+            .any(|(id, accel)| *id == CommandId::Settings && accel == "<Control>comma")
+    }));
     // Explicit override isolates persistence from the user's actual config.
     if std::env::var_os("LAYER_SETTINGS_FILE").is_some() {
         assert_eq!(
@@ -409,6 +599,8 @@ fn native_preferences_and_shortcuts() {
         let next = windows.borrow().last().unwrap().clone();
         assert_eq!(state(&next).settings, state(&w).settings);
         next.window.destroy();
+        pump(100);
+        w.window.present();
     }
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Canvas,

@@ -72,6 +72,11 @@ all canvas-pixel work stay off GTK's main thread. Rounded corners are applied in
 the viewport shader, without cropping.
 Build prerequisites, Linux Chrome flags, test commands, and the manual
 tablet/touch checklist are in [UI setup](docs/ui-implementation.md#run).
+For a native staging bundle, run `node apps/layer-linux/package.mjs` (also needs
+`strip` and `desktop-file-validate`). Run `dist/capycanvas-linux/bin/capycanvas`.
+This ignored directory includes the `art.capycanvas.CapyCanvas` desktop launcher,
+app icon and license files; GTK/libadwaita remain system dependencies. It does
+not install files into your desktop or bundle third-party UI libraries.
 The compact native/DOM controls float over a full-window canvas. **Zen mode**
 in the top bar (or Z) fades them when the pointer moves away, with no camera
 or viewport changes. Brush selectors show real GPU-rendered samples.

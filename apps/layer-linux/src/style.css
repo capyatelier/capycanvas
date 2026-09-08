@@ -3,6 +3,9 @@ window.background { background: transparent; }
 window { --window-bg-color: #333333; --window-fg-color: #fafafb; --headerbar-bg-color: #414141; --view-bg-color: #2b2b2b; --popover-bg-color: #414141; --panel-bg: #414141; --tabbar-bg: #2e2e2e; --input-bg: #333333; }
 window.light-theme { --window-bg-color: #b8b8b8; --window-fg-color: #2e2e32; --headerbar-bg-color: #ededed; --view-bg-color: #e4e4e4; --popover-bg-color: #ededed; --panel-bg: #ededed; --tabbar-bg: #dedede; --input-bg: #fafafa; }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
+window { --panel-text-size: 11pt; }
+window.panel-text-9 { --panel-text-size: 9pt; }
+window.panel-text-13 { --panel-text-size: 13pt; }
 .workspace-header { background: transparent; box-shadow: none; }
 .workspace-header > windowhandle > box { padding-bottom: 6px; }
 .workspace-header button.chrome-control, .workspace-header menubutton.chrome-control > button, .workspace-header windowcontrols button { min-height: 24px; padding-top: 6px; padding-bottom: 6px; }
@@ -20,15 +23,17 @@ window.light-theme { --window-bg-color: #b8b8b8; --window-fg-color: #2e2e32; --h
 .document-title { font-weight: 600; padding: 4px 8px; }
 .workspace-status { background: transparent; padding: 0 4px; font-size: 12.026px; color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
-.dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: 12.026px; }
-.dock-tabs { background: var(--tabbar-bg); font-size: 14.667px; }
-.dock-panel .heading { font-size: 14.667px; }
+.dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--panel-text-size); }
+.panel-context-menu { font-size: var(--panel-text-size); }
+.dock-tabs { background: var(--tabbar-bg); font-size: inherit; }
+.dock-panel .heading { font-size: inherit; }
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
-.dock-panel button { border-radius: 6px; min-height: 20px; padding: 4px 12px; }
+.dock-panel button { border-radius: 6px; min-height: 1.66em; padding: 4px 12px; }
 .dock-panel image { -gtk-icon-size: 14px; }
-.dock-panel .layer-tools button { min-width: 16px; }
-.dock-panel spinbutton { min-height: 28px; }
-.dock-panel spinbutton > button { min-width: 15px; padding: 4px 6px; border: 0; box-shadow: none; }
+.dock-panel .layer-tools button { min-width: 16px; min-height: 20px; }
+.dock-panel spinbutton { min-height: calc(1em + 16px); }
+.dock-panel spinbutton > button { min-width: 15px; min-height: 0; padding: 4px 6px; border: 0; box-shadow: none; }
+.dock-panel spinbutton image { -gtk-icon-size: 1.16em; }
 .dock-panel scale { min-height: 16px; padding: 6px 12px; }
 .dock-panel scale slider { min-width: 16px; min-height: 16px; margin: -6px; }
 .dock-panel checkbutton check { min-width: 16px; min-height: 16px; -gtk-icon-size: 16px; padding: 0; border-radius: 4px; }
@@ -52,4 +57,6 @@ window.light-theme { --window-bg-color: #b8b8b8; --window-fg-color: #2e2e32; --h
 .layer-preferences { --window-bg-color: #333333; --headerbar-bg-color: #333333; }
 window.light-theme .layer-preferences { --window-bg-color: #fafafb; --headerbar-bg-color: #fafafb; }
 .layer-preferences *:focus { outline: none; }
+.layer-preferences.touch-input .navigation-sidebar row:hover:not(:selected):not(:active) { background: transparent; }
+.layer-preferences.touch-input .navigation-sidebar row:selected:hover:not(:active) { background: alpha(currentColor, .10); }
 .shortcut-hint { font-weight: 400; }

@@ -2,6 +2,7 @@
 //! Raw pen samples and gesture records are deliberately not keyboard commands.
 use crate::*;
 use serde::{Deserialize, Serialize};
+pub(crate) const MAX_SHORTCUTS: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyChord {
@@ -305,11 +306,14 @@ impl Settings {
         }
         let all = definitions(self, Platform::Gtk);
         for (id, keys) in &self.shortcuts {
-            if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > 4 {
+            if !all.iter().any(|(a, _)| a.id == *id) || keys.len() > MAX_SHORTCUTS {
                 return Err("Unknown action or too many shortcut alternatives".into());
             }
-            for chord in keys {
+            for (index, chord) in keys.iter().enumerate() {
                 chord.validate()?;
+                if keys[..index].contains(chord) {
+                    return Err("Duplicate shortcut alternative".into());
+                }
                 if self.conflict(id, chord, Platform::Gtk).is_some() {
                     return Err("Two actions cannot use the same shortcut".into());
                 }

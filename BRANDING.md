@@ -15,7 +15,7 @@ The artwork subject to the separate license below is:
 
 - `apps/layer-web/icons/layer-zen-symbolic.svg`: the project's capybara mark,
   also used for the Zen button, copies embedded in application resources, and
-  the app-icon PNGs generated from it when packaging the PWA.
+  the app icons generated from it when building GTK or packaging the PWA.
 
 Other generic interface icons, brush masks and generated brush previews are
 not branding assets and remain MIT OR Apache-2.0. Any future branding asset
