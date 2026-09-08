@@ -37,6 +37,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     var failure by mutableStateOf<String?>(null)
         private set
+    var actionError by mutableStateOf<String?>(null)
+        private set
+    // Native focus, not application state; prevents typing from invoking tools.
+    var editingText = false
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
@@ -63,23 +67,31 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             attempt {
                 handle = Native.create(BuildConfig.DEBUG)
                 choreographer = Choreographer.getInstance()
-                saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_settings", "settings" to JSONObject(it)).toString()) }
-                saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
+                attempt(canvas = false) {
+                    saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_settings", "settings" to JSONObject(it)).toString()) }
+                }
+                attempt(canvas = false) {
+                    saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
+                }
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))
                 main.post { catalog = value }
                 publish(true)
             }
         }
     }
-    private fun attempt(block: () -> Unit) {
+    private fun attempt(canvas: Boolean = true, block: () -> Unit) {
         try { block() } catch (e: Exception) {
             Log.e("CapyCanvas", "Native canvas operation failed", e)
-            main.post { failure = e.message ?: "Could not initialize canvas" }
+            main.post {
+                if (canvas) failure = e.message ?: "Could not initialize canvas"
+                else actionError = e.message ?: "Could not complete this action"
+            }
         }
     }
-    private fun post(block: () -> Unit) {
-        worker.post { if (!disposed && handle != 0L) attempt(block) }
+    private fun post(canvas: Boolean = false, block: () -> Unit) {
+        worker.post { if (!disposed && handle != 0L) attempt(canvas, block) }
     }
+    fun clearActionError() { actionError = null }
     fun dispatch(action: JSONObject) = post {
         Native.dispatch(handle, action.toString())
         refreshChrome()
@@ -115,7 +127,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         "facts" to chromeFacts, "viewport" to JSONArray(listOf(logicalWidth, logicalHeight)))
     private fun refreshChrome() { Native.input(handle, chromeInput(obj("kind" to "refresh")).toString()) }
 
-    fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) = post {
+    fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) = post(canvas = true) {
         logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
         frameInterval = (1_000_000_000.0 / refreshRate.coerceAtLeast(30f)).toLong()
         Native.resize(handle, width, height, density)
@@ -135,28 +147,28 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
      * returns. This wait is only at surface teardown, never in an input/frame. */
     fun detach() {
         val stopped = CountDownLatch(1)
-        worker.post {
+        if (!worker.post {
             try { if (handle != 0L) { attached = false; Native.detach(handle) } }
             finally { stopped.countDown() }
-        }
+        }) return // The owning thread has already destroyed the native session.
         check(stopped.await(10, TimeUnit.SECONDS)) { "Canvas surface did not detach" }
     }
-    fun pointer(id: Long, tool: Int, button: Int, samples: DoubleArray) {
+    fun pointer(id: Long, tool: Int, button: Int, samples: DoubleArray, predicted: Boolean = false) {
         val arrival = System.nanoTime()
-        post {
+        post(canvas = true) {
             val started = System.nanoTime()
             maxQueueNs = maxOf(maxQueueNs, started - arrival)
             queuedInputSamples += samples.size / 9
             val phase = samples[samples.size - 1].toInt()
-            if (phase == 1) {
+            if (phase == 1 && !predicted) {
                 val event = obj("kind" to "contact", "canvas" to true,
                     "position" to JSONArray(listOf(samples[0] / surfaceDensity, samples[1] / surfaceDensity)))
                 val reply = JSONObject(Native.input(handle, chromeInput(event).toString()))
                 if (reply.optBoolean("handled")) suppressedContacts.add(id)
             }
-            if (id !in suppressedContacts) Native.pointer(handle, id, tool, button, samples)
+            if (id !in suppressedContacts) Native.pointer(handle, id, tool, button, samples, predicted)
             if (phase == 3 || phase == 4) suppressedContacts.remove(id)
-            if (measuredInputs != null && measuredInputs.size < 8192) measuredInputs.add(longArrayOf(
+            if (!predicted && measuredInputs != null && measuredInputs.size < 8192) measuredInputs.add(longArrayOf(
                 samples[samples.size - 2].toLong(), arrival, started, System.nanoTime() - started, (samples.size / 9).toLong()))
             wake()
         }
@@ -191,7 +203,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun measurements(reset: Boolean = false, reply: (JSONObject) -> Unit) = post {
         val report = obj("frames" to JSONArray(measuredFrames?.map { JSONArray(it.toList()) } ?: emptyList<Any>()),
             "inputs" to JSONArray(measuredInputs?.map { JSONArray(it.toList()) } ?: emptyList<Any>()),
-            "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "present_ns")),
+            "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns")),
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
         if (reset) { measuredFrames?.clear(); measuredInputs?.clear() }
         main.post { reply(report) }

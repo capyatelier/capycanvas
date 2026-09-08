@@ -2,8 +2,10 @@
 
 The adapters share `layer-ui` state/actions, canvas semantics, and conformance
 tests, not widgets, windowing, or graphics implementation.
-Linux and web hosts are implemented. Other rows describe the intended native
-mapping, not completed clients. Physical-device input validation is listed in
+Linux, web and the [Android tablet prototype](android-implementation.md) are
+implemented. Other rows describe intended native mappings, not completed clients.
+Android's emulator checks do not establish physical-device performance.
+Physical-device input validation is listed in
 the [UI human-test checklist](ui-implementation.md#run).
 
 | Platform | UI/input path | Canvas backend | Notes |
@@ -12,7 +14,7 @@ the [UI human-test checklist](ui-implementation.md#run).
 | Windows | WinUI + Win32 `WM_POINTER` history | `layer-render-wgpu` → D3D12 | Reverse history into chronological order; shared predictor supplies future samples |
 | macOS | SwiftUI/AppKit tablet events | `layer-render-wgpu` → Metal | Pressure/tilt/rotation are native; shared prediction uses the display target |
 | iPadOS | SwiftUI/UIKit + coalesced/predicted Pencil touches | `layer-render-wgpu` → Metal | Submit precise coalesced touches, then UIKit predictions, through the batched path |
-| Android | Compose + `MotionEvent` history through JNI | `layer-render-wgpu` → Vulkan | Record every event in AndroidX MotionEventPredictor and submit its frame-time result |
+| Android | Compose + `MotionEvent` history through JNI | `layer-render-wgpu` → Vulkan → SurfaceView | One dedicated render Looper; API 34 MotionPredictor samples when available, shared prediction otherwise; Choreographer presentation targets |
 | Web | DOM/Wasm toolkit + Pointer Events | `layer-render-wgpu` → WebGPU | Use raw/coalesced events plus browser predictions when available |
 
 The platform callback must:
@@ -81,7 +83,7 @@ Primary API references:
 - [Apple high-fidelity coalesced touches](https://developer.apple.com/documentation/uikit/getting-high-fidelity-input-with-coalesced-touches)
 - [Apple predicted touches](https://developer.apple.com/documentation/uikit/uievent/predictedtouches%28for%3A%29)
 - [Android `MotionEvent`](https://developer.android.com/reference/android/view/MotionEvent.html)
-- [AndroidX `MotionEventPredictor`](https://developer.android.com/reference/androidx/input/motionprediction/MotionEventPredictor)
+- [Android `MotionPredictor`](https://developer.android.com/reference/android/view/MotionPredictor)
 - [W3C Pointer Events Level 3](https://www.w3.org/TR/pointerevents3/)
 - [wgpu WebAssembly backends](https://docs.rs/wgpu/latest/wasm32-unknown-unknown/wgpu/struct.Backends.html)
 - [Shared UI and platform adapter design](shared-ui.md)

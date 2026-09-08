@@ -2,9 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-    <application android:label="Capy Canvas" android:theme="@style/Theme.CapyCanvas"
+    <application android:label="Capy Canvas" android:theme="@style/Theme.CapyCanvas" android:icon="@mipmap/capy_launcher"
         android:allowBackup="false" android:supportsRtl="true" android:hardwareAccelerated="true">
         <activity android:name=".MainActivity" android:exported="true"
+            android:windowSoftInputMode="adjustNothing"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

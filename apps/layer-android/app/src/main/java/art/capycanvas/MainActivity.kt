@@ -25,26 +25,37 @@ class MainActivity : ComponentActivity() {
         updateTheme(newConfig)
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val key = when (event.keyCode) {
-            KeyEvent.KEYCODE_SPACE -> " "
-            KeyEvent.KEYCODE_ESCAPE -> "escape"
-            KeyEvent.KEYCODE_ENTER -> "enter"
-            KeyEvent.KEYCODE_TAB -> "tab"
-            KeyEvent.KEYCODE_DEL -> "backspace"
-            KeyEvent.KEYCODE_FORWARD_DEL -> "delete"
-            KeyEvent.KEYCODE_DPAD_LEFT -> "arrowleft"
-            KeyEvent.KEYCODE_DPAD_RIGHT -> "arrowright"
-            KeyEvent.KEYCODE_DPAD_UP -> "arrowup"
-            KeyEvent.KEYCODE_DPAD_DOWN -> "arrowdown"
-            else -> event.getUnicodeChar(0).takeIf { it != 0 }?.toChar()?.lowercase()
-        }
-        if (key != null) host.input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),
-            "repeat" to (event.repeatCount > 0), "editing" to (currentFocus is android.widget.EditText),
-            "modifiers" to obj("command" to event.isCtrlPressed, "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
+        host.key(event)
         return super.dispatchKeyEvent(event)
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus) host.input(obj("type" to "blur"))
     }
+}
+
+/** Both the Activity and native dialog windows forward the same key schema. */
+internal fun CanvasHost.key(event: KeyEvent) {
+    val key = when (event.keyCode) {
+            KeyEvent.KEYCODE_SPACE -> " "
+            KeyEvent.KEYCODE_ESCAPE -> "escape"
+            KeyEvent.KEYCODE_ENTER -> "enter"
+            KeyEvent.KEYCODE_TAB -> "tab"
+            KeyEvent.KEYCODE_DEL -> "backspace"
+            KeyEvent.KEYCODE_FORWARD_DEL -> "delete"
+            KeyEvent.KEYCODE_INSERT -> "insert"
+            KeyEvent.KEYCODE_MOVE_HOME -> "home"
+            KeyEvent.KEYCODE_MOVE_END -> "end"
+            KeyEvent.KEYCODE_PAGE_UP -> "pageup"
+            KeyEvent.KEYCODE_PAGE_DOWN -> "pagedown"
+            in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> "f${event.keyCode - KeyEvent.KEYCODE_F1 + 1}"
+            KeyEvent.KEYCODE_DPAD_LEFT -> "arrowleft"
+            KeyEvent.KEYCODE_DPAD_RIGHT -> "arrowright"
+            KeyEvent.KEYCODE_DPAD_UP -> "arrowup"
+            KeyEvent.KEYCODE_DPAD_DOWN -> "arrowdown"
+            else -> event.getUnicodeChar(0).takeIf { it != 0 }?.toChar()?.lowercase()
+        }
+        if (key != null) input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),
+            "repeat" to (event.repeatCount > 0), "editing" to editingText,
+            "modifiers" to obj("command" to event.isCtrlPressed, "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
 }

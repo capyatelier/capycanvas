@@ -15,7 +15,7 @@ pub(crate) struct App {
     #[cfg(target_os = "android")]
     pub profiling: bool,
     #[cfg(target_os = "android")]
-    pub frame_cost: [i64; 3],
+    pub frame_cost: [i64; 5],
     last_pen: Option<PenEvent>,
     #[cfg(target_os = "android")]
     pub surface: Option<crate::android::Surface>,
@@ -37,7 +37,7 @@ impl App {
             #[cfg(target_os = "android")]
             profiling: false,
             #[cfg(target_os = "android")]
-            frame_cost: [0; 3],
+            frame_cost: [0; 5],
             last_pen: None,
             #[cfg(target_os = "android")]
             surface: None,
@@ -97,6 +97,7 @@ impl App {
         tool: u8,
         button: u8,
         records: &[f64],
+        predicted: bool,
     ) -> Result<(), String> {
         if records.is_empty()
             || !records.len().is_multiple_of(9)
@@ -123,7 +124,9 @@ impl App {
                 PenPhase::Cancel => Some(ContactPhase::Cancel),
             };
             let position = [sample[0] as f32, sample[1] as f32];
-            let paint = if let Some(phase) = contact {
+            let paint = if predicted {
+                self.last_pen.is_some_and(|p| p.device_id == id) && tool != 3
+            } else if let Some(phase) = contact {
                 self.input(UiInput::Pointer {
                     id,
                     phase,
@@ -162,9 +165,16 @@ impl App {
                     2 => ToolKind::Eraser,
                     _ => ToolKind::Pen,
                 },
-                flags: SampleFlags::PRIMARY,
+                flags: SampleFlags(
+                    SampleFlags::PRIMARY.0
+                        | if predicted {
+                            SampleFlags::PREDICTED.0
+                        } else {
+                            0
+                        },
+                ),
             };
-            if tool != 3 {
+            if tool != 3 && !predicted {
                 self.session.cursor_input(if phase == PenPhase::Cancel {
                     None
                 } else {
@@ -175,11 +185,13 @@ impl App {
             if paint && self.session.engine().backend().0.is_some() {
                 self.sequence += 1;
                 self.enqueue(event)?;
-                self.last_pen = if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
-                    None
-                } else {
-                    Some(event)
-                };
+                if !predicted {
+                    self.last_pen = if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
+                        None
+                    } else {
+                        Some(event)
+                    };
+                }
             }
         }
         Ok(())
@@ -216,6 +228,10 @@ impl App {
                 panel: layer_ui::Panel,
                 heights: [f32; 2],
                 progress: f32,
+                #[serde(default)]
+                from: Option<layer_ui::PanelExpansion>,
+                #[serde(default)]
+                closing: bool,
             },
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
@@ -234,12 +250,23 @@ impl App {
                 panel,
                 heights,
                 progress,
-            } => json!(self.session.state().workspace.layout.expanded_panel(
-                self.logical,
-                panel,
-                heights,
-                progress
-            )),
+                from,
+                closing,
+            } => {
+                let layout = &self.session.state().workspace.layout;
+                let end = layout.expanded_panel(
+                    self.logical,
+                    panel,
+                    heights,
+                    if closing { 0.0 } else { 1.0 },
+                );
+                let from =
+                    from.or_else(|| layout.expanded_panel(self.logical, panel, heights, 0.0));
+                json!(
+                    end.zip(from)
+                        .map(|(end, from)| end.interpolate_from(from, progress))
+                )
+            }
         };
         Ok(result)
     }
@@ -275,7 +302,7 @@ mod tests {
             vec![f64::NAN; 9],
             vec![0., 0., 1., 0., 0., 0., 0., -1., 1.],
         ] {
-            assert!(app.pointer(1, 0, 0, &sample).is_err());
+            assert!(app.pointer(1, 0, 0, &sample, false).is_err());
         }
         assert_eq!(app.sequence, 0);
         assert!(app.resize(0, 100, 1.0).is_err());
@@ -286,14 +313,38 @@ mod tests {
         let mut app = App::new().unwrap();
         app.resize(2560, 1600, 2.0).unwrap();
         let before = app.session.state().camera.revision;
-        app.pointer(1, 3, 0, &[100., 100., 1., 0., 0., 0., 0., 1_000_000., 1.])
-            .unwrap();
-        app.pointer(2, 3, 0, &[200., 100., 1., 0., 0., 0., 0., 1_000_000., 1.])
-            .unwrap();
-        app.pointer(1, 3, 0, &[120., 120., 1., 0., 0., 0., 0., 2_000_000., 2.])
-            .unwrap();
-        app.pointer(1, 3, 0, &[120., 120., 1., 0., 0., 0., 0., 3_000_000., 3.])
-            .unwrap();
+        app.pointer(
+            1,
+            3,
+            0,
+            &[100., 100., 1., 0., 0., 0., 0., 1_000_000., 1.],
+            false,
+        )
+        .unwrap();
+        app.pointer(
+            2,
+            3,
+            0,
+            &[200., 100., 1., 0., 0., 0., 0., 1_000_000., 1.],
+            false,
+        )
+        .unwrap();
+        app.pointer(
+            1,
+            3,
+            0,
+            &[120., 120., 1., 0., 0., 0., 0., 2_000_000., 2.],
+            false,
+        )
+        .unwrap();
+        app.pointer(
+            1,
+            3,
+            0,
+            &[120., 120., 1., 0., 0., 0., 0., 3_000_000., 3.],
+            false,
+        )
+        .unwrap();
         assert_eq!(app.sequence, 0);
         assert!(app.session.state().camera.revision > before);
     }

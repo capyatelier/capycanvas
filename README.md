@@ -47,7 +47,7 @@ of those responsibilities evaluates or modifies canvas pixels.
 - `layer-ui` — semantic UI state, typed actions, docking, camera/touch,
   validation, and user-flow coordination for platform frontends.
 
-GTK4/libadwaita and Wasm/WebGPU clients use the same
+GTK4/libadwaita, Wasm/WebGPU and Android/Compose clients use the same
 `UiSession`. Target bindings stay in each app. The shared UI API does not
 require threads and compiles for `wasm32-unknown-unknown`. See the
 [implementation checklist](docs/ui-implementation.md) for current progress.
@@ -57,9 +57,12 @@ require threads and compiles for `wasm32-unknown-unknown`. See the
 ```bash
 cargo run --release -p layer-linux
 ./apps/layer-web/run.sh
+bash apps/layer-android/run.sh
 ```
 
 The web client is served at `http://127.0.0.1:4173` and needs hardware WebGPU.
+The Android launcher builds and installs into the tablet emulator; see
+[Android SDK setup, validation and performance limits](docs/android-implementation.md).
 For a static, installable/offline PWA, run `node apps/layer-web/package.mjs`.
 The ignored `dist/capycanvas/` bundle can be hosted at a root or subpath;
 see [packaging prerequisites and tests](docs/web-packaging.md). Deployment is

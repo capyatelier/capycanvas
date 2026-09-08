@@ -113,7 +113,7 @@ impl App {
         Ok(())
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
-        self.frame_cost = [0; 3];
+        self.frame_cost = [0; 5];
         if !self.dirty || self.surface.is_none() {
             return Ok(false);
         }
@@ -164,9 +164,11 @@ impl App {
             view,
             surround,
         );
-        gpu.queue().present(target);
-        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
+        gpu.queue().present(target);
+        self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
+        gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
+        self.frame_cost[4] = elapsed() - self.frame_cost[..4].iter().sum::<i64>();
         Ok(self.dirty)
     }
 }
@@ -207,7 +209,7 @@ pub extern "system" fn Java_art_capycanvas_Native_frameCost(
     handle: jlong,
 ) -> jni::sys::jlongArray {
     let result = (|| {
-        let array = env.new_long_array(3).map_err(error)?;
+        let array = env.new_long_array(5).map_err(error)?;
         env.set_long_array_region(&array, 0, &unsafe { app(handle) }.frame_cost)
             .map_err(error)?;
         Ok::<_, String>(array.into_raw())
@@ -338,6 +340,7 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
     tool: jint,
     button: jint,
     records: JDoubleArray,
+    predicted: jboolean,
 ) {
     let result = (|| {
         let count = env.get_array_length(&records).map_err(error)? as usize;
@@ -347,7 +350,13 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
         let mut data = vec![0.0; count];
         env.get_double_array_region(&records, 0, &mut data)
             .map_err(error)?;
-        unsafe { app(handle) }.pointer(id.max(0) as u64, tool as u8, button as u8, &data)
+        unsafe { app(handle) }.pointer(
+            id.max(0) as u64,
+            tool as u8,
+            button as u8,
+            &data,
+            predicted != 0,
+        )
     })();
     fail(&mut env, result);
 }

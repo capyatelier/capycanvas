@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,6 +17,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
 import org.json.JSONObject
@@ -31,15 +34,17 @@ import kotlin.math.roundToInt
                 val kind = control.getString("kind")
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
                     ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
-                val modifier = dragSource(Modifier.placed(bounds, density), dock,
+                val modifier = dragSource(Modifier.placed(bounds, density).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}"), dock,
                     obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
-                IconTile(icon, tile.getString("label"), tile.optBoolean("selected"), tile.getBoolean("enabled"), modifier) {
+                IconTile(icon, tile.getString("label"), tile.optBoolean("selected"), tile.getBoolean("enabled"), modifier,
+                    onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }) {
                     host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
                 }
             }
         }
         geometry.objectOrNull("grip")?.let { grip ->
-            Box(dragSource(Modifier.placed(grip, density), dock, obj("kind" to "panel", "panel" to panel.getString("id"))), contentAlignment = Alignment.Center) {
+            Box(dragSource(Modifier.placed(grip, density), dock, obj("kind" to "panel", "panel" to panel.getString("id")))
+                .combinedClickable(onClick = {}, onLongClick = { dock.context(obj("kind" to "ribbon", "panel" to panel.getString("id"))) }), contentAlignment = Alignment.Center) {
                 SharedIcon("grip", "Move toolbar")
             }
         }
@@ -51,7 +56,7 @@ import kotlin.math.roundToInt
         panel.array("controls").objects().filter { all || it.getBoolean("visible_in_panel") }.forEach { item ->
             when (item.getString("control")) {
                 "brushes" -> BrushList(host, state.getJSONObject("brush"))
-                "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
+                "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size"), host.catalog.getJSONObject("brush_size_slider")) {
                     host.dispatch(obj("type" to "set_brush_size", "value" to it))
                 }
                 "size_presets" -> SizePresets(host, state.getJSONObject("brush").number("diameter"))
@@ -76,7 +81,7 @@ import kotlin.math.roundToInt
         }
     }
 }
-@Composable internal fun NumericSetting(label: String, value: Float, control: JSONObject, onChange: (Float) -> Unit) {
+@Composable internal fun NumericSetting(label: String, value: Float, control: JSONObject, slider: JSONObject = control, onChange: (Float) -> Unit) {
     val low = control.number("min"); val high = control.number("max"); val step = control.number("step", 1.0)
     val text = if (value == value.toInt().toFloat()) value.toInt().toString() else "%.2f".format(java.util.Locale.ROOT, value)
     Column {
@@ -88,7 +93,8 @@ import kotlin.math.roundToInt
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
             IconTile("plus", "Increase $label", enabled = value < high) { onChange((value + step).coerceIn(low, high)) }
         }
-        Slider(value.coerceIn(low, high), onChange, valueRange = low..high, modifier = Modifier.fillMaxWidth())
+        val range = slider.number("min")..slider.number("max")
+        Slider(value.coerceIn(range), onChange, valueRange = range, modifier = Modifier.fillMaxWidth())
     }
 }
 @Composable private fun BrushList(host: CanvasHost, brush: JSONObject) {
@@ -145,8 +151,9 @@ import kotlin.math.roundToInt
         }
     }
 }
-@Composable internal fun ConfigurePanel(host: CanvasHost, panel: JSONObject) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+@Composable internal fun ConfigurePanel(host: CanvasHost, panel: JSONObject, onHeight: (Float) -> Unit = {}) {
+    val density = LocalDensity.current.density
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(panel.getString("configuration_title"), style = MaterialTheme.typography.titleMedium)
         Text(panel.getString("configuration_hint"), color = LocalPalette.current.secondary)
         panel.array("controls").objects().forEach { control ->
@@ -156,7 +163,9 @@ import kotlin.math.roundToInt
             }
         }
         host.snapshot?.getJSONObject("state")?.let { state ->
-            if (panel.array("controls").length() > 0) PanelControls(host, state, panel, true, Modifier.heightIn(max = 500.dp))
+            // Lists and presets already have a live preview in the first column.
+            val controls = panel.array("controls").objects().filter { it.getString("control") in setOf("brush_size", "brush_opacity", "brush_color", "layer_opacity") }
+            if (controls.isNotEmpty()) PanelControls(host, state, JSONObject(panel.toString()).put("controls", JSONArray(controls)), true, Modifier.heightIn(max = 500.dp))
         }
         if (panel.getString("id").startsWith("toolbar")) {
             panel.array("tiles").objects().forEach { tile ->

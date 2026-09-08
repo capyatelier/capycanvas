@@ -13,7 +13,7 @@ internal object Native {
     @JvmStatic external fun scroll(handle: Long, x: Float, y: Float, dx: Float, dy: Float, zoom: Boolean, horizontal: Boolean)
     @JvmStatic external fun dispatch(handle: Long, action: String)
     @JvmStatic external fun input(handle: Long, input: String): String
-    @JvmStatic external fun pointer(handle: Long, id: Long, tool: Int, button: Int, records: DoubleArray)
+    @JvmStatic external fun pointer(handle: Long, id: Long, tool: Int, button: Int, records: DoubleArray, predicted: Boolean)
     @JvmStatic external fun frame(handle: Long, now: Long, presentation: Long): Boolean
     @JvmStatic external fun frameCost(handle: Long): LongArray
     @JvmStatic external fun snapshot(handle: Long): String

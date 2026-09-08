@@ -1,6 +1,7 @@
 # Android native host
 
-Status: implementation in progress, not yet accepted by device testing.
+Status: native tablet prototype implemented; emulator validation in progress.
+Physical-tablet latency and stylus feel are not yet validated.
 
 ## Required acceptance
 
@@ -30,6 +31,10 @@ That Looper exclusively calls the Rust `UiSession` and wgpu device. Low-rate
 actions/snapshots use the existing Serde schema through JNI; pen history uses
 numeric batches, never JSON. UI work cannot block surface acquisition or painting.
 The surface is independently composited behind the transparent native controls.
+The keyboard changes the settings insets, not the GPU surface size. Predictions
+from Android's API 34 `MotionPredictor`, when supplied, use the engine's existing
+predicted-sample flag and never become document truth. Older devices retain the
+shared engine's predictor; there is no additional Kotlin prediction algorithm.
 
 Surface loss must not destroy the session or document. All window references and
 swapchains must be released on their owning render thread, after the surface is
@@ -55,16 +60,23 @@ The CLI's medium-tablet profile currently installs an Android 15 image, separate
 from the SDK 37 used to compile the application. The emulator's documented
 `hw.lcd.vsync=120` setting in its AVD `config.ini` enables a 120 Hz mode after a
 cold restart; the default is 60 Hz. Actual app cadence and SurfaceFlinger
-presentation still need measurement, not an inference from that setting.
+presentation must be measured, not inferred from that setting.
 
 ## Validation progress (not final acceptance)
 
-- Android x86_64 release native library and debug APK build successfully.
+- Android x86_64 and arm64 release native libraries build successfully. The arm64
+  ELF load segments have 16 KB alignment. The debug APK and pinned-wrapper
+  `run.sh headless` build/install/launch flow have been exercised.
 - Three Rust host tests pass: GPU-unavailable UI, malformed input, shared touch routing.
-- Four emulator tests pass: real injected stylus paints visible pixels; undo/redo;
-  preferences/search/theme; expanded drawer and divider resizing; high-rate input
-  stream/render scheduling (the latter is a measurement, not a 120 fps assertion).
-- Initial workspace, settings, light/dark and drawer screenshots inspected.
+- Eight emulator tests pass: visible stylus paint and pixel-checked undo/redo;
+  preferences/search/theme; animated drawer and divider resizing; native context
+  menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
+  shortcut recording, saving and activity recreation; two-finger navigation,
+  coalesced history, cancellation, background/foreground surface recovery and
+  display rotation; high-rate input/render/compositor measurement.
+- Workspace, settings, light/dark, joined drawer, shortcut editor, custom toolbar,
+  tab-group moves and actual portrait-display screenshots inspected. Android's
+  letterboxed forced-activity orientation is not used as portrait validation.
   Test images survive app uninstall under `Pictures/CapyCanvasValidation` in the
   emulator. Timing JSON is under `Download/CapyCanvasValidation`.
 - The first repeat uncovered asynchronous IME resets in the search field; native
@@ -75,11 +87,57 @@ presentation still need measurement, not an inference from that setting.
   CPU painting p95 1.07 ms; surface acquire p95 4.56 ms; viewport/present/poll
   p95 5.77 ms. These are CPU durations, **not** GPU completion or final compositor
   timestamps. Sustained 120 fps is not yet proven; investigate presentation stalls.
-- Still required: wider drag/drop and customization coverage, shortcut editing,
-  pressure/history/cancellation/palm/multitouch and lifecycle/rotation coverage,
-  UI refinements and native touch target audit, complete performance analysis,
-  arm64/release validation, and final visual acceptance. Do not treat the initial
-  passing suite as proof of those remaining requirements.
+- Refinements found during testing: honor Rust's shortcut visibility flags;
+  forward keys from the dialog's native window; preserve local IME editing state;
+  reuse the Vulkan instance across surface replacement; preserve canvas extent
+  when the keyboard opens; use one joined drawer shadow; keep platform predictions
+  out of contact routing; render Android dialogs with the shared neutral palette.
+- Still required before final handoff: remaining menu/cursor/palm/Zen interaction
+  checks, release packaging check, final source review and visual acceptance.
+
+## Emulator measurements
+
+Android 15 medium-tablet AVD, host-GPU/gfxstream Vulkan, 2560×1600 display,
+120 Hz mode. The same shader engine is used on all hosts; there is no pixel
+readback during drawing. One render Looper owns the session and swapchain, and
+input callbacks enqueue numeric history without waiting for rendering.
+
+Isolated September 8 runs: 128 px brushes, warmed pipelines, existing pigment,
+601 injected stylus events spaced approximately 8 ms apart. CPU values cover all
+render calls; compositor values use SurfaceFlinger's last 127 valid presentations,
+not the entire gesture. Virtual GPU scheduling is noisy; these are not physical
+tablet or scanout/input-to-photon measurements.
+
+| Brush | CPU frame p50 / p95 / p99 (ms) | Composited interval p50 / p95 / p99 (ms) | Composited fps |
+| --- | --- | --- | --- |
+| G-Pen | 3.25 / 13.74 / 19.05 | 8.37 / 17.10 / 24.75 | 100.4 |
+| Watercolor Wash | 8.60 / 20.07 / 30.38 | 16.62 / 25.20 / 36.13 | 61.4 |
+| Natural Blender | 4.37 / 14.62 / 27.04 | 8.36 / 20.18 / 25.36 | 95.1 |
+
+Input delivery p95 is 1.50–1.60 ms; CPU input processing p95 is 0.015–0.017 ms.
+Render-thread queue delay grows when GPU work/presentation stalls. CPU painting
+submission p95 is 1.27 / 8.72 / 3.79 ms respectively. Acquisition and viewport
+submission are substantial contributors; final queue-present itself is usually
+below 0.4 ms p95. Reducing maximum swapchain latency from two to one did not
+improve tails, so it remains two. This does **not** establish globally optimal
+rendering or sustained 120 fps; watercolor especially still needs real-device
+profiling. The emulator's 120 Hz capability is confirmed, but the performance
+target is not met across these workloads.
+
+To repeat a single workload (change the brush name/size as needed):
+
+```sh
+apps/layer-android/gradlew -p apps/layer-android :app:connectedDebugAndroidTest \
+  -PcapyAbi=x86_64 \
+  -Pandroid.testInstrumentationRunnerArguments.class=art.capycanvas.AndroidHostTest#measureHighRateStylusIngressAndRenderScheduling \
+  '-Pandroid.testInstrumentationRunnerArguments.capyBrush=Watercolor Wash' \
+  -Pandroid.testInstrumentationRunnerArguments.capyBrushSize=128
+```
+
+Debug-only bounded timing arrays capture input delivery/queue age and separate
+paint, acquisition, viewport submission, queue-present and device-poll durations.
+Release builds do not collect them. Tests retrieve compositor timestamps
+separately; no screenshot or readback is included in the timed gesture.
 
 Primary references: [Compose external surfaces](https://github.com/androidx/androidx/blob/androidx-main/compose/foundation/foundation/src/androidMain/kotlin/androidx/compose/foundation/AndroidExternalSurface.android.kt),
 [SurfaceView composition](https://source.android.com/docs/core/graphics/arch-sv-glsv),

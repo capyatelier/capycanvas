@@ -5,6 +5,7 @@ import android.os.Build
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.MotionPredictor
 import android.view.PointerIcon
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -16,6 +17,8 @@ import kotlin.math.sin
 /** Separate compositor layer, not a texture embedded in Compose's renderer. */
 class CanvasSurfaceView(context: Context, private val host: CanvasHost) : SurfaceView(context), SurfaceHolder.Callback {
     private var attached = false
+    private var predictor: MotionPredictor? = null
+    private var predictionDevice: Int? = null
     init {
         holder.addCallback(this)
         isFocusable = true
@@ -36,6 +39,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
         } else host.resize(width, height, density)
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) {
+        predictor = null; predictionDevice = null
         if (attached) { host.detach(); attached = false }
     }
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -56,6 +60,26 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
                 else -> 2
             }
             send(event, i, phase, action == MotionEvent.ACTION_MOVE)
+        }
+        if (Build.VERSION.SDK_INT >= 34 && event.isFromSource(InputDevice.SOURCE_STYLUS)) {
+            if (action == MotionEvent.ACTION_DOWN && (predictor == null || predictionDevice != event.deviceId)) {
+                predictor = MotionPredictor(context); predictionDevice = event.deviceId
+            }
+            predictor?.let { native ->
+                try {
+                    native.record(event)
+                    if (action == MotionEvent.ACTION_MOVE) {
+                        val target = System.nanoTime() + (1_000_000_000 / (display?.refreshRate ?: 60f)).toLong()
+                        native.predict(target)?.let { predicted ->
+                            try { send(predicted, 0, 2, true, predicted = true) } finally { predicted.recycle() }
+                        }
+                    }
+                } catch (_: IllegalArgumentException) {
+                    // Device switches/cancelled system gestures can invalidate
+                    // a predictor; raw input and core feedback still work.
+                    predictor = null
+                }
+            }
         }
         return true
     }
@@ -79,7 +103,7 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
         }
         return super.onGenericMotionEvent(event)
     }
-    private fun send(event: MotionEvent, index: Int, phase: Int, history: Boolean) {
+    private fun send(event: MotionEvent, index: Int, phase: Int, history: Boolean, predicted: Boolean = false) {
         val tool = when (event.getToolType(index)) {
             MotionEvent.TOOL_TYPE_MOUSE -> 1
             MotionEvent.TOOL_TYPE_ERASER -> 2
@@ -94,7 +118,9 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
             fun axis(axis: Int): Float = if (historical) event.getHistoricalAxisValue(axis, index, h) else event.getAxisValue(axis, index)
             val tilt = axis(MotionEvent.AXIS_TILT)
             val orientation = axis(MotionEvent.AXIS_ORIENTATION)
-            val time = if (historical) event.getHistoricalEventTime(h) * 1_000_000L else event.eventTime * 1_000_000L
+            val time = if (Build.VERSION.SDK_INT >= 34) {
+                if (historical) event.getHistoricalEventTimeNanos(h) else event.eventTimeNanos
+            } else if (historical) event.getHistoricalEventTime(h) * 1_000_000L else event.eventTime * 1_000_000L
             val offset = h * 9
             samples[offset] = (if (historical) event.getHistoricalX(index, h) else event.getX(index)).toDouble()
             samples[offset + 1] = (if (historical) event.getHistoricalY(index, h) else event.getY(index)).toDouble()
@@ -107,6 +133,6 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
             samples[offset + 8] = (if (historical) { if (phase == 0) 0 else 2 } else phase).toDouble()
         }
         val id = (event.deviceId.toLong().and(0xffffffffL) shl 16) or event.getPointerId(index).toLong()
-        host.pointer(id, tool, button, samples)
+        host.pointer(id, tool, button, samples, predicted)
     }
 }

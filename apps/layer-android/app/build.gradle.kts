@@ -23,6 +23,7 @@ android {
     }
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs").get().asFile)
     sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews")
+    sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/capy/res").get().asFile)
     packaging { jniLibs.useLegacyPackaging = false }
     testOptions { animationsDisabled = true }
 }
@@ -34,13 +35,40 @@ val rustBuild by tasks.registering(Exec::class) {
     environment("ANDROID_NDK_HOME", "${System.getenv("ANDROID_HOME") ?: System.getProperty("user.home") + "/Android/Sdk"}/ndk/29.0.14206865")
     commandLine(listOf("cargo", "ndk") + abi.split(",").flatMap { listOf("-t", it) } +
         listOf("--platform", "29", "-o", out.absolutePath, "build", "--release", "-p", "layer-android"))
-    inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
+    inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
     inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
     inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"))
     inputs.property("abi", abi)
     outputs.dir(out)
 }
 tasks.named("preBuild") { dependsOn(rustBuild) }
+
+// Adapt the existing brand path to Android's maskable launcher format. No second
+// artwork source or checked-in raster exports.
+val generateBrand by tasks.registering {
+    val source = rootDir.resolve("../layer-web/icons/layer-zen-symbolic.svg")
+    val output = layout.buildDirectory.dir("generated/capy/res").get().asFile
+    inputs.file(source)
+    outputs.dir(output)
+    doLast {
+        val svg = source.readText()
+        val path = Regex("""<path[^>]*\sd="([^"]+)"""").find(svg)?.groupValues?.get(1)
+            ?: error("Missing shared brand path")
+        val viewBox = Regex("""viewBox="([^"]+)"""").find(svg)!!.groupValues[1].split(" ").map(String::toFloat)
+        val scale = 200 / maxOf(viewBox[2], viewBox[3])
+        val x = (324 - viewBox[2] * scale) / 2 - viewBox[0] * scale
+        val y = (324 - viewBox[3] * scale) / 2 - viewBox[1] * scale
+        output.resolve("drawable").mkdirs()
+        output.resolve("drawable/capy_mark.xml").writeText("""
+            <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="324" android:viewportHeight="324">
+              <group android:translateX="$x" android:translateY="$y" android:scaleX="$scale" android:scaleY="$scale">
+                <path android:fillColor="#f6f5f4" android:fillType="evenOdd" android:pathData="$path" />
+              </group>
+            </vector>
+        """.trimIndent())
+    }
+}
+tasks.named("preBuild") { dependsOn(generateBrand) }
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.08.00"))

@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.content.ContentValues
 import android.provider.MediaStore
 import android.os.SystemClock
+import android.os.ParcelFileDescriptor
+import android.view.KeyEvent
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -37,6 +39,9 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { host.snapshot?.getJSONObject("state")?.optString("theme") == "light" }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    private fun preferences() = host.snapshot!!.getJSONObject("preferences")
+    private fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+        .bufferedReader().use { it.readText() }
     private fun waitState(test: (JSONObject) -> Boolean) = compose.waitUntil(10_000) { test(state()) }
     private fun findCanvas(view: View): CanvasSurfaceView? = when (view) {
         is CanvasSurfaceView -> view
@@ -68,6 +73,24 @@ class AndroidHostTest {
             if (i != steps) SystemClock.sleep(8)
         }
     }
+    /** Native dispatch tests retain full MotionEvent history and pointer IDs. */
+    private fun canvasEvent(action: Int, points: List<androidx.compose.ui.geometry.Offset>,
+        tool: Int = MotionEvent.TOOL_TYPE_FINGER, history: Boolean = false) {
+        instrumentation.runOnMainSync {
+            val canvas = findCanvas(compose.activity.window.decorView)!!
+            val coords = points.map { point -> MotionEvent.PointerCoords().apply {
+                x = canvas.width * point.x; y = canvas.height * point.y; pressure = 0.7f
+                setAxisValue(MotionEvent.AXIS_TILT, 0.4f)
+            } }.toTypedArray()
+            val props = points.indices.map { i -> MotionEvent.PointerProperties().apply { id = i; toolType = tool } }.toTypedArray()
+            val time = SystemClock.uptimeMillis()
+            val source = if (tool == MotionEvent.TOOL_TYPE_FINGER) InputDevice.SOURCE_TOUCHSCREEN else InputDevice.SOURCE_STYLUS
+            val event = MotionEvent.obtain(time - 30, time - if (history) 2 else 0, action, points.size, props, coords, 0, 0, 1f, 1f, 1, 0, source, 0)
+            if (history) event.addBatch(time, coords.map { old -> MotionEvent.PointerCoords(old).apply { x += 4f; pressure = 0.9f } }.toTypedArray(), 0)
+            assertTrue(canvas.dispatchTouchEvent(event))
+            event.recycle()
+        }
+    }
     private fun capture(name: String): Bitmap {
         compose.waitForIdle()
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
@@ -91,25 +114,44 @@ class AndroidHostTest {
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
         assertNull(host.failure)
         val painted = capture("01-stylus-light")
-        var dark = 0
-        for (y in painted.height * 35 / 100 until painted.height * 65 / 100 step 2) {
-            for (x in painted.width * 35 / 100 until painted.width * 65 / 100 step 2) {
-                val c = painted.getPixel(x, y)
-                if (android.graphics.Color.red(c) < 100 && android.graphics.Color.green(c) < 100) dark++
+        fun darkPixels(image: Bitmap): Int {
+            var dark = 0
+            for (y in image.height * 35 / 100 until image.height * 65 / 100 step 2) {
+                for (x in image.width * 35 / 100 until image.width * 65 / 100 step 2) {
+                    val c = image.getPixel(x, y)
+                    if (android.graphics.Color.red(c) < 100 && android.graphics.Color.green(c) < 100) dark++
+                }
             }
+            return dark
         }
+        val dark = darkPixels(painted)
         assertTrue("Stroke deposits visible pixels in the canvas, not just cursor state ($dark)", dark > 100)
         compose.onNodeWithContentDescription("Undo").performClick()
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "redo" && c.getBoolean("enabled") } }
-        capture("02-undo")
+        val undone = darkPixels(capture("02-undo"))
+        assertTrue("Undo removes deposited pixels ($undone vs $dark)", undone < dark / 10)
         compose.onNodeWithContentDescription("Redo").performClick()
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
-        capture("03-redo")
+        assertTrue("Redo restores deposited pixels", darkPixels(capture("03-redo")) >= dark * 9 / 10)
     }
     @Test fun measureHighRateStylusIngressAndRenderScheduling() {
+        val options = InstrumentationRegistry.getArguments()
+        val brush = options.getString("capyBrush", "G-Pen")!!
+        val diameter = options.getString("capyBrushSize", "18")!!.toFloat()
+        val preset = host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() }
+            .first { it.getString("label") == brush }.getInt("id")
+        // Warm pipelines and provide existing pigment for destination-aware tools.
+        penStroke(60)
+        compose.runOnIdle {
+            host.dispatch(obj("type" to "select_brush", "id" to preset))
+            host.dispatch(obj("type" to "set_brush_size", "value" to diameter))
+        }
+        waitState { it.getJSONObject("brush").getInt("preset") == preset && it.getJSONObject("brush").number("diameter") == diameter }
+        penStroke(60)
         val cleared = CountDownLatch(1)
         host.measurements(true) { cleared.countDown() }
         assertTrue(cleared.await(10, TimeUnit.SECONDS))
+        shell("dumpsys SurfaceFlinger --latency-clear")
         penStroke(600, synchronous = false)
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
         val collected = CountDownLatch(1)
@@ -117,6 +159,16 @@ class AndroidHostTest {
         host.measurements { report = it; collected.countDown() }
         assertTrue(collected.await(10, TimeUnit.SECONDS))
         val data = report!!
+        data.put("brush", brush).put("diameter", diameter)
+        val layers = shell("dumpsys SurfaceFlinger --list").lineSequence().filter {
+            it.contains("SurfaceView[art.capycanvas/art.capycanvas.MainActivity](BLAST)")
+        }.map { it.substringAfter("RequestedLayerState{").substringBefore(" parentId=").removeSuffix("}") }.toList()
+        // UiAutomation tokenizes arguments directly, not through a shell; these
+        // app-owned names contain no whitespace and must not include quotes.
+        val samples = layers.associateWith { shell("dumpsys SurfaceFlinger --latency $it") }
+        data.put("surface_layers", JSONObject(samples))
+        val compositor = samples.values.maxByOrNull { it.length } ?: ""
+        data.put("surface_flinger", compositor)
         assertTrue("Input stream reached the native host", data.array("inputs").length() > 100)
         assertTrue("Renderer produced continuous frames", data.array("frames").length() > 100)
         val rows = data.array("frames").values().map { it as org.json.JSONArray }
@@ -129,11 +181,20 @@ class AndroidHostTest {
         val summary = obj("cpu_render_present" to summary(rows.map { it.getDouble(2) / 1e6 }),
             "cpu_paint" to summary(rows.map { it.getDouble(4) / 1e6 }),
             "surface_acquire" to summary(rows.map { it.getDouble(5) / 1e6 }),
-            "cpu_present" to summary(rows.map { it.getDouble(6) / 1e6 }),
+            "cpu_viewport" to summary(rows.map { it.getDouble(6) / 1e6 }),
+            "queue_present" to summary(rows.map { it.getDouble(7) / 1e6 }),
+            "cpu_poll" to summary(rows.map { it.getDouble(8) / 1e6 }),
             "frame_interval" to summary(rows.zipWithNext { a, b -> (b.getDouble(0) - a.getDouble(0)) / 1e6 }),
             "input_delivery" to summary(input.map { (it.getDouble(1) - it.getDouble(0)) / 1e6 }),
             "input_queue" to summary(input.map { (it.getDouble(2) - it.getDouble(1)) / 1e6 }),
             "cpu_input" to summary(input.map { it.getDouble(3) / 1e6 }))
+        val presented = compositor.lineSequence().drop(1).mapNotNull { line ->
+            line.trim().split(Regex("\\s+")).getOrNull(1)?.toLongOrNull()?.takeIf { it > 0 && it < Long.MAX_VALUE }
+        }.toList().distinct().sorted()
+        if (presented.size > 2) {
+            summary.put("composited_interval", summary(presented.zipWithNext { a, b -> (b - a) / 1e6 }))
+            summary.put("composited_fps", (presented.size - 1) * 1e9 / (presented.last() - presented.first()))
+        }
         android.util.Log.i("CapyBenchmark", summary.toString())
         val resolver = compose.activity.contentResolver
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ContentValues().apply {
@@ -182,5 +243,142 @@ class AndroidHostTest {
         }
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").toString() != before }
         capture("10-divider-resize")
+    }
+
+    @Test fun nativeContextMenuCreatesToolbarAndToolsCanBeReordered() {
+        compose.onAllNodesWithContentDescription("Move panel group").onFirst().performTouchInput { longClick() }
+        compose.onNodeWithText("New Toolbar…").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") != null }
+        val picker = host.snapshot!!.getJSONObject("picker")
+        picker.optString("name_label").takeIf { it.isNotEmpty() }?.let { label ->
+            compose.onNodeWithText(label).performTextReplacement("Quick tools")
+        }
+        val choices = picker.array("choices").objects().take(3)
+        choices.forEach { choice ->
+            compose.onAllNodes(hasText(choice.getString("label")) and isToggleable()).onFirst().performScrollTo().performClick()
+        }
+        compose.onNodeWithText(picker.getString("confirm_label")).performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") == null }
+        val custom = host.snapshot!!.array("panels").objects().first { it.getString("title") == "Quick tools" }
+        assertEquals(3, custom.array("tiles").length())
+        val ids = custom.array("tiles").objects().map { it.getInt("id") }
+        val source = compose.onNodeWithTag("tile-${custom.getString("id")}-${ids[0]}")
+        val target = compose.onNodeWithTag("tile-${custom.getString("id")}-${ids[2]}").fetchSemanticsNode().boundsInRoot
+        val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
+        source.performTouchInput { swipe(center, target.centerRight - origin - androidx.compose.ui.geometry.Offset(2f, 0f), 700) }
+        compose.waitUntil(10_000) {
+            host.snapshot!!.array("panels").objects().first { it.getString("id") == custom.getString("id") }
+                .array("tiles").objects().map { it.getInt("id") } != ids
+        }
+        capture("12-custom-toolbar")
+        assertNull(host.actionError)
+    }
+
+    @Test fun tabDragAppendsAndWholeGroupDragPreservesTabs() {
+        fun drag(source: SemanticsNodeInteraction, target: androidx.compose.ui.geometry.Offset) {
+            val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
+            source.performTouchInput { swipe(center, target - origin, 700) }
+        }
+        val brushes = compose.onAllNodesWithText("Brushes").onFirst()
+        val layers = compose.onAllNodesWithText("Layers").onFirst()
+        drag(brushes, layers.fetchSemanticsNode().boundsInRoot.centerRight - androidx.compose.ui.geometry.Offset(2f, 0f))
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
+            it.array("panels").values().containsAll(listOf("brushes", "layers"))
+        } }
+        val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { it.array("panels").values().contains("brushes") }
+        val grip = compose.onAllNodesWithContentDescription("Move panel group").filterToOne(
+            SemanticsMatcher("group grip") { node ->
+                val density = compose.activity.resources.displayMetrics.density
+                node.boundsInRoot.center.x > group.getJSONObject("bounds").number("x") * density
+            })
+        // A whole-group drop onto Sizes must preserve both tab identities.
+        val sizeTitle = host.snapshot!!.array("panels").objects().first { it.getString("id") == "sizes" }.getString("title")
+        val sizes = compose.onAllNodesWithText(sizeTitle).onFirst()
+        drag(grip, sizes.fetchSemanticsNode().boundsInRoot.center)
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
+            it.array("panels").values().containsAll(listOf("brushes", "layers", "sizes"))
+        } }
+        assertNull(host.actionError)
+        capture("13-tab-group-drag")
+    }
+
+    @Test fun shortcutDialogRecordsMultipleBindingsAndPersists() {
+        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithText("Keyboard Shortcuts").performClick()
+        compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
+        compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
+        compose.onNode(hasText("Zen mode") and !hasSetTextAction()).performScrollTo().performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
+        val original = preferences().getJSONObject("shortcut_editor").array("bindings").length()
+        compose.onNodeWithText("Add shortcut").performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("capture") != null }
+        compose.waitForIdle()
+        val now = SystemClock.uptimeMillis()
+        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+            val event = KeyEvent(now, SystemClock.uptimeMillis(), action, KeyEvent.KEYCODE_J, 0, KeyEvent.META_CTRL_ON or KeyEvent.META_ALT_ON)
+            assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true))
+        }
+        compose.waitUntil(10_000) { preferences().getJSONObject("capture").objectOrNull("chord") != null }
+        compose.onNodeWithText("Use shortcut").performClick()
+        compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original + 1 }
+        capture("14-shortcut-editor")
+        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+        compose.activityRule.scenario.recreate()
+        compose.waitUntil(20_000) { host.snapshot!!.optBoolean("gpu_ready") }
+        assertNull(host.failure)
+        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithText("Keyboard Shortcuts").performClick()
+        compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
+        compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
+        compose.onNode(hasText("Zen mode") and !hasSetTextAction()).performScrollTo().performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
+        assertEquals(original + 1, preferences().getJSONObject("shortcut_editor").array("bindings").length())
+        compose.onNodeWithText("Restore default").performClick()
+        compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original }
+    }
+
+    @Test fun touchNavigationHistoryCancellationAndSurfaceRecovery() {
+        val a = androidx.compose.ui.geometry.Offset(0.45f, 0.5f)
+        val b = androidx.compose.ui.geometry.Offset(0.55f, 0.5f)
+        val initial = state().getJSONObject("camera").number("zoom")
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(a))
+        canvasEvent(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(a, b))
+        canvasEvent(MotionEvent.ACTION_MOVE, listOf(a - androidx.compose.ui.geometry.Offset(0.03f, 0.02f), b + androidx.compose.ui.geometry.Offset(0.05f, 0.04f)))
+        canvasEvent(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(a, b))
+        canvasEvent(MotionEvent.ACTION_UP, listOf(a))
+        waitState { it.getJSONObject("camera").number("zoom") > initial }
+        assertFalse("Finger navigation must not deposit paint", state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled"))
+        compose.runOnIdle { host.invoke("fit_canvas") }
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(a), MotionEvent.TOOL_TYPE_STYLUS)
+        canvasEvent(MotionEvent.ACTION_MOVE, listOf(b), MotionEvent.TOOL_TYPE_STYLUS, history = true)
+        canvasEvent(MotionEvent.ACTION_CANCEL, listOf(b), MotionEvent.TOOL_TYPE_STYLUS)
+        val completed = CountDownLatch(1)
+        var sampleCount = 0L
+        host.measurements { data ->
+            sampleCount = data.array("inputs").values().maxOf { (it as org.json.JSONArray).getLong(4) }; completed.countDown()
+        }
+        assertTrue(completed.await(10, TimeUnit.SECONDS))
+        assertTrue("Coalesced historical samples cross JNI together", sampleCount >= 2)
+        // Backgrounding destroys SurfaceView, not the Rust document/device.
+        penStroke()
+        waitState { it.array("commands").objects().first { c -> c.getString("id") == "undo" }.getBoolean("enabled") }
+        fun cameraGeometry() = JSONObject(state().getJSONObject("camera").toString()).apply { remove("revision") }.toString()
+        val camera = cameraGeometry()
+        compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        compose.waitForIdle()
+        assertNull(host.failure)
+        assertEquals(camera, cameraGeometry())
+        penStroke(20)
+        assertNull(host.failure)
+        capture("15-surface-recovery")
+        assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90))
+        compose.waitUntil(10_000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
+        capture("16-workspace-portrait")
+        compose.onNodeWithContentDescription("Preferences").performClick()
+        capture("17-settings-portrait")
+        assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0))
     }
 }

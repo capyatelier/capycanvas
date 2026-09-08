@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +16,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import org.json.JSONObject
@@ -23,7 +29,7 @@ import org.json.JSONObject
     val searching = view.optBoolean("searching")
     var showPage by remember { mutableStateOf(false) }
     BackHandler { host.dispatch(obj("type" to "cancel_settings")) }
-    Surface(Modifier.fillMaxSize(), color = colors.panel) {
+    Surface(Modifier.fillMaxSize().imePadding(), color = colors.panel) {
         BoxWithConstraints {
             val wide = maxWidth >= 700.dp
             Column {
@@ -127,7 +133,7 @@ import org.json.JSONObject
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
     CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
         modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null) })
-    view.array("shortcuts").objects().forEach { shortcut ->
+    view.array("shortcuts").objects().filter { it.getBoolean("visible") }.forEach { shortcut ->
         Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { host.preference(obj("type" to "edit_shortcut", "id" to shortcut.getString("id"))) }.padding(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text(shortcut.getString("label"), Modifier.weight(1f))
@@ -137,7 +143,12 @@ import org.json.JSONObject
 }
 @Composable private fun ShortcutEditor(host: CanvasHost, view: JSONObject, editor: JSONObject) {
     val capture = view.objectOrNull("capture")
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(capture != null) { if (capture != null) focus.requestFocus() }
     AlertDialog(onDismissRequest = { host.preference(obj("type" to "close_shortcut_editor")) },
+        modifier = Modifier.onPreviewKeyEvent { event ->
+            if (capture != null) { host.key(event.nativeKeyEvent); true } else false
+        }.focusRequester(focus).focusable(),
         title = { Text(editor.getString("label")) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -177,8 +188,10 @@ import org.json.JSONObject
                     placeholder = { Text(picker.getString("search_hint")) })
                 Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
                     picker.array("choices").objects().forEach { tool ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(tool.optBoolean("selected"), { selected -> host.customize(obj("type" to "picker_select", "control" to tool.getJSONObject("control"), "selected" to selected)) })
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(tool.optBoolean("selected"), role = Role.Checkbox) { selected ->
+                            host.customize(obj("type" to "picker_select", "control" to tool.getJSONObject("control"), "selected" to selected))
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(tool.optBoolean("selected"), onCheckedChange = null, modifier = Modifier.padding(end = 12.dp))
                             Text(tool.getString("label"))
                         }
                     }

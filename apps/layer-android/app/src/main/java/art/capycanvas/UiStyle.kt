@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +15,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +44,7 @@ internal data class Palette(val dark: Boolean) {
     val accent = Color(if (dark) 0xff91b9f0 else 0xff2863a8)
 }
 internal val LocalPalette = staticCompositionLocalOf { Palette(true) }
+internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Missing native host") }
 
 /** Editing/composition is native widget state. Rust remains authoritative for
  * accepted values, but an asynchronous acknowledgement must not reset an IME's
@@ -53,8 +56,10 @@ internal val LocalPalette = staticCompositionLocalOf { Palette(true) }
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default) {
     var text by remember { mutableStateOf(value) }
     var focused by remember { mutableStateOf(false) }
+    val host = LocalCanvasHost.current
     LaunchedEffect(value, focused) { if (!focused) text = value }
-    OutlinedTextField(text, { text = it; onChange(it) }, modifier.onFocusChanged { focused = it.isFocused },
+    DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
+    OutlinedTextField(text, { text = it; onChange(it) }, modifier.onFocusChanged { focused = it.isFocused; host.editingText = focused },
         singleLine = true, label = label, placeholder = placeholder, leadingIcon = leadingIcon, trailingIcon = trailingIcon,
         keyboardOptions = keyboardOptions, textStyle = LocalTextStyle.current,
         colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = LocalPalette.current.input))
@@ -75,10 +80,10 @@ internal val LocalPalette = staticCompositionLocalOf { Palette(true) }
     Image(bitmap, description, modifier.size(20.dp), colorFilter = ColorFilter.tint(LocalPalette.current.text))
 }
 @Composable internal fun IconTile(name: String, label: String, selected: Boolean = false,
-    enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
     val colors = LocalPalette.current
     Box(modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) colors.active else Color.Transparent, RoundedCornerShape(6.dp))
-        .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick), contentAlignment = Alignment.Center) {
+        .combinedClickable(enabled = enabled, role = Role.Button, onClickLabel = label, onLongClick = onLongClick, onClick = onClick), contentAlignment = Alignment.Center) {
         SharedIcon(name, label)
     }
 }
