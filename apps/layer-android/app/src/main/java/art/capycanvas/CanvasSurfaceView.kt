@@ -49,10 +49,10 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
             requestFocus()
         }
         val action = event.actionMasked
-        val indices = if (action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_CANCEL) {
-            (0 until event.pointerCount).toList()
-        } else listOf(event.actionIndex)
-        indices.forEach { i ->
+        val all = action == MotionEvent.ACTION_MOVE || action == MotionEvent.ACTION_CANCEL
+        val first = if (all) 0 else event.actionIndex
+        val last = if (all) event.pointerCount - 1 else first
+        for (i in first..last) {
             val phase = when (action) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> 1
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (Build.VERSION.SDK_INT >= 33 && event.flags and MotionEvent.FLAG_CANCELED != 0) 4 else 3
@@ -112,7 +112,8 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
         }
         val button = if (event.buttonState and (MotionEvent.BUTTON_TERTIARY or MotionEvent.BUTTON_SECONDARY) != 0 && tool == 1) 1 else 0
         val count = if (history) event.historySize else 0
-        val samples = DoubleArray((count + 1) * 9)
+        val used = (count + 1) * 9
+        val samples = host.pointerBuffer(used)
         for (h in 0..count) {
             val historical = h < count
             fun axis(axis: Int): Float = if (historical) event.getHistoricalAxisValue(axis, index, h) else event.getAxisValue(axis, index)
@@ -133,6 +134,6 @@ class CanvasSurfaceView(context: Context, private val host: CanvasHost) : Surfac
             samples[offset + 8] = (if (historical) { if (phase == 0) 0 else 2 } else phase).toDouble()
         }
         val id = (event.deviceId.toLong().and(0xffffffffL) shl 16) or event.getPointerId(index).toLong()
-        host.pointer(id, tool, button, samples, predicted)
+        host.pointer(id, tool, button, samples, used, predicted)
     }
 }

@@ -5,25 +5,23 @@ use crate::{
 };
 use gtk::prelude::*;
 use layer_render::ReadbackImage;
-use layer_ui::{UiChange, UiSession};
+use layer_ui::{CanvasCursor, UiChange, UiSession};
 
 pub struct GpuCanvas {
     pub session: UiSession<RenderWorker>,
+    cursor: CanvasCursor,
     // Alive until the worker and its borrowed Wayland handles are gone.
     _parent: gtk::gdk::Surface,
     pub needs_present: bool,
 }
 impl GpuCanvas {
     pub fn update_cursor(&mut self) -> bool {
-        let cursor = self
-            .session
-            .canvas_cursor()
-            .map_or_else(Vec::new, |v| v.segments);
+        self.session.update_canvas_cursor(&mut self.cursor, false);
         let renderer = self.session.renderer_mut();
-        if renderer.cursor == cursor {
+        if renderer.cursor == self.cursor.segments {
             return false;
         }
-        renderer.cursor = cursor;
+        std::mem::swap(&mut renderer.cursor, &mut self.cursor.segments);
         self.needs_present = true;
         true
     }
@@ -52,6 +50,7 @@ impl GpuCanvas {
         })?;
         Ok(Self {
             session,
+            cursor: CanvasCursor::default(),
             _parent: parent,
             needs_present: true,
         })

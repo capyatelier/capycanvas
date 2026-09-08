@@ -37,6 +37,54 @@ const RESERVOIR_BYTES: u64 = RESERVOIR_SIZE as u64 * RESERVOIR_SIZE as u64 * 4 *
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
 
+/// Native writes reuse staging resources. On web, Queue::write_buffer transfers
+/// Wasm bytes directly; mapped slices would allocate and copy through JS memory.
+struct Uploads {
+    #[cfg(not(target_arch = "wasm32"))]
+    belt: wgpu::util::StagingBelt,
+}
+impl Uploads {
+    fn new(device: &wgpu::Device, chunk_size: u64) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = (device, chunk_size);
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            belt: wgpu::util::StagingBelt::new(device.clone(), chunk_size),
+        }
+    }
+    fn write(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target: &wgpu::Buffer,
+        bytes: &[u8],
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = queue;
+            self.belt
+                .write_buffer(
+                    encoder,
+                    target,
+                    0,
+                    wgpu::BufferSize::new(bytes.len() as u64).unwrap(),
+                )
+                .copy_from_slice(bytes);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = encoder;
+            queue.write_buffer(target, 0, bytes);
+        }
+    }
+    fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.belt.finish_and_recall_on_submit(encoder);
+        #[cfg(target_arch = "wasm32")]
+        let _ = encoder;
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GpuRasterMetrics {
     pub submissions: u64,
@@ -510,6 +558,7 @@ pub struct WgpuRasterizer {
     target_stride: u64,
     target_capacity: usize,
     target_upload: Vec<u8>,
+    uploads: Uploads,
     _empty_texture: wgpu::Texture,
     empty_view: wgpu::TextureView,
     _empty_scalar_texture: wgpu::Texture,
@@ -683,6 +732,7 @@ impl WgpuRasterizer {
             },
         );
 
+        let uploads = Uploads::new(&device, 64 * 1024);
         let mut renderer = Self {
             adapter,
             device,
@@ -722,6 +772,7 @@ impl WgpuRasterizer {
             target_stride,
             target_capacity,
             target_upload: Vec::with_capacity(target_stride as usize * target_capacity),
+            uploads,
             _empty_texture: empty_texture,
             empty_view,
             _empty_scalar_texture: empty_scalar_texture,
@@ -1628,12 +1679,20 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    fn prepare_uploads(&mut self, packet: FramePacket<'_>) -> Result<usize, GpuRasterError> {
+    fn prepare_uploads(
+        &mut self,
+        packet: FramePacket<'_>,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<usize, GpuRasterError> {
         let background_index = packet.dab_batches.len() + packet.layers.len();
         self.ensure_upload_capacity(packet.dabs.len(), background_index + 1)?;
         if !packet.dabs.is_empty() {
-            self.queue
-                .write_buffer(&self.dab_buffer, 0, dab_bytes(packet.dabs));
+            self.uploads.write(
+                encoder,
+                &self.queue,
+                &self.dab_buffer,
+                dab_bytes(packet.dabs),
+            );
         }
         let used = self.style_stride as usize * (background_index + 1);
         self.style_upload.clear();
@@ -1673,8 +1732,8 @@ impl WgpuRasterizer {
         let offset = background_index * self.style_stride as usize;
         self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
             .copy_from_slice(style_bytes(&background));
-        self.queue
-            .write_buffer(&self.style_buffer, 0, &self.style_upload);
+        self.uploads
+            .write(encoder, &self.queue, &self.style_buffer, &self.style_upload);
         Ok(background_index)
     }
 
@@ -3487,12 +3546,12 @@ impl CanvasRenderer for WgpuRasterizer {
         }
 
         // Style records serve brush batches, then composition layers.
-        let background_offset = self.prepare_uploads(packet)?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("layer incremental sparse frame"),
             });
+        let background_offset = self.prepare_uploads(packet, &mut encoder)?;
 
         // Newly allocated pages are explicitly initialized on the GPU before
         // any Load operation. No pixel buffer crosses the CPU boundary.
@@ -4080,6 +4139,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 .saturating_add(dirty.area().saturating_add(composited_pixels));
         }
 
+        self.uploads.finish(&encoder);
         let submission = self.queue.submit([encoder.finish()]);
         self.last_submission = Some(submission);
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);

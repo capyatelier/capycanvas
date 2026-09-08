@@ -124,7 +124,7 @@ impl App {
         let view = self.session.state().camera.view();
         let surround = self.session.state().theme.canvas_surround();
         let scale = self.session.state().camera.viewport[0] as f32 / self.logical[0];
-        let cursor = self.session.canvas_cursor();
+        self.session.update_canvas_cursor(&mut self.cursor, false);
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.session.renderer_mut().0.as_ref().unwrap();
         let extent = [view.width_px, view.height_px];
@@ -152,12 +152,9 @@ impl App {
             }
         };
         self.frame_cost[1] = elapsed() - self.frame_cost[0];
-        surface.presenter.set_cursor(
-            gpu.device(),
-            gpu.queue(),
-            cursor.as_ref().map_or(&[], |c| &c.segments),
-            scale,
-        );
+        surface
+            .presenter
+            .set_cursor(gpu.device(), &self.cursor.segments, scale);
         surface.presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),
@@ -207,20 +204,12 @@ pub extern "system" fn Java_art_capycanvas_Native_frameCost(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
-) -> jni::sys::jlongArray {
-    let result = (|| {
-        let array = env.new_long_array(5).map_err(error)?;
-        env.set_long_array_region(&array, 0, &unsafe { app(handle) }.frame_cost)
-            .map_err(error)?;
-        Ok::<_, String>(array.into_raw())
-    })();
-    match result {
-        Ok(value) => value,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    array: jni::objects::JLongArray,
+) {
+    let result = env
+        .set_long_array_region(&array, 0, &unsafe { app(handle) }.frame_cost)
+        .map_err(error);
+    fail(&mut env, result);
 }
 
 #[unsafe(no_mangle)]
@@ -340,23 +329,33 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
     tool: jint,
     button: jint,
     records: JDoubleArray,
+    count: jint,
     predicted: jboolean,
 ) {
     let result = (|| {
-        let count = env.get_array_length(&records).map_err(error)? as usize;
-        if count > 9 * 8192 {
-            return Err("Android pointer batch is too large".into());
+        if count <= 0
+            || count > 9 * 8192
+            || count > env.get_array_length(&records).map_err(error)?
+        {
+            return Err("Invalid Android pointer batch length".into());
         }
-        let mut data = vec![0.0; count];
-        env.get_double_array_region(&records, 0, &mut data)
-            .map_err(error)?;
-        unsafe { app(handle) }.pointer(
-            id.max(0) as u64,
-            tool as u8,
-            button as u8,
-            &data,
-            predicted != 0,
-        )
+        let app = unsafe { app(handle) };
+        let mut data = std::mem::take(&mut app.pointer_records);
+        data.resize(count as usize, 0.0);
+        let result = env
+            .get_double_array_region(&records, 0, &mut data)
+            .map_err(error)
+            .and_then(|()| {
+                app.pointer(
+                    id.max(0) as u64,
+                    tool as u8,
+                    button as u8,
+                    &data,
+                    predicted != 0,
+                )
+            });
+        app.pointer_records = data;
+        result
     })();
     fail(&mut env, result);
 }
@@ -384,7 +383,10 @@ pub extern "system" fn Java_art_capycanvas_Native_snapshot(
     _: JClass,
     handle: jlong,
 ) -> jstring {
-    string(&mut env, Ok(unsafe { app(handle) }.snapshot().to_string()))
+    match unsafe { app(handle) }.take_snapshot() {
+        Some(snapshot) => string(&mut env, Ok(snapshot.to_string())),
+        None => std::ptr::null_mut(),
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_query(

@@ -46,6 +46,7 @@ pub(crate) struct Cursor {
     pub origin_ns: u64,
 }
 impl Cursor {
+    #[allow(clippy::too_many_arguments)]
     pub fn view<R: CanvasRenderer>(
         &self,
         renderer: &R,
@@ -54,11 +55,10 @@ impl Cursor {
         camera: &Camera,
         scale: f32,
         mode: CursorMode,
-    ) -> CanvasCursor {
-        let mut view = CanvasCursor {
-            mode,
-            ..CanvasCursor::default()
-        };
+        view: &mut CanvasCursor,
+        svg: bool,
+    ) {
+        view.mode = mode;
         if let Some(event) = self.event {
             view.center = [
                 event.surface_position.x / scale,
@@ -66,13 +66,24 @@ impl Cursor {
             ];
         }
         let [cx, cy] = view.center;
-        view.marker = match mode {
-            CursorMode::Cross | CursorMode::BrushSizeCross => {
-                format!("M{} {}h12M{} {}v12", cx - 6.0, cy, cx, cy - 6.0)
+        if svg {
+            match mode {
+                CursorMode::Cross | CursorMode::BrushSizeCross => {
+                    let _ = write!(
+                        view.marker,
+                        "M{} {}h12M{} {}v12",
+                        cx - 6.0,
+                        cy,
+                        cx,
+                        cy - 6.0
+                    );
+                }
+                CursorMode::Dot => {
+                    let _ = write!(view.marker, "M{} {}h2v2h-2Z", cx - 1.0, cy - 1.0);
+                }
+                _ => {}
             }
-            CursorMode::Dot => format!("M{} {}h2v2h-2Z", cx - 1.0, cy - 1.0),
-            _ => String::new(),
-        };
+        }
         match mode {
             CursorMode::Cross | CursorMode::BrushSizeCross => {
                 view.line([cx - 6.0, cy], [cx + 6.0, cy], 0.0, true);
@@ -80,19 +91,20 @@ impl Cursor {
             }
             CursorMode::Dot => {
                 view.contour(
-                    &[
+                    [
                         [cx - 1.0, cy - 1.0],
                         [cx + 1.0, cy - 1.0],
                         [cx + 1.0, cy + 1.0],
                         [cx - 1.0, cy + 1.0],
-                    ],
+                    ]
+                    .into_iter(),
                     true,
                 );
             }
             _ => {}
         }
         if !matches!(mode, CursorMode::BrushSize | CursorMode::BrushSizeCross) {
-            return view;
+            return;
         }
         let [a, b, c, d, tx, ty] = camera.document_to_surface().map(|v| v / scale);
         let marker_count = view.segments.len();
@@ -118,50 +130,50 @@ impl Cursor {
                     let count = (std::f32::consts::PI * (rx.max(ry) / 0.2).sqrt())
                         .ceil()
                         .clamp(24.0, 1024.0) as usize;
-                    let points: Vec<_> = (0..count)
-                        .map(|i| {
-                            let (sin, cos) =
-                                (i as f32 * std::f32::consts::TAU / count as f32).sin_cos();
-                            [a * cos + c * sin + tx, b * cos + d * sin + ty]
-                        })
-                        .collect();
-                    view.contour(&points, false);
-                    let _ = write!(
-                        view.outline,
-                        "M{} {}A{rx} {ry} {angle} 1 1 {} {}A{rx} {ry} {angle} 1 1 {} {}Z",
-                        tx + a,
-                        ty + b,
-                        tx - a,
-                        ty - b,
-                        tx + a,
-                        ty + b
-                    );
+                    let points = (0..count).map(|i| {
+                        let (sin, cos) =
+                            (i as f32 * std::f32::consts::TAU / count as f32).sin_cos();
+                        [a * cos + c * sin + tx, b * cos + d * sin + ty]
+                    });
+                    view.contour(points, false);
+                    if svg {
+                        let _ = write!(
+                            view.outline,
+                            "M{} {}A{rx} {ry} {angle} 1 1 {} {}A{rx} {ry} {angle} 1 1 {} {}Z",
+                            tx + a,
+                            ty + b,
+                            tx - a,
+                            ty - b,
+                            tx + a,
+                            ty + b
+                        );
+                    }
                 }
                 BrushTip::Mask(id) => {
                     if let Some(contours) = renderer.tip_outline(id) {
                         for contour in contours {
-                            let points: Vec<_> = contour
+                            let points = contour
                                 .iter()
-                                .map(|&[x, y]| [a * x + c * y + tx, b * x + d * y + ty])
-                                .collect();
-                            view.contour(&points, false);
-                            for (i, &[x, y]) in contour.iter().enumerate() {
-                                let _ = write!(
-                                    view.outline,
-                                    "{}{:.2} {:.2}",
-                                    if i == 0 { 'M' } else { 'L' },
-                                    a * x + c * y + tx,
-                                    b * x + d * y + ty
-                                );
+                                .map(|&[x, y]| [a * x + c * y + tx, b * x + d * y + ty]);
+                            view.contour(points, false);
+                            if svg {
+                                for (i, &[x, y]) in contour.iter().enumerate() {
+                                    let _ = write!(
+                                        view.outline,
+                                        "{}{:.2} {:.2}",
+                                        if i == 0 { 'M' } else { 'L' },
+                                        a * x + c * y + tx,
+                                        b * x + d * y + ty
+                                    );
+                                }
+                                view.outline.push('Z');
                             }
-                            view.outline.push('Z');
                         }
                     }
                 }
             }
         }
         view.segments.rotate_left(marker_count);
-        view
     }
 }
 
@@ -175,15 +187,16 @@ impl CanvasCursor {
             scale: 1.0,
         });
     }
-    fn contour(&mut self, points: &[[f32; 2]], marker: bool) {
+    fn contour(&mut self, mut points: impl Iterator<Item = [f32; 2]>, marker: bool) {
+        let Some(first) = points.next() else {
+            return;
+        };
+        let mut from = first;
         let mut distance = 0.0;
-        for (from, to) in points
-            .iter()
-            .zip(points.iter().cycle().skip(1))
-            .take(points.len())
-        {
-            self.line(*from, *to, distance, marker);
+        for to in points.chain(std::iter::once(first)) {
+            self.line(from, to, distance, marker);
             distance += (to[0] - from[0]).hypot(to[1] - from[1]);
+            from = to;
         }
     }
 }

@@ -176,6 +176,10 @@ class AndroidHostTest {
         data.put("surface_flinger", compositor)
         assertTrue("Input stream reached the native host", data.array("inputs").length() > 100)
         assertTrue("Renderer produced continuous frames", data.array("frames").length() > 100)
+        assertTrue("Input arrays are reused, not allocated for every event",
+            data.getLong("pointer_allocations") < data.array("inputs").length() / 2)
+        assertTrue("Unchanged drawing state does not build and serialize UI snapshots",
+            data.getLong("snapshots_published") < data.getLong("snapshot_attempts") / 2)
         val rows = data.array("frames").values().map { it as org.json.JSONArray }
         val input = data.array("inputs").values().map { it as org.json.JSONArray }
         fun summary(values: List<Double>): JSONObject {
@@ -184,6 +188,8 @@ class AndroidHostTest {
             return obj("count" to sorted.size, "p50_ms" to p(0.5), "p95_ms" to p(0.95), "p99_ms" to p(0.99), "max_ms" to sorted.last())
         }
         val summary = obj("cpu_render_present" to summary(rows.map { it.getDouble(2) / 1e6 }),
+            "cpu_callback" to summary(rows.map { it.getDouble(10) / 1e6 }),
+            "publish_schedule" to summary(rows.map { it.getDouble(9) / 1e6 }),
             "cpu_paint" to summary(rows.map { it.getDouble(4) / 1e6 }),
             "surface_acquire" to summary(rows.map { it.getDouble(5) / 1e6 }),
             "cpu_viewport" to summary(rows.map { it.getDouble(6) / 1e6 }),
@@ -255,8 +261,9 @@ class AndroidHostTest {
         compose.onNodeWithText("New Toolbar…").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") != null }
         val picker = host.snapshot!!.getJSONObject("picker")
+        val name = "Quick tools $runId"
         picker.optString("name_label").takeIf { it.isNotEmpty() }?.let { label ->
-            compose.onNodeWithText(label).performTextReplacement("Quick tools")
+            compose.onNodeWithText(label).performTextReplacement(name)
         }
         val choices = picker.array("choices").objects().take(3)
         choices.forEach { choice ->
@@ -264,7 +271,7 @@ class AndroidHostTest {
         }
         compose.onNodeWithText(picker.getString("confirm_label")).performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") == null }
-        val custom = host.snapshot!!.array("panels").objects().first { it.getString("title") == "Quick tools" }
+        val custom = host.snapshot!!.array("panels").objects().first { it.getString("title") == name }
         assertEquals(3, custom.array("tiles").length())
         val ids = custom.array("tiles").objects().map { it.getInt("id") }
         val source = compose.onNodeWithTag("tile-${custom.getString("id")}-${ids[0]}")
@@ -314,6 +321,11 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
         compose.onNode(hasText("Zen mode") and !hasSetTextAction()).performScrollTo().performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
+        // Instrumentation can run again against an already installed app.
+        if (preferences().getJSONObject("shortcut_editor").getBoolean("modified")) {
+            compose.onNodeWithText("Restore default").performClick()
+            compose.waitUntil(10_000) { !preferences().getJSONObject("shortcut_editor").getBoolean("modified") }
+        }
         val original = preferences().getJSONObject("shortcut_editor").array("bindings").length()
         compose.onNodeWithText("Add shortcut").performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("capture") != null }
@@ -342,6 +354,9 @@ class AndroidHostTest {
         assertEquals(original + 1, preferences().getJSONObject("shortcut_editor").array("bindings").length())
         compose.onNodeWithText("Restore default").performClick()
         compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original }
+        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
     }
 
     @Test fun touchNavigationHistoryCancellationAndSurfaceRecovery() {

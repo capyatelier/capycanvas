@@ -447,12 +447,8 @@ impl Worker {
         self.renderer.submit(frame.packet()).map_err(error)?;
         self.cursor.clone_from(&frame.cursor);
         self.cursor_scale = frame.geometry.scale as f32;
-        self.presenter.set_cursor(
-            self.renderer.device(),
-            self.renderer.queue(),
-            &self.cursor,
-            self.cursor_scale,
-        );
+        self.presenter
+            .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         self.presenter.set_corner_radius(if frame.geometry.rounded {
             12.0 * self.cursor_scale
         } else {
@@ -540,12 +536,7 @@ impl Worker {
                 view_formats: &[],
             });
         let mut presenter = ViewportPresenter::new(self.renderer.device(), texture.format());
-        presenter.set_cursor(
-            self.renderer.device(),
-            self.renderer.queue(),
-            &self.cursor,
-            self.cursor_scale,
-        );
+        presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
         let mut encoder = self
             .renderer
             .device()

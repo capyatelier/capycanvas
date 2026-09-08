@@ -21,6 +21,43 @@ performance questions. It covers the only raster path, `layer-render-wgpu`.
 
 ## Completed
 
+### Reused native input, cursor and GPU upload storage
+
+Android now checks the shared UI revision plus host presentation state **before**
+building a snapshot. Its input arrays have exclusive ownership while queued and
+return to a bounded pool after consumption; JNI retains its numeric scratch
+buffer and reads only the used portion. Debug timing uses fixed arrays and
+includes publication/rescheduling rather than ending at the render call.
+Four repeated 128 px workloads per brush used 3–6 input arrays, with 2–3 actual
+snapshots instead of 126–140 serialization attempts per stroke. Publication/
+rescheduling p95 fell from 0.305–0.375 ms to 0.056–0.074 ms. Frame tails did not
+consistently improve; see [Android measurements](android-implementation.md#emulator-measurements).
+
+GTK and Android refill native cursor geometry without formatting unused SVG
+paths or allocating intermediate contours. The shared presenter retains scaled
+vertices and skips unchanged camera uploads. Web still uses the same cursor
+geometry and its SVG presentation.
+
+One private upload helper recycles wgpu `StagingBelt` chunks on native platforms,
+finishing/remapping after the existing submission completes. Web retains direct
+`Queue::write_buffer`: wgpu's mapped-slice implementation there creates a Wasm
+temporary and copies back into JavaScript memory, defeating this optimization.
+This is upload transport only, not another brush/raster path. No pixel readback,
+extra submission, CPU wait, or canvas-sized allocation is introduced.
+See [wgpu queue behavior](https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.write_buffer)
+and [web mapped slices](https://docs.rs/wgpu/30.0.1/src/wgpu/backend/webgpu.rs.html).
+
+The isolated native comparison runs all 25 fixed 4K/32-layer workloads three
+times. All 25 final PNGs are byte-identical. Move completed-work p99 stays below
+4.4 ms and both versions pass the harness's 8.33 ms percentile gate; individual
+timings vary and this is not a blanket speedup claim. Natural Blender p95/p99
+changed from 2.743/3.364 ms to 2.432/3.154 ms; Watercolor Wash changed from
+3.244/4.072 ms to 3.304/4.355 ms. Full reports are ignored local files:
+`artifacts/benchmarks/android-upload-before-isolated.md` and
+`artifacts/benchmarks/android-upload-after.md`. These exclude native presentation
+and do not establish Android's 120 Hz target. Swapchain image-view caching is
+unchanged; no measured hotspot justified adding that lifetime machinery.
+
 ### Worker-owned full-window Wayland canvas
 
 The canvas now presents directly through an app-owned Vulkan Wayland swapchain.
@@ -301,13 +338,6 @@ wet transport, image quality, or the shared shader paths.
 Linux GPU presentation and host-path completion timings are implemented. Add
 GPU timestamps and compositor presentation feedback to separate device work
 from host scheduling. Completion does not measure compositor or scanout latency.
-
-### Upload path
-
-`Queue::write_buffer` already meets the current submit budget. Consider an
-explicit mapped upload ring only if platform traces show staging allocation or
-copy overhead at higher sample rates. Do not add it based on allocator counts
-alone.
 
 ### Large tip minification
 

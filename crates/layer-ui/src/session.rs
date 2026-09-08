@@ -136,14 +136,27 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn canvas_cursor(&mut self) -> Option<CanvasCursor> {
-        let event = self.cursor.event?;
+        let mut view = CanvasCursor::default();
+        self.update_canvas_cursor(&mut view, true).then_some(view)
+    }
+
+    /// Refill a host-owned cursor buffer without discarding its capacity.
+    /// Native presenters need segments only;
+    /// SVG formatting is optional, without changing the shared outline geometry.
+    pub fn update_canvas_cursor(&mut self, view: &mut CanvasCursor, svg: bool) -> bool {
+        view.outline.clear();
+        view.marker.clear();
+        view.segments.clear();
+        let Some(event) = self.cursor.event else {
+            return false;
+        };
         if self.interaction.pan_key.is_some()
             || self.interaction.pointer.is_some_and(|p| !p.paint)
             || self.interaction.facts.popup_open
             || self.state.settings_draft.is_some()
             || self.touch.is_active()
         {
-            return None;
+            return false;
         }
         let scale = self
             .logical_viewport
@@ -151,14 +164,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         let dabs =
             self.engine
                 .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns);
-        Some(self.cursor.view(
+        self.cursor.view(
             self.engine.backend(),
             &self.engine.brush().tip,
             &dabs,
             &self.state.camera,
             scale,
             self.state.settings.cursor,
-        ))
+            view,
+            svg,
+        );
+        true
     }
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
@@ -2057,6 +2073,18 @@ mod tests {
         assert_eq!(initial.center, [112.5, 150.0]);
         assert!(!initial.outline.is_empty());
         assert_eq!(initial.outline, s.canvas_cursor().unwrap().outline);
+        let mut native = CanvasCursor::default();
+        assert!(s.update_canvas_cursor(&mut native, false));
+        assert_eq!(native.segments, initial.segments);
+        assert!(native.outline.is_empty() && native.marker.is_empty());
+        let capacity = native.segments.capacity();
+        let pointer = native.segments.as_ptr();
+        for _ in 0..100 {
+            assert!(s.update_canvas_cursor(&mut native, false));
+            assert_eq!(native.segments, initial.segments);
+            assert_eq!(native.segments.capacity(), capacity);
+            assert_eq!(native.segments.as_ptr(), pointer);
+        }
         assert_eq!(s.state.revision, before);
         assert_eq!(s.engine.document(), &document);
         assert_eq!(s.engine.backend().dabs, 0);
@@ -2068,6 +2096,8 @@ mod tests {
         );
         key(&mut s, " ", true, false, false);
         assert!(s.canvas_cursor().is_none());
+        assert!(!s.update_canvas_cursor(&mut native, false));
+        assert!(native.segments.is_empty());
         key(&mut s, " ", false, false, false);
         assert!(s.canvas_cursor().is_some());
         invoke(&mut s, CommandId::Settings);
@@ -2106,10 +2136,15 @@ mod tests {
         brush.shape.flip_x_probability = 1.0;
         s.engine.set_brush(brush).unwrap();
         s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.0)));
+        let svg = s.canvas_cursor().unwrap();
         assert_eq!(
-            s.canvas_cursor().unwrap().outline,
+            svg.outline,
             "M92.50 155.00L122.50 155.00L92.50 145.00L92.50 155.00Z"
         );
+        let mut native = CanvasCursor::default();
+        assert!(s.update_canvas_cursor(&mut native, false));
+        assert_eq!(native.segments, svg.segments);
+        assert!(native.outline.is_empty());
     }
 
     #[test]

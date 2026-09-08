@@ -1,6 +1,6 @@
 //! GPU-only viewport presentation shared by toolkit surfaces and WebGPU.
 
-use crate::WgpuRasterizer;
+use crate::{Uploads, WgpuRasterizer};
 use layer_render::{CursorSegment, ViewState};
 
 pub struct ViewportPresenter {
@@ -13,7 +13,9 @@ pub struct ViewportPresenter {
     corner_radius: f32,
     cursor_pipeline: wgpu::RenderPipeline,
     cursor_buffer: wgpu::Buffer,
-    cursor_count: u32,
+    cursor_vertices: Vec<CursorSegment>,
+    uploads: Uploads,
+    camera_data: Option<[f32; 16]>,
 }
 
 impl ViewportPresenter {
@@ -134,7 +136,9 @@ impl ViewportPresenter {
             corner_radius: 0.0,
             cursor_pipeline,
             cursor_buffer,
-            cursor_count: 0,
+            cursor_vertices: Vec::with_capacity(256),
+            uploads: Uploads::new(device, 16 * 1024),
+            camera_data: None,
         }
     }
 
@@ -144,43 +148,28 @@ impl ViewportPresenter {
         self.corner_radius = physical_pixels.max(0.0);
     }
 
-    pub fn set_cursor(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        segments: &[CursorSegment],
-        scale: f32,
-    ) {
-        self.cursor_count = segments.len() as u32;
+    pub fn set_cursor(&mut self, device: &wgpu::Device, segments: &[CursorSegment], scale: f32) {
+        self.cursor_vertices.clear();
         if segments.is_empty() {
             return;
         }
-        let vertices: Vec<_> = segments
-            .iter()
-            .map(|s| CursorSegment {
+        self.cursor_vertices
+            .extend(segments.iter().map(|s| CursorSegment {
                 from: s.from.map(|v| v * scale),
                 to: s.to.map(|v| v * scale),
                 distance: s.distance * scale,
                 marker: s.marker,
                 scale,
-            })
-            .collect();
-        // repr(C) contains only initialized f32s, without padding.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                vertices.as_ptr().cast::<u8>(),
-                std::mem::size_of_val(vertices.as_slice()),
-            )
-        };
-        if self.cursor_buffer.size() < bytes.len() as u64 {
+            }));
+        let size = std::mem::size_of_val(self.cursor_vertices.as_slice()) as u64;
+        if self.cursor_buffer.size() < size {
             self.cursor_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("cursor segments"),
-                size: bytes.len().next_power_of_two() as u64,
+                size: size.next_power_of_two(),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
         }
-        queue.write_buffer(&self.cursor_buffer, 0, bytes);
     }
 
     /// The target is a toolkit-owned framebuffer or acquired surface texture.
@@ -263,7 +252,22 @@ impl ViewportPresenter {
         let bytes = unsafe {
             std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), std::mem::size_of_val(&data))
         };
-        renderer.queue.write_buffer(&self.uniform, 0, bytes);
+        if self.camera_data != Some(data) {
+            self.uploads
+                .write(encoder, &renderer.queue, &self.uniform, bytes);
+            self.camera_data = Some(data);
+        }
+        if !self.cursor_vertices.is_empty() {
+            // repr(C) contains only initialized f32s, without padding.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    self.cursor_vertices.as_ptr().cast::<u8>(),
+                    std::mem::size_of_val(self.cursor_vertices.as_slice()),
+                )
+            };
+            self.uploads
+                .write(encoder, &renderer.queue, &self.cursor_buffer, bytes);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewport"),
@@ -284,11 +288,14 @@ impl ViewportPresenter {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, self.bind_group.as_ref().unwrap(), &[]);
             pass.draw(0..3, 0..1);
-            if self.cursor_count != 0 {
+            if !self.cursor_vertices.is_empty() {
                 pass.set_pipeline(&self.cursor_pipeline);
                 pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));
-                pass.draw(0..6, 0..self.cursor_count);
+                pass.draw(0..6, 0..self.cursor_vertices.len() as u32);
             }
         }
+        // Return upload chunks only after this encoder's GPU work completes.
+        // Works both for present() and hosts submitting encode() themselves.
+        self.uploads.finish(encoder);
     }
 }

@@ -318,7 +318,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
       return Promise.all(urls.map(async url=>{
         const image=new Image();image.src=url;await image.decode();
         const canvas=document.createElement('canvas');canvas.width=canvas.height=32;
-        const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0,32,32);
+        const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0,32,32);
         const pixels=ctx.getImageData(0,0,32,32).data;
         const alpha=(x,y)=>pixels[(y*32+x)*4+3];
         return {width:image.naturalWidth,height:image.naturalHeight,

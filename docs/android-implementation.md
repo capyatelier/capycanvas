@@ -36,6 +36,22 @@ from Android's API 34 `MotionPredictor`, when supplied, use the engine's existin
 predicted-sample flag and never become document truth. Older devices retain the
 shared engine's predictor; there is no additional Kotlin prediction algorithm.
 
+The hot input path reuses a bounded pool of numeric arrays, transferring ownership
+from the input callback to the render task and returning it only after JNI has
+consumed the batch. JNI copies only the used records into reusable Rust scratch
+space. History and predicted records use the same route; a busy worker never
+causes an in-flight buffer to be overwritten or input to be dropped. Native cursor
+geometry is rebuilt into retained storage without generating unused SVG strings.
+
+UI snapshots check the shared core revision and host presentation state before
+building panel/layout models or serializing JSON. Hover and ordinary stroke
+movement do not rebuild unchanged controls. Vulkan swapchain images remain owned
+by the platform buffer queue and reused: there is no per-frame Compose texture,
+canvas bitmap, CPU raster, or canvas-pixel round trip. The shared wgpu renderer
+recycles small mapped upload chunks on native platforms for contacts, styles and cursor geometry;
+camera uniforms are uploaded only when their values change. Those copies use
+the existing submissions without adding a CPU wait.
+
 Surface loss must not destroy the session or document. All window references and
 swapchains must be released on their owning render thread, after the surface is
 detached. A failed GPU initialization leaves native controls and an error visible.
@@ -77,7 +93,8 @@ presentation must be measured, not inferred from that setting.
   ELF load segments have 16 KB alignment. The combined ARM64/x86_64 unsigned
   release-configuration APK passes `zipalign -c -P 16 4`. The debug APK and
   pinned-wrapper `run.sh headless` build/install/launch flow have been exercised.
-- Three Rust host tests pass: GPU-unavailable UI, malformed input, shared touch routing.
+- Four Rust host tests pass: GPU-unavailable UI, malformed input, shared touch
+  routing, and unchanged-input snapshot suppression with state/error/resize updates.
 - Eleven emulator tests pass: visible stylus paint and pixel-checked undo/redo;
   preferences/search/theme; animated drawer and divider resizing; native context
   menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
@@ -121,27 +138,40 @@ Android 15 medium-tablet AVD, host-GPU/gfxstream Vulkan, 2560×1600 display,
 readback during drawing. One render Looper owns the session and swapchain, and
 input callbacks enqueue numeric history without waiting for rendering.
 
-Isolated September 8 runs: 128 px brushes, warmed pipelines, existing pigment,
-601 injected stylus events spaced approximately 8 ms apart. CPU values cover all
-render calls; compositor values use SurfaceFlinger's last 127 valid presentations,
-not the entire gesture. Virtual GPU scheduling is noisy; these are not physical
-tablet or scanout/input-to-photon measurements.
+September 8 allocation-cleanup comparison: 128 px brushes, warmed pipelines,
+existing pigment, 601 injected stylus events spaced approximately 8 ms apart.
+The baseline has one run per brush; the updated distributions combine **every
+frame from four runs per brush**, not the fastest repetition. CPU callback timing
+includes rendering, polling, UI publication and rescheduling (older reports ended
+before publication). SurfaceFlinger fps uses its last 127 valid presentations per
+run, not the entire gesture; the table gives the updated run-to-run range.
 
-| Brush | CPU frame p50 / p95 / p99 (ms) | Composited interval p50 / p95 / p99 (ms) | Composited fps |
-| --- | --- | --- | --- |
-| G-Pen | 3.25 / 13.74 / 19.05 | 8.37 / 17.10 / 24.75 | 100.4 |
-| Watercolor Wash | 8.60 / 20.07 / 30.38 | 16.62 / 25.20 / 36.13 | 61.4 |
-| Natural Blender | 4.37 / 14.62 / 27.04 | 8.36 / 20.18 / 25.36 | 95.1 |
+| Brush | Before callback p50 / p95 / p99 (ms) | Updated callback p50 / p95 / p99 (ms) | Publication/reschedule p95, before → updated (ms) | Updated composited fps range |
+| --- | --- | --- | --- | --- |
+| G-Pen | 3.03 / 11.34 / 17.89 | 3.00 / 11.41 / 18.08 | 0.305 → 0.056 | 105.7–111.4 |
+| Natural Blender | 4.74 / 14.99 / 19.06 | 4.63 / 14.33 / 21.42 | 0.328 → 0.057 | 76.7–97.0 |
+| Watercolor Wash | 9.56 / 20.46 / 25.00 | 8.44 / 20.46 / 28.84 | 0.375 → 0.074 | 62.0–71.5 |
 
-Input delivery p95 is 1.50–1.60 ms; CPU input processing p95 is 0.015–0.017 ms.
-Render-thread queue delay grows when GPU work/presentation stalls. CPU painting
-submission p95 is 1.27 / 8.72 / 3.79 ms respectively. Acquisition and viewport
-submission are substantial contributors; final queue-present itself is usually
-below 0.4 ms p95. Reducing maximum swapchain latency from two to one did not
-improve tails, so it remains two. This does **not** establish globally optimal
-rendering or sustained 120 fps; watercolor especially still needs real-device
-profiling. The emulator's 120 Hz capability is confirmed, but the performance
-target is not met across these workloads.
+The updated host allocates 3–6 input arrays across each complete test, including
+warm-up, instead of one per event. It builds only 2–3 UI snapshots during the
+measured stroke instead of rebuilding 126–140 before comparing serialized text.
+CPU input processing p95 remains 0.015–0.016 ms. These measurements establish
+less allocation/publication work, **not** a reliable improvement in frame tails:
+GPU acquisition, viewport submission and virtual scheduling still dominate, and
+some updated p99 values are worse. No sustained 120 fps claim is made. Physical
+tablet, thermal and input-to-photon measurements remain necessary.
+
+Maximum swapchain latency remains two; an earlier one-frame experiment did not
+improve tails. Raw comparison reports are ignored local outputs under
+`artifacts/android/allocation-baseline/` and `artifacts/android/allocation-after/`.
+
+Retained storage is small relative to the canvas: eight 16-double input buffers
+need 1 KiB for uncoalesced samples, growing with history; native scratch retains
+the largest batch. GPU staging uses 64 KiB brush chunks and 16 KiB viewport chunks,
+recycled after completion; the number of chunks depends on upload size and work
+in flight. No extra canvas-sized texture is introduced. Debug measurements reserve
+1 MiB for bounded flat arrays instead of allocating records on each event/frame;
+release builds allocate none of that diagnostic storage.
 
 To repeat a single workload (change the brush name/size as needed):
 
@@ -154,7 +184,8 @@ apps/layer-android/gradlew -p apps/layer-android :app:connectedDebugAndroidTest 
 ```
 
 Debug-only bounded timing arrays capture input delivery/queue age and separate
-paint, acquisition, viewport submission, queue-present and device-poll durations.
+paint, acquisition, viewport submission, queue-present, device-poll and
+publication/rescheduling durations, plus the complete render callback.
 Release builds do not collect them. Tests retrieve compositor timestamps
 separately; no screenshot or readback is included in the timed gesture.
 

@@ -5,6 +5,15 @@ use layer_ui::{ContactPhase, PointerButton, PointerKind, UiAction, UiInput, UiSe
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+#[derive(PartialEq)]
+struct SnapshotKey {
+    revision: u64,
+    logical: [f32; 2],
+    chrome_hidden: bool,
+    gpu_ready: bool,
+    error: Option<String>,
+}
+
 pub(crate) struct App {
     pub session: UiSession<Renderer>,
     pub logical: [f32; 2],
@@ -16,7 +25,12 @@ pub(crate) struct App {
     pub profiling: bool,
     #[cfg(target_os = "android")]
     pub frame_cost: [i64; 5],
+    #[cfg(target_os = "android")]
+    pub pointer_records: Vec<f64>,
+    #[cfg(target_os = "android")]
+    pub cursor: layer_ui::CanvasCursor,
     last_pen: Option<PenEvent>,
+    last_snapshot: Option<SnapshotKey>,
     #[cfg(target_os = "android")]
     pub surface: Option<crate::android::Surface>,
     #[cfg(target_os = "android")]
@@ -38,7 +52,12 @@ impl App {
             profiling: false,
             #[cfg(target_os = "android")]
             frame_cost: [0; 5],
+            #[cfg(target_os = "android")]
+            pointer_records: Vec::new(),
+            #[cfg(target_os = "android")]
+            cursor: layer_ui::CanvasCursor::default(),
             last_pen: None,
+            last_snapshot: None,
             #[cfg(target_os = "android")]
             surface: None,
             #[cfg(target_os = "android")]
@@ -196,7 +215,23 @@ impl App {
         }
         Ok(())
     }
-    pub fn snapshot(&self) -> Value {
+    /// Check the core revision before building any layout, panel models or JSON.
+    /// Presentation-only state is included because it is not part of UiState.
+    pub fn take_snapshot(&mut self) -> Option<Value> {
+        let key = SnapshotKey {
+            revision: self.session.state().revision,
+            logical: self.logical,
+            chrome_hidden: self.chrome_hidden,
+            gpu_ready: self.session.engine().backend().0.is_some(),
+            error: self.error.clone(),
+        };
+        if self.last_snapshot.as_ref() == Some(&key) {
+            return None;
+        }
+        self.last_snapshot = Some(key);
+        Some(self.snapshot())
+    }
+    fn snapshot(&self) -> Value {
         let layout = self.session.layout(self.logical);
         let panels: Vec<_> = layout
             .groups
@@ -292,6 +327,37 @@ mod tests {
             app.query(json!({"type":"catalog"})).unwrap()["app_name"],
             "Capy Canvas"
         );
+    }
+    #[test]
+    fn snapshots_skip_unchanged_input_but_publish_state_and_chrome() {
+        let mut app = App::new().unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        assert!(app.take_snapshot().is_some());
+        for i in 0..1000 {
+            app.pointer(
+                1,
+                0,
+                0,
+                &[100. + i as f64, 200., 1., 0., 0., 0., 0., i as f64, 0.],
+                false,
+            )
+            .unwrap();
+            assert!(app.take_snapshot().is_none());
+        }
+        app.dispatch(UiAction::SetBrushSize { value: 42.0 })
+            .unwrap();
+        assert_eq!(
+            app.take_snapshot().unwrap()["state"]["brush"]["diameter"],
+            42.0
+        );
+        assert!(app.take_snapshot().is_none());
+        app.chrome_hidden = true;
+        assert_eq!(app.take_snapshot().unwrap()["chrome_hidden"], true);
+        app.error = Some("test surface error".into());
+        assert_eq!(app.take_snapshot().unwrap()["error"], "test surface error");
+        assert!(app.take_snapshot().is_none());
+        app.resize(1600, 2560, 2.0).unwrap();
+        assert!(app.take_snapshot().is_some());
     }
     #[test]
     fn malformed_input_is_rejected_before_changing_state() {
