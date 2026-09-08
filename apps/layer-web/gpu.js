@@ -71,13 +71,13 @@ export function showGpuNotice({ container, error, element, button }) {
       address(content, `${scheme}://flags/#ignore-gpu-blocklist`);
       content.append(element("p", "", "If needed, enable “Unsafe WebGPU”:"));
       address(content, `${scheme}://flags/#enable-unsafe-webgpu`);
-      const alternative = element("p", "", `Alternatively, force ${name} to use the Vulkan driver.`);
+      const alternative = element("p", "", `Alternatively, force ${name} to use the Vulkan driver:`);
       const launch = element("span", "gpu-launch", `Relaunch ${name} with the `);
       launch.append(element("code", "", "--use-angle=vulkan"), " command line option.");
       alternative.append(launch);
       content.append(alternative);
     }
-    const report = system === "linux" ? "Display Type should show “ANGLE_VULKAN”:"
+    const report = system === "linux" ? "Display Type should show ANGLE_VULKAN in the GPU debug page:"
       : `WebGPU should show “Hardware accelerated” in ${name}’s graphics report:`;
     content.append(element("p", "", report));
     address(content, `${scheme}://gpu`);

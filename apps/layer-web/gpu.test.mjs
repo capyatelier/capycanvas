@@ -8,7 +8,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
   const checkPanelStyle = async () => {
     assert.ok(await evaluate("(()=>{const help=getComputedStyle(document.querySelector('.gpu-help')),panel=getComputedStyle(document.querySelector('.dock-group'));return ['backgroundColor','color','borderRadius','boxShadow'].every(key=>help[key]===panel[key])})()"), "GPU help shares the panel background, text, corners and shadow");
-    assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice').getBoundingClientRect(),h=document.querySelector('.gpu-help').getBoundingClientRect();return Math.abs((n.top+n.bottom-h.top-h.bottom)/2)<1})()"), "Help panel is vertically centered");
+    assert.ok(await evaluate("(()=>{const notice=document.querySelector('#gpu-notice'),n=notice.getBoundingClientRect(),h=document.querySelector('.gpu-help').getBoundingClientRect(),padding=parseFloat(getComputedStyle(notice).paddingTop);return h.height>n.height-2*padding?Math.abs(h.top-n.top-padding)<1:Math.abs((n.top+n.bottom-h.top-h.bottom)/2)<1})()"), "Help panel is centered when it fits and starts at the top when scrolling is needed");
     assert.ok(await evaluate("(()=>{const h=document.querySelector('.gpu-help');return [...h.querySelectorAll('p')].every(p=>getComputedStyle(p).color===getComputedStyle(h).color)})()"), "Help text uses a consistent color");
   };
   const capture = async (name) => {
@@ -121,12 +121,14 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           assert.match(visibleText, /On Linux, enable “Override software rendering list”/);
           assert.match(visibleText, /If needed, enable “Unsafe WebGPU”/);
           const name = mode === "edge-linux" ? "Edge" : "Chrome";
-          assert.ok(visibleText.includes(`Alternatively, force ${name} to use the Vulkan driver.`));
+          assert.ok(visibleText.includes(`Alternatively, force ${name} to use the Vulkan driver:`));
           assert.equal(await evaluate("document.querySelector('.gpu-launch').textContent"), `Relaunch ${name} with the --use-angle=vulkan command line option.`);
           assert.equal(await evaluate("document.querySelector('.gpu-launch code').textContent"), "--use-angle=vulkan");
           assert.ok(await evaluate("(()=>{const launch=getComputedStyle(document.querySelector('.gpu-launch code')),address=getComputedStyle(document.querySelector('.gpu-address code'));return ['backgroundColor','color','fontFamily','fontSize','borderRadius','padding','userSelect'].every(key=>launch[key]===address[key])})()"), "Launcher flag uses the same code styling as browser addresses");
           assert.ok(await evaluate("(()=>{const line=document.querySelector('.gpu-launch'),address=document.querySelector('.gpu-address code');return Math.abs(line.getBoundingClientRect().left-address.getBoundingClientRect().left)<1})()"), "Relaunch instruction shares the address-row indent");
-          assert.match(visibleText, /Display Type should show “ANGLE_VULKAN”/);
+          assert.equal(await evaluate("getComputedStyle(document.querySelector('.gpu-launch')).marginTop"), "8px", "Relaunch instruction has the same gap as other instruction rows");
+          assert.equal(await evaluate("getComputedStyle(document.querySelector('.gpu-launch')).lineHeight"), await evaluate("getComputedStyle(document.querySelector('.gpu-address button')).minHeight"), "Relaunch line height matches rows with Copy buttons");
+          assert.equal(await evaluate("document.querySelector('.gpu-launch').parentElement.nextElementSibling.textContent"), "Display Type should show ANGLE_VULKAN in the GPU debug page:");
           assert.doesNotMatch(visibleText, /WebGPU should show/);
           assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help > p')].some(n=>n.textContent.startsWith('On Linux,'))"), "Linux help is an unnumbered paragraph");
           assert.equal(await evaluate("document.querySelectorAll('.gpu-steps ol').length"), 0, "No nested troubleshooting steps");
@@ -166,11 +168,17 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       await capture(mode + "-light");
       if (mode === "no-adapter") {
         await action({ type: "set_theme", theme: "dark" });
-        for (const [width, height] of [[1280, 720], [900, 700]]) {
+        for (const [width, height] of [[1280, 720], [900, 760], [900, 700]]) {
           await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
           await settle();
           await checkPanelStyle();
-          assert.deepEqual(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return [n.scrollWidth-n.clientWidth,n.scrollHeight-n.clientHeight]})()"), [0, 0], `All instructions fit without scrolling at ${width}×${height}`);
+          const overflow = await evaluate("(()=>{const n=document.querySelector('#gpu-notice');return [n.scrollWidth-n.clientWidth,n.scrollHeight-n.clientHeight]})()");
+          assert.equal(overflow[0], 0, "Help never needs horizontal scrolling");
+          if (height !== 700) assert.equal(overflow[1], 0, `All instructions fit without scrolling at ${width}×${height}`);
+          else {
+            assert.ok(await evaluate("(()=>{const n=document.querySelector('#gpu-notice');n.scrollTop=n.scrollHeight;const r=n.getBoundingClientRect(),last=n.querySelector('.gpu-address:last-child').getBoundingClientRect();return last.top>=r.top&&last.bottom<=r.bottom})()"), "The GPU debug-page address and Copy button remain reachable in shorter windows");
+            await evaluate("document.querySelector('#gpu-notice').scrollTop=0");
+          }
           await capture(`${mode}-${width}x${height}`);
         }
         await call("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });

@@ -33,7 +33,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 .gpu-address { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 /* Match the ordered list's 24px marker inset plus 4px item padding. */
 .gpu-help > .gpu-address, .gpu-launch { margin-left: 28px; }
-.gpu-launch { display: block; }
+.gpu-launch { display: block; margin-top: 8px; line-height: 28px; }
 .gpu-help code { padding: 4px 8px; border-radius: 6px; background: var(--input); font-size: 12px; user-select: text; }
 .gpu-address code { min-width: 0; flex: 0 1 auto; }
 .gpu-launch code { white-space: nowrap; }

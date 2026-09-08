@@ -107,7 +107,9 @@ Android client hints. Desktop Chromium gets the compact settings → acceleratio
 desktop Chromium gets the two unnumbered experimental-flag paragraphs and the
 alternative Vulkan-driver guidance, followed by an indented instruction to relaunch
 with the `--use-angle=vulkan` command-line option, styled like the copyable
-browser addresses. Android
+browser addresses and separated from its introduction by the same 8 px gap as
+other instruction rows. Its 28 px line height matches rows with Copy buttons.
+The next paragraph identifies the GPU debug page. Android
 gets Chrome/system-update guidance, iOS/iPadOS gets Safari/system-update guidance,
 and Safari and Firefox get their own update guidance. Mobile users do not get
 desktop graphics-acceleration switches or Linux flags.
@@ -123,7 +125,8 @@ in both themes, with roomier padding and vertical centering in the canvas area.
 All copyable addresses have the same left indent, and explanatory text uses the
 same color as the instructions. Extra space below the subtitle and numbered steps
 separates the sections. The default instructions fit without scrolling at 1280×720
-and 900×700. Browser flags are never enabled by the app. Missing WebGPU and insecure
+and 900×760. Shorter, narrow windows scroll vertically without clipping the last
+instruction or Copy button. Browser flags are never enabled by the app. Missing WebGPU and insecure
 connections get appropriate explanations; users see only their platform’s guide.
 There are no retry or technical-details controls. Reload the page after fixing
 browser settings; technical errors are logged to the browser console only.
