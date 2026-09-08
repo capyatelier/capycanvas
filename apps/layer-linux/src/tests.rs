@@ -112,6 +112,21 @@ fn native_menu_sections() {
     std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let theme_action = w
+            .menu_actions
+            .lookup_action(&CommandId::ToggleTheme.shortcut_id())
+            .unwrap();
+        assert_eq!(
+            theme_action.state().unwrap().get::<bool>(),
+            Some(theme == Theme::Dark)
+        );
+        theme_action.activate(None);
+        assert_eq!(
+            theme_action.state().unwrap().get::<bool>(),
+            Some(theme != Theme::Dark)
+        );
+        theme_action.activate(None);
+        assert_eq!(state(&w).theme, theme);
         for (label, sections) in MENUS
             .iter()
             .map(|m| (m.label, m.sections))

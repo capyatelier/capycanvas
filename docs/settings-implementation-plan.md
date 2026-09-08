@@ -86,6 +86,8 @@ All native header menus use `GMenu`/`GtkPopoverMenu`, with enabled/check states
 and accelerator hints from the shared command model. Rust defines menu sections:
 New Window is separate from Preferences/Keyboard Shortcuts/About; View separates
 Fit Canvas, the appearance/visibility toggles (including Zen Mode), and Reset Layout.
+Dark Mode is checked when the effective theme is dark, including in Auto mode;
+toggling it sets an explicit light/dark override. Its label and state live in Rust.
 Undo/Redo remain one group. GTK renders native section separators; web renders
 horizontal rules at the same boundaries. GNOME Settings keeps its support entries
 together, and Text Editor separates this final group from document/window actions:

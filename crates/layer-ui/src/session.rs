@@ -460,7 +460,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             (id, self.state.brush.tool),
             (CommandId::Brush, Tool::Brush) | (CommandId::Eraser, Tool::Eraser)
         ) || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
-            || (id == CommandId::TogglePanels && self.state.workspace.layout.panels_visible);
+            || (id == CommandId::TogglePanels && self.state.workspace.layout.panels_visible)
+            || (id == CommandId::ToggleTheme
+                && self.state.settings.theme.unwrap_or(self.system_theme) == Theme::Dark);
         (enabled, selected)
     }
 
@@ -2042,7 +2044,17 @@ mod tests {
     #[test]
     fn appearance_follows_system_unless_overridden() {
         let mut app = session();
+        let check_menu = |state: &UiState| {
+            let command = state
+                .commands
+                .iter()
+                .find(|c| c.id == CommandId::ToggleTheme)
+                .unwrap();
+            assert_eq!(command.label, "Dark Mode");
+            assert_eq!(command.selected, state.theme == Theme::Dark);
+        };
         assert_eq!(app.state.settings.theme, None);
+        check_menu(&app.state);
         for theme in [Theme::Dark, Theme::Light] {
             let change = app
                 .dispatch(UiAction::SystemThemeChanged { theme })
@@ -2050,6 +2062,8 @@ mod tests {
             assert_eq!(app.state.theme, theme);
             assert!(change.canvas_wake);
             assert_eq!(app.state.settings.theme, None);
+            check_menu(&app.state);
+            assert_ne!(change.regions & regions::COMMANDS, 0);
         }
         app.dispatch(UiAction::SetTheme {
             theme: Some(Theme::Light),
@@ -2061,20 +2075,25 @@ mod tests {
         assert_eq!(app.state.theme, Theme::Light);
         assert!(!change.canvas_wake);
         assert_eq!(change.regions, 0);
+        check_menu(&app.state);
         // Return to auto using the latest system value, without a new OS event.
         app.dispatch(UiAction::SetTheme { theme: None }).unwrap();
         assert_eq!(app.state.theme, Theme::Dark);
+        check_menu(&app.state);
         invoke(&mut app, CommandId::ToggleTheme);
         assert_eq!(app.state.settings.theme, Some(Theme::Light));
+        check_menu(&app.state);
         invoke(&mut app, CommandId::Settings);
         app.dispatch(UiAction::EditSettings {
             settings: Settings::default(),
         })
         .unwrap();
         assert_eq!(app.state.theme, Theme::Light);
+        check_menu(&app.state);
         app.dispatch(UiAction::ApplySettings).unwrap();
         assert_eq!(app.state.theme, Theme::Dark);
         assert_eq!(app.state.settings.theme, None);
+        check_menu(&app.state);
     }
     #[test]
     fn settings_are_transactional_and_dismissible() {

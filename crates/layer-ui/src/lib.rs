@@ -399,7 +399,7 @@ impl CommandId {
             Self::Redo => "Redo",
             Self::FitCanvas => "Fit canvas",
             Self::Settings => "Preferences",
-            Self::ToggleTheme => "Light / dark",
+            Self::ToggleTheme => "Dark Mode",
             Self::AddLayer => "New layer",
             Self::DeleteLayer => "Delete layer",
             Self::RaiseLayer => "Raise layer",

@@ -44,6 +44,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await action({ type: "cancel_settings" });
   for (const theme of ["dark", "light"]) {
     await action({ type: "set_theme", theme });
+    const darkMode = '.header-menu [data-command="toggle_theme"]';
+    assert.equal(await evaluate(`document.querySelector('${darkMode} .command-label').textContent`), 'Dark Mode');
+    assert.equal(await evaluate(`document.querySelector('${darkMode}').getAttribute('aria-pressed')`), String(theme === 'dark'));
+    await click(darkMode);
+    assert.equal(await evaluate(`document.querySelector('${darkMode}').getAttribute('aria-pressed')`), String(theme !== 'dark'));
+    assert.equal(await evaluate('document.body.dataset.theme'), theme === 'dark' ? 'light' : 'dark');
+    await click(darkMode);
     const menus = await evaluate("layerApp.app.catalog().menus");
     for (const [index, spec] of menus.entries()) {
       const selector = `.header-menu:nth-of-type(${index + 1})`;
