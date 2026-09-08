@@ -1,5 +1,6 @@
 package art.capycanvas
 
+import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.os.Bundle
 import android.view.KeyEvent
@@ -24,6 +25,9 @@ class MainActivity : ComponentActivity() {
         super.onConfigurationChanged(newConfig)
         updateTheme(newConfig)
     }
+    // This is Activity's public Window.Callback override. AndroidX's internal
+    // superclass carries a class-wide restriction that lint also inherits here.
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         host.key(event)
         return super.dispatchKeyEvent(event)

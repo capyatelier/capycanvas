@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -94,7 +95,7 @@ import org.json.JSONObject
     val context = LocalContext.current
     val enabled = row.optBoolean("enabled", true)
     fun edit(value: Any) = host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to value))
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.testTag("preference-${row.getString("id")}"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         when (kind.getString("type")) {
             "number" -> NumericSetting(row.getString("title"), kind.number("value"), kind.getJSONObject("control")) { if (enabled) edit(it) }
             "switch" -> Row(verticalAlignment = Alignment.CenterVertically) {

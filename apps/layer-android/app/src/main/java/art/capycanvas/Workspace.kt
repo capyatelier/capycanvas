@@ -1,6 +1,7 @@
 package art.capycanvas
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -22,7 +23,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -40,7 +40,7 @@ internal class DockInteraction(val host: CanvasHost) {
     var expansion by mutableStateOf<JSONObject?>(null)
     var contextMenu by mutableStateOf<JSONObject?>(null)
     var popupOpen = false
-    var configurationHeight by mutableStateOf(0f)
+    var configurationHeight by mutableFloatStateOf(0f)
     val tabs = mutableMapOf<String, JSONObject>()
     var origin = Offset.Zero
     var density = 1f
@@ -111,7 +111,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val state = snapshot?.getJSONObject("state")
     val colors = Palette(state?.optString("theme") != "light")
     val scheme = if (colors.dark) darkColorScheme() else lightColorScheme()
-    val activity = LocalContext.current as? android.app.Activity
+    val activity = LocalActivity.current
     SideEffect {
         activity?.window?.let { window ->
             androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
@@ -193,8 +193,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 }
             }
         }
-        if (snapshot != null && !snapshot.optBoolean("chrome_hidden")) {
-            Header(host, state!!, dock)
+        if (snapshot != null && state != null && !snapshot.optBoolean("chrome_hidden")) {
+            if (snapshot.objectOrNull("preferences") == null) Header(host, state, dock)
             val layout = snapshot.getJSONObject("layout")
             layout.array("groups").objects().sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEach { group ->
                 key(group.getInt("id")) {
@@ -295,7 +295,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                         (section as JSONArray).values().forEach { id ->
                             state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
                                 DropdownMenuItem(text = { Text(command.getString("label")) }, enabled = command.getBoolean("enabled"),
-                                    trailingIcon = { Text(if (command.optBoolean("selected")) "✓" else command.optString("shortcut"), color = colors.secondary) },
+                                    trailingIcon = { if (command.optBoolean("selected")) SharedIcon("check", null) else Text(command.optString("shortcut"), color = colors.secondary) },
                                     onClick = { open = false; host.invoke(id.toString()) })
                             }
                         }

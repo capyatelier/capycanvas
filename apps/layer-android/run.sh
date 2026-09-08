@@ -39,7 +39,7 @@ done
 capy_abi=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')
 if [[ "$capy_mode" == test ]]; then
     "$capy_android_dir/gradlew" -p "$capy_android_dir" :app:connectedDebugAndroidTest \
-        "-PcapyAbi=$capy_abi" -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+        "-PcapyAbi=$capy_abi"
 else
     "$capy_android_dir/gradlew" -p "$capy_android_dir" :app:assembleDebug "-PcapyAbi=$capy_abi"
     adb install -r "$capy_android_dir/app/build/outputs/apk/debug/app-debug.apk"

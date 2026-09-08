@@ -54,10 +54,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var lastSnapshot = ""
     private var snapshotAt = 0L
     private var savedWorkspace = ""
-    private var queuedInputSamples = 0L
-    private var frames = 0L
-    private var maxQueueNs = 0L
-    private var maxFrameNs = 0L
     private val measuredFrames = if (BuildConfig.DEBUG) ArrayList<LongArray>() else null
     private val measuredInputs = if (BuildConfig.DEBUG) ArrayList<LongArray>() else null
     private val suppressedContacts = mutableSetOf<Long>()
@@ -157,8 +153,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val arrival = System.nanoTime()
         post(canvas = true) {
             val started = System.nanoTime()
-            maxQueueNs = maxOf(maxQueueNs, started - arrival)
-            queuedInputSamples += samples.size / 9
             val phase = samples[samples.size - 1].toInt()
             if (phase == 1 && !predicted) {
                 val event = obj("kind" to "contact", "canvas" to true,
@@ -191,9 +185,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             val start = System.nanoTime()
             val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
             val elapsed = System.nanoTime() - start
-            maxFrameNs = maxOf(maxFrameNs, elapsed)
             if (measuredFrames != null && measuredFrames.size < 8192) measuredFrames.add(longArrayOf(frameTime, start, elapsed, expectedPresentation) + Native.frameCost(handle))
-            frames++
             publish(!again)
             if (again) wake()
         }
@@ -237,7 +229,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         worker.post {
             disposed = true; attached = false
             if (handle != 0L) { Native.destroy(handle); handle = 0 }
-            Log.i("CapyCanvas", "frames=$frames samples=$queuedInputSamples maxQueueMs=${maxQueueNs / 1e6} maxFrameMs=${maxFrameNs / 1e6}")
             thread.quitSafely()
         }
     }

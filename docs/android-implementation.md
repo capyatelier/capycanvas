@@ -1,6 +1,6 @@
 # Android native host
 
-Status: native tablet prototype implemented; emulator validation in progress.
+Status: native tablet prototype implemented and emulator-validated.
 Physical-tablet latency and stylus feel are not yet validated.
 
 ## Required acceptance
@@ -46,6 +46,8 @@ NDK r29, Gradle 9.5, Java 25 host runtime, arm64 devices and x86_64 emulator.
 ## Build and run
 
 ```sh
+rustup target add aarch64-linux-android x86_64-linux-android
+cargo install cargo-ndk --locked
 android --sdk="$HOME/Android/Sdk" sdk install platforms/android-37.0 build-tools/37.0.0 ndk/29.0.14206865 platform-tools emulator
 android --sdk="$HOME/Android/Sdk" emulator create medium_tablet
 bash apps/layer-android/run.sh
@@ -55,6 +57,13 @@ bash apps/layer-android/run.sh
 the native integration tests. Set `CAPY_ANDROID_SERIAL` for another connected
 device and `CAPY_ANDROID_AVD` for a different existing emulator. The Gradle
 wrapper validates its downloaded distribution against the pinned SHA-256.
+The SDK-management `android` CLI is optional; Android Studio's SDK/Device
+Managers can install the same packages and create the tablet instead. Java,
+Rust and the Android tools are external prerequisites, not vendored sources.
+
+Settings and workspace customization persist between launches. Like the other
+prototype hosts, the drawing document is currently in memory; do not use this
+build for artwork that needs to survive process termination.
 
 The CLI's medium-tablet profile currently installs an Android 15 image, separate
 from the SDK 37 used to compile the application. The emulator's documented
@@ -62,38 +71,48 @@ from the SDK 37 used to compile the application. The emulator's documented
 cold restart; the default is 60 Hz. Actual app cadence and SurfaceFlinger
 presentation must be measured, not inferred from that setting.
 
-## Validation progress (not final acceptance)
+## Validation
 
 - Android x86_64 and arm64 release native libraries build successfully. The arm64
-  ELF load segments have 16 KB alignment. The debug APK and pinned-wrapper
-  `run.sh headless` build/install/launch flow have been exercised.
+  ELF load segments have 16 KB alignment. The combined ARM64/x86_64 unsigned
+  release-configuration APK passes `zipalign -c -P 16 4`. The debug APK and
+  pinned-wrapper `run.sh headless` build/install/launch flow have been exercised.
 - Three Rust host tests pass: GPU-unavailable UI, malformed input, shared touch routing.
-- Eight emulator tests pass: visible stylus paint and pixel-checked undo/redo;
+- Eleven emulator tests pass: visible stylus paint and pixel-checked undo/redo;
   preferences/search/theme; animated drawer and divider resizing; native context
   menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
   shortcut recording, saving and activity recreation; two-finger navigation,
   coalesced history, cancellation, background/foreground surface recovery and
-  display rotation; high-rate input/render/compositor measurement.
+  display rotation; high-rate input/render/compositor measurement; menus, cursor
+  choices and About links; palm rejection and pixel-checked erasing; Zen drawer
+  dismissal and panel dragging without hiding the workspace. All 71 shared Rust
+  UI tests also pass.
+- Android lint completes without errors. Remaining warnings concern pinned
+  dependency updates, optional Kotlin/Compose conventions and development
+  manifest/tooling choices; they are not suppressed with a blanket baseline.
 - Workspace, settings, light/dark, joined drawer, shortcut editor, custom toolbar,
-  tab-group moves and actual portrait-display screenshots inspected. Android's
+  tab-group moves, cursor choices, menus, About, erasing, wet brushes, Zen and
+  actual portrait-display screenshots inspected. Android's
   letterboxed forced-activity orientation is not used as portrait validation.
   Test images survive app uninstall under `Pictures/CapyCanvasValidation` in the
   emulator. Timing JSON is under `Download/CapyCanvasValidation`.
 - The first repeat uncovered asynchronous IME resets in the search field; native
   editing state is now retained locally until focus leaves, with accepted values
   still owned by Rust. The suite passes again after this fix.
-- Initial 120 Hz emulator measurement (601 stylus events): frame interval median
-  8.33 ms / p95 16.67 ms; CPU input p95 0.016 ms; input delivery p95 1.52 ms.
-  CPU painting p95 1.07 ms; surface acquire p95 4.56 ms; viewport/present/poll
-  p95 5.77 ms. These are CPU durations, **not** GPU completion or final compositor
-  timestamps. Sustained 120 fps is not yet proven; investigate presentation stalls.
 - Refinements found during testing: honor Rust's shortcut visibility flags;
   forward keys from the dialog's native window; preserve local IME editing state;
   reuse the Vulkan instance across surface replacement; preserve canvas extent
   when the keyboard opens; use one joined drawer shadow; keep platform predictions
-  out of contact routing; render Android dialogs with the shared neutral palette.
-- Still required before final handoff: remaining menu/cursor/palm/Zen interaction
-  checks, release packaging check, final source review and visual acceptance.
+  out of contact routing; render Android dialogs with the shared neutral palette;
+  dismiss workspace menu windows when opening Preferences.
+
+These are development APKs, not store-ready releases. Before public binary
+distribution, add release signing and complete the exact Maven/native/toolchain
+dependency-notice package described in `THIRD_PARTY_NOTICES.md`. The APK already
+retains repository license/branding notices and dependency notices supplied by
+its Java artifacts; that is not a claim of complete distribution compliance.
+Real tablet testing remains necessary for stylus feel, GPU-driver differences,
+thermal behavior and sustained 120 Hz. Emulator timing limitations are below.
 
 ## Emulator measurements
 

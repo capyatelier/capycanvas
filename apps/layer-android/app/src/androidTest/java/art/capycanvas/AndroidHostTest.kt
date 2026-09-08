@@ -75,19 +75,24 @@ class AndroidHostTest {
     }
     /** Native dispatch tests retain full MotionEvent history and pointer IDs. */
     private fun canvasEvent(action: Int, points: List<androidx.compose.ui.geometry.Offset>,
-        tool: Int = MotionEvent.TOOL_TYPE_FINGER, history: Boolean = false) {
+        tool: Int = MotionEvent.TOOL_TYPE_FINGER, history: Boolean = false,
+        pointerTools: List<Int> = List(points.size) { tool }) {
         instrumentation.runOnMainSync {
             val canvas = findCanvas(compose.activity.window.decorView)!!
             val coords = points.map { point -> MotionEvent.PointerCoords().apply {
                 x = canvas.width * point.x; y = canvas.height * point.y; pressure = 0.7f
                 setAxisValue(MotionEvent.AXIS_TILT, 0.4f)
             } }.toTypedArray()
-            val props = points.indices.map { i -> MotionEvent.PointerProperties().apply { id = i; toolType = tool } }.toTypedArray()
+            val props = points.indices.map { i -> MotionEvent.PointerProperties().apply { id = i; toolType = pointerTools[i] } }.toTypedArray()
             val time = SystemClock.uptimeMillis()
-            val source = if (tool == MotionEvent.TOOL_TYPE_FINGER) InputDevice.SOURCE_TOUCHSCREEN else InputDevice.SOURCE_STYLUS
+            val source = when (tool) {
+                MotionEvent.TOOL_TYPE_FINGER -> InputDevice.SOURCE_TOUCHSCREEN
+                MotionEvent.TOOL_TYPE_MOUSE -> InputDevice.SOURCE_MOUSE
+                else -> InputDevice.SOURCE_STYLUS
+            }
             val event = MotionEvent.obtain(time - 30, time - if (history) 2 else 0, action, points.size, props, coords, 0, 0, 1f, 1f, 1, 0, source, 0)
             if (history) event.addBatch(time, coords.map { old -> MotionEvent.PointerCoords(old).apply { x += 4f; pressure = 0.9f } }.toTypedArray(), 0)
-            assertTrue(canvas.dispatchTouchEvent(event))
+            assertTrue(if (action == MotionEvent.ACTION_HOVER_MOVE) canvas.dispatchGenericMotionEvent(event) else canvas.dispatchTouchEvent(event))
             event.recycle()
         }
     }
@@ -109,21 +114,21 @@ class AndroidHostTest {
         resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
         return bitmap
     }
+    private fun darkPixels(image: Bitmap): Int {
+        var dark = 0
+        for (y in image.height * 35 / 100 until image.height * 65 / 100 step 2) {
+            for (x in image.width * 35 / 100 until image.width * 65 / 100 step 2) {
+                val c = image.getPixel(x, y)
+                if (android.graphics.Color.red(c) < 100 && android.graphics.Color.green(c) < 100) dark++
+            }
+        }
+        return dark
+    }
     @Test fun stylusDrawsAndUndoRedoChangePixels() {
         penStroke()
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
         assertNull(host.failure)
         val painted = capture("01-stylus-light")
-        fun darkPixels(image: Bitmap): Int {
-            var dark = 0
-            for (y in image.height * 35 / 100 until image.height * 65 / 100 step 2) {
-                for (x in image.width * 35 / 100 until image.width * 65 / 100 step 2) {
-                    val c = image.getPixel(x, y)
-                    if (android.graphics.Color.red(c) < 100 && android.graphics.Color.green(c) < 100) dark++
-                }
-            }
-            return dark
-        }
         val dark = darkPixels(painted)
         assertTrue("Stroke deposits visible pixels in the canvas, not just cursor state ($dark)", dark > 100)
         compose.onNodeWithContentDescription("Undo").performClick()
@@ -380,5 +385,86 @@ class AndroidHostTest {
         compose.onNodeWithContentDescription("Preferences").performClick()
         capture("17-settings-portrait")
         assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0))
+    }
+
+    @Test fun menusCursorChoicesAndAboutUseCoreMetadata() {
+        compose.onNodeWithText("View").performClick()
+        capture("18-view-menu")
+        compose.onNodeWithText("Fit canvas").performClick()
+        compose.onNodeWithText("Fit canvas").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithText("Canvas").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
+        capture("19-canvas-settings")
+        val row = preferences().array("pages").objects().first { it.getString("id") == "canvas" }
+            .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getJSONObject("kind").getString("type") == "choice" }
+        val kind = row.getJSONObject("kind")
+        compose.onNodeWithTag("preference-${row.getString("id")}").performScrollTo()
+            .onChildren().filterToOne(hasClickAction()).performClick()
+        capture("20-cursor-choices")
+        val selection = (kind.getInt("selected") + 1) % kind.array("options").length()
+        compose.onNodeWithText(kind.array("options").getString(selection)).performClick()
+        compose.onNodeWithText("About").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "about" }
+        compose.onNodeWithText("capycanvas.art").assertExists()
+        compose.onNodeWithText("github.com/capyatelier/capycanvas").assertExists()
+        capture("21-about")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+        assertNull(host.actionError)
+    }
+
+    @Test fun palmDoesNotPanWhilePenDrawsAndEraserWorks() {
+        val pen = androidx.compose.ui.geometry.Offset(0.45f, 0.5f)
+        val palm = androidx.compose.ui.geometry.Offset(0.6f, 0.6f)
+        val camera = state().getJSONObject("camera").toString()
+        val tools = listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_FINGER)
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(pen), MotionEvent.TOOL_TYPE_STYLUS)
+        canvasEvent(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(pen, palm), MotionEvent.TOOL_TYPE_STYLUS, pointerTools = tools)
+        canvasEvent(MotionEvent.ACTION_MOVE, listOf(pen + androidx.compose.ui.geometry.Offset(0.1f, 0f), palm + androidx.compose.ui.geometry.Offset(0.05f, 0.05f)), MotionEvent.TOOL_TYPE_STYLUS, pointerTools = tools)
+        canvasEvent(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), listOf(pen, palm), MotionEvent.TOOL_TYPE_STYLUS, pointerTools = tools)
+        canvasEvent(MotionEvent.ACTION_UP, listOf(pen), MotionEvent.TOOL_TYPE_STYLUS)
+        waitState { it.array("commands").objects().first { c -> c.getString("id") == "undo" }.getBoolean("enabled") }
+        assertEquals("Palm contact must not move the camera", camera, state().getJSONObject("camera").toString())
+        val painted = darkPixels(capture("22-pen-with-palm"))
+        assertTrue("Pen still deposits pigment during palm contact", painted > 100)
+        compose.runOnIdle { host.dispatch(obj("type" to "set_brush_size", "value" to 64)) }
+        waitState { it.getJSONObject("brush").number("diameter") == 64f }
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(pen), MotionEvent.TOOL_TYPE_ERASER)
+        canvasEvent(MotionEvent.ACTION_MOVE, listOf(pen + androidx.compose.ui.geometry.Offset(0.1f, 0f)), MotionEvent.TOOL_TYPE_ERASER)
+        canvasEvent(MotionEvent.ACTION_UP, listOf(pen), MotionEvent.TOOL_TYPE_ERASER)
+        assertTrue("The eraser removes deposited pigment", darkPixels(capture("23-eraser")) < painted / 5)
+        assertNull(host.failure)
+    }
+
+    @Test fun zenKeepsChromeThroughDrawerDismissalAndPanelDrag() {
+        compose.onNodeWithContentDescription("Zen mode").performClick()
+        waitState { it.getJSONObject("workspace").getBoolean("zen_mode") }
+        val edge = androidx.compose.ui.geometry.Offset(0.01f, 0.01f)
+        val center = androidx.compose.ui.geometry.Offset(0.7f, 0.6f)
+        canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(edge), MotionEvent.TOOL_TYPE_MOUSE)
+        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        compose.onAllNodesWithText("Brushes").onFirst().performClick()
+        waitState { it.getJSONObject("customization").optString("expanded") == "brushes" }
+        compose.waitForIdle()
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
+        canvasEvent(MotionEvent.ACTION_UP, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
+        waitState { it.getJSONObject("customization").isNull("expanded") }
+        assertFalse("First outside contact closes only the drawer", host.snapshot!!.getBoolean("chrome_hidden"))
+        canvasEvent(MotionEvent.ACTION_DOWN, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
+        canvasEvent(MotionEvent.ACTION_UP, listOf(center), MotionEvent.TOOL_TYPE_STYLUS)
+        compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
+        canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(edge), MotionEvent.TOOL_TYPE_MOUSE)
+        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        val source = compose.onAllNodesWithText("Brushes").onFirst()
+        val target = compose.onAllNodesWithText("Layers").onFirst().fetchSemanticsNode().boundsInRoot.center
+        val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
+        source.performTouchInput { swipe(this.center, target - origin, 700) }
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any {
+            it.array("panels").values().containsAll(listOf("brushes", "layers"))
+        } }
+        assertFalse("Dropping a panel keeps its workspace visible", host.snapshot!!.getBoolean("chrome_hidden"))
+        capture("24-zen-after-drag")
+        compose.runOnIdle { host.invoke("zen_mode") }
     }
 }
