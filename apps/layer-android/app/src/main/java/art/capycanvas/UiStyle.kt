@@ -134,17 +134,25 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun EditorSlider(value: Float, onChange: (Float) -> Unit,
     modifier: Modifier = Modifier, range: ClosedFloatingPointRange<Float> = 0f..1f,
-    enabled: Boolean = true, label: String = "") {
+    enabled: Boolean = true, label: String = "", height: Dp = 28.dp,
+    inactiveTrackColor: Color = LocalPalette.current.input,
+    onValueChangeFinished: (() -> Unit)? = null) {
     val colors = LocalPalette.current
     val focus = LocalFocusManager.current
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
-        Slider(value.coerceIn(range), { focus.clearFocus(); onChange(it) }, modifier.height(28.dp).semantics { contentDescription = label },
-            enabled = enabled, valueRange = range,
-            thumb = { Box(Modifier.size(16.dp).shadow(2.dp, CircleShape).background(colors.thumb, CircleShape)) },
+        Slider(value.coerceIn(range), { focus.clearFocus(); onChange(it) }, modifier.height(height).semantics { contentDescription = label },
+            enabled = enabled, valueRange = range, onValueChangeFinished = onValueChangeFinished,
+            thumb = {
+                // Material measures the slider from its thumb/track, so reserve
+                // the hit height here without enlarging the visible knob.
+                Box(Modifier.width(16.dp).height(height), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(16.dp).shadow(2.dp, CircleShape).background(colors.thumb, CircleShape))
+                }
+            },
             track = { state ->
                 ComposeCanvas(Modifier.fillMaxWidth().height(4.dp)) {
                     val end = Offset(size.width, center.y)
-                    drawLine(colors.input, Offset(0f, center.y), end, size.height, StrokeCap.Round)
+                    drawLine(inactiveTrackColor, Offset(0f, center.y), end, size.height, StrokeCap.Round)
                     val fraction = (state.value - range.start) / (range.endInclusive - range.start)
                     drawLine(colors.accent.copy(alpha = if (enabled) 1f else .4f), Offset(0f, center.y),
                         Offset(size.width * fraction, center.y), size.height, StrokeCap.Round)

@@ -35,6 +35,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -65,7 +66,6 @@ import org.json.JSONObject
 private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "value:" + it.getString("id") }
     ?: objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") } ?: "page:" + getString("page")
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
@@ -86,16 +86,26 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
             }
         }
         BackHandler(onBack = ::back)
-        Column {
-            TopAppBar(title = { Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
-                actions = { TextButton(::close, Modifier.testTag("settings-done").padding(end = 8.dp)) { Text("Done") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.settingsBackground),
-                windowInsets = WindowInsets(0))
-            HorizontalDivider(color = colors.divider)
-            Row(Modifier.weight(1f)) {
-                if (wide || !showPage) PreferencesNavigation(host, view,
-                    Modifier.then(if (wide) Modifier.width(260.dp) else Modifier.fillMaxWidth()).fillMaxHeight()) { showPage = true }
-                if (wide || showPage) {
+        // Two full-height panes, not a global app bar stacked over two columns.
+        Row(Modifier.fillMaxSize()) {
+            if (wide || !showPage) PreferencesNavigation(host, view,
+                Modifier.then(if (wide) Modifier.width(260.dp) else Modifier.fillMaxWidth()).fillMaxHeight(),
+                showDone = !wide, close = ::close) { showPage = true }
+            if (wide || showPage) {
+                Column(Modifier.weight(1f).fillMaxHeight().testTag("settings-main-pane")) {
+                    val page = view.array("pages").objects().find { it.getString("id") == view.getString("page") }
+                    // Pane controls stay put while only its contents slide.
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)) {
+                        Text(detail?.getString("title") ?: shortcut?.getString("label") ?: page?.getString("title") ?: "",
+                            Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 88.dp).testTag("settings-page-title"),
+                            fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                        if (detail != null || shortcut != null || !wide) {
+                            IconButton(::back, Modifier.align(Alignment.CenterStart).size(48.dp)) {
+                                SharedIcon("back", "Back", Modifier.size(20.dp))
+                            }
+                        }
+                        SettingsDone(::close, Modifier.align(Alignment.CenterEnd))
+                    }
                     AnimatedContent(view, Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentKey = { it.settingsRoute() },
                         transitionSpec = {
                             if (initialState.settingsRoute().startsWith("page:") && targetState.settingsRoute().startsWith("page:")) {
@@ -109,45 +119,35 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                         val row = model.objectOrNull("detail")
                         val editor = model.objectOrNull("shortcut_editor")
                         val page = model.array("pages").objects().find { it.getString("id") == model.getString("page") }
-                        Column(Modifier.testTag("settings-content-" + model.settingsRoute())) {
-                            if (row != null || editor != null || !wide) {
-                                TopAppBar(title = { Text(row?.getString("title") ?: editor?.getString("label") ?: page?.getString("title") ?: "",
-                                    fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
-                                    navigationIcon = {
-                                        IconButton(::back) { SharedIcon("back", "Back", Modifier.size(24.dp)) }
-                                    }, colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.settingsBackground),
-                                    windowInsets = WindowInsets(0))
-                            }
-                            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                                .padding(horizontal = 24.dp, vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                                    when {
-                                        row != null -> PreferenceDetail(host, row)
-                                        editor != null -> ShortcutEditor(host, model, editor)
-                                        else -> {
-                                            if (wide) Text(page?.getString("title") ?: "", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                                            if (model.getString("page") == "shortcuts") Shortcuts(host, model)
-                                            else page?.array("groups")?.objects()?.forEach { group ->
-                                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                    Text(group.getString("title"), Modifier.padding(horizontal = 4.dp), fontWeight = FontWeight.Bold)
-                                                    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-                                                        color = colors.settingsCard, shadowElevation = 1.dp) {
-                                                        Column {
-                                                            group.array("rows").objects().filter { it.optBoolean("visible", true) }.forEachIndexed { index, setting ->
-                                                                if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                                                                key(setting.getString("id")) { PreferenceRow(host, setting) }
-                                                            }
+                        Column(Modifier.fillMaxSize().testTag("settings-content-" + model.settingsRoute())
+                            .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally) {
+                            Column(Modifier.widthIn(max = 680.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                                when {
+                                    row != null -> PreferenceDetail(host, row)
+                                    editor != null -> ShortcutEditor(host, model, editor)
+                                    else -> {
+                                        if (model.getString("page") == "shortcuts") Shortcuts(host, model)
+                                        else page?.array("groups")?.objects()?.forEach { group ->
+                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                Text(group.getString("title"), Modifier.padding(horizontal = 4.dp), fontWeight = FontWeight.SemiBold)
+                                                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+                                                    color = colors.settingsCard, shadowElevation = 1.dp) {
+                                                    Column {
+                                                        group.array("rows").objects().filter { it.optBoolean("visible", true) }.forEachIndexed { index, setting ->
+                                                            if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
+                                                            key(setting.getString("id")) { PreferenceRow(host, setting) }
                                                         }
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                    model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
-                                        Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
-                                    }
-                                    host.actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                                 }
+                                model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
+                                    Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
+                                }
+                                host.actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                             }
                         }
                     }
@@ -157,22 +157,38 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     }
 }
 
-@Composable private fun PreferencesNavigation(host: CanvasHost, view: JSONObject, modifier: Modifier, onPage: () -> Unit) {
+@Composable private fun SettingsDone(close: () -> Unit, modifier: Modifier = Modifier) {
+    Button(close, modifier.widthIn(min = 80.dp).heightIn(min = 48.dp).testTag("settings-done"),
+        shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
+        Text("Done", fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable private fun PreferencesNavigation(host: CanvasHost, view: JSONObject, modifier: Modifier,
+    showDone: Boolean, close: () -> Unit, onPage: () -> Unit) {
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val searching = view.optBoolean("searching")
-    Column(modifier.background(colors.tabs).padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier.background(if (colors.dark) colors.tabs else colors.panel).testTag("settings-sidebar").padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton({
+                focus.clearFocus(); host.preference(obj("type" to "toggle_search", "open" to !searching))
+            }, Modifier.size(48.dp).background(if (searching) colors.active else Color.Transparent, RoundedCornerShape(8.dp))
+                .testTag("settings-search-button")) {
+                SharedIcon("search", "Search settings", Modifier.size(20.dp))
+            }
+            Text("Settings", Modifier.weight(1f).testTag("settings-sidebar-title"),
+                fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
+            if (showDone) SettingsDone(close)
+        }
         if (searching) CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
             Modifier.fillMaxWidth(), height = 48.dp, placeholder = { Text("Search settings") },
-            leadingIcon = { SharedIcon("search", null, Modifier.size(24.dp)) },
             trailingIcon = {
                 IconButton({
                     focus.clearFocus(); host.preference(obj("type" to "toggle_search", "open" to false))
-                }) { Text("×", fontSize = 24.sp) }
+                }) { SharedIcon("plus", "Close search", Modifier.size(20.dp).rotate(45f)) }
             })
-        else IconButton({ host.preference(obj("type" to "toggle_search", "open" to true)) }) {
-            SharedIcon("search", "Search settings", Modifier.size(24.dp))
-        }
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (searching) {
                 view.array("search_results").objects().forEach { result ->
@@ -186,12 +202,17 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                 if (view.optBoolean("empty")) Text("No matching settings", Modifier.padding(12.dp), color = colors.settingsSecondary)
             } else view.array("pages").objects().forEach { page ->
                 val selected = view.getString("page") == page.getString("id")
-                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(8.dp))
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
                     .background(if (selected) colors.active else Color.Transparent)
-                    .clickable { focus.clearFocus(); host.preference(obj("type" to "page", "page" to page.getString("id"))); onPage() }
-                    .padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SharedIcon(page.getString("icon"), null, Modifier.size(24.dp))
-                    Text(page.getString("title"), fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                    .selectable(selected, role = Role.Tab) {
+                        focus.clearFocus(); host.preference(obj("type" to "page", "page" to page.getString("id"))); onPage()
+                    }.testTag("settings-category-" + page.getString("id"))
+                    .padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+                        SharedIcon(page.getString("icon"), null, Modifier.size(20.dp).testTag("settings-category-icon-" + page.getString("id")))
+                    }
+                    Text(page.getString("title"), Modifier.testTag("settings-category-label-" + page.getString("id")),
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
                 }
             }
         }
@@ -218,7 +239,7 @@ private fun numberLabel(kind: JSONObject): String =
         }
         else -> Modifier
     }
-    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).then(action).padding(16.dp)
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).then(action).padding(horizontal = 16.dp, vertical = 12.dp)
         .testTag("preference-" + row.getString("id")),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -237,7 +258,7 @@ private fun numberLabel(kind: JSONObject): String =
         }
         when (type) {
             "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
-            "number", "choice" -> SharedIcon("chevron-down", null, Modifier.size(24.dp).rotate(-90f), tint = colors.settingsSecondary)
+            "number", "choice" -> SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(-90f), tint = colors.settingsSecondary)
         }
     }
 }
@@ -253,11 +274,11 @@ private fun numberLabel(kind: JSONObject): String =
             Column {
                 kind.array("options").values().forEachIndexed { index, name ->
                     if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
                         .selectable(index == kind.getInt("selected"), enabled = enabled, role = Role.RadioButton) { edit(index) }
                         .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        kind.array("icons").optString(index).takeIf { it.isNotEmpty() }?.let { SharedIcon(it, null, Modifier.size(24.dp)) }
+                        kind.array("icons").optString(index).takeIf { it.isNotEmpty() }?.let { SharedIcon(it, null, Modifier.size(20.dp)) }
                         Text(name.toString(), Modifier.weight(1f))
                         RadioButton(index == kind.getInt("selected"), onClick = null, enabled = enabled)
                     }
@@ -282,7 +303,8 @@ private fun numberLabel(kind: JSONObject): String =
                 imeAction = androidx.compose.ui.text.input.ImeAction.Done),
             keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { focus.clearFocus() }),
             shape = RoundedCornerShape(12.dp))
-        Slider(slider, { slider = it }, enabled = enabled, valueRange = control.number("min")..control.number("max"),
+        EditorSlider(slider, { slider = it }, enabled = enabled, range = control.number("min")..control.number("max"),
+            height = 48.dp, label = row.getString("title"), inactiveTrackColor = colors.divider,
             onValueChangeFinished = {
                 focus.clearFocus()
                 val scale = Math.pow(10.0, control.optInt("digits", 0).toDouble()).toFloat()
@@ -294,18 +316,18 @@ private fun numberLabel(kind: JSONObject): String =
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
     CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
         modifier = Modifier.fillMaxWidth(), height = 48.dp,
-        placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null, Modifier.size(24.dp)) })
+        placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
     val colors = LocalPalette.current
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
         Column {
             view.array("shortcuts").objects().filter { it.getBoolean("visible") }.forEachIndexed { index, shortcut ->
                 if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
                     .clickable { host.preference(obj("type" to "edit_shortcut", "id" to shortcut.getString("id"))) }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(shortcut.getString("label"), Modifier.weight(1f))
                     Text(shortcut.getString("shortcut"), color = colors.settingsSecondary)
-                    SharedIcon("chevron-down", null, Modifier.size(24.dp).rotate(-90f), tint = colors.settingsSecondary)
+                    SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(-90f), tint = colors.settingsSecondary)
                 }
             }
         }
@@ -326,7 +348,7 @@ private fun numberLabel(kind: JSONObject): String =
                 .padding(start = 16.dp, end = 8.dp).heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(binding.toString(), Modifier.weight(1f))
                 IconButton({ host.preference(obj("type" to "remove_shortcut", "id" to editor.getString("id"), "index" to index)) }) {
-                    SharedIcon("minus", "Remove shortcut", Modifier.size(24.dp))
+                    SharedIcon("minus", "Remove shortcut", Modifier.size(20.dp))
                 }
             }
         }

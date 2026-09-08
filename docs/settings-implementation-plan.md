@@ -103,11 +103,22 @@ There are no toolkit types in the shared model.
 ### Android
 
 Settings occupies the full available window, slides down from the top on entry
-and slides up on dismissal. The root app bar has Settings and Done, not Back/Save:
-Done closes an auto-saving overlay rather than committing a form. At 840 dp and
-wider a 260 dp category list remains beside the content pane; narrower windows
-use list/page navigation. Content is bounded to 680 dp for readable rows, with
-native Material controls and at least 48 dp interactive targets.
+and slides up on dismissal. There is no full-width header above the panes. At
+840 dp and wider a full-height 260 dp sidebar sits beside the main content.
+Search and Settings share the sidebar's top row. The main pane has its own
+centered page title and a filled Material Done button at the top right; Back
+appears at its top left for details. Done closes the auto-saving overlay rather
+than committing a form. Narrower windows use list/page navigation with Done in
+the currently visible pane. Content is bounded to 680 dp for readable rows.
+
+Body/sidebar text retains the shared 11 pt app size; pane headings are 18 sp.
+Navigation glyphs are 20 dp in 48 dp rows, aligned with the search glyph; sidebar
+labels align with Settings. Sidebar insets and button radii are 8 dp, row gaps
+4 dp, and grouped content uses 20 dp spacing. Regular two-line settings rows are
+64 dp minimum; choices and shortcuts are 56 dp. The existing editor slider skin
+is reused with a 48 dp settings touch height, a contrasting inactive track and
+a release callback, without changing compact editor sliders. Controls retain
+at least 48 dp touch targets.
 
 There are no nested dialogs or popups in Android settings. Choice lists and numeric
 editors use the shared `PreferencesView.detail`; shortcuts use `shortcut_editor`.
@@ -121,7 +132,8 @@ the full-screen Done presentation is a product choice for the editor, inspired b
 the supplied Procreate reference, not an Android requirement.
 [Android settings](https://developer.android.com/design/ui/mobile/guides/patterns/settings),
 [canonical layouts](https://developer.android.com/develop/adaptive-apps/guides/canonical-layouts),
-[app bars](https://developer.android.com/develop/ui/compose/components/app-bars).
+[native buttons](https://developer.android.com/develop/ui/compose/components/button),
+[touch targets](https://developer.android.com/develop/ui/compose/accessibility/api-defaults).
 
 ## Shortcut contract
 
@@ -208,7 +220,7 @@ remain separate work, not nonfunctional controls in this dialog.
 - Android device tests cover full-screen geometry, real entry/exit and detail
   movement, zero settings dialog/popup nodes, numeric rejection/acceptance,
   immediate persistence, multiple shortcuts, narrow-screen navigation and stylus
-  isolation from the canvas. Review captures: `artifacts/android/settings-overlay/final/`.
+  isolation from the canvas. Review captures: `artifacts/android/settings-panes/final/`.
 - Review PNGs are in `artifacts/ui/preferences/`.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.

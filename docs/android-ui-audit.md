@@ -76,24 +76,36 @@ need device validation.
 
 ## Full-screen settings follow-up
 
-The approved Settings design replaces the bounded tablet dialog with one
-full-screen, top-sliding overlay. Done dismisses; accepted edits auto-apply and
-persist through Rust. Choice/number/shortcut details slide into the right pane
-and return using its Back arrow. There are no nested settings dialogs, dropdowns
-or recording/conflict popups. Narrow screens retain category-to-page navigation.
-Native settings controls use comfortable 48 dp or larger targets; the compact
-editor controls and GPU surface are unchanged.
+Settings is one full-screen, top-sliding overlay with a full-height sidebar
+beside its main content, not a header spanning two columns. Search sits beside
+Settings at the sidebar's top. The main pane has a centered page title, a filled
+Done button and a Back arrow for details; these controls stay put while detail
+contents animate. Done dismisses; accepted edits auto-apply and persist through
+Rust. There are no nested settings dialogs, dropdowns or recording/conflict
+popups. Narrow screens retain category-to-page navigation.
 
-The expanded 15-test device suite checks entry/exit and detail movement with the
-Compose clock, no dialog/popup nodes, full-width geometry, invalid/valid numeric
-edits, accepted-value persistence and real stylus events not reaching the covered
-canvas. Settings captures, including numeric details and inline errors, are in
-`artifacts/android/settings-overlay/final/`.
-Final run `1788900522533` passes all 15 tests and produces 35 PNGs; 32–33 cover
-numeric details/validation and 34–35 inline shortcut recording/conflicts. Settings
-views were visually checked in light/dark and portrait layouts. Android lint and
-both native ABI builds pass. Shared-core tests pass (72), as do the packaged web
+Sidebar/body text uses the shared 11 pt size, pane titles 18 sp, and sidebar
+glyphs 20 dp within 48 dp navigation rows. Glyph centers and label starts align
+with the search/Settings row. Sidebar insets are 8 dp, navigation gaps 4 dp and
+content group spacing 20 dp. Choice/shortcut rows use 56 dp minimum height;
+two-line setting rows use 64 dp. The editor slider is reused with a 48 dp touch
+height and a visible neutral inactive track, fixing the light-on-light contrast
+found during review. Compact editor controls and the GPU surface are unchanged.
+
+The expanded 16-test device suite checks entry/exit and detail movement with the
+Compose clock, no dialog/popup nodes, adjacent full-height panes, sidebar
+alignment and font/glyph dimensions, filled Done pixels in both themes, slider
+contrast/release behavior, invalid/valid numeric edits, accepted-value persistence
+and real stylus events not reaching the covered canvas. Review captures are in
+`artifacts/android/settings-panes/final/`: 32–33 cover numeric details/validation,
+34–35 inline shortcut recording/conflicts and 36 the two-pane layout in each
+theme. Settings views were visually checked in light/dark and portrait layouts.
+Final emulator run `1788908967987` passes all 16 tests and produces 37 PNGs.
+Android APK/test builds and lint pass. The slider's native touch bounds are
+explicitly checked: reserving height around its 16 dp thumb preserves the small
+visible knob while giving settings a real 48 dp target.
+
+The preceding shared-model milestone also passed 72 core tests, packaged web
 preferences/customization suites and GTK preferences in an isolated headless
-Wayland session. On the regular desktop, occluded GTK dialogs can stall before
-their animation allocates children; the isolated compositor avoids that test
-environment dependency without changing application rendering.
+Wayland session. This presentation-only refinement does not change those
+implementations or the drawing/rendering path.

@@ -12,6 +12,9 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -250,7 +253,7 @@ class AndroidHostTest {
         compose.onNodeWithText("Search settings").performTextInput("prediction")
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").array("search_results").length() > 0 }
         capture("05-settings-search")
-        compose.onNodeWithText("×").performClick()
+        compose.onNodeWithContentDescription("Close search").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").getString("page") == "input" }
         capture("06-pen-input")
@@ -298,6 +301,42 @@ class AndroidHostTest {
         } finally { compose.mainClock.autoAdvance = true }
     }
 
+    @Test fun settingsPanesShareTopEdgeAndUseAppScale() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+        for (theme in listOf("light", "dark")) {
+            compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to theme)) }
+            waitState { it.getString("theme") == theme }
+            fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val surface = bounds("preferences-surface")
+            val sidebar = bounds("settings-sidebar")
+            val main = bounds("settings-main-pane")
+            assertEquals("Sidebar reaches the top; no global header", surface.top, sidebar.top, 1f)
+            assertEquals("Sidebar reaches the bottom", surface.bottom, sidebar.bottom, 1f)
+            assertEquals("Panes start at the same height", sidebar.top, main.top, 1f)
+            assertEquals("Panes are adjacent", sidebar.right, main.left, 1f)
+            val search = bounds("settings-search-button")
+            val title = bounds("settings-sidebar-title")
+            assertEquals("Search sits beside the sidebar title", title.center.y, search.center.y, 1f)
+            assertEquals("Category labels align with Settings", title.left, bounds("settings-category-label-appearance").left, 1f)
+            assertEquals("Sidebar glyphs share a center line", search.center.x, bounds("settings-category-icon-appearance").center.x, 1f)
+            compose.onNodeWithTag("settings-category-appearance").assertHeightIsEqualTo(48.dp)
+            compose.onNodeWithTag("settings-category-icon-appearance", useUnmergedTree = true).assertWidthIsEqualTo(20.dp).assertHeightIsEqualTo(20.dp)
+            compose.onNodeWithTag("settings-search-button").assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
+            compose.onNodeWithTag("settings-done").assertHeightIsEqualTo(48.dp)
+            assertTrue("Done belongs to the main pane", bounds("settings-done").left >= main.left)
+            val text = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithTag("settings-category-label-appearance", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(text) }
+            assertEquals("Sidebar uses shared panel typography", (host.catalog.number("text_size_pt") * 4 / 3), text.single().layoutInput.style.fontSize.value, .01f)
+            val button = compose.onNodeWithTag("settings-done").captureToImage().toPixelMap()
+            val fill = button[button.width / 2, button.height / 4]
+            assertTrue("Done has a visible filled surface, not just colored text", fill.blue > fill.red + .2f)
+            capture("36-settings-two-panes-$theme")
+        }
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
@@ -305,6 +344,11 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { preferences().objectOrNull("detail") != null }
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
+        val slider = compose.onNodeWithTag("setting-slider").assertTouchHeightIsEqualTo(48.dp)
+        val track = slider.captureToImage().toPixelMap()
+        val trackX = track.width * 9 / 10
+        assertTrue("Inactive slider track remains visible on the light settings surface",
+            track[trackX, track.height / 4].red - track[trackX, track.height / 2].red > .05f)
         capture("32-number-detail")
         val before = state().getJSONObject("settings").number("prediction_ms")
         compose.onNodeWithTag("setting-number").performTextReplacement("65")
@@ -312,6 +356,9 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { !preferences().isNull("error") }
         assertEquals(before, state().getJSONObject("settings").number("prediction_ms"))
         capture("33-number-invalid")
+        slider.performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(width * .75f, center.y), 300) }
+        waitState { it.getJSONObject("settings").number("prediction_ms") in 40f..56f }
+        assertTrue("Slider release validates and applies through Rust", preferences().isNull("error"))
         compose.onNodeWithTag("setting-number").performTextReplacement("64")
         compose.onNodeWithTag("setting-number").performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }

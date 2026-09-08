@@ -310,8 +310,9 @@ controls and renderer information. Core validation checks field availability,
 dependencies, value ranges, shortcut collisions and persisted versions.
 GTK uses libadwaita 1.9's `AdwViewSwitcherSidebar`/`AdwNavigationSplitView` in
 `AdwDialog`; web uses native DOM controls in a matching adaptive modal.
-Android uses a full-screen, top-sliding Settings overlay with Done. A persistent
-category list and content pane adapt to list/page navigation on narrow screens.
+Android uses a full-screen, top-sliding Settings overlay without a global header.
+A full-height sidebar has search beside Settings; the main pane has its own title
+and filled Done button. These panes adapt to list/page navigation on narrow screens.
 `EditPreference`/`ClosePreference` and the shortcut editor state describe inline
 detail pages: Android slides these in from the right, with a pane-local Back
 arrow. Settings never open another Android dialog or popup, including for choices,
