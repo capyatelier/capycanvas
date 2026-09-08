@@ -83,7 +83,9 @@ glib::wrapper! {
 }
 impl TileStrip {
     pub fn new() -> Self {
-        glib::Object::new()
+        let strip: Self = glib::Object::new();
+        strip.set_overflow(gtk::Overflow::Hidden);
+        strip
     }
     pub fn append(&self, widget: &impl IsA<gtk::Widget>) {
         widget.add_css_class("tile-button");

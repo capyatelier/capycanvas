@@ -1,0 +1,98 @@
+# Panel and toolbar customization
+
+## Interaction contract
+
+The Rust UI core owns customization and the complete serializable workspace.
+GTK and web translate native events and render its menu/dialog/control models.
+This feature does not add another canvas/rendering path.
+
+- A panel tab or panel body opens that panel's context menu: **Tab Name** /
+  **Tab Icon** and **Show All Controls**. Double-tapping the tab/header opens
+  Show All Controls too; double-clicks within inputs retain native behavior.
+- Empty tab-header space and the group grip target the whole tab group:
+  **Tab Names** / **Tab Icons** and **New Toolbar…**. Group changes apply to
+  every current tab; an individual tab can subsequently override its style.
+- A ribbon tile targets that tile: **Remove Tool**, **Insert Tools…**.
+  Empty ribbon space targets the ribbon: **Add Tools…** (append).
+  A standalone ribbon's grip still drags the entire ribbon; its context menu
+  uses the empty-ribbon actions. A tabbed ribbon keeps the group grip.
+- Mouse/pen secondary click and touch press-and-hold open the same menu.
+  Native gesture recognition owns timing/slop; the deepest applicable target
+  wins. Recognized hold/drag suppresses the ordinary click, and scrolling cancels
+  a pending hold. Existing input/context menus inside text inputs remain native.
+- **Show All Controls** temporarily opens an expanded floating panel above the
+  canvas, without modifying dock geometry or saving an expanded layout. Outside
+  tap or Escape closes it. All controls supported by that panel are visible;
+  per-control visibility choices determine the compact panel after closing.
+  Existing controls are reused, not a second independent settings model.
+- Toolbar creation and insertion use one searchable multi-select picker with
+  icons, descriptions and explicit confirmation/cancel. Creation also asks for
+  a trimmed, case-insensitively unique name. Invalid names leave the draft open.
+- Tiles move within and between ribbons, including wrapped/vertical/tabbed
+  ribbons. A blue insertion line previews the exact core-validated destination.
+  Stable tile IDs prevent stale drags from moving a different tile after edits.
+- Ribbons wrap and grow where space permits, then clip at their panel boundary.
+  They do not scroll: dragging remains reserved for tile reordering. Clipping
+  preserves every configured tile, so resizing can reveal it again. Insertion
+  previews only target visible slots and are clipped to the same boundary.
+
+The expanded view is a contextual inspector, not an enlargement of the saved
+dock. This avoids changing canvas fitting and neighboring panels just to inspect
+hidden controls. Complex creation/selection uses a dialog, following GNOME's
+[popover guidance](https://developer.gnome.org/hig/patterns/containers/popovers.html).
+GTK uses [native long-press recognition](https://docs.gtk.org/gtk4/class.GestureLongPress.html).
+The compact/all-controls distinction follows the interaction described in
+[Clip Studio Paint's brush customization guide](https://help.clip-studio.com/en-us/manual_en/240_brushes/Customizing_brush_tools.htm);
+no third-party code or assets are imported.
+
+## Model
+
+- System panel identities remain stable. Custom toolbar identities are allocated
+  independently of their editable display names and can be docked/tabbed exactly
+  like system panels. There is no fixed toolbar count.
+- `DockLayout` contains panel configurations alongside its docking tree, so
+  geometry, tab styles, visible controls, toolbar names and ordered tiles restore
+  atomically. The existing `WorkspaceState` wraps it and Zen mode.
+- Toolbar tiles have stable IDs and typed controls. The available-button catalog
+  includes application commands, brush presets, size presets and color/opacity
+  buttons; control values and execution remain in the existing Rust session.
+- System-panel control catalogs define allowed controls and compact defaults.
+  The expanded inspector shows that catalog, including hidden controls. This is
+  metadata for native controls, not a generic widget-tree abstraction.
+- Missing configuration in older workspaces receives the original defaults.
+  Restore validates references, IDs, names, controls, active tabs and allocator
+  state before changing the live workspace. Reset Layout must preserve custom
+  toolbars and their contents rather than orphaning them.
+- Picker drafts and expanded/context targets are transient UI state, never part
+  of saved layouts. Closing/canceling does not partially insert/create anything.
+- Context-menu contents, picker validation/search/selection, control visibility,
+  and tile drop targets are generated/validated by Rust, not duplicated in hosts.
+
+## Completion checklist
+
+These are required gates, not claims of completion.
+
+- [x] Shared dynamic configuration, backward-compatible restore and atomic validation.
+- [ ] Unique toolbar creation with multi-select, search, cancel and validation.
+- [ ] All panel/group/tile/ribbon context targets on mouse, pen and touch.
+- [ ] Individual/group tab-name/icon switching with tooltip/accessibility names.
+- [ ] Expanded live panel, hidden controls, visibility editing and outside/Escape
+  dismissal; header double-tap without consuming control editing.
+- [ ] Tile remove/insert/append and same/cross-toolbar drag with exact blue line.
+- [ ] Dynamic ribbon wrapping, docking, tabbing and resize without fixed counts.
+- [ ] Full workspace round-trip and non-destructive layout reset.
+- [ ] GTK native control and interaction tests; light/dark screenshots inspected.
+- [ ] Web parity and interaction tests; light/dark screenshots inspected.
+- [ ] No host-only business logic, stale targets, orphan widgets or GPU regression.
+
+## Implementation checkpoints
+
+The shared model now implements dynamic panel configuration, stable tile IDs,
+transactional creation/insertion, context menu targeting, picker search/selection,
+per-panel and group tab styles, expanded-control view metadata, tile movement and
+variable-count ribbon allocation. Old workspace JSON receives the original panel
+configuration. Tests cover these policies and native/Wasm type checks pass.
+
+GTK and web presentation/event wiring and visual validation are still pending;
+this is not yet an exposed end-to-end feature. Final host tests must also cover
+clipped ribbons, not just ribbons that can grow to fit on screen.

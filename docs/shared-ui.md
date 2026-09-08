@@ -46,11 +46,14 @@ toolkit, OS handles, filesystem, async runtime, or thread requirement. Target
 bindings live in the app that uses them; no separate binding framework/crate is
 needed for the Rust GTK and Wasm clients.
 
-`ui_catalog()` describes supported panels, ordered toolbar controls and menus,
+`ui_catalog()` describes system panels, default toolbar controls and menus,
 brush categories/presets, and numeric input limits/steps/precision. GTK consumes
 the same typed constants exposed to DOM through the Wasm catalog; hosts supply
 widgets/icons, not separate command lists or numeric rules. The ribbon allocator
-derives its item count from `TOOLBAR_CONTROLS`. `SetLayerOpacity` may omit `id` to
+derives its item count from each toolbar's saved panel configuration.
+`TOOLBAR_CONTROLS` supplies the original defaults. Context menu, picker and
+expanded-panel APIs are being integrated as described in
+[Panel customization](panel-customization.md). `SetLayerOpacity` may omit `id` to
 target the live active layer instead of resolving it from a frontend snapshot.
 
 ## Docking

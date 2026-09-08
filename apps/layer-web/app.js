@@ -146,11 +146,13 @@ function numericControl(input, spec) {
 }
 // Overlay scrollbars do not take width away from previews or tiles. Scrolling
 // itself stays in the browser; this one thumb also supports pointer dragging.
-function panelFrame(panel) {
+function panelFrame(panel, scrollable = true) {
   const frame = element("div", "panel-frame");
+  frame.append(panel);
+  if (!scrollable) return frame;
   const thumb = element("div", "scroll-thumb");
   thumb.setAttribute("aria-hidden", "true");
-  frame.append(panel, thumb);
+  frame.append(thumb);
   let origin;
   const update = () => {
     if (!panel.clientHeight) {
@@ -514,10 +516,11 @@ function resizeCanvas() {
   applyChange(app.viewport(rect.width, rect.height, width, height));
 }
 function buildPanels() {
-  for (const name of Object.keys(panelNames)) {
+  for (const { id: name, kind } of catalog.panels) {
     const panel = element("div", `panel ${name}-panel`);
+    if (kind === "tiles") panel.classList.add("tile-panel");
     panels.set(name, panel);
-    panelFrame(panel);
+    panelFrame(panel, kind !== "tiles");
   }
   const toolbar = element("div", "toolbar-controls");
   toolbar.append(grip({ kind: "panel", panel: "toolbar" }));
@@ -557,7 +560,6 @@ function buildPanels() {
         throw new Error(`Unsupported toolbar control: ${item.kind}`);
     }
   }
-  panels.get("toolbar").classList.add("tile-panel");
   panels.get("toolbar").append(toolbar);
   const list = element("div", "brush-list");
   for (const { label: category, brushes } of catalog.brush_categories) {

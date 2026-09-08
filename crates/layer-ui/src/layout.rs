@@ -1,11 +1,12 @@
 //! Semantic docking topology. Coordinates are logical UI units, never pixels
 //! belonging to the raster document. Earlier bands own shared corners.
 
-use crate::WORKSPACE_SPACING;
+use crate::{PanelConfig, PanelContent, ToolbarControl, ToolbarTile, WORKSPACE_SPACING};
 use serde::{Deserialize, Serialize};
 
 pub const TILE_SIZE: f32 = 36.0;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
+#[cfg(test)]
 const TOOL_TILE_COUNT: usize = crate::TOOLBAR_CONTROLS.len();
 
 // Reserve 20px for the trailing grip and 2px between it and the last tile.
@@ -18,6 +19,39 @@ fn ribbon_lanes(length: f32, count: usize) -> usize {
 pub struct TileLayout {
     pub tiles: Vec<Bounds>,
     pub grip: Option<Bounds>,
+    /// One insertion marker per slot, including append. Same order as tiles.
+    pub insertion: Vec<Bounds>,
+}
+
+impl TileLayout {
+    // Overflow is clipped, not scrolled. Preserve slot indices but never turn a
+    // hidden tile into a visible insertion target at the panel edge.
+    fn drop_slot(&self, point: [f32; 2], width: f32, height: f32) -> Option<(usize, Bounds)> {
+        let clip = Bounds {
+            width,
+            height,
+            ..Bounds::default()
+        };
+        if !clip.contains(point[0], point[1])
+            || self.grip.is_some_and(|b| b.contains(point[0], point[1]))
+        {
+            return None;
+        }
+        let distance = |b: Bounds| {
+            (point[0] - point[0].clamp(b.x, b.x + b.width)).powi(2)
+                + (point[1] - point[1].clamp(b.y, b.y + b.height)).powi(2)
+        };
+        self.insertion
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                if let Some(tile) = self.tiles.get(index).or_else(|| self.tiles.last()) {
+                    tile.intersection(clip)?;
+                }
+                Some((index, line.intersection(clip)?))
+            })
+            .min_by(|(_, a), (_, b)| distance(*a).total_cmp(&distance(*b)))
+    }
 }
 
 /// One square-tile allocator for native and web strips. Cross-axis resizing
@@ -42,7 +76,7 @@ pub fn tile_layout(
     let slots = count.max(1).div_ceil(lanes);
     let grid = lanes as f32 * (TILE_SIZE + 2.0) - 2.0;
     let inset = ((cross - grid) * 0.5).max(padding);
-    let tiles = (0..count)
+    let tiles: Vec<_> = (0..count)
         .map(|i| {
             let (along, across) = if standalone {
                 (i % slots, i / slots)
@@ -76,7 +110,54 @@ pub fn tile_layout(
             height: 20.0,
         }
     });
-    TileLayout { tiles, grip }
+    let flow = if (!standalone && lanes > 1) || (standalone && slots == 1) {
+        if horizontal {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        }
+    } else {
+        axis
+    };
+    let line = |b: Bounds, after: bool| {
+        let marker = if flow == Axis::Horizontal {
+            Bounds {
+                x: (b.x + if after { b.width } else { 0.0 } - 1.5).max(0.0),
+                y: b.y,
+                width: 3.0,
+                height: b.height,
+            }
+        } else {
+            Bounds {
+                x: b.x,
+                y: (b.y + if after { b.height } else { 0.0 } - 1.5).max(0.0),
+                width: b.width,
+                height: 3.0,
+            }
+        };
+        marker
+            .intersection(Bounds {
+                width,
+                height,
+                ..Bounds::default()
+            })
+            .unwrap_or(marker)
+    };
+    let mut insertion = tiles.iter().map(|&b| line(b, false)).collect::<Vec<_>>();
+    insertion.push(line(
+        tiles.last().copied().unwrap_or(Bounds {
+            x: padding,
+            y: padding,
+            width: TILE_SIZE.min(width),
+            height: TILE_SIZE.min(height),
+        }),
+        !tiles.is_empty(),
+    ));
+    TileLayout {
+        tiles,
+        grip,
+        insertion,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -110,12 +191,48 @@ pub struct DropHint {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(try_from = "String", into = "String")]
 pub enum Panel {
     Toolbar,
     Brushes,
     Sizes,
     Layers,
+    CustomToolbar(u32),
+}
+
+// Retain the original system-panel string IDs in saved workspaces and DOM keys.
+impl From<Panel> for String {
+    fn from(panel: Panel) -> Self {
+        match panel {
+            Panel::Toolbar => "toolbar".into(),
+            Panel::Brushes => "brushes".into(),
+            Panel::Sizes => "sizes".into(),
+            Panel::Layers => "layers".into(),
+            Panel::CustomToolbar(id) => format!("toolbar:{id}"),
+        }
+    }
+}
+impl TryFrom<String> for Panel {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, String> {
+        Ok(match value.as_str() {
+            "toolbar" => Self::Toolbar,
+            "brushes" => Self::Brushes,
+            "sizes" => Self::Sizes,
+            "layers" => Self::Layers,
+            _ => {
+                let id: u32 = value
+                    .strip_prefix("toolbar:")
+                    .and_then(|id| id.parse().ok())
+                    .filter(|id| *id > 0)
+                    .ok_or("Unknown panel identity")?;
+                if value != format!("toolbar:{id}") {
+                    return Err("Invalid toolbar identity".into());
+                }
+                Self::CustomToolbar(id)
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +244,7 @@ pub enum PanelKind {
 
 impl Panel {
     pub fn kind(self) -> PanelKind {
-        if self == Self::Toolbar {
+        if matches!(self, Self::Toolbar | Self::CustomToolbar(_)) {
             PanelKind::Tiles
         } else {
             PanelKind::Content
@@ -140,6 +257,15 @@ impl Panel {
             Self::Brushes => "Brushes",
             Self::Sizes => "Brush size",
             Self::Layers => "Layers",
+            Self::CustomToolbar(_) => "Toolbar",
+        }
+    }
+    pub fn icon(self) -> &'static str {
+        match self {
+            Self::Toolbar | Self::CustomToolbar(_) => "menu",
+            Self::Brushes => "brush",
+            Self::Sizes => "size",
+            Self::Layers => "layers",
         }
     }
 }
@@ -250,7 +376,14 @@ pub struct DockLayout {
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
     pub panels_visible: bool,
+    #[serde(default = "PanelConfig::defaults")]
+    pub panels: Vec<PanelConfig>,
+    #[serde(default = "initial_tile_id")]
+    next_tile_id: u32,
     next_id: u32,
+}
+fn initial_tile_id() -> u32 {
+    crate::TOOLBAR_CONTROLS.len() as u32 + 1
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -271,6 +404,11 @@ pub enum DockTarget {
         group: u32,
         edge: Edge,
     },
+    Tile {
+        panel: Panel,
+        /// Insert before this stable tile ID; absent appends.
+        before: Option<u32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,6 +416,7 @@ pub enum DockTarget {
 pub enum DockItem {
     Panel { panel: Panel },
     Group { group: u32 },
+    Tile { panel: Panel, tile: u32 },
 }
 impl DockItem {
     pub fn move_action(self, target: DockTarget, viewport: [f32; 2]) -> crate::UiAction {
@@ -289,6 +428,12 @@ impl DockItem {
             },
             Self::Group { group } => crate::UiAction::MoveGroup {
                 group,
+                target,
+                viewport,
+            },
+            Self::Tile { panel, tile } => crate::UiAction::MoveTile {
+                panel,
+                tile,
                 target,
                 viewport,
             },
@@ -306,6 +451,18 @@ pub struct Bounds {
 impl Bounds {
     pub fn contains(self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
+    }
+    fn intersection(self, other: Self) -> Option<Self> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let width = (self.x + self.width).min(other.x + other.width) - x;
+        let height = (self.y + self.height).min(other.y + other.height) - y;
+        (width > 0.0 && height > 0.0).then_some(Self {
+            x,
+            y,
+            width,
+            height,
+        })
     }
     fn strip(&mut self, edge: Edge, amount: f32) -> Self {
         let mut out = *self;
@@ -379,6 +536,8 @@ impl Default for DockLayout {
         };
         Self {
             panels_visible: true,
+            panels: PanelConfig::defaults(),
+            next_tile_id: initial_tile_id(),
             bands: vec![
                 DockBand {
                     id: 3,
@@ -411,7 +570,7 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
-    /// A restored topology must contain each supported panel exactly once,
+    /// A restored topology must contain each configured panel exactly once,
     /// globally unique IDs, finite dimensions, and valid active tabs/ratios.
     pub fn validate(&self) -> Result<(), String> {
         let mut ids = std::collections::BTreeSet::new();
@@ -422,7 +581,7 @@ impl DockLayout {
             panels: &mut Vec<Panel>,
             depth: usize,
         ) -> Result<(), String> {
-            if depth > Panel::ALL.len() || !ids.insert(n.id()) {
+            if depth > 128 || !ids.insert(n.id()) {
                 return Err("Invalid workspace node identity or depth".into());
             }
             match n {
@@ -462,13 +621,201 @@ impl DockLayout {
             }
             node(&band.root, &mut ids, &mut panels, 0)?;
         }
-        if panels.len() != Panel::ALL.len() {
-            return Err("Workspace is missing a panel".into());
+        let mut tile_ids = std::collections::BTreeSet::new();
+        let mut names = std::collections::BTreeSet::new();
+        for config in &self.panels {
+            config.validate()?;
+            if let Panel::CustomToolbar(id) = config.id
+                && (id == 0 || !ids.insert(id))
+            {
+                return Err("Invalid toolbar identity".into());
+            }
+            if !names.insert(config.title().to_lowercase()) {
+                return Err("Panel names must be unique".into());
+            }
+            for tile in config.tiles() {
+                if tile.id == 0 || !tile_ids.insert(tile.id) {
+                    return Err("Duplicate or invalid toolbar tile identity".into());
+                }
+            }
+            let index = panels
+                .iter()
+                .position(|id| *id == config.id)
+                .ok_or("Panel configuration is not docked")?;
+            panels.remove(index);
+        }
+        if !panels.is_empty()
+            || Panel::ALL
+                .iter()
+                .any(|id| !self.panels.iter().any(|p| p.id == *id))
+        {
+            return Err("Workspace panel configuration is incomplete".into());
+        }
+        if tile_ids.last().is_some_and(|id| self.next_tile_id <= *id) {
+            return Err("Invalid toolbar tile ID allocator".into());
         }
         if ids.last().is_some_and(|id| self.next_id <= *id) {
             return Err("Invalid workspace ID allocator".into());
         }
         Ok(())
+    }
+
+    pub fn panel(&self, id: Panel) -> Result<&PanelConfig, String> {
+        self.panels
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| "Unknown panel".into())
+    }
+    pub(crate) fn panel_mut(&mut self, id: Panel) -> Result<&mut PanelConfig, String> {
+        self.panels
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| "Unknown panel".into())
+    }
+    pub fn group_panels(&self, id: u32) -> Result<&[Panel], String> {
+        fn find(n: &DockNode, id: u32) -> Option<&[Panel]> {
+            match n {
+                DockNode::Tabs {
+                    id: group, panels, ..
+                } => (*group == id).then_some(panels),
+                DockNode::Split { first, second, .. } => {
+                    find(first, id).or_else(|| find(second, id))
+                }
+            }
+        }
+        self.bands
+            .iter()
+            .find_map(|b| find(&b.root, id))
+            .ok_or_else(|| "Unknown tab group".into())
+    }
+
+    pub fn add_toolbar(
+        &mut self,
+        group: u32,
+        name: &str,
+        controls: &[ToolbarControl],
+    ) -> Result<Panel, String> {
+        let name = name.trim();
+        self.validate_toolbar_name(name)?;
+        self.group_panels(group)?;
+        let mut next = self.clone();
+        let id = Panel::CustomToolbar(next.allocate()?);
+        next.panels.push(PanelConfig {
+            id,
+            tab_style: crate::TabStyle::Name,
+            content: PanelContent::Toolbar {
+                name: name.into(),
+                tiles: Vec::new(),
+            },
+        });
+        next.insert_tools(id, None, controls)?;
+        let Some(DockNode::Tabs { panels, active, .. }) = next.node_mut(group) else {
+            unreachable!()
+        };
+        panels.push(id);
+        *active = id;
+        next.validate()?;
+        *self = next;
+        Ok(id)
+    }
+
+    pub fn insert_tools(
+        &mut self,
+        panel: Panel,
+        before: Option<u32>,
+        controls: &[ToolbarControl],
+    ) -> Result<(), String> {
+        if controls.is_empty() {
+            return Err("Select at least one tool".into());
+        }
+        for control in controls {
+            control.validate()?;
+        }
+        let tiles = self.panel(panel)?.tiles();
+        let index = match before {
+            Some(id) => tiles
+                .iter()
+                .position(|t| t.id == id)
+                .ok_or("The target tool no longer exists")?,
+            None => tiles.len(),
+        };
+        let end = self
+            .next_tile_id
+            .checked_add(u32::try_from(controls.len()).map_err(|_| "Too many tools")?)
+            .ok_or("Toolbar tile ID space exhausted")?;
+        let added = controls
+            .iter()
+            .zip(self.next_tile_id..end)
+            .map(|(&control, id)| ToolbarTile { id, control })
+            .collect::<Vec<_>>();
+        self.panel_mut(panel)?
+            .tiles_mut()?
+            .splice(index..index, added);
+        self.next_tile_id = end;
+        Ok(())
+    }
+
+    pub fn remove_tool(&mut self, panel: Panel, tile: u32) -> Result<(), String> {
+        let tiles = self.panel_mut(panel)?.tiles_mut()?;
+        let index = tiles
+            .iter()
+            .position(|t| t.id == tile)
+            .ok_or("The tool no longer exists")?;
+        tiles.remove(index);
+        Ok(())
+    }
+
+    fn move_tile(&mut self, panel: Panel, tile: u32, target: DockTarget) -> Result<(), String> {
+        let source = self
+            .panel(panel)?
+            .tiles()
+            .iter()
+            .find(|t| t.id == tile)
+            .ok_or("The dragged tool no longer exists")?
+            .clone();
+        let DockTarget::Tile {
+            panel: destination,
+            before,
+        } = target
+        else {
+            return Err("Drop tools inside a toolbar".into());
+        };
+        if self.panel(destination)?.id.kind() != PanelKind::Tiles {
+            return Err("Drop tools inside a toolbar".into());
+        }
+        if let Some(id) = before
+            && !self.panel(destination)?.tiles().iter().any(|t| t.id == id)
+        {
+            return Err("The target tool no longer exists".into());
+        }
+        if panel == destination && before == Some(tile) {
+            return Ok(());
+        }
+        // All fallible lookups are checked before either toolbar changes.
+        self.remove_tool(panel, tile)?;
+        let tiles = self.panel_mut(destination)?.tiles_mut()?;
+        let index = before
+            .and_then(|id| tiles.iter().position(|t| t.id == id))
+            .unwrap_or(tiles.len());
+        tiles.insert(index, source);
+        Ok(())
+    }
+
+    /// Restore docking defaults without throwing away customized panels/tools.
+    pub fn reset_docking(&mut self) {
+        let defaults = Self::default();
+        self.bands = defaults.bands;
+        self.panels_visible = true;
+        let tools = self
+            .panels
+            .iter()
+            .filter(|p| p.id.kind() == PanelKind::Tiles)
+            .map(|p| p.id)
+            .collect();
+        if let Some(DockNode::Tabs { panels, active, .. }) = self.node_mut(2) {
+            *panels = tools;
+            *active = Panel::Toolbar;
+        }
     }
 
     pub fn resize_workspace(
@@ -520,6 +867,12 @@ impl DockLayout {
         if !viewport.into_iter().all(|v| v.is_finite() && v > 0.0) {
             return Err("Invalid workspace size".into());
         }
+        if let DockItem::Tile { panel, tile } = item {
+            return self.move_tile(panel, tile, target);
+        }
+        if matches!(target, DockTarget::Tile { .. }) {
+            return Err("Only tools can be dropped inside a toolbar".into());
+        }
         let before = self.workspace(
             viewport[0],
             viewport[1],
@@ -542,6 +895,7 @@ impl DockLayout {
                 };
                 (panels.clone(), *active, group, 0, panels.len())
             }
+            DockItem::Tile { .. } => unreachable!(),
         };
         let whole = moving.len() == source_len;
         if matches!(target, DockTarget::Tab {group, ..} if group == source_group) && whole {
@@ -579,6 +933,7 @@ impl DockLayout {
             active: selected,
         };
         match target {
+            DockTarget::Tile { .. } => unreachable!(),
             DockTarget::Edge { edge, outer } => {
                 let id = next.allocate()?;
                 let band = DockBand {
@@ -820,7 +1175,7 @@ impl DockLayout {
             } else {
                 remaining.height
             };
-            let ribbon_min = ribbon_cross_min(&band.root, axis, length);
+            let ribbon_min = ribbon_cross_min(&band.root, axis, length, self);
             let available = if band.edge.axis() == Axis::Horizontal {
                 remaining.width
             } else {
@@ -859,7 +1214,7 @@ impl DockLayout {
                 parent,
                 reversed: matches!(band.edge, Edge::Bottom | Edge::Right),
             });
-            resolve_node(&band.root, bounds, axis, &mut result);
+            resolve_node(&band.root, bounds, axis, self, &mut result);
         }
         result.work_area = remaining;
         result
@@ -899,6 +1254,38 @@ impl DockLayout {
 }
 
 impl ResolvedLayout {
+    pub fn tile_drop_hint(&self, point: [f32; 2], config: &DockLayout) -> Option<DropHint> {
+        for group in &self.groups {
+            let Some(tiles) = &group.tiles else { continue };
+            let mut body = group.bounds;
+            if group.tabs_visible {
+                body.y += TAB_BAR_HEIGHT;
+                body.height -= TAB_BAR_HEIGHT;
+            }
+            if !body.contains(point[0], point[1]) {
+                continue;
+            }
+            let local = [point[0] - body.x, point[1] - body.y];
+            let (index, line) = tiles.drop_slot(local, body.width, body.height)?;
+            return Some(DropHint {
+                target: DockTarget::Tile {
+                    panel: group.active,
+                    before: config
+                        .panel(group.active)
+                        .ok()?
+                        .tiles()
+                        .get(index)
+                        .map(|t| t.id),
+                },
+                bounds: Bounds {
+                    x: body.x + line.x,
+                    y: body.y + line.y,
+                    ..line
+                },
+            });
+        }
+        None
+    }
     /// Measured native tab rectangles take priority over split zones. Body
     /// centers append tabs; the top/bottom 20% of the body split vertically.
     pub fn drop_hint(&self, x: f32, y: f32, tabs: &[TabHit]) -> DropHint {
@@ -1051,10 +1438,17 @@ fn finite_extent(value: f32) -> f32 {
 
 // Intrinsic ribbon thickness, including ribbons nested beside other panels.
 // Use the same split fractions as allocation; no resize callbacks or feedback.
-fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32) -> f32 {
+fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout) -> f32 {
     match node {
-        DockNode::Tabs { panels, .. } if panels.as_slice() == [Panel::Toolbar] => {
-            ribbon_lanes(length, TOOL_TILE_COUNT) as f32 * (TILE_SIZE + 2.0) - 2.0
+        DockNode::Tabs { panels, active, .. }
+            if panels.len() == 1 && active.kind() == PanelKind::Tiles =>
+        {
+            ribbon_lanes(
+                length,
+                layout.panel(*active).map(|p| p.tiles().len()).unwrap_or(0),
+            ) as f32
+                * (TILE_SIZE + 2.0)
+                - 2.0
         }
         DockNode::Tabs { .. } => 0.0,
         DockNode::Split {
@@ -1066,14 +1460,12 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32) -> f32 {
         } => {
             if *axis == ribbon_axis {
                 let usable = (length - WORKSPACE_SPACING).max(0.0);
-                ribbon_cross_min(first, ribbon_axis, usable * fraction).max(ribbon_cross_min(
-                    second,
-                    ribbon_axis,
-                    usable * (1.0 - fraction),
-                ))
+                ribbon_cross_min(first, ribbon_axis, usable * fraction, layout).max(
+                    ribbon_cross_min(second, ribbon_axis, usable * (1.0 - fraction), layout),
+                )
             } else {
-                let a = ribbon_cross_min(first, ribbon_axis, length);
-                let b = ribbon_cross_min(second, ribbon_axis, length);
+                let a = ribbon_cross_min(first, ribbon_axis, length, layout);
+                let b = ribbon_cross_min(second, ribbon_axis, length, layout);
                 if a == 0.0 && b == 0.0 {
                     0.0
                 } else {
@@ -1164,7 +1556,13 @@ fn nearest_edge(b: Bounds, x: f32, y: f32) -> (f32, Edge) {
 fn edge_line(mut b: Bounds, edge: Edge) -> Bounds {
     b.strip(edge, 3.0)
 }
-fn resolve_node(node: &DockNode, bounds: Bounds, orientation: Axis, result: &mut ResolvedLayout) {
+fn resolve_node(
+    node: &DockNode,
+    bounds: Bounds,
+    orientation: Axis,
+    layout: &DockLayout,
+    result: &mut ResolvedLayout,
+) {
     match node {
         DockNode::Tabs { id, panels, active } => {
             let standalone = panels.len() == 1;
@@ -1181,7 +1579,7 @@ fn resolve_node(node: &DockNode, bounds: Bounds, orientation: Axis, result: &mut
                         bounds.width,
                         bounds.height - if tabs_visible { TAB_BAR_HEIGHT } else { 0.0 },
                         orientation,
-                        TOOL_TILE_COUNT,
+                        layout.panel(*active).map(|p| p.tiles().len()).unwrap_or(0),
                         standalone,
                     )
                 }),
@@ -1216,8 +1614,8 @@ fn resolve_node(node: &DockNode, bounds: Bounds, orientation: Axis, result: &mut
                 parent: bounds,
                 reversed: false,
             });
-            resolve_node(first, a, orientation, result);
-            resolve_node(second, rest, orientation, result);
+            resolve_node(first, a, orientation, layout, result);
+            resolve_node(second, rest, orientation, layout, result);
         }
     }
 }
@@ -1225,6 +1623,57 @@ fn resolve_node(node: &DockNode, bounds: Bounds, orientation: Axis, result: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipped_ribbons_keep_tiles_but_only_offer_visible_drop_slots() {
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            for standalone in [false, true] {
+                for (width, height) in [(59.0, 75.0), (81.0, 51.0)] {
+                    let layout = tile_layout(width, height, axis, 30, standalone);
+                    let clip = Bounds {
+                        width,
+                        height,
+                        ..Bounds::default()
+                    };
+                    assert_eq!(layout.tiles.len(), 30);
+                    assert!(layout.tiles.iter().any(|b| b.intersection(clip).is_none()));
+                    let mut targets = std::collections::BTreeSet::new();
+                    for x in 0..width as usize {
+                        for y in 0..height as usize {
+                            let point = [x as f32 + 0.5, y as f32 + 0.5];
+                            let hint = layout.drop_slot(point, width, height);
+                            if layout.grip.is_some_and(|b| b.contains(point[0], point[1])) {
+                                assert!(hint.is_none());
+                            }
+                            if let Some((index, line)) = hint {
+                                assert_eq!(line.intersection(clip), Some(line));
+                                assert!(layout.tiles[index.min(29)].intersection(clip).is_some());
+                                targets.insert(index);
+                            }
+                        }
+                    }
+                    assert!(!targets.is_empty());
+                    assert!(targets.len() < 31);
+                    let expanded = tile_layout(900.0, 900.0, axis, 30, standalone);
+                    for (index, line) in expanded.insertion.iter().enumerate() {
+                        let point = [line.x + line.width * 0.5, line.y + line.height * 0.5];
+                        assert_eq!(expanded.drop_slot(point, 900.0, 900.0).unwrap().0, index);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hidden_slots_are_not_clamped_into_the_last_visible_row() {
+        let layout = tile_layout(36.0, 36.0, Axis::Horizontal, 12, true);
+        let (index, line) = layout.drop_slot([1.0, 35.5], 36.0, 36.0).unwrap();
+        assert_eq!(index, 0);
+        assert_eq!(line.y, 0.0);
+        // The next row is still hidden even if its marker straddles the clip.
+        let layout = tile_layout(80.0, 38.0, Axis::Horizontal, 12, true);
+        assert_eq!(layout.drop_slot([1.0, 37.5], 80.0, 38.0).unwrap().0, 0);
+    }
+
     #[test]
     fn exhausted_workspace_ids_fail_atomically() {
         let mut layout = DockLayout {

@@ -6,6 +6,7 @@
 
 mod camera;
 mod cursor;
+mod customization;
 mod interaction;
 mod layout;
 mod session;
@@ -15,6 +16,11 @@ mod workspace;
 
 pub use camera::{Camera, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
+pub use customization::{
+    ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
+    PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabStyle, TileView,
+    ToolChoice, ToolPickerView, ToolbarTile, tool_choice,
+};
 pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,
 };
@@ -103,10 +109,12 @@ pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
         })
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolbarControl {
     Command { command: CommandId },
+    Brush { id: u32 },
+    Size { pixels: u16 },
     Color,
     Opacity,
 }
@@ -261,6 +269,8 @@ pub fn ui_catalog() -> UiCatalog {
             "zen",
             "settings",
             "menu",
+            "size",
+            "layers",
             "appearance",
             "keyboard",
             "info",
@@ -468,6 +478,7 @@ pub struct UiState {
     /// Core-owned modal state. Native dismissal dispatches CancelSettings.
     pub settings_draft: Option<Settings>,
     pub preferences: PreferencesState,
+    pub customization: CustomizationState,
     pub platform: Platform,
     pub requests: Vec<HostRequest>,
     pub host_error: Option<String>,
@@ -478,6 +489,13 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Customize {
+        action: CustomizationAction,
+    },
+    ActivateTile {
+        panel: Panel,
+        tile: u32,
+    },
     RestoreWorkspace {
         workspace: WorkspaceState,
     },
@@ -521,6 +539,12 @@ pub enum UiAction {
     },
     MoveGroup {
         group: u32,
+        target: DockTarget,
+        viewport: [f32; 2],
+    },
+    MoveTile {
+        panel: Panel,
+        tile: u32,
         target: DockTarget,
         viewport: [f32; 2],
     },
@@ -600,7 +624,8 @@ pub mod regions {
     pub const SETTINGS: u32 = 16;
     pub const CAMERA: u32 = 32;
     pub const HOST: u32 = 64;
-    pub const ALL: u32 = 127;
+    pub const CUSTOMIZATION: u32 = 128;
+    pub const ALL: u32 = 255;
 }
 
 pub fn srgb_to_linear(value: f32) -> f32 {

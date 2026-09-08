@@ -68,6 +68,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 theme: Theme::Light,
                 settings_draft: None,
                 preferences: PreferencesState::default(),
+                customization: CustomizationState::default(),
                 platform: Platform::Generic,
                 requests: Vec::new(),
                 host_error: None,
@@ -94,6 +95,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .preferences
                 .view(draft, &self.state.settings, self.state.platform)
         })
+    }
+    pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
+        self.state.workspace.layout.context_menu(target)
+    }
+    pub fn panel_view(&self, panel: Panel) -> Result<PanelView, String> {
+        customization::panel_view(&self.state, panel)
+    }
+    pub fn tool_picker(&self) -> Option<ToolPickerView> {
+        self.state
+            .customization
+            .picker
+            .as_ref()
+            .map(|p| p.view(&self.state.workspace.layout, self.state.platform))
     }
 
     /// Hover is presentation input, separate from the paint queue and UI state.
@@ -217,6 +231,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     let blocked = editing
                         || self.state.settings_draft.is_some()
+                        || self.state.customization.is_open()
                         || self.interaction.facts.popup_open;
                     if !blocked {
                         if let Some(id) = divider.filter(|_| {
@@ -393,9 +408,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return None;
         }
-        let hint = self
-            .layout(viewport)
-            .drop_hint(position[0], position[1], tabs);
+        let resolved = self.layout(viewport);
+        let hint = if matches!(item, DockItem::Tile { .. }) {
+            resolved.tile_drop_hint(position, &self.state.workspace.layout)?
+        } else {
+            resolved.drop_hint(position[0], position[1], tabs)
+        };
         let mut probe = self.state.workspace.layout.clone();
         probe.move_item(viewport, item, hint.target.clone()).ok()?;
         Some(hint)
@@ -478,11 +496,33 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::Customize { action } => {
+                let changed = self.state.customization.edit(
+                    &mut self.state.workspace.layout,
+                    action,
+                    self.state.platform,
+                )?;
+                (changed, false)
+            }
+            UiAction::ActivateTile { panel, tile } => {
+                let control = self
+                    .state
+                    .workspace
+                    .layout
+                    .panel(panel)?
+                    .tiles()
+                    .iter()
+                    .find(|t| t.id == tile)
+                    .ok_or("The tool no longer exists")?
+                    .control;
+                return self.dispatch(control.action());
+            }
             UiAction::RestoreWorkspace { workspace } => {
                 workspace.validate()?;
                 self.state.workspace = workspace;
                 self.divider_drag = None;
-                (LAYOUT, false)
+                self.state.customization = CustomizationState::default();
+                (LAYOUT | CUSTOMIZATION, false)
             }
             UiAction::Invoke { command } => {
                 if !self.command(command).enabled {
@@ -600,6 +640,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SelectPanelTab { group, panel } => {
                 self.state.workspace.layout.select_tab(group, panel)?;
+                (LAYOUT, false)
+            }
+            UiAction::MoveTile {
+                panel,
+                tile,
+                target,
+                viewport,
+            } => {
+                self.state.workspace.layout.move_item(
+                    viewport,
+                    DockItem::Tile { panel, tile },
+                    target,
+                )?;
                 (LAYOUT, false)
             }
             UiAction::ResizeDock {
@@ -1031,7 +1084,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((SETTINGS, true))
             }
             CommandId::ResetLayout => {
-                self.state.workspace.layout = DockLayout::default();
+                self.state.workspace.layout.reset_docking();
                 Ok((LAYOUT, false))
             }
             CommandId::TogglePanels => {
@@ -2039,6 +2092,129 @@ mod tests {
                 .unwrap()
                 .opacity,
             0.25
+        );
+    }
+    #[test]
+    fn panel_inspector_shows_hidden_controls_live_without_changing_docking() {
+        let mut app = session();
+        let before = app.state.workspace.clone();
+        assert_eq!(
+            app.panel_view(Panel::Brushes)
+                .unwrap()
+                .controls
+                .iter()
+                .filter(|c| c.shown)
+                .count(),
+            1
+        );
+        app.dispatch(UiAction::Customize {
+            action: CustomizationAction::ShowAllControls {
+                panel: Panel::Brushes,
+            },
+        })
+        .unwrap();
+        assert_eq!(app.state.workspace, before);
+        assert!(
+            app.panel_view(Panel::Brushes)
+                .unwrap()
+                .controls
+                .iter()
+                .all(|c| c.shown)
+        );
+        app.dispatch(UiAction::SetBrushOpacity { value: 0.4 })
+            .unwrap();
+        assert_eq!(app.state.brush.opacity, 0.4);
+        app.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetControlVisible {
+                panel: Panel::Brushes,
+                control: PanelControl::BrushOpacity,
+                visible: true,
+            },
+        })
+        .unwrap();
+        app.dispatch(UiAction::Customize {
+            action: CustomizationAction::CloseExpanded,
+        })
+        .unwrap();
+        assert_eq!(
+            app.panel_view(Panel::Brushes)
+                .unwrap()
+                .controls
+                .iter()
+                .filter(|c| c.shown)
+                .map(|c| c.control)
+                .collect::<Vec<_>>(),
+            [PanelControl::Brushes, PanelControl::BrushOpacity]
+        );
+        assert_eq!(app.state.workspace.layout.bands, before.layout.bands);
+        // Restoring a workspace closes transient inspectors/pickers atomically.
+        app.dispatch(UiAction::Customize {
+            action: CustomizationAction::NewToolbar { group: 8 },
+        })
+        .unwrap();
+        app.dispatch(UiAction::RestoreWorkspace { workspace: before })
+            .unwrap();
+        assert!(!app.state.customization.is_open());
+    }
+    #[test]
+    fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
+        let mut app = session();
+        app.state
+            .workspace
+            .layout
+            .insert_tools(
+                Panel::Toolbar,
+                None,
+                &[
+                    ToolbarControl::Size { pixels: 64 },
+                    ToolbarControl::Command {
+                        command: CommandId::ToggleTheme,
+                    },
+                ],
+            )
+            .unwrap();
+        let tiles = app
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .to_vec();
+        app.dispatch(UiAction::ActivateTile {
+            panel: Panel::Toolbar,
+            tile: tiles[6].id,
+        })
+        .unwrap();
+        assert_eq!(app.state.brush.diameter, 64.0);
+        assert!(
+            app.panel_view(Panel::Toolbar).unwrap().tiles[6]
+                .choice
+                .selected
+        );
+        app.dispatch(UiAction::ActivateTile {
+            panel: Panel::Toolbar,
+            tile: tiles[7].id,
+        })
+        .unwrap();
+        assert!(
+            app.panel_view(Panel::Toolbar).unwrap().tiles[7]
+                .choice
+                .selected
+        );
+        app.dispatch(UiAction::Customize {
+            action: CustomizationAction::RemoveTool {
+                panel: Panel::Toolbar,
+                tile: tiles[6].id,
+            },
+        })
+        .unwrap();
+        assert!(
+            app.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: tiles[6].id
+            })
+            .is_err()
         );
     }
     #[test]

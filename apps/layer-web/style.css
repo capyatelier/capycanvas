@@ -97,7 +97,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .scroll-thumb::after { content: ""; display: block; height: 100%; border-radius: 8px; background: color-mix(in srgb, var(--text) 35%, transparent); }
 :where(:root:not([data-touch])) .panel-frame:hover > .scroll-thumb, .panel-frame:focus-within > .scroll-thumb { opacity: 1; }
 :where(:root:not([data-touch])) .scroll-thumb:hover, .scroll-thumb:active { padding: 1px; }
-.panel.tile-panel { padding: 0; position: relative; }
+.panel.tile-panel { padding: 0; position: relative; overflow: clip; touch-action: none; }
 .toolbar-controls { position: relative; width: 100%; height: 100%; }
 .toolbar-controls > button { position: absolute; min-height: 0; padding: 0; }
 .toolbar-controls[data-axis="vertical"] > .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }

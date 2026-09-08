@@ -384,17 +384,12 @@ impl Workspace {
             drop_hint: RefCell::new(None),
             toolbar: toolbar.clone(),
             groups: RefCell::new(Vec::new()),
-            panels: Panel::ALL.map(|panel| {
-                (
-                    panel,
-                    match panel {
-                        Panel::Toolbar => toolbar.clone().upcast(),
-                        Panel::Brushes => scroll(&brushes),
-                        Panel::Sizes => scroll(&sizes),
-                        Panel::Layers => scroll(&layers_panel),
-                    },
-                )
-            }),
+            panels: [
+                (Panel::Toolbar, toolbar.clone().upcast()),
+                (Panel::Brushes, scroll(&brushes)),
+                (Panel::Sizes, scroll(&sizes)),
+                (Panel::Layers, scroll(&layers_panel)),
+            ],
             commands: RefCell::new(Vec::new()),
             menus: RefCell::new(Vec::new()),
             menu_actions: gtk::gio::SimpleActionGroup::new(),
@@ -439,6 +434,14 @@ impl Workspace {
             let (is_color, label, control) = match item {
                 ToolbarControl::Command { command } => {
                     toolbar.append(&self.command_button(command));
+                    continue;
+                }
+                ToolbarControl::Brush { .. } | ToolbarControl::Size { .. } => {
+                    let choice = tool_choice(item);
+                    let button = self.action_button("", item.action());
+                    button.set_icon_name(&format!("layer-{}-symbolic", choice.icon));
+                    button.set_tooltip_text(Some(&choice.label));
+                    toolbar.append(&button);
                     continue;
                 }
                 ToolbarControl::Color => (
