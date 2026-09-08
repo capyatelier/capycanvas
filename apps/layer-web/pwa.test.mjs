@@ -167,6 +167,30 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
   }
   await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 650, y: 450 });
   console.log("Touch controls: Settings, menus, Zen and mouse/pen switching passed in both themes");
+  // CDP verifies the app's cursor policy, not the compositor's physical tablet
+  // cursor. Chrome's Wayland tablet path can ignore CSS cursor:none; see docs.
+  const center = await point("#canvas");
+  assert.equal(await evaluate(`document.elementFromPoint(${center.x},${center.y}).id`), "canvas");
+  for (const pointerType of ["mouse", "pen"]) {
+    for (const [type, offset, buttons] of [
+      ["mouseMoved", 0, 0], ["mousePressed", 0, 1],
+      ["mouseMoved", 40, 1], ["mouseReleased", 40, 0],
+    ]) {
+      await call("Input.dispatchMouseEvent", {
+        type, pointerType, x: center.x + offset, y: center.y,
+        button: buttons || type === "mouseReleased" ? "left" : "none",
+        buttons, clickCount: type === "mouseMoved" ? 0 : 1,
+        force: buttons ? 0.7 : 0,
+      });
+      await settle();
+      assert.equal(await evaluate("getComputedStyle(layerApp.canvas).cursor"), "none", `${pointerType} ${type} requests no browser cursor`);
+      assert.ok(await evaluate("!!document.querySelector('.cursor-outline-front').getAttribute('d')"), `${pointerType} ${type} retains the brush outline`);
+    }
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", ...await point(settings), pointerType });
+    await settle();
+    assert.equal(await evaluate("document.querySelector('.cursor-outline-front').getAttribute('d')"), "", `${pointerType} leaving the canvas clears the brush outline`);
+  }
+  console.log("Mouse/pen DOM cursor policy: hover, drawing, release and canvas exit passed (native tablet cursor not tested)");
   const ready = async (previous) => {
     const start = Date.now();
     while (Date.now() - start < 25000) {

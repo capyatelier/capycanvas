@@ -114,6 +114,17 @@ pigment diffusion, or the final mark's opacity. Randomized tools show a provisio
 next contact rather than predicting an entire future stroke. Pointer exit, touch,
 pan, popups, and focus loss suppress the drawing cursor.
 
+Web requests `cursor: none` for both mouse and pen over the canvas, switching to
+`grab` for panning. Chrome 152.0.7977.64 on Wayland has a browser-side limitation:
+[tablet proximity sets a default arrow](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.64/ui/ozone/platform/wayland/host/wayland_tablet_tool.cc),
+whereas [cursor hiding and custom bitmaps update only `wl_pointer`](https://chromium.googlesource.com/chromium/src/+/refs/tags/152.0.7977.64/ui/ozone/platform/wayland/host/wayland_cursor.cc).
+The tablet cursor is separate, so it can remain visible alongside our outline.
+A transparent CSS cursor cannot fix that routing. Chromium needs to apply the
+window cursor to the active tablet tool, including a null tablet cursor surface
+for `cursor: none`. Packaged browser tests check mouse/pen hover, drawing, release
+and exit at the DOM level; CDP input does not exercise native Wayland tablet
+delivery and cannot establish that the physical stylus cursor is hidden.
+
 Zen fades chrome over 180 ms when the pointer is away. Hidden chrome reveals only
 within 80 logical pixels of the top edge or an edge with a visible dock panel.
 Empty left/right/bottom edges do not reveal; the status HUD is not a bottom panel.
