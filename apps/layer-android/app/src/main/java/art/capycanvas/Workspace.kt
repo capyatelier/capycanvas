@@ -23,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.zIndex
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -159,14 +160,19 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
                 Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime))) {
-                    Workspace(host, snapshot)
-                    host.actionError?.let { message ->
+                    Box(if (snapshot?.objectOrNull("preferences") != null) Modifier.clearAndSetSemantics {} else Modifier) {
+                        Workspace(host, snapshot)
+                    }
+                    host.actionError?.takeIf { snapshot?.objectOrNull("preferences") == null }?.let { message ->
                         AlertDialog(onDismissRequest = host::clearActionError, text = { Text(message) },
                             confirmButton = { TextButton(host::clearActionError) { Text("OK") } })
                     }
-                    if (snapshot?.objectOrNull("preferences") != null) PreferencesScreen(host, snapshot.getJSONObject("preferences"))
-                    if (snapshot?.objectOrNull("picker") != null) ToolPicker(host, snapshot.getJSONObject("picker"))
-                    state?.getJSONObject("customization")?.optString("control")?.takeIf { it.isNotEmpty() && it != "null" }?.let { control ->
+                    PreferencesOverlay(host, snapshot?.objectOrNull("preferences"))
+                    if (snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") != null)
+                        ToolPicker(host, snapshot.getJSONObject("picker"))
+                    state?.getJSONObject("customization")?.optString("control")?.takeIf {
+                        snapshot?.objectOrNull("preferences") == null && it.isNotEmpty() && it != "null"
+                    }?.let { control ->
                         AlertDialog(onDismissRequest = { host.customize(obj("type" to "close_control")) },
                             title = { Text(if (control == "brush_color") "Color" else "Opacity") },
                             text = { Column {
@@ -355,7 +361,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
         }
         Spacer(Modifier.weight(1f))
-        IconTile("settings", "Preferences") { host.invoke("settings") }
+        IconTile("settings", "Settings") { host.invoke("settings") }
       }
     }
 }

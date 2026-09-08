@@ -94,7 +94,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     await action({ type: "set_brush_size", value: 37 });
     await action({ type: "open_settings", page: "appearance" });
     assert.equal(await evaluate("document.querySelector('#settings').open"), true);
-    await action({ type: "cancel_settings" });
+    await action({ type: "close_settings" });
     await action({ type: "invoke", command: "add_layer" });
     assert.equal(await evaluate("window.frameCalls"), 0, "No paint loop while the GPU is unavailable");
     if (mode === "no-adapter") {

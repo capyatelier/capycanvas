@@ -1115,7 +1115,13 @@ fn native_preferences_and_shortcuts() {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for page in SettingsPage::ALL {
             w.dispatch(UiAction::OpenSettings { page });
+            assert!(state(&w).settings_open, "open action must reach the core");
             pump(400);
+            assert!(state(&w).settings_open, "settings must remain open");
+            assert!(
+                w.preferences.dialog.is_mapped(),
+                "open settings must map the native dialog"
+            );
             let search_toggle: gtk::ToggleButton = find_named(
                 w.preferences.dialog.upcast_ref(),
                 "preferences-search-toggle",
@@ -1130,13 +1136,14 @@ fn native_preferences_and_shortcuts() {
             let sidebar =
                 find_named(w.preferences.dialog.upcast_ref(), "preferences-sidebar").unwrap();
             let sidebar_bounds = sidebar.compute_bounds(&w.window).unwrap();
-            let apply = find_named(w.preferences.dialog.upcast_ref(), "apply-settings")
+            let done = find_named(w.preferences.dialog.upcast_ref(), "close-settings")
                 .unwrap()
                 .compute_bounds(&w.window)
                 .unwrap();
+            capture_reference(&w, &format!("{dir}/gtk-{}-{suffix}.png", page.key()), 1.0);
             assert!(
-                sidebar_bounds.y() + sidebar_bounds.height() > apply.y() + apply.height(),
-                "sidebar must extend beside the bottom action bar"
+                sidebar_bounds.y() + sidebar_bounds.height() > done.y() + done.height(),
+                "sidebar must extend beside the bottom action bar: sidebar {sidebar_bounds:?}, Done {done:?}"
             );
             assert_eq!(
                 w.gpu
@@ -1149,7 +1156,6 @@ fn native_preferences_and_shortcuts() {
                     .page,
                 page
             );
-            capture_reference(&w, &format!("{dir}/gtk-{}-{suffix}.png", page.key()), 1.0);
             if page == SettingsPage::About {
                 assert!(w.preferences.dialog.is_mapped());
                 let view = w
@@ -1196,7 +1202,7 @@ fn native_preferences_and_shortcuts() {
                 }
             }
         }
-        w.dispatch(UiAction::CancelSettings);
+        w.dispatch(UiAction::CloseSettings);
         pump(250);
     }
     click(&command(&w, CommandId::KeyboardShortcuts));
@@ -1289,15 +1295,12 @@ fn native_preferences_and_shortcuts() {
         .unwrap();
     click(&confirm);
     assert!(state(&w).preferences.capture.is_none());
-    assert_eq!(
-        state(&w).settings_draft.as_ref().unwrap().shortcuts["command.Brush"][1].key,
-        "e"
-    );
+    assert_eq!(state(&w).settings.shortcuts["command.Brush"][1].key, "e");
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::CloseShortcutEditor,
     });
     pump(250);
-    click(&find_button(w.preferences.dialog.upcast_ref(), "Apply").unwrap());
+    click(&find_button(w.preferences.dialog.upcast_ref(), "Done").unwrap());
     assert!(
         state(&w).requests.is_empty(),
         "host acknowledged the saved snapshot"
@@ -2005,24 +2008,24 @@ fn native_workspace_controls_docking_and_ink() {
     assert_eq!(state(&w).layers[0].id, painted_id);
 
     click(&command(&w, CommandId::Settings));
-    assert!(state(&w).settings_draft.is_some());
+    assert!(state(&w).settings_open);
     assert!(w.preferences.dialog.root().is_some());
     let pressure: adw::SpinRow = find_named(w.preferences.dialog.upcast_ref(), "setting-pressure")
         .unwrap()
         .downcast()
         .unwrap();
     pressure.set_value(1.45);
-    assert_eq!(state(&w).settings_draft.unwrap().pressure_gamma, 1.45);
+    assert_eq!(state(&w).settings.pressure_gamma, 1.45);
     w.preferences.dialog.close();
     pump(300);
-    assert!(state(&w).settings_draft.is_none());
-    assert_eq!(state(&w).settings.pressure_gamma, 1.0);
+    assert!(!state(&w).settings_open);
+    assert_eq!(state(&w).settings.pressure_gamma, 1.45);
     click(&command(&w, CommandId::Settings));
     pressure.set_value(1.5);
-    let apply = find_button(w.preferences.dialog.upcast_ref(), "Apply").unwrap();
-    click(&apply);
+    let done = find_button(w.preferences.dialog.upcast_ref(), "Done").unwrap();
+    click(&done);
     assert_eq!(state(&w).settings.pressure_gamma, 1.5);
-    assert!(state(&w).settings_draft.is_none());
+    assert!(!state(&w).settings_open);
     pump(300);
 
     w.dispatch(UiAction::MovePanel {
@@ -2403,7 +2406,7 @@ fn native_workspace_controls_docking_and_ink() {
         !w.header.has_css_class("zen-hidden"),
         "settings must pin chrome"
     );
-    w.dispatch(UiAction::CancelSettings);
+    w.dispatch(UiAction::CloseSettings);
     pump(100);
     click(&command(&w, CommandId::ZenMode));
     assert!(!w.header.has_css_class("zen-hidden"));

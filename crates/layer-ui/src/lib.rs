@@ -478,8 +478,8 @@ pub struct UiState {
     pub settings: Settings,
     /// Resolved appearance for widgets, previews and GPU canvas surround.
     pub theme: Theme,
-    /// Core-owned modal state. Native dismissal dispatches CancelSettings.
-    pub settings_draft: Option<Settings>,
+    /// Settings are applied individually; dismissal only closes the view.
+    pub settings_open: bool,
     pub preferences: PreferencesState,
     pub customization: CustomizationState,
     pub platform: Platform,
@@ -600,8 +600,7 @@ pub enum UiAction {
         id: u32,
         error: Option<String>,
     },
-    ApplySettings,
-    CancelSettings,
+    CloseSettings,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

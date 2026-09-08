@@ -19,9 +19,9 @@ panels, tab dragging, and drawing/recovery states.
 | Header / HUD | Off-center title without dimensions; centered HUD | Centered document title with dimensions; bottom/right-aligned HUD |
 | Drawers | Giant controls and excessive nested padding | Same compact controls, joined outline/shadow, clear configuration hierarchy |
 | Menus | Oversized rows, selected state replaces shortcut hint; panel actions in a centered alert | Compact grouped menu rows, separate selection and shortcut affordances; native popup anchored to the triggering tab/grip/tile |
-| Preferences | Full-screen stretched tablet controls; repetitive vertical labels | Bounded list-detail surface on tablets; single-pane navigation at compact widths |
+| Preferences | Stretched controls; repetitive vertical labels | Full-screen list-detail overlay with bounded content width; single-pane navigation at compact widths |
 | Preferences controls | Huge number fields/sliders; weak alignment and hierarchy | Label/description with trailing value/control, grouped rows, readable content width |
-| Search / shortcuts | Oversized search, ungrouped shortcut rows | Filled search, grouped results/bindings, consistent dialog actions |
+| Search / shortcuts | Oversized search, ungrouped shortcut rows | Filled search, grouped results/bindings, inline recording/conflicts |
 | Portrait / IME | Same oversized controls; very narrow settings detail | Responsive settings navigation, bounded scrolling, safe system/keyboard insets |
 | Drag positioning | Initial movement counted twice, shifting edge drops outside the window | Absolute native pointer coordinates for panel/tile/divider drags; edge-drop regression test |
 | Number editing | Focused text can remain stale when a stepper changes its core value | Native focus handoff when using steppers/sliders; text/stepper synchronization test |
@@ -55,7 +55,8 @@ Fresh web reference captures are in `artifacts/ui/customization/web/`.
   recovery/rotation, settings/search/theme/shortcuts, panel/tile/group dragging,
   dividers, Zen mode, number editing and horizontal/vertical ribbons.
 - Geometry assertions verify 36dp tools/Zen/tabs, 40dp brush previews, 31dp number
-  inputs, 20dp group grips and the bounded 960dp tablet settings window.
+  inputs and 20dp group grips. The settings-window assertion was subsequently
+  replaced by full-screen geometry for the approved overlay design below.
 - Portrait checks exercise category → detail → Back, not just a resized image.
 - The high-rate drawing test retains allocation/snapshot-suppression assertions.
   This UI audit does not establish sustained 120 Hz on a physical Android tablet.
@@ -72,3 +73,27 @@ and control hierarchy. Native font rasterization, ripple/scroll behavior,
 system bars, dialog navigation and shadows are intentionally not pixel-identical.
 Physical-device usability and larger Android accessibility font scales still
 need device validation.
+
+## Full-screen settings follow-up
+
+The approved Settings design replaces the bounded tablet dialog with one
+full-screen, top-sliding overlay. Done dismisses; accepted edits auto-apply and
+persist through Rust. Choice/number/shortcut details slide into the right pane
+and return using its Back arrow. There are no nested settings dialogs, dropdowns
+or recording/conflict popups. Narrow screens retain category-to-page navigation.
+Native settings controls use comfortable 48 dp or larger targets; the compact
+editor controls and GPU surface are unchanged.
+
+The expanded 15-test device suite checks entry/exit and detail movement with the
+Compose clock, no dialog/popup nodes, full-width geometry, invalid/valid numeric
+edits, accepted-value persistence and real stylus events not reaching the covered
+canvas. Settings captures, including numeric details and inline errors, are in
+`artifacts/android/settings-overlay/final/`.
+Final run `1788900522533` passes all 15 tests and produces 35 PNGs; 32–33 cover
+numeric details/validation and 34–35 inline shortcut recording/conflicts. Settings
+views were visually checked in light/dark and portrait layouts. Android lint and
+both native ABI builds pass. Shared-core tests pass (72), as do the packaged web
+preferences/customization suites and GTK preferences in an isolated headless
+Wayland session. On the regular desktop, occluded GTK dialogs can stall before
+their animation allocates children; the isolated compositor avoids that test
+environment dependency without changing application rendering.

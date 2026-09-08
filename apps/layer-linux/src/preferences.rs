@@ -55,7 +55,6 @@ pub struct Preferences {
     shortcut_search: gtk::SearchEntry,
     empty: gtk::Label,
     error: gtk::Label,
-    apply: gtk::Button,
     fields: RefCell<BTreeMap<PreferenceId, Field>>,
     groups: RefCell<Vec<(SettingsPage, usize, adw::PreferencesGroup)>>,
     shortcuts: adw::PreferencesGroup,
@@ -217,7 +216,6 @@ impl Preferences {
             shortcut_search,
             empty,
             error,
-            apply: gtk::Button::with_label("Apply"),
             fields: RefCell::new(BTreeMap::new()),
             groups: RefCell::default(),
             shortcuts: adw::PreferencesGroup::new(),
@@ -269,15 +267,9 @@ impl Preferences {
         margins(&footer, 12);
         self.error.set_hexpand(true);
         footer.append(&self.error);
-        footer.append(&action_button("Cancel", w, UiAction::CancelSettings));
-        self.apply.add_css_class("suggested-action");
-        self.apply.set_widget_name("apply-settings");
-        self.apply.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            move |_| w.dispatch(UiAction::ApplySettings)
-        ));
-        footer.append(&self.apply);
+        let done = action_button("Done", w, UiAction::CloseSettings);
+        done.set_widget_name("close-settings");
+        footer.append(&done);
         self.content_view.add_bottom_bar(&footer);
         self.dialog.set_child(Some(&self.split));
         self.dialog.connect_closed(glib::clone!(
@@ -287,9 +279,9 @@ impl Preferences {
                 if w.gpu
                     .borrow()
                     .as_ref()
-                    .is_some_and(|g| g.session.state().settings_draft.is_some())
+                    .is_some_and(|g| g.session.state().settings_open)
                 {
-                    w.dispatch(UiAction::CancelSettings);
+                    w.dispatch(UiAction::CloseSettings);
                 }
             }
         ));
@@ -650,8 +642,6 @@ impl Preferences {
                 );
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
-            self.apply
-                .set_sensitive(view.dirty && view.capture.is_none());
             if self
                 .shortcut_rows
                 .borrow()
@@ -830,7 +820,7 @@ impl Preferences {
         if self.servicing.replace(true) {
             return;
         }
-        // Finish an acknowledged Apply even if the last window closes while
+        // Finish an accepted settings edit even if the last window closes while
         // its atomic write is in flight.
         let hold = w.window.application().map(|app| app.hold());
         glib::MainContext::default().spawn_local(glib::clone!(

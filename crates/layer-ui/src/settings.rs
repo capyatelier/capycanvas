@@ -201,6 +201,9 @@ pub enum PreferenceValue {
     Bool(bool),
     Number(f32),
     Choice(u32),
+    /// Native numeric editors submit text when editing completes. Parsing and
+    /// range validation stay in the core; incomplete IME text is not persisted.
+    Text(String),
 }
 // Choice indices and numbers have distinct Rust types; JSON numbers are decoded
 // according to the destination field below, so clients need no tagged wrappers.
@@ -209,6 +212,7 @@ impl PreferenceValue {
         match self {
             Self::Number(v) => Some(*v),
             Self::Choice(v) => Some(*v as f32),
+            Self::Text(v) => v.trim().parse().ok(),
             _ => None,
         }
     }
@@ -270,6 +274,7 @@ pub struct PreferencesState {
     pub searching: bool,
     pub shortcut_query: String,
     pub editing_shortcut: Option<String>,
+    pub editing_preference: Option<PreferenceId>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
 }
@@ -282,10 +287,10 @@ pub struct PreferencesView {
     pub search_results: Vec<PreferenceSearchResult>,
     pub shortcut_query: String,
     pub shortcut_editor: Option<ShortcutEditor>,
+    pub detail: Option<PreferenceRow>,
     pub shortcuts: Vec<ShortcutRow>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
-    pub dirty: bool,
     pub empty: bool,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -307,6 +312,10 @@ pub struct ShortcutEditor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceAction {
+    EditPreference {
+        id: PreferenceId,
+    },
+    ClosePreference,
     Page {
         page: SettingsPage,
     },
@@ -664,14 +673,17 @@ impl Settings {
     }
 }
 impl PreferencesState {
-    pub(crate) fn view(
-        &self,
-        draft: &Settings,
-        active: &Settings,
-        platform: Platform,
-    ) -> PreferencesView {
+    pub(crate) fn view(&self, settings: &Settings, platform: Platform) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
-        let pages = draft.pages(platform);
+        let pages = settings.pages(platform);
+        let detail = self.editing_preference.and_then(|id| {
+            pages
+                .iter()
+                .flat_map(|p| &p.groups)
+                .flat_map(|g| &g.rows)
+                .find(|r| r.id == id)
+                .cloned()
+        });
         let mut search_results = Vec::new();
         for page in &pages {
             for group in &page.groups {
@@ -699,11 +711,11 @@ impl PreferencesState {
             }
         }
         let shortcut_query = self.shortcut_query.trim().to_lowercase();
-        let shortcuts: Vec<_> = crate::shortcuts::definitions(draft, platform)
+        let shortcuts: Vec<_> = crate::shortcuts::definitions(settings, platform)
             .into_iter()
             .map(|(definition, group)| ShortcutRow {
-                shortcut: draft.shortcut_label(&definition.id, platform),
-                modified: draft.shortcuts.contains_key(&definition.id),
+                shortcut: settings.shortcut_label(&definition.id, platform),
+                modified: settings.shortcuts.contains_key(&definition.id),
                 visible: format!("{group} {}", definition.label)
                     .to_lowercase()
                     .contains(&shortcut_query),
@@ -727,7 +739,11 @@ impl PreferencesState {
         }
         let shortcut_editor = self.editing_shortcut.as_ref().and_then(|id| {
             let row = shortcuts.iter().find(|r| &r.id == id)?;
-            let bindings: Vec<_> = draft.keys(id).iter().map(|k| k.label(platform)).collect();
+            let bindings: Vec<_> = settings
+                .keys(id)
+                .iter()
+                .map(|k| k.label(platform))
+                .collect();
             Some(ShortcutEditor {
                 id: id.clone(),
                 label: row.label.clone(),
@@ -750,6 +766,7 @@ impl PreferencesState {
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,
+            detail,
             shortcuts,
             capture: self.capture.clone().map(|mut c| {
                 if self.error.is_some() {
@@ -758,29 +775,50 @@ impl PreferencesState {
                 c
             }),
             error: self.error.clone(),
-            dirty: draft != active,
         }
     }
     pub(crate) fn edit(
         &mut self,
-        draft: &mut Settings,
+        settings: &mut Settings,
         action: PreferenceAction,
         platform: Platform,
     ) {
-        self.error = self.try_edit(draft, action, platform).err();
+        self.error = self.try_edit(settings, action, platform).err();
     }
     fn try_edit(
         &mut self,
-        draft: &mut Settings,
+        settings: &mut Settings,
         action: PreferenceAction,
         platform: Platform,
     ) -> Result<(), String> {
         match action {
+            PreferenceAction::EditPreference { id } => {
+                let row = settings
+                    .pages(platform)
+                    .into_iter()
+                    .flat_map(|p| p.groups)
+                    .flat_map(|g| g.rows)
+                    .find(|r| r.id == id)
+                    .ok_or("This setting is unavailable on this platform")?;
+                if !row.enabled
+                    || !matches!(
+                        row.kind,
+                        PreferenceKind::Number { .. } | PreferenceKind::Choice { .. }
+                    )
+                {
+                    return Err("This setting cannot be opened for editing".into());
+                }
+                self.editing_preference = Some(id);
+                self.editing_shortcut = None;
+                self.capture = None;
+            }
+            PreferenceAction::ClosePreference => self.editing_preference = None,
             PreferenceAction::Page { page } => {
                 self.page = page;
                 self.query.clear();
                 self.searching = false;
                 self.editing_shortcut = None;
+                self.editing_preference = None;
                 self.capture = None;
             }
             PreferenceAction::Search { query } => {
@@ -802,9 +840,9 @@ impl PreferencesState {
                 }
                 self.shortcut_query = query;
             }
-            PreferenceAction::Edit { id, value } => draft.edit(id, value, platform)?,
+            PreferenceAction::Edit { id, value } => settings.edit(id, value, platform)?,
             PreferenceAction::EditShortcut { id } => {
-                if !crate::shortcuts::definitions(draft, platform)
+                if !crate::shortcuts::definitions(settings, platform)
                     .iter()
                     .any(|(d, _)| d.id == id)
                 {
@@ -814,6 +852,7 @@ impl PreferencesState {
                 self.query.clear();
                 self.searching = false;
                 self.editing_shortcut = Some(id);
+                self.editing_preference = None;
                 self.capture = None;
             }
             PreferenceAction::CloseShortcutEditor => {
@@ -824,19 +863,19 @@ impl PreferencesState {
                 if self.editing_shortcut.as_ref() != Some(&id) {
                     return Err("Shortcut editor is not open".into());
                 }
-                let mut keys = draft.keys(&id);
+                let mut keys = settings.keys(&id);
                 if index >= keys.len() {
                     return Err("Unknown shortcut binding".into());
                 }
                 keys.remove(index);
-                draft.shortcuts.insert(id, keys);
+                settings.shortcuts.insert(id, keys);
             }
             PreferenceAction::BeginShortcut { id } => {
-                let (definition, _) = crate::shortcuts::definitions(draft, platform)
+                let (definition, _) = crate::shortcuts::definitions(settings, platform)
                     .into_iter()
                     .find(|(d, _)| d.id == id)
                     .ok_or("Unknown shortcut action")?;
-                if draft.keys(&id).len() >= crate::shortcuts::MAX_SHORTCUTS {
+                if settings.keys(&id).len() >= crate::shortcuts::MAX_SHORTCUTS {
                     return Err("Remove a shortcut before adding another".into());
                 }
                 self.capture = Some(ShortcutCapture {
@@ -862,60 +901,60 @@ impl PreferencesState {
                 if !chord.available(platform) {
                     return Err("This shortcut is reserved by the browser".into());
                 }
-                let mut keys = draft.keys(&capture.id);
+                let mut keys = settings.keys(&capture.id);
                 if keys.contains(&chord) {
                     return Err("This shortcut is already assigned to this action".into());
                 }
                 if keys.len() >= crate::shortcuts::MAX_SHORTCUTS {
                     return Err("Remove a shortcut before adding another".into());
                 }
-                if let Some(conflict) = draft.conflict(&capture.id, &chord, platform) {
+                if let Some(conflict) = settings.conflict(&capture.id, &chord, platform) {
                     if !replace {
                         return Err(format!("Already assigned to {}", conflict.label));
                     }
-                    let keys = draft
+                    let keys = settings
                         .keys(&conflict.id)
                         .into_iter()
                         .filter(|c| *c != chord)
                         .collect();
-                    draft.shortcuts.insert(conflict.id, keys);
+                    settings.shortcuts.insert(conflict.id, keys);
                 }
                 keys.push(chord);
-                draft.shortcuts.insert(capture.id.clone(), keys);
+                settings.shortcuts.insert(capture.id.clone(), keys);
                 self.capture = None;
             }
             PreferenceAction::ResetShortcut { id } => {
-                if !crate::shortcuts::definitions(draft, platform)
+                if !crate::shortcuts::definitions(settings, platform)
                     .iter()
                     .any(|(d, _)| d.id == id)
                 {
                     return Err("Unknown shortcut action".into());
                 }
                 for chord in crate::shortcuts::defaults(&id) {
-                    if let Some(conflict) = draft.conflict(&id, &chord, platform) {
+                    if let Some(conflict) = settings.conflict(&id, &chord, platform) {
                         return Err(format!(
                             "Reset conflicts with {}. Reset all shortcuts or change that binding first.",
                             conflict.label
                         ));
                     }
                 }
-                draft.shortcuts.remove(&id);
+                settings.shortcuts.remove(&id);
             }
             PreferenceAction::ResetAllShortcuts => {
-                draft.shortcuts.clear();
+                settings.shortcuts.clear();
                 self.capture = None;
             }
             PreferenceAction::RegisterAction { definition } => {
-                let mut candidate = draft.clone();
+                let mut candidate = settings.clone();
                 candidate.custom_actions.retain(|a| a.id != definition.id);
                 candidate.custom_actions.push(definition);
                 candidate.validate()?;
-                *draft = candidate;
+                *settings = candidate;
             }
         }
         Ok(())
     }
-    pub(crate) fn record(&mut self, draft: &Settings, chord: KeyChord, platform: Platform) {
+    pub(crate) fn record(&mut self, settings: &Settings, chord: KeyChord, platform: Platform) {
         self.error = None;
         if KeyChord::modifier(&chord.key) {
             return;
@@ -929,7 +968,7 @@ impl PreferencesState {
                 (!chord.available(platform))
                     .then(|| "This shortcut is reserved by the browser".into())
             });
-            capture.conflict = draft
+            capture.conflict = settings
                 .conflict(&capture.id, &chord, platform)
                 .map(|d| d.label);
             capture.shortcut = chord.label(platform);

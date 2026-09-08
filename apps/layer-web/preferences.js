@@ -3,7 +3,7 @@
 export function createPreferences({ element, button, icon, spin, setNumber, numericControl, panelFrame, dispatch, view }) {
   const dialog = document.getElementById("settings");
   const send = (action) => dispatch({ type: "preferences", action });
-  const close = () => dispatch({ type: "cancel_settings" });
+  const close = () => dispatch({ type: "close_settings" });
   const root = element("div", "preferences-layout");
   const sidebar = element("aside", "preferences-sidebar");
   const sidebarHeader = element("header", "dialog-header");
@@ -32,9 +32,8 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
   content.append(header, panelFrame(pages));
   const footer = element("footer");
   const error = element("span", "preferences-error"); error.setAttribute("role", "status");
-  const cancel = button("Cancel", close); cancel.value = "cancel";
-  const apply = button("Apply", () => dispatch({ type: "apply_settings" }), "suggested-action"); apply.id = "apply-settings";
-  footer.append(error, cancel, apply); content.append(footer); root.append(sidebar, content); dialog.append(root);
+  const done = button("Done", close); done.id = "close-settings";
+  footer.append(error, done); content.append(footer); root.append(sidebar, content); dialog.append(root);
   dialog.addEventListener("close", () => { if (!dialog.open && view()) close(); });
   dialog.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
 
@@ -202,7 +201,7 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
       const { row, binding } = shortcuts.get(spec.id);
       row.hidden = !spec.visible; binding.textContent = spec.shortcut || "Disabled";
     }
-    error.textContent = model.error || ""; apply.disabled = !model.dirty || !!model.capture;
+    error.textContent = model.error || "";
     if (!dialog.open) { dialog.showModal(); root.classList.add("show-content"); }
     if (model.shortcut_editor) {
       const spec = model.shortcut_editor, signature = JSON.stringify([spec, model.error]);

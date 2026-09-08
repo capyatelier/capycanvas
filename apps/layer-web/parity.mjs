@@ -122,8 +122,8 @@ export async function checkParity({ call, evaluate, settle }) {
     );
     await click(".dialog-close");
     assert.equal(
-      await evaluate("layerApp.state().settings_draft ?? null"),
-      null,
+      await evaluate("layerApp.state().settings_open"),
+      false,
     );
   }
   await writeFile(
@@ -417,15 +417,15 @@ export async function checkParity({ call, evaluate, settle }) {
   await evaluate(
     `const pressure=document.querySelector('#setting-pressure');pressure.value='1.5';pressure.dispatchEvent(new Event('input'));`,
   );
-  await click('#settings footer button[value="cancel"]');
-  assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1);
+  await click('#close-settings');
+  assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
   await click('[data-command="settings"]');
   await click('[data-settings-page="input"]');
   await click('#setting-pressure + button + button');
-  await click("#apply-settings");
+  await click("#close-settings");
   assert.ok(
     Math.abs(
-      (await evaluate("layerApp.state().settings.pressure_gamma")) - 1.05,
+      (await evaluate("layerApp.state().settings.pressure_gamma")) - 1.55,
     ) < 0.001,
   );
 
@@ -489,7 +489,7 @@ export async function checkParity({ call, evaluate, settle }) {
   await evaluate(
     `const select=document.querySelector('#setting-cursor'); select.value=layerApp.app.catalog().cursors.findIndex(c=>c[0]==='cross');select.dispatchEvent(new Event('input'));`,
   );
-  await click("#apply-settings");
+  await click("#close-settings");
   await cursorAt(600, 450);
   assert.deepEqual(
     await evaluate(
@@ -502,7 +502,7 @@ export async function checkParity({ call, evaluate, settle }) {
     type: "edit_settings",
     settings: { theme: null, pressure_gamma: 1, cursor: "brush_size" },
   });
-  await action({ type: "apply_settings" });
+  await action({ type: "close_settings" });
 
   // No desktop input injection required: exercise host DOM listeners directly
   // for Zen/scroll, and the same shared actions used by native docking controls.
@@ -681,6 +681,6 @@ export async function checkParity({ call, evaluate, settle }) {
     "",
   );
   console.log(
-    "PASS: GTK/web geometry ≤1px, dark/light/settings captures, nonselectable chrome/no focus halos, copyable title, live controls, settings transactions, occupied-edge Zen 80/40, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
+    "PASS: GTK/web geometry ≤1px, dark/light/settings captures, nonselectable chrome/no focus halos, copyable title, live controls, immediate settings persistence, occupied-edge Zen 80/40, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
   );
 }

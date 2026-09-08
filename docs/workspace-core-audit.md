@@ -32,7 +32,7 @@ timestamp/coordinate conversion remain host responsibilities.
 | Zen visibility/reveal | Frontends owned hidden state, pin rules, and first-contact consumption | Implemented: `UiInput::Chrome` owns hover/visibility, keyboard pin, edge hysteresis and reveal/dismiss consumption; hosts report native popover/title-grab facts |
 | Shortcuts | GTK and JS contained separate mappings with different modifier behavior | Implemented: normalized `UiInput::Key`, modifier/editing/modal/popup guards, repeat handling, shared divider nudges; fixed web treating Ctrl+B/E/F as bare shortcuts |
 | Canvas input routing | Space-pan, button-pan, pointer ownership and interruption policy repeated in hosts | Implemented: `UiInput::Pointer` / `Blur` owns routing, pointer exclusion, cancellation and Space lifecycle; raw native histories/backpressure stay in adapters |
-| Settings modal/draft, commands, document edits, camera math and two-touch gestures | Already in `UiSession` | Retained; widget focus/native popup facts now feed core interaction guards |
+| Settings view/validated updates, commands, document edits, camera math and two-touch gestures | Already in `UiSession` | Retained; widget focus/native popup facts feed core interaction guards |
 | View-only state | Widget references, CSS classes, scroll offsets, focus, popover placement, animations, numeric edit buffers | Retain in hosts; no second application state or layout policy |
 
 ## Final boundary review

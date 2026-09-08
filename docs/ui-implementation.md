@@ -5,7 +5,7 @@ this repository. See [publication notes](publication.md#publication-checks).
 
 ## Contract
 
-`layer-ui` owns semantic controls, command availability, settings drafts,
+`layer-ui` owns semantic controls, command availability, validated settings updates,
 workspace docking, camera transforms, and shared mouse/pen/touch interpretation.
 GTK4/libadwaita and the browser DOM own widgets, accessibility, focus, native
 event collection, drag visuals, and surface lifecycle. Both use the same Rust
@@ -68,7 +68,8 @@ panel context menus use the same typography role. One overlay scrollbar
 wrapper keeps the browser's native scrolling without consuming preview width.
 Layer rows are reconciled only when their identity/order/labels change; opacity
 and visibility updates keep controls mounted, including during pointer capture.
-Preferences uses shared Rust page/group/row definitions and Apply/Cancel drafts.
+Preferences uses shared Rust page/group/row definitions and immediate validated
+updates. Done only dismisses the view; each accepted change requests persistence.
 GTK presents an adaptive native sidebar dialog; web mirrors its layout with a
 gear in the header. Appearance, Canvas, Pen & Input, Shortcuts and About are
 implemented. See [settings design](settings-implementation-plan.md).
@@ -274,7 +275,7 @@ Matching native/web review captures and widget measurements are in
 At 1200×900 logical pixels with matching display scale, measured panel/control
 geometry differs by at most one logical pixel (native integer allocation versus
 CSS subpixels). Font metrics, 36px controls, 6px workspace gaps, 2px tool gaps,
-grip insets, 24px native close circle, settings transactions, copyable titles,
+grip insets, 24px native close circle, settings persistence, copyable titles,
 nonselectable chrome, no focus halos, live opacity and empty-edge Zen all pass.
 The browser restores a saved workspace into a separate real Wasm/WebGPU session.
 The parity harness forces sRGB screenshots for comparable samples: dark/light
@@ -352,7 +353,8 @@ and About Capy Canvas; web uses a direct gear button. View contains panel
 visibility/reset. Drag panel grips/tabs: header slots insert/reorder tabs, body
 centers append tabs, narrow body edges split beside a panel, and workspace
 edges create dock bands. A highlighted insertion line previews the result. Drag
-dividers or focus them and use arrow keys. Settings use a native modal draft.
+dividers or focus them and use arrow keys. Settings use the shared auto-saving
+model with native presentation.
 Ribbons contain only 36-unit square tiles; color/opacity open popovers. They
 default to one row on top/bottom, one column on a side, and wrap when resized
 across that axis. Standalone grips sit at the right/bottom; tabbed ribbons have

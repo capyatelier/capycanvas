@@ -3,10 +3,19 @@ package art.capycanvas
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
@@ -29,62 +38,115 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import org.json.JSONObject
 
-@Composable internal fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
+/** Retain only the outgoing view during the exit animation; Rust owns the
+ * settings session. The full-size input surface also blocks the exposed canvas
+ * while the settings sheet is entering or leaving. */
+@Composable internal fun PreferencesOverlay(host: CanvasHost, view: JSONObject?) {
+    val visible = remember { MutableTransitionState(false) }
+    visible.targetState = view != null
+    var retained by remember { mutableStateOf<JSONObject?>(null) }
+    if (view != null) SideEffect { retained = view }
+    val model = view ?: retained
+    if (visible.currentState || visible.targetState) {
+        Box(Modifier.fillMaxSize().pointerInput(Unit) {
+            awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+        }) {
+            AnimatedVisibility(visible,
+                enter = slideInVertically(tween(240, easing = FastOutSlowInEasing)) { -it },
+                exit = slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { -it }) {
+                model?.let { PreferencesScreen(host, it) }
+            }
+        }
+    }
+}
+
+private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "value:" + it.getString("id") }
+    ?: objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") } ?: "page:" + getString("page")
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
     val colors = LocalPalette.current
-    var showPage by remember { mutableStateOf(view.getString("page") != "appearance") }
-    val page = view.array("pages").objects().find { it.getString("id") == view.getString("page") }
-    Dialog({ host.dispatch(obj("type" to "cancel_settings")) },
-        properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        BoxWithConstraints(Modifier.fillMaxSize().imePadding(),
-            contentAlignment = Alignment.Center) {
-            val wide = maxWidth >= 840.dp
-            val inset = if (wide) 24.dp else 0.dp
-            fun back() { if (!wide && showPage) showPage = false else host.dispatch(obj("type" to "cancel_settings")) }
-            BackHandler(onBack = ::back)
-            Surface(Modifier.padding(inset).then(if (wide) Modifier.widthIn(max = 960.dp).heightIn(max = 720.dp) else Modifier)
-                .fillMaxSize().testTag("preferences-surface"),
-                color = colors.settingsBackground, shape = RoundedCornerShape(if (inset > 0.dp) 20.dp else 0.dp)) {
-                Column {
-                    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(::back) { Text("Back") }
-                        Text(if (!wide && showPage) page?.getString("title") ?: "Preferences" else "Preferences",
-                            Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                        Button({ host.dispatch(obj("type" to "apply_settings")) }, shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 18.dp)) { Text("Save") }
-                    }
-                    HorizontalDivider(color = colors.divider)
-                    Row(Modifier.weight(1f)) {
-                        if (wide || !showPage) PreferencesNavigation(host, view,
-                            Modifier.then(if (wide) Modifier.width(240.dp) else Modifier.fillMaxWidth()).fillMaxHeight()) { showPage = true }
-                        if (wide || showPage) {
-                            Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.TopCenter) {
-                                key(view.getString("page")) {
-                                    Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
-                                        verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                                        if (wide) Text(page?.getString("title") ?: "", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                                        if (view.getString("page") == "shortcuts") Shortcuts(host, view)
-                                        else page?.array("groups")?.objects()?.forEach { group ->
-                                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                Text(group.getString("title"), Modifier.padding(horizontal = 4.dp), fontWeight = FontWeight.Bold)
-                                                Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
-                                                    color = colors.settingsCard, shadowElevation = 1.dp) {
-                                                    Column {
-                                                        group.array("rows").objects().filter { it.optBoolean("visible", true) }.forEachIndexed { index, row ->
-                                                            if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                                                            key(row.getString("id")) { PreferenceRow(host, row) }
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    var showPage by rememberSaveable { mutableStateOf(view.getString("page") != "appearance") }
+    BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding().testTag("preferences-surface")) {
+        val wide = maxWidth >= 840.dp
+        val detail = view.objectOrNull("detail")
+        val shortcut = view.objectOrNull("shortcut_editor")
+        fun close() { focus.clearFocus(); host.dispatch(obj("type" to "close_settings")) }
+        fun back() {
+            focus.clearFocus()
+            when {
+                view.objectOrNull("capture") != null -> host.preference(obj("type" to "cancel_shortcut"))
+                shortcut != null -> host.preference(obj("type" to "close_shortcut_editor"))
+                detail != null -> host.preference(obj("type" to "close_preference"))
+                !wide && showPage -> showPage = false
+                else -> close()
+            }
+        }
+        BackHandler(onBack = ::back)
+        Column {
+            TopAppBar(title = { Text("Settings", fontSize = 22.sp, fontWeight = FontWeight.SemiBold) },
+                actions = { TextButton(::close, Modifier.testTag("settings-done").padding(end = 8.dp)) { Text("Done") } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.settingsBackground),
+                windowInsets = WindowInsets(0))
+            HorizontalDivider(color = colors.divider)
+            Row(Modifier.weight(1f)) {
+                if (wide || !showPage) PreferencesNavigation(host, view,
+                    Modifier.then(if (wide) Modifier.width(260.dp) else Modifier.fillMaxWidth()).fillMaxHeight()) { showPage = true }
+                if (wide || showPage) {
+                    AnimatedContent(view, Modifier.weight(1f).fillMaxHeight().clipToBounds(), contentKey = { it.settingsRoute() },
+                        transitionSpec = {
+                            if (initialState.settingsRoute().startsWith("page:") && targetState.settingsRoute().startsWith("page:")) {
+                                fadeIn(tween(140)) togetherWith fadeOut(tween(100))
+                            } else {
+                                val direction = if (targetState.settingsRoute().startsWith("page:")) -1 else 1
+                                (slideInHorizontally(tween(220)) { it * direction } + fadeIn(tween(160))) togetherWith
+                                    (slideOutHorizontally(tween(220)) { -it * direction / 3 } + fadeOut(tween(120)))
+                            }
+                        }, label = "settings-detail") { model ->
+                        val row = model.objectOrNull("detail")
+                        val editor = model.objectOrNull("shortcut_editor")
+                        val page = model.array("pages").objects().find { it.getString("id") == model.getString("page") }
+                        Column(Modifier.testTag("settings-content-" + model.settingsRoute())) {
+                            if (row != null || editor != null || !wide) {
+                                TopAppBar(title = { Text(row?.getString("title") ?: editor?.getString("label") ?: page?.getString("title") ?: "",
+                                    fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
+                                    navigationIcon = {
+                                        IconButton(::back) { SharedIcon("back", "Back", Modifier.size(24.dp)) }
+                                    }, colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.settingsBackground),
+                                    windowInsets = WindowInsets(0))
+                            }
+                            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                                .padding(horizontal = 24.dp, vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Column(Modifier.widthIn(max = 680.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                                    when {
+                                        row != null -> PreferenceDetail(host, row)
+                                        editor != null -> ShortcutEditor(host, model, editor)
+                                        else -> {
+                                            if (wide) Text(page?.getString("title") ?: "", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                                            if (model.getString("page") == "shortcuts") Shortcuts(host, model)
+                                            else page?.array("groups")?.objects()?.forEach { group ->
+                                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                                    Text(group.getString("title"), Modifier.padding(horizontal = 4.dp), fontWeight = FontWeight.Bold)
+                                                    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+                                                        color = colors.settingsCard, shadowElevation = 1.dp) {
+                                                        Column {
+                                                            group.array("rows").objects().filter { it.optBoolean("visible", true) }.forEachIndexed { index, setting ->
+                                                                if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
+                                                                key(setting.getString("id")) { PreferenceRow(host, setting) }
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
                                         }
-                                        view.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
-                                            Text(it, color = MaterialTheme.colorScheme.error)
-                                        }
                                     }
+                                    model.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let {
+                                        Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("settings-error"))
+                                    }
+                                    host.actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         }
@@ -92,7 +154,6 @@ import org.json.JSONObject
                 }
             }
         }
-        view.objectOrNull("shortcut_editor")?.let { ShortcutEditor(host, view, it) }
     }
 }
 
@@ -102,31 +163,34 @@ import org.json.JSONObject
     val searching = view.optBoolean("searching")
     Column(modifier.background(colors.tabs).padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (searching) CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
-            Modifier.fillMaxWidth(), placeholder = { Text("Search preferences") },
-            leadingIcon = { SharedIcon("search", null) },
+            Modifier.fillMaxWidth(), height = 48.dp, placeholder = { Text("Search settings") },
+            leadingIcon = { SharedIcon("search", null, Modifier.size(24.dp)) },
             trailingIcon = {
-                Box(Modifier.size(24.dp).clip(CircleShape).clickable {
+                IconButton({
                     focus.clearFocus(); host.preference(obj("type" to "toggle_search", "open" to false))
-                }, contentAlignment = Alignment.Center) { Text("×", fontSize = 20.sp) }
+                }) { Text("×", fontSize = 24.sp) }
             })
-        else IconTile("search", "Search preferences") { host.preference(obj("type" to "toggle_search", "open" to true)) }
+        else IconButton({ host.preference(obj("type" to "toggle_search", "open" to true)) }) {
+            SharedIcon("search", "Search settings", Modifier.size(24.dp))
+        }
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (searching) {
                 view.array("search_results").objects().forEach { result ->
-                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable {
+                    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(8.dp)).clickable {
                         focus.clearFocus(); host.preference(result.getJSONObject("action")); onPage()
                     }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(result.getString("title"), fontWeight = FontWeight.Medium)
                         Text(result.getString("description"), color = colors.settingsSecondary)
                     }
                 }
+                if (view.optBoolean("empty")) Text("No matching settings", Modifier.padding(12.dp), color = colors.settingsSecondary)
             } else view.array("pages").objects().forEach { page ->
                 val selected = view.getString("page") == page.getString("id")
-                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(8.dp))
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(8.dp))
                     .background(if (selected) colors.active else Color.Transparent)
                     .clickable { focus.clearFocus(); host.preference(obj("type" to "page", "page" to page.getString("id"))); onPage() }
                     .padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    SharedIcon(page.getString("icon"), null)
+                    SharedIcon(page.getString("icon"), null, Modifier.size(24.dp))
                     Text(page.getString("title"), fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
                 }
             }
@@ -134,113 +198,159 @@ import org.json.JSONObject
     }
 }
 
+private fun numberLabel(kind: JSONObject): String =
+    "%.${kind.getJSONObject("control").optInt("digits", 0)}f".format(java.util.Locale.ROOT, kind.number("value"))
+
 @Composable private fun PreferenceRow(host: CanvasHost, row: JSONObject) {
     val colors = LocalPalette.current
     val kind = row.getJSONObject("kind")
+    val type = kind.getString("type")
     val context = LocalContext.current
     val enabled = row.optBoolean("enabled", true)
-    val title = row.getString("title")
-    val description = row.optString("description")
-    fun edit(value: Any) = host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to value))
-    BoxWithConstraints(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id")).padding(16.dp)) {
-        val narrow = maxWidth < 400.dp
-        @Composable fun caption(modifier: Modifier = Modifier) {
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, fontWeight = FontWeight.Medium)
-                if (description.isNotEmpty()) Text(description, color = colors.settingsSecondary, lineHeight = 20.sp)
+    val interactive = type in listOf("number", "choice", "link")
+    val action = when {
+        type == "switch" -> Modifier.toggleable(kind.getBoolean("active"), enabled = enabled, role = Role.Switch) {
+            host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))
+        }
+        interactive -> Modifier.clickable(enabled = enabled) {
+            if (type == "link") context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(kind.getString("url"))))
+            else host.preference(obj("type" to "edit_preference", "id" to row.getString("id")))
+        }
+        else -> Modifier
+    }
+    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).then(action).padding(16.dp)
+        .testTag("preference-" + row.getString("id")),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(row.getString("title"), fontWeight = FontWeight.Medium, color = if (enabled) colors.text else colors.settingsSecondary)
+            val summary = when (type) {
+                "number" -> numberLabel(kind)
+                "choice" -> kind.array("options").optString(kind.optInt("selected"))
+                "link" -> kind.getString("label")
+                "info" -> kind.optString("value")
+                else -> row.optString("description")
+            }
+            if (summary.isNotEmpty()) {
+                if (type == "info") SelectionContainer { Text(summary, color = colors.settingsSecondary) }
+                else Text(summary, color = if (type == "link") colors.accent else colors.settingsSecondary)
             }
         }
-        @Composable fun control() {
-            when (kind.getString("type")) {
-                "number" -> NumberStepper(title, kind.number("value"), kind.getJSONObject("control"), enabled = enabled, onChange = ::edit)
-                "switch" -> Switch(kind.getBoolean("active"), { edit(it) }, enabled = enabled)
-                "choice" -> {
-                    var expanded by remember { mutableStateOf(false) }
-                    Box {
-                        TextButton({ expanded = true }, enabled = enabled, shape = RoundedCornerShape(6.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp)) {
-                            kind.array("icons").optString(kind.getInt("selected")).takeIf { it.isNotEmpty() }?.let {
-                                SharedIcon(it, null); Spacer(Modifier.width(8.dp))
-                            }
-                            Text(kind.array("options").getString(kind.getInt("selected")))
-                            Spacer(Modifier.width(8.dp)); SharedIcon("chevron-down", null)
-                        }
-                        DropdownMenu(expanded, { expanded = false }, shape = RoundedCornerShape(12.dp), containerColor = colors.panel) {
-                            kind.array("options").values().forEachIndexed { index, label ->
-                                DropdownMenuItem(text = { Text(label.toString()) }, leadingIcon = {
-                                    kind.array("icons").optString(index).takeIf { it.isNotEmpty() }?.let { SharedIcon(it, null) }
-                                }, trailingIcon = { if (index == kind.getInt("selected")) SharedIcon("check", null) },
-                                    onClick = { expanded = false; edit(index) })
-                            }
-                        }
-                    }
-                }
-                else -> SelectionContainer { Text(kind.optString("value"), color = colors.settingsSecondary) }
-            }
-        }
-        if (kind.getString("type") == "link") {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(title, fontWeight = FontWeight.Medium)
-                TextButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(kind.getString("url")))) },
-                    contentPadding = PaddingValues(0.dp)) { Text(kind.getString("label")) }
-            }
-        } else if (narrow && kind.getString("type") != "switch") {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { caption(); Box(Modifier.align(Alignment.End)) { control() } }
-        } else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            caption(Modifier.weight(1f)); control()
+        when (type) {
+            "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
+            "number", "choice" -> SharedIcon("chevron-down", null, Modifier.size(24.dp).rotate(-90f), tint = colors.settingsSecondary)
         }
     }
 }
+
+@Composable private fun PreferenceDetail(host: CanvasHost, row: JSONObject) {
+    val kind = row.getJSONObject("kind")
+    val colors = LocalPalette.current
+    val enabled = row.optBoolean("enabled", true)
+    fun edit(value: Any) = host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to value))
+    Text(row.optString("description"), color = colors.settingsSecondary)
+    if (kind.getString("type") == "choice") {
+        Surface(shape = RoundedCornerShape(12.dp), color = colors.settingsCard) {
+            Column {
+                kind.array("options").values().forEachIndexed { index, name ->
+                    if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
+                    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp)
+                        .selectable(index == kind.getInt("selected"), enabled = enabled, role = Role.RadioButton) { edit(index) }
+                        .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        kind.array("icons").optString(index).takeIf { it.isNotEmpty() }?.let { SharedIcon(it, null, Modifier.size(24.dp)) }
+                        Text(name.toString(), Modifier.weight(1f))
+                        RadioButton(index == kind.getInt("selected"), onClick = null, enabled = enabled)
+                    }
+                }
+            }
+        }
+    } else {
+        val focus = androidx.compose.ui.platform.LocalFocusManager.current
+        val control = kind.getJSONObject("control")
+        val value = kind.number("value")
+        var text by rememberSaveable(row.getString("id")) { mutableStateOf(numberLabel(kind)) }
+        var focused by remember { mutableStateOf(false) }
+        var slider by remember(value) { mutableFloatStateOf(value) }
+        LaunchedEffect(value) { if (!focused) text = numberLabel(kind) }
+        DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
+        OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().onFocusChanged {
+            if (focused && !it.isFocused) edit(text)
+            focused = it.isFocused; host.editingText = focused
+        }.testTag("setting-number"),
+            enabled = enabled, singleLine = true, label = { Text(row.getString("title")) },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
+                imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { focus.clearFocus() }),
+            shape = RoundedCornerShape(12.dp))
+        Slider(slider, { slider = it }, enabled = enabled, valueRange = control.number("min")..control.number("max"),
+            onValueChangeFinished = {
+                focus.clearFocus()
+                val scale = Math.pow(10.0, control.optInt("digits", 0).toDouble()).toFloat()
+                edit(kotlin.math.round(slider * scale) / scale)
+            }, modifier = Modifier.fillMaxWidth().testTag("setting-slider"))
+    }
+}
+
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
     CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
-        modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null) })
+        modifier = Modifier.fillMaxWidth(), height = 48.dp,
+        placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null, Modifier.size(24.dp)) })
     val colors = LocalPalette.current
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
         Column {
             view.array("shortcuts").objects().filter { it.getBoolean("visible") }.forEachIndexed { index, shortcut ->
                 if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp)
                     .clickable { host.preference(obj("type" to "edit_shortcut", "id" to shortcut.getString("id"))) }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(shortcut.getString("label"), Modifier.weight(1f))
                     Text(shortcut.getString("shortcut"), color = colors.settingsSecondary)
+                    SharedIcon("chevron-down", null, Modifier.size(24.dp).rotate(-90f), tint = colors.settingsSecondary)
                 }
             }
         }
     }
 }
+
+/** Shortcut information, recording and conflict resolution are all inline. */
 @Composable private fun ShortcutEditor(host: CanvasHost, view: JSONObject, editor: JSONObject) {
     val capture = view.objectOrNull("capture")
     val focus = remember { FocusRequester() }
     LaunchedEffect(capture != null) { if (capture != null) focus.requestFocus() }
-    AlertDialog(onDismissRequest = { host.preference(obj("type" to "close_shortcut_editor")) },
-        modifier = Modifier.onPreviewKeyEvent { event ->
-            if (capture != null) { host.key(event.nativeKeyEvent); true } else false
-        }.focusRequester(focus).focusable(),
-        title = { Text(editor.getString("label"), fontSize = 20.sp, fontWeight = FontWeight.SemiBold) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Default: " + editor.array("defaults").values().joinToString(" / "))
-                editor.array("bindings").values().forEachIndexed { index, binding ->
-                    Row(Modifier.fillMaxWidth().background(LocalPalette.current.input, RoundedCornerShape(8.dp)).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(binding.toString(), Modifier.weight(1f), color = LocalPalette.current.text, fontWeight = FontWeight.Medium)
-                        IconTile("minus", "Remove shortcut") { host.preference(obj("type" to "remove_shortcut", "id" to editor.getString("id"), "index" to index)) }
-                    }
+    Column(Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+        if (capture != null) { host.key(event.nativeKeyEvent); true } else false
+    }.focusRequester(focus).focusable(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("Default: " + editor.array("defaults").values().joinToString(" / "), color = LocalPalette.current.settingsSecondary)
+        editor.array("bindings").values().forEachIndexed { index, binding ->
+            Row(Modifier.fillMaxWidth().background(LocalPalette.current.settingsCard, RoundedCornerShape(12.dp))
+                .padding(start = 16.dp, end = 8.dp).heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(binding.toString(), Modifier.weight(1f))
+                IconButton({ host.preference(obj("type" to "remove_shortcut", "id" to editor.getString("id"), "index" to index)) }) {
+                    SharedIcon("minus", "Remove shortcut", Modifier.size(24.dp))
                 }
-                if (capture != null) {
+            }
+        }
+        if (capture != null) {
+            Surface(shape = RoundedCornerShape(12.dp), color = LocalPalette.current.settingsCard) {
+                Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Press a key combination on your keyboard")
-                    Text(capture.optString("shortcut"))
+                    Text(capture.optString("shortcut"), fontSize = 20.sp, fontWeight = FontWeight.Medium)
                     capture.optString("conflict").takeIf { it.isNotEmpty() && it != "null" }?.let { conflict ->
                         Text("Already assigned to $conflict")
                         TextButton({ host.preference(obj("type" to "confirm_shortcut", "replace" to true)) }) { Text("Replace assignment") }
                     }
-                    TextButton({ host.preference(obj("type" to "confirm_shortcut", "replace" to false)) }, enabled = capture.objectOrNull("chord") != null) { Text("Use shortcut") }
-                    TextButton({ host.preference(obj("type" to "cancel_shortcut")) }) { Text("Cancel recording") }
-                } else TextButton({ host.preference(obj("type" to "begin_shortcut", "id" to editor.getString("id"))) }, enabled = editor.optBoolean("can_add")) { Text("Add shortcut") }
-                TextButton({ host.preference(obj("type" to "reset_shortcut", "id" to editor.getString("id"))) }, enabled = editor.optBoolean("modified")) { Text("Restore default") }
-                view.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton({ host.preference(obj("type" to "cancel_shortcut")) }) { Text("Cancel recording") }
+                        TextButton({ host.preference(obj("type" to "confirm_shortcut", "replace" to false)) },
+                            enabled = capture.objectOrNull("chord") != null && capture.isNull("conflict")) { Text("Use shortcut") }
+                    }
+                }
             }
-        }, confirmButton = { TextButton({ host.preference(obj("type" to "close_shortcut_editor")) }) { Text("Done") } })
+        } else TextButton({ host.preference(obj("type" to "begin_shortcut", "id" to editor.getString("id"))) },
+            enabled = editor.optBoolean("can_add")) { Text("Add shortcut") }
+        TextButton({ host.preference(obj("type" to "reset_shortcut", "id" to editor.getString("id"))) },
+            enabled = editor.optBoolean("modified")) { Text("Restore default") }
+    }
 }
 
 @Composable internal fun ToolPicker(host: CanvasHost, picker: JSONObject) {

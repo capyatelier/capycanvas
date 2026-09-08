@@ -339,7 +339,7 @@ try {
     await evaluate('document.querySelector("#settings").close()');
     await settle();
     assert.equal(
-      await evaluate("layerApp.state().settings_draft == null"),
+      await evaluate("!layerApp.state().settings_open"),
       true,
     );
     await click('[data-command="settings"]');
@@ -347,16 +347,16 @@ try {
       `(() => { const input=document.querySelector('#setting-pressure'); input.value='1.5'; input.dispatchEvent(new Event('input')); })()`,
     );
     assert.equal(
-      await evaluate("layerApp.state().settings_draft.pressure_gamma"),
+      await evaluate("layerApp.state().settings.pressure_gamma"),
       1.5,
     );
-    await click("#apply-settings");
+    await click("#close-settings");
     assert.equal(
       await evaluate("layerApp.state().settings.pressure_gamma"),
       1.5,
     );
     assert.equal(
-      await evaluate("layerApp.state().settings_draft == null"),
+      await evaluate("!layerApp.state().settings_open"),
       true,
     );
     // Draw through Chrome mouse events, exercising DOM capture and Wasm input.
@@ -816,7 +816,7 @@ try {
       ),
       false,
     );
-    await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+    await evaluate("layerApp.dispatch({type:'close_settings'})");
     await click('[data-command="zen_mode"]');
     await click('[data-command="toggle_panels"]');
     assert.deepEqual(

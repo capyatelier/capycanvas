@@ -45,7 +45,7 @@ class AndroidHostTest {
         assertNull("GPU initialization", host.failure)
         originalWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         compose.runOnIdle {
-            host.dispatch(obj("type" to "cancel_settings"))
+            host.dispatch(obj("type" to "close_settings"))
             host.dispatch(obj("type" to "set_theme", "theme" to "light"))
             host.dispatch(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
         }
@@ -55,7 +55,7 @@ class AndroidHostTest {
     @After fun restoreWorkspace() {
         originalWorkspace?.let { workspace ->
             compose.runOnIdle {
-                host.dispatch(obj("type" to "cancel_settings"))
+                host.dispatch(obj("type" to "close_settings"))
                 host.dispatch(obj("type" to "restore_workspace", "workspace" to workspace))
             }
             waitState { it.getJSONObject("workspace").toString() == workspace.toString() }
@@ -243,26 +243,105 @@ class AndroidHostTest {
         capture("11-high-rate-stylus")
     }
     @Test fun preferencesSearchAndThemeAreCoreDriven() {
-        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
         capture("04-preferences-light")
-        compose.onNodeWithContentDescription("Search preferences").performClick()
-        compose.onNodeWithText("Search preferences").performTextInput("prediction")
+        compose.onNodeWithContentDescription("Search settings").performClick()
+        compose.onNodeWithText("Search settings").performTextInput("prediction")
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").array("search_results").length() > 0 }
         capture("05-settings-search")
         compose.onNodeWithText("×").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").getString("page") == "input" }
         capture("06-pen-input")
-        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithTag("settings-done").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("07-workspace-dark")
-        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
         capture("08-preferences-dark")
     }
+    @Test fun settingsAndDetailsSlideWithinOneSurface() {
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithContentDescription("Settings").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+            compose.mainClock.advanceTimeBy(80)
+            val entering = compose.onNodeWithTag("preferences-surface").fetchSemanticsNode().positionInRoot.y
+            compose.mainClock.advanceTimeBy(320)
+            val settled = compose.onNodeWithTag("preferences-surface").fetchSemanticsNode().positionInRoot.y
+            assertTrue("Settings slide down from above ($entering -> $settled)", entering < settled)
+
+            compose.onNodeWithTag("preference-theme").performClick()
+            compose.waitUntil(10_000) { preferences().objectOrNull("detail") != null }
+            compose.mainClock.advanceTimeBy(80)
+            val enteringDetail = compose.onNodeWithTag("settings-content-value:theme").fetchSemanticsNode().positionInRoot.x
+            compose.mainClock.advanceTimeBy(300)
+            val settledDetail = compose.onNodeWithTag("settings-content-value:theme").fetchSemanticsNode().positionInRoot.x
+            assertTrue("Detail slides in from the right ($enteringDetail -> $settledDetail)", enteringDetail > settledDetail)
+            compose.onAllNodes(isDialog()).assertCountEquals(0)
+            compose.onAllNodes(isPopup()).assertCountEquals(0)
+
+            compose.onNodeWithContentDescription("Back").performClick()
+            compose.waitUntil(10_000) { preferences().objectOrNull("detail") == null }
+            compose.mainClock.advanceTimeBy(400)
+            compose.onNodeWithTag("preference-theme").assertIsDisplayed()
+            compose.onNodeWithTag("settings-done").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+            compose.mainClock.advanceTimeBy(80)
+            val leaving = compose.onNodeWithTag("preferences-surface").fetchSemanticsNode().positionInRoot.y
+            assertTrue("Settings slide up on dismissal ($settled -> $leaving)", leaving < settled)
+            compose.mainClock.advanceTimeBy(300)
+            compose.onNodeWithTag("preferences-surface").assertDoesNotExist()
+        } finally { compose.mainClock.autoAdvance = true }
+    }
+
+    @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Pen & Input").performClick()
+        compose.onNodeWithTag("preference-prediction_horizon").performScrollTo().performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("detail") != null }
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        capture("32-number-detail")
+        val before = state().getJSONObject("settings").number("prediction_ms")
+        compose.onNodeWithTag("setting-number").performTextReplacement("65")
+        compose.onNodeWithTag("setting-number").performImeAction()
+        compose.waitUntil(10_000) { !preferences().isNull("error") }
+        assertEquals(before, state().getJSONObject("settings").number("prediction_ms"))
+        capture("33-number-invalid")
+        compose.onNodeWithTag("setting-number").performTextReplacement("64")
+        compose.onNodeWithTag("setting-number").performImeAction()
+        waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
+        assertTrue(preferences().isNull("error"))
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("detail") == null }
+        compose.onNodeWithTag("preference-prediction_horizon").assert(hasText("64"))
+        compose.onNodeWithText("About").performClick()
+        val collected = CountDownLatch(1)
+        host.measurements(true) { collected.countDown() }
+        assertTrue(collected.await(10, TimeUnit.SECONDS))
+        penStroke(15)
+        val result = CountDownLatch(1)
+        host.measurements {
+            assertEquals("Settings surface intercepts stylus input instead of forwarding to canvas", 0, it.array("inputs").length())
+            result.countDown()
+        }
+        assertTrue(result.await(10, TimeUnit.SECONDS))
+        compose.onNodeWithTag("settings-done").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+        assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Pen & Input").performClick()
+        compose.onNodeWithTag("preference-prediction_horizon").assert(hasText("64"))
+        // Return this shared preference to its original accepted value.
+        compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to before)) }
+        waitState { it.getJSONObject("settings").number("prediction_ms") == before }
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
     @Test fun panelDrawerAndDividerUseSharedLayout() {
         compose.onAllNodesWithText("Brushes", useUnmergedTree = true).onFirst().performClick()
         waitState { it.getJSONObject("customization").optString("expanded") == "brushes" }
@@ -328,9 +407,11 @@ class AndroidHostTest {
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("26-editor-default-dark")
-        compose.onNodeWithContentDescription("Preferences").performClick()
-        compose.onNodeWithTag("preferences-surface").assertWidthIsEqualTo(960.dp)
-        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("preferences-surface").assertWidthIsEqualTo(compose.activity.resources.configuration.screenWidthDp.dp)
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        compose.onNodeWithTag("settings-done").performClick()
     }
 
     @Test fun compactNumberInputAndVerticalRibbonStayUsable() {
@@ -386,8 +467,8 @@ class AndroidHostTest {
         capture("13-tab-group-drag")
     }
 
-    @Test fun shortcutDialogRecordsMultipleBindingsAndPersists() {
-        compose.onNodeWithContentDescription("Preferences").performClick()
+    @Test fun shortcutPageRecordsMultipleBindingsAndPersists() {
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
@@ -402,22 +483,39 @@ class AndroidHostTest {
         compose.onNodeWithText("Add shortcut").performClick()
         compose.waitUntil(10_000) { preferences().objectOrNull("capture") != null }
         compose.waitForIdle()
+        val conflictTime = SystemClock.uptimeMillis()
+        for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+            assertTrue(instrumentation.uiAutomation.injectInputEvent(
+                KeyEvent(conflictTime, SystemClock.uptimeMillis(), action, KeyEvent.KEYCODE_E, 0), true))
+        }
+        compose.waitUntil(10_000) { preferences().getJSONObject("capture").optString("conflict") == "Eraser" }
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        capture("35-shortcut-conflict-inline")
+        compose.onNodeWithText("Cancel recording").performScrollTo().performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("capture") == null }
+        assertEquals(original, preferences().getJSONObject("shortcut_editor").array("bindings").length())
+        compose.onNodeWithText("Add shortcut").performScrollTo().performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("capture") != null }
+        compose.waitForIdle()
         val now = SystemClock.uptimeMillis()
         for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
             val event = KeyEvent(now, SystemClock.uptimeMillis(), action, KeyEvent.KEYCODE_J, 0, KeyEvent.META_CTRL_ON or KeyEvent.META_ALT_ON)
             assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true))
         }
         compose.waitUntil(10_000) { preferences().getJSONObject("capture").objectOrNull("chord") != null }
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        capture("34-shortcut-recording-inline")
         compose.onNodeWithText("Use shortcut").performClick()
         compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original + 1 }
         capture("14-shortcut-editor")
         compose.onNodeWithText("Done").performClick()
-        compose.onNodeWithText("Save").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         compose.activityRule.scenario.recreate()
         compose.waitUntil(20_000) { host.snapshot!!.optBoolean("gpu_ready") }
         assertNull(host.failure)
-        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Keyboard Shortcuts").performClick()
         compose.onNodeWithText("Search keyboard shortcuts").performTextInput("Zen mode")
         compose.waitUntil(10_000) { preferences().array("shortcuts").objects().count { it.getBoolean("visible") } == 1 }
@@ -427,7 +525,6 @@ class AndroidHostTest {
         compose.onNodeWithText("Restore default").performClick()
         compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == original }
         compose.onNodeWithText("Done").performClick()
-        compose.onNodeWithText("Save").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
     }
 
@@ -469,13 +566,13 @@ class AndroidHostTest {
         assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90))
         compose.waitUntil(10_000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
         capture("16-workspace-portrait")
-        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         capture("17-settings-portrait")
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         compose.onNodeWithText("Prediction horizon (ms)").assertExists()
         capture("29-settings-portrait-detail")
-        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Canvas").assertExists()
         capture("30-settings-portrait-back")
         assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0))
@@ -486,24 +583,25 @@ class AndroidHostTest {
         capture("18-view-menu")
         compose.onNodeWithText("Fit canvas").performClick()
         compose.onNodeWithText("Fit canvas").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Preferences").performClick()
+        compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Canvas").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "canvas" }
         capture("19-canvas-settings")
         val row = preferences().array("pages").objects().first { it.getString("id") == "canvas" }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getJSONObject("kind").getString("type") == "choice" }
         val kind = row.getJSONObject("kind")
-        compose.onNodeWithTag("preference-${row.getString("id")}").performScrollTo()
-            .onChildren().filterToOne(hasClickAction()).performClick()
+        compose.onNodeWithTag("preference-${row.getString("id")}").performScrollTo().performClick()
         capture("20-cursor-choices")
         val selection = (kind.getInt("selected") + 1) % kind.array("options").length()
-        compose.onNode(hasText(kind.array("options").getString(selection)) and hasAnyAncestor(isPopup())).performClick()
+        compose.onNode(hasText(kind.array("options").getString(selection)) and hasClickAction() and hasAnyAncestor(hasTestTag("preferences-surface"))).performClick()
+        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onNodeWithText("About").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "about" }
         compose.onNodeWithText("capycanvas.art").assertExists()
         compose.onNodeWithText("github.com/capyatelier/capycanvas").assertExists()
         capture("21-about")
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithTag("settings-done").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
         assertNull(host.actionError)
     }

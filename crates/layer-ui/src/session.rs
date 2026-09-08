@@ -66,7 +66,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
-                settings_draft: None,
+                settings_open: false,
                 preferences: PreferencesState::default(),
                 customization: CustomizationState::default(),
                 platform: Platform::Generic,
@@ -90,10 +90,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_shortcuts();
     }
     pub fn preferences(&self) -> Option<PreferencesView> {
-        self.state.settings_draft.as_ref().map(|draft| {
+        self.state.settings_open.then(|| {
             self.state
                 .preferences
-                .view(draft, &self.state.settings, self.state.platform)
+                .view(&self.state.settings, self.state.platform)
         })
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
@@ -153,7 +153,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.interaction.pan_key.is_some()
             || self.interaction.pointer.is_some_and(|p| !p.paint)
             || self.interaction.facts.popup_open
-            || self.state.settings_draft.is_some()
+            || self.state.settings_open
             || self.touch.is_active()
         {
             return false;
@@ -259,7 +259,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if self.state.preferences.capture.is_some() {
                         if !repeat {
                             self.state.preferences.record(
-                                self.state.settings_draft.as_ref().unwrap(),
+                                &self.state.settings,
                                 KeyChord::new(&key, modifiers),
                                 self.state.platform,
                             );
@@ -283,7 +283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled = true;
                     }
                     let blocked = editing
-                        || self.state.settings_draft.is_some()
+                        || self.state.settings_open
                         || self.state.customization.is_open()
                         || self.interaction.facts.popup_open;
                     if !blocked {
@@ -335,7 +335,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Invalid pointer position".into());
                 }
                 if kind == PointerKind::Touch {
-                    if self.interaction.pointer.is_none() && self.state.settings_draft.is_none() {
+                    if self.interaction.pointer.is_none() && !self.state.settings_open {
                         reply.change = self.touch(id, pen_phase(phase), position);
                         reply.handled = true;
                     }
@@ -344,7 +344,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         button == PointerButton::Primary && self.interaction.pan_key.is_none();
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
-                        && self.state.settings_draft.is_none()
+                        && !self.state.settings_open
                         && (paint || self.require_idle().is_ok())
                         && button != PointerButton::Other
                     {
@@ -413,7 +413,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.interaction.facts.popup_open
             || self.interaction.keyboard_chrome
             || self.interaction.keep_chrome_until_contact
-            || self.state.settings_draft.is_some()
+            || self.state.settings_open
             || self.state.customization.is_open()
             || self.divider_drag.is_some();
         if !self.state.workspace.zen_mode || pinned {
@@ -588,10 +588,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         use regions::*;
         let revision = self.engine.document().revision;
         let was_expanded = self.state.customization.expanded.is_some();
-        let save_settings = matches!(
+        let mut save_settings = matches!(
             &action,
-            UiAction::ApplySettings
-                | UiAction::SetTheme { .. }
+            UiAction::SetTheme { .. }
                 | UiAction::Invoke {
                     command: CommandId::ToggleTheme
                 }
@@ -857,26 +856,36 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::EditSettings { settings } => {
                 settings.validate()?;
-                if self.state.settings_draft.is_none() {
+                if !self.state.settings_open {
                     return Err("Settings are not open".into());
                 }
-                self.state.settings_draft = Some(settings);
-                (SETTINGS, false)
+                save_settings = settings != self.state.settings;
+                if save_settings {
+                    self.apply_settings(settings)?;
+                }
+                (SETTINGS | COMMANDS, save_settings)
             }
             UiAction::OpenSettings { page } => {
                 self.open_settings(page);
                 (SETTINGS, false)
             }
             UiAction::Preferences { action } => {
-                let draft = self
-                    .state
-                    .settings_draft
-                    .as_mut()
-                    .ok_or("Preferences are not open")?;
+                if !self.state.settings_open {
+                    return Err("Settings are not open".into());
+                }
+                // Validate edits atomically. Search, navigation and recording
+                // change only view state and never trigger storage or rendering.
+                let mut settings = self.state.settings.clone();
                 self.state
                     .preferences
-                    .edit(draft, action, self.state.platform);
-                (SETTINGS, false)
+                    .edit(&mut settings, action, self.state.platform);
+                save_settings =
+                    self.state.preferences.error.is_none() && settings != self.state.settings;
+                if save_settings {
+                    settings.validate()?;
+                    self.apply_settings(settings)?;
+                }
+                (SETTINGS, save_settings)
             }
             UiAction::RestoreSettings { settings } => {
                 settings.validate()?;
@@ -894,20 +903,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.host_error = error;
                 (HOST, false)
             }
-            UiAction::ApplySettings => {
-                let settings = self
-                    .state
-                    .settings_draft
-                    .clone()
-                    .ok_or("Settings are not open")?;
-                settings.validate()?;
-                self.apply_settings(settings)?;
-                self.state.settings_draft = None;
-                self.state.preferences = PreferencesState::default();
-                (SETTINGS | COMMANDS, true)
-            }
-            UiAction::CancelSettings => {
-                self.state.settings_draft = None;
+            UiAction::CloseSettings => {
+                self.state.settings_open = false;
                 self.state.preferences = PreferencesState::default();
                 (SETTINGS, false)
             }
@@ -1235,13 +1232,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     fn open_settings(&mut self, page: SettingsPage) {
-        let draft = self
-            .state
-            .settings_draft
-            .get_or_insert_with(|| self.state.settings.clone());
-        self.state
-            .preferences
-            .edit(draft, PreferenceAction::Page { page }, self.state.platform);
+        self.state.settings_open = true;
+        self.state.preferences.edit(
+            &mut self.state.settings,
+            PreferenceAction::Page { page },
+            self.state.platform,
+        );
     }
     fn apply_settings(&mut self, settings: Settings) -> Result<(), String> {
         self.engine
@@ -1521,7 +1517,7 @@ mod tests {
         assert!(dismiss.handled && dismiss.dismiss_popups);
         invoke(&mut s, CommandId::Settings);
         assert!(!chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
-        s.dispatch(UiAction::CancelSettings).unwrap();
+        s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
         assert!(!key(&mut s, "Tab", true, false, false).chrome_hidden);
         assert!(chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
@@ -1604,7 +1600,7 @@ mod tests {
         );
         invoke(&mut s, CommandId::Settings);
         assert!(!key(&mut s, "b", true, false, false).handled);
-        s.dispatch(UiAction::CancelSettings).unwrap();
+        s.dispatch(UiAction::CloseSettings).unwrap();
         s.input(UiInput::Blur).unwrap();
         assert!(key(&mut s, "b", true, false, false).handled);
     }
@@ -2107,7 +2103,7 @@ mod tests {
             ..Settings::default()
         };
         s.dispatch(UiAction::EditSettings { settings }).unwrap();
-        s.dispatch(UiAction::ApplySettings).unwrap();
+        s.dispatch(UiAction::CloseSettings).unwrap();
         let cross = s.canvas_cursor().unwrap();
         assert!(cross.outline.is_empty());
         assert!(!cross.marker.is_empty());
@@ -2679,15 +2675,15 @@ mod tests {
             settings: Settings::default(),
         })
         .unwrap();
-        assert_eq!(app.state.theme, Theme::Light);
+        assert_eq!(app.state.theme, Theme::Dark);
         check_menu(&app.state);
-        app.dispatch(UiAction::ApplySettings).unwrap();
+        app.dispatch(UiAction::CloseSettings).unwrap();
         assert_eq!(app.state.theme, Theme::Dark);
         assert_eq!(app.state.settings.theme, None);
         check_menu(&app.state);
     }
     #[test]
-    fn settings_are_transactional_and_dismissible() {
+    fn settings_apply_individually_and_dismissal_never_reverts_them() {
         let mut app = session();
         invoke(&mut app, CommandId::Settings);
         let settings = Settings {
@@ -2699,16 +2695,16 @@ mod tests {
             settings: settings.clone(),
         })
         .unwrap();
-        assert_eq!(app.state.settings, Settings::default());
-        app.dispatch(UiAction::CancelSettings).unwrap();
-        assert!(app.state.settings_draft.is_none());
-        assert_eq!(app.state.settings, Settings::default());
+        assert_eq!(app.state.settings, settings);
+        app.dispatch(UiAction::CloseSettings).unwrap();
+        assert!(!app.state.settings_open);
+        assert_eq!(app.state.settings, settings);
         invoke(&mut app, CommandId::Settings);
         app.dispatch(UiAction::EditSettings {
             settings: settings.clone(),
         })
         .unwrap();
-        app.dispatch(UiAction::ApplySettings).unwrap();
+        app.dispatch(UiAction::CloseSettings).unwrap();
         assert_eq!(app.state.settings, settings);
         assert!(
             app.dispatch(UiAction::EditSettings {
@@ -2723,6 +2719,92 @@ mod tests {
     }
     fn edit_preference(s: &mut UiSession<Recorder>, id: PreferenceId, value: PreferenceValue) {
         preference(s, PreferenceAction::Edit { id, value });
+    }
+    #[test]
+    fn settings_detail_navigation_validation_and_autosave_are_shared() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::Settings);
+            preference(
+                &mut s,
+                PreferenceAction::Page {
+                    page: SettingsPage::Input,
+                },
+            );
+            preference(
+                &mut s,
+                PreferenceAction::EditPreference {
+                    id: PreferenceId::PredictionHorizon,
+                },
+            );
+            assert_eq!(
+                s.preferences().unwrap().detail.unwrap().id,
+                PreferenceId::PredictionHorizon
+            );
+            assert!(s.state.requests.is_empty());
+            for value in ["", "abc", "NaN", "65", "-1"] {
+                edit_preference(
+                    &mut s,
+                    PreferenceId::PredictionHorizon,
+                    PreferenceValue::Text(value.into()),
+                );
+                assert!(s.preferences().unwrap().error.is_some());
+                assert_eq!(s.state.settings.prediction_ms, 8.0);
+                assert!(
+                    s.state.requests.is_empty(),
+                    "invalid edits never reach storage"
+                );
+            }
+            edit_preference(
+                &mut s,
+                PreferenceId::PredictionHorizon,
+                PreferenceValue::Text("64".into()),
+            );
+            assert_eq!(
+                s.state.settings.feedback_config().prediction_horizon_micros,
+                64_000
+            );
+            assert!(s.preferences().unwrap().error.is_none());
+            assert_eq!(s.state.requests.len(), 1);
+            edit_preference(
+                &mut s,
+                PreferenceId::PredictionHorizon,
+                PreferenceValue::Text("64".into()),
+            );
+            assert_eq!(
+                s.state.requests.len(),
+                1,
+                "unchanged values do not write again"
+            );
+            preference(&mut s, PreferenceAction::ClosePreference);
+            assert!(s.preferences().unwrap().detail.is_none());
+            assert_eq!(s.preferences().unwrap().page, SettingsPage::Input);
+            preference(
+                &mut s,
+                PreferenceAction::EditShortcut {
+                    id: CommandId::Brush.shortcut_id(),
+                },
+            );
+            assert!(s.preferences().unwrap().detail.is_none());
+            preference(
+                &mut s,
+                PreferenceAction::Page {
+                    page: SettingsPage::Canvas,
+                },
+            );
+            assert!(s.preferences().unwrap().shortcut_editor.is_none());
+            assert_eq!(
+                s.state.requests.len(),
+                1,
+                "navigation does not write settings"
+            );
+            s.dispatch(UiAction::CloseSettings).unwrap();
+            assert_eq!(s.state.settings.prediction_ms, 64.0);
+            assert_eq!(s.state.requests.len(), 1, "Done only dismisses");
+            invoke(&mut s, CommandId::Settings);
+            assert_eq!(s.state.settings.prediction_ms, 64.0);
+        }
     }
     fn record_shortcut(s: &mut UiSession<Recorder>, id: &str, name: &str, command: bool) {
         preference(s, PreferenceAction::BeginShortcut { id: id.into() });
@@ -2767,7 +2849,7 @@ mod tests {
             for id in [PreferenceId::Website, PreferenceId::SourceCode] {
                 edit_preference(&mut s, id, PreferenceValue::Choice(0));
                 assert!(s.preferences().unwrap().error.is_some());
-                assert!(!s.preferences().unwrap().dirty);
+                assert_eq!(s.state.settings, Settings::default());
             }
             preference(
                 &mut s,
@@ -2809,7 +2891,7 @@ mod tests {
         edit_preference(&mut s, PreferenceId::Pressure, PreferenceValue::Number(1.7));
         invoke(&mut s, CommandId::KeyboardShortcuts);
         assert_eq!(s.preferences().unwrap().page, SettingsPage::Shortcuts);
-        assert_eq!(s.state.settings_draft.as_ref().unwrap().pressure_gamma, 1.7);
+        assert_eq!(s.state.settings.pressure_gamma, 1.7);
         preference(
             &mut s,
             PreferenceAction::Search {
@@ -2849,22 +2931,22 @@ mod tests {
                 .unwrap()
                 .enabled
         );
-        let before = s.state.settings_draft.clone();
+        let before = s.state.settings.clone();
         edit_preference(
             &mut s,
             PreferenceId::PredictionHorizon,
             PreferenceValue::Number(20.0),
         );
         assert!(s.preferences().unwrap().error.is_some());
-        assert_eq!(s.state.settings_draft, before);
+        assert_eq!(s.state.settings, before);
         edit_preference(
             &mut s,
             PreferenceId::Pressure,
             PreferenceValue::Number(f32::NAN),
         );
-        assert_eq!(s.state.settings_draft, before);
+        assert_eq!(s.state.settings, before);
         edit_preference(&mut s, PreferenceId::Theme, PreferenceValue::Choice(99));
-        assert_eq!(s.state.settings_draft, before);
+        assert_eq!(s.state.settings, before);
         s.set_platform(Platform::Web);
         assert!(
             rows(&s)
@@ -2912,16 +2994,13 @@ mod tests {
         .unwrap();
         invoke(&mut s, CommandId::Settings);
         s.dispatch(action).unwrap();
-        assert_eq!(
-            s.state.settings_draft.as_ref().unwrap().theme,
-            Some(Theme::Dark)
-        );
-        assert_eq!(s.state.settings.theme, None);
-        s.dispatch(UiAction::CancelSettings).unwrap();
-        assert!(s.state.requests.is_empty());
+        assert_eq!(s.state.settings.theme, Some(Theme::Dark));
+        assert_eq!(s.state.settings.theme, Some(Theme::Dark));
+        s.dispatch(UiAction::CloseSettings).unwrap();
+        assert_eq!(s.state.requests.len(), 1);
     }
     #[test]
-    fn shortcut_conflicts_require_explicit_replacement_and_update_menu_hints_on_apply() {
+    fn shortcut_conflicts_require_explicit_replacement_and_update_menu_hints_immediately() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         invoke(&mut s, CommandId::KeyboardShortcuts);
@@ -2936,27 +3015,22 @@ mod tests {
                 .as_deref(),
             Some("Redo")
         );
-        let before = s.state.settings_draft.clone();
+        let before = s.state.settings.clone();
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
-        assert_eq!(s.state.settings_draft, before);
+        assert_eq!(s.state.settings, before);
         assert!(s.preferences().unwrap().error.is_some());
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
         assert_eq!(
             s.command(CommandId::Brush).shortcut,
-            "B",
-            "draft must not change live bindings"
+            "B / Ctrl+Y",
+            "confirmed bindings must take effect immediately"
         );
         assert_eq!(
-            s.state
-                .settings_draft
-                .as_ref()
-                .unwrap()
-                .keys(&CommandId::Redo.shortcut_id())
-                .len(),
+            s.state.settings.keys(&CommandId::Redo.shortcut_id()).len(),
             1,
             "preserve Redo's other accelerator"
         );
-        s.dispatch(UiAction::ApplySettings).unwrap();
+        s.dispatch(UiAction::CloseSettings).unwrap();
         assert_eq!(s.command(CommandId::Brush).shortcut, "B / Ctrl+Y");
         for command in &s.state.commands {
             let current = s.command(command.id);
@@ -2982,14 +3056,7 @@ mod tests {
             "reset cannot steal another shortcut"
         );
         preference(&mut s, PreferenceAction::ResetAllShortcuts);
-        assert!(
-            s.state
-                .settings_draft
-                .as_ref()
-                .unwrap()
-                .shortcuts
-                .is_empty()
-        );
+        assert!(s.state.settings.shortcuts.is_empty());
     }
     #[test]
     fn shortcut_recording_cancel_clear_and_platform_reservations() {
@@ -3012,7 +3079,7 @@ mod tests {
         key(&mut s, "escape", true, false, true);
         assert!(s.preferences().unwrap().capture.is_none());
         assert!(
-            s.state.settings_draft.is_some(),
+            s.state.settings_open,
             "Escape only closes the recording sheet"
         );
         record_shortcut(&mut s, &target, "tab", false);
@@ -3028,22 +3095,12 @@ mod tests {
                 index: 0,
             },
         );
-        assert!(
-            s.state
-                .settings_draft
-                .as_ref()
-                .unwrap()
-                .keys(&target)
-                .is_empty()
-        );
+        assert!(s.state.settings.keys(&target).is_empty());
         preference(
             &mut s,
             PreferenceAction::ResetShortcut { id: target.clone() },
         );
-        assert_eq!(
-            s.state.settings_draft.as_ref().unwrap().keys(&target).len(),
-            1
-        );
+        assert_eq!(s.state.settings.keys(&target).len(), 1);
     }
     #[test]
     fn arbitrary_typed_actions_and_momentary_pan_use_the_same_keymap() {
@@ -3066,7 +3123,7 @@ mod tests {
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         record_shortcut(&mut s, "canvas.pan", "g", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
-        s.dispatch(UiAction::ApplySettings).unwrap();
+        s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(
             !key(&mut s, "j", true, false, true).handled,
             "native text editing wins"
@@ -3169,12 +3226,9 @@ mod tests {
                 ["B", "J", "L"]
             );
             record_shortcut(&mut s, &id, "j", false);
-            let before = s.state.settings_draft.clone();
+            let before = s.state.settings.clone();
             preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
-            assert_eq!(
-                s.state.settings_draft, before,
-                "duplicate addition is atomic"
-            );
+            assert_eq!(s.state.settings, before, "duplicate addition is atomic");
             preference(&mut s, PreferenceAction::CancelShortcut);
             preference(&mut s, PreferenceAction::ResetShortcut { id });
             assert_eq!(
@@ -3208,21 +3262,15 @@ mod tests {
                 PreferenceValue::Number(64.0),
             );
             assert!(s.preferences().unwrap().error.is_none());
-            s.state
-                .settings_draft
-                .as_ref()
-                .unwrap()
-                .feedback_config()
-                .validate()
-                .unwrap();
-            let before = s.state.settings_draft.clone();
+            s.state.settings.feedback_config().validate().unwrap();
+            let before = s.state.settings.clone();
             edit_preference(
                 &mut s,
                 PreferenceId::PredictionHorizon,
                 PreferenceValue::Number(65.0),
             );
             assert!(s.preferences().unwrap().error.is_some());
-            assert_eq!(s.state.settings_draft, before);
+            assert_eq!(s.state.settings, before);
         }
     }
     #[test]
@@ -3238,12 +3286,12 @@ mod tests {
             PreferenceId::PredictionHorizon,
             PreferenceValue::Number(4.0),
         );
-        s.dispatch(UiAction::ApplySettings).unwrap();
+        s.dispatch(UiAction::CloseSettings).unwrap();
         assert_eq!(
             s.state.settings.feedback_config().prediction_horizon_micros,
             4000
         );
-        assert_eq!(s.state.requests.len(), 2);
+        assert_eq!(s.state.requests.len(), 3);
         assert!(matches!(
             s.state.requests[0].kind,
             HostRequestKind::NewWindow
@@ -3264,7 +3312,7 @@ mod tests {
             error: Some("Window unavailable".into()),
         })
         .unwrap();
-        assert_eq!(s.state.requests.len(), 1);
+        assert_eq!(s.state.requests.len(), 2);
         assert_eq!(s.state.host_error.as_deref(), Some("Window unavailable"));
         assert!(
             s.dispatch(UiAction::CompleteRequest {

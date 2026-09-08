@@ -84,7 +84,7 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
     assert.ok(await evaluate("document.fullscreenElement === document.documentElement"), "Fullscreen includes the whole UI, not only the canvas");
     await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
     assert.ok(await evaluate("document.querySelector('#settings').open && document.fullscreenElement.contains(document.querySelector('#settings'))"));
-    await evaluate("layerApp.dispatch({type:'cancel_settings'});layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
+    await evaluate("layerApp.dispatch({type:'close_settings'});layerApp.dispatch({type:'set_theme',theme:'light'});layerApp.dispatch({type:'invoke',command:'fit_canvas'})");
     await settle();
     const before = await canvasPixels();
     const point = await evaluate("({x:innerWidth/2-100,y:innerHeight/2})");
@@ -121,7 +121,7 @@ async function checkFullscreen({ call, evaluate, settle, canvasPixels }) {
   assert.equal(await evaluate("document.querySelector('#fullscreen').title"), "Fullscreen unavailable");
   await evaluate("document.querySelector('#header-end [data-command=settings]').click()");
   assert.equal(await evaluate("document.querySelector('#settings').open"), true);
-  await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+  await evaluate("layerApp.dispatch({type:'close_settings'})");
   await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
   console.log("Fullscreen: geometry, real enter/exit, external exit, failure recovery, settings and GPU ink passed");
 }
@@ -202,7 +202,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     const idle = await background(settings), menuIdle = await background(menu);
     await tap(settings);
     assert.equal(await evaluate("document.querySelector('#settings').open"), true);
-    await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+    await evaluate("layerApp.dispatch({type:'close_settings'})");
     assert.equal(await background(settings), idle, "Touch leaves no stuck Settings hover");
     for (const pointerType of ["mouse", "pen"]) {
       await call("Input.dispatchMouseEvent", { type: "mouseMoved", ...await point(settings), pointerType });
@@ -210,7 +210,7 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
       assert.equal(await evaluate("document.documentElement.hasAttribute('data-touch')"), false);
       assert.notEqual(await background(settings), idle, `${pointerType} hover returns after touch`);
       await tap(settings);
-      await evaluate("layerApp.dispatch({type:'cancel_settings'})");
+      await evaluate("layerApp.dispatch({type:'close_settings'})");
       assert.equal(await background(settings), idle);
     }
     await tap(menu);

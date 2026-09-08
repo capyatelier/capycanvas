@@ -30,7 +30,7 @@ change application semantics. No UI binding serializes canvas pixels.
 ```text
 crates/layer-ui/src/
     lib.rs       public actions, semantic state, commands and control catalog
-    session.rs   action handling, engine integration, settings transactions
+    session.rs   action handling, engine integration, validated settings updates
     settings.rs  portable preferences definitions, editor and host requests
     shortcuts.rs configurable chords routed to typed actions
     cursor.rs    display-only stamp outlines, pointer modes and camera mapping
@@ -200,7 +200,7 @@ the host; Light/Dark are explicit overrides. `SystemThemeChanged` updates the
 shared resolved `UiState.theme`, used for widgets, previews and GPU surround.
 GTK observes the default `AdwStyleManager` and applies overrides to the display
 manager; web observes `prefers-color-scheme`. OS changes never overwrite a user
-override or a settings draft. Returning to System uses the latest OS value.
+override. Returning to System uses the latest OS value.
 
 `ZenMode` toggles shared `UiState.workspace.zen_mode`. The shared `near_chrome` rule reveals
 hidden controls only within a fixed 80 logical pixels of an occupied window edge,
@@ -245,7 +245,7 @@ regenerates them; no live brush jobs or canvas readbacks run when opening the pi
 revision, changed-region bits, and `canvas_wake`. The host updates only affected
 views and schedules a display callback when needed. `state()` is read-only;
 it exposes layout, brush controls, layers, document tabs, command availability,
-settings/draft, Zen mode, and camera. Foreign bridges return owned snapshots only when
+settings/view state, Zen mode, and camera. Foreign bridges return owned snapshots only when
 UI state changes; the host redraws the affected regions.
 
 `CommandId` is the common identity for buttons, menus, keyboard shortcuts, and
@@ -293,13 +293,15 @@ Space and is editable in Preferences alongside semantic command bindings.
 
 ## Settings and native flows
 
-`OpenSettings { page }` (or the Preferences/Shortcuts/About commands) opens a
-core-owned draft without losing edits when navigating. `preferences()` describes
+`OpenSettings { page }` (or the Preferences/Shortcuts/About commands) opens the
+core-owned settings view. `preferences()` describes
 pages, groups and typed choice/number/switch/information rows, current values,
 availability, dependencies, search results, errors and shortcut recording state.
-`PreferenceAction` edits that draft; the bulk `EditSettings` action remains
-available to programmatic callers. `ApplySettings` commits it;
-`CancelSettings` discards it. Hosts render this small settings-specific model,
+Each accepted `PreferenceAction` edit validates, applies and requests persistence
+immediately; the bulk `EditSettings` action does the same for programmatic callers.
+`CloseSettings` only closes the view; Done, Back and dismissal never revert values.
+Invalid edits preserve the last accepted value and report an inline error.
+Hosts render this small settings-specific model,
 not an arbitrary widget tree or a second business-logic layer.
 
 Five pages cover Appearance/Zen, Canvas/navigation, Pen & Input, Keyboard
@@ -308,10 +310,17 @@ controls and renderer information. Core validation checks field availability,
 dependencies, value ranges, shortcut collisions and persisted versions.
 GTK uses libadwaita 1.9's `AdwViewSwitcherSidebar`/`AdwNavigationSplitView` in
 `AdwDialog`; web uses native DOM controls in a matching adaptive modal.
+Android uses a full-screen, top-sliding Settings overlay with Done. A persistent
+category list and content pane adapt to list/page navigation on narrow screens.
+`EditPreference`/`ClosePreference` and the shortcut editor state describe inline
+detail pages: Android slides these in from the right, with a pane-local Back
+arrow. Settings never open another Android dialog or popup, including for choices,
+numeric input, shortcut recording, conflicts or validation errors.
 
 The single keymap routes commands, brush/size presets and registered parameterized
 `UiAction`s. Hosts do not resolve shortcuts. Explicit conflict replacement only
-removes the colliding alternative; Clear, Reset and Reset All remain transactional.
+removes the colliding alternative; Clear, Reset and Reset All apply atomically.
+Recording is provisional until confirmed; navigation and recording alone never save.
 Escape cancels recording; Tab and native editing stay reserved. Platform-global
 shortcuts are not inhibited. Browser-reserved bindings are rejected by the core.
 

@@ -11,7 +11,7 @@ canvas path.
 
 `layer-ui/settings.rs` owns the versioned settings value, five page definitions,
 field metadata, platform filtering, dependencies, validation, search and the
-transactional editor. `shortcuts.rs` supplies the single keymap and shortcut
+atomic per-edit updates. `shortcuts.rs` supplies the single keymap and shortcut
 editor data; bindings execute the existing typed `UiAction`, not a parallel
 command system. `UiSession` coordinates the engine and requests host services.
 
@@ -53,8 +53,8 @@ Dialog presentation follows open/closed transitions from the model, not GTK
 root membership: a closing sheet stays rooted during its animation and must
 still be presentable if reopened immediately.
 
-The sidebar extends to the bottom of the dialog; Apply/Cancel belong to the
-content pane. A stock `edit-find-symbolic` search toggle at the sidebar's
+The sidebar extends to the bottom of the dialog; Done belongs to the
+content pane and only dismisses the view. A stock `edit-find-symbolic` search toggle at the sidebar's
 top-left reveals its search entry and result list. Search results and their
 destination actions come from Rust. Keyboard Shortcuts has a separate search
 entry. Touch suppresses stale pointer-hover styling without removing selected
@@ -79,7 +79,7 @@ the open drawing. These read-only rows are searchable, not editable settings.
 
 GTK's top-right primary menu has New Window, Preferences, Keyboard Shortcuts and
 About Capy Canvas. Shortcuts/About deep-link to the same editor; calling
-`OpenSettings { page }` from another element preserves the current draft.
+`OpenSettings { page }` from another element preserves accepted settings.
 This follows GNOME's placement of application-level entries in the main menu.
 [GNOME menu guidance](https://developer.gnome.org/hig/patterns/controls/menus.html).
 All native header menus use `GMenu`/`GtkPopoverMenu`, with enabled/check states
@@ -98,8 +98,30 @@ Header text buttons retain libadwaita's 17px horizontal padding.
 Web uses a gear opening Preferences directly, with the same sidebar/page flow,
 native input behavior, original shared SVGs, copyable information values and
 pen-oriented focus appearance. Desktop dialogs target 800 × 620 logical pixels.
-Mobile native frontends can present the same view as a navigation page instead
-of a desktop modal; there are no toolkit types in the shared model.
+There are no toolkit types in the shared model.
+
+### Android
+
+Settings occupies the full available window, slides down from the top on entry
+and slides up on dismissal. The root app bar has Settings and Done, not Back/Save:
+Done closes an auto-saving overlay rather than committing a form. At 840 dp and
+wider a 260 dp category list remains beside the content pane; narrower windows
+use list/page navigation. Content is bounded to 680 dp for readable rows, with
+native Material controls and at least 48 dp interactive targets.
+
+There are no nested dialogs or popups in Android settings. Choice lists and numeric
+editors use the shared `PreferencesView.detail`; shortcuts use `shortcut_editor`.
+Details slide into the content pane from the right, with a Back arrow at its top
+left. Recording, conflicts and validation errors appear inline. Numeric text is
+validated by Rust on IME Done or focus loss; sliders submit on release. A full-size
+input barrier protects the still-mounted GPU canvas throughout entry and exit.
+
+This follows Android's settings organization and adaptive list/detail patterns;
+the full-screen Done presentation is a product choice for the editor, inspired by
+the supplied Procreate reference, not an Android requirement.
+[Android settings](https://developer.android.com/design/ui/mobile/guides/patterns/settings),
+[canonical layouts](https://developer.android.com/develop/adaptive-apps/guides/canonical-layouts),
+[app bars](https://developer.android.com/develop/ui/compose/components/app-bars).
 
 ## Shortcut contract
 
@@ -118,13 +140,13 @@ of a desktop modal; there are no toolkit types in the shared model.
   take precedence. Application shortcuts do not inhibit desktop-global keys.
 - Conflicts require explicit replacement. Replacing one alternative preserves
   the other action's remaining alternatives. Reset cannot silently steal a
-  shortcut; Reset All restores defaults in the draft. Removing the last
+  shortcut; Reset All restores defaults immediately. Removing the last
   alternative disables the action's keyboard binding.
 - Each row opens an editor showing current alternatives and original defaults.
-  Add records another chord; Remove and Reset operate in this dialog, not the
-  table. Up to four alternatives are supported in both hosts. Duplicates and
+  Add records another chord; Remove and Reset operate in this editor, not the
+  table. Up to four alternatives are supported in all hosts. Duplicates and
   limits are validated in Rust. Menu hints update from applied core state,
-  not an uncommitted draft; GTK's native hint shows the first alternative.
+  immediately after each accepted edit; GTK's native hint shows the first alternative.
 - The browser cannot own browser/OS-reserved combinations. The core rejects
   common reserved browser chords rather than claiming they will work.
 - Pan stores the actually pressed key. Releasing it clears the momentary mode
@@ -135,14 +157,15 @@ collision decision, and preserving unaffected alternatives. Its GPL source was
 not copied, vendored or translated into this MIT OR Apache-2.0 codebase.
 [GNOME keyboard shortcut editor](https://gitlab.gnome.org/GNOME/gnome-control-center/-/blob/main/panels/keyboard/cc-keyboard-shortcut-editor.c).
 
-## Transactions and persistence
+## Validation and persistence
 
-`PreferenceAction::Edit` validates before modifying the draft. Invalid edits
-leave it unchanged and produce view errors. Apply validates the complete value,
-updates engine/input settings and emits a durable `SaveSettings` request.
-Cancel/dismiss drops the draft. Navigation, search, recording and canceled edits
-never write storage. The bulk `EditSettings` action is available to programmatic
-callers but does not form a second host UI path.
+`PreferenceAction::Edit` validates a candidate before replacing active settings.
+Each accepted changed value updates engine/input settings and emits a durable
+`SaveSettings` request. Invalid values leave settings unchanged and produce view
+errors. `CloseSettings` only dismisses the view. Navigation, search, recording,
+canceled recording and no-op edits never write storage. The bulk `EditSettings`
+action uses the same validation/apply path for programmatic callers. There is no
+separate whole-dialog draft or Apply/Cancel workflow on any platform.
 
 GTK writes atomic replacements on GIO's background I/O pool to
 `$XDG_CONFIG_HOME/layer/settings.json` (normally `~/.config/layer/settings.json`).
@@ -156,19 +179,19 @@ A request remains queued until `CompleteRequest` returns success/error.
 Missing fields in older settings receive defaults; unsupported versions, invalid
 values and unknown fields are rejected. Invalid saved data is not silently
 overwritten at startup. Native read failures are reported to stderr; browser
-failures appear in the status message. Explicit subsequent Apply can replace it.
+failures appear in the status message. An explicit accepted settings edit can replace it.
 
 Applied settings are relayed to other native windows (GTK's theme manager is
 display-wide) and browser tabs through the validated restore action, without a
 save echo. Native atomic writes are serialized on the I/O pool; older queued
-snapshots are skipped so they cannot overwrite a newer save. Open drafts are
-preserved. Workspace disk persistence, document file flows and AI settings
+snapshots are skipped so they cannot overwrite a newer save. Open settings views
+reflect restored values without losing their navigation state. Workspace disk persistence, document file flows and AI settings
 remain separate work, not nonfunctional controls in this dialog.
 
 ## Validation
 
 - Core tests cover platform definitions, dependencies, atomic validation, search,
-  deep links preserving drafts, JSON compatibility, requests/acknowledgements,
+  deep links preserving settings, JSON compatibility, requests/acknowledgements,
   custom actions, shortcut recording/conflicts/reset, editing guards, momentary
   pan and applied menu hints.
 - `native_preferences_and_shortcuts` exercises real GTK controls/key-controller
@@ -176,12 +199,16 @@ remain separate work, not nonfunctional controls in this dialog.
   multiple GPU windows, and isolated atomic save/restore into a new window.
 - `node apps/layer-web/test.mjs --preferences` verifies DOM controls, all
   pages/themes, core filtering, search, dependencies, shortcut conflicts,
-  compact recording prompt, Apply/Cancel, persisted reload and executable
+  compact recording prompt, per-edit persistence, dismissal, persisted reload and executable
   restored shortcuts.
   Use `--package --preferences` to run it against the production bundle.
 - The existing GTK workspace, hardware browser and parity suites remain
   regression tests. Native-input pacing is rerun separately, without concurrent
   browser/GPU benchmarks.
+- Android device tests cover full-screen geometry, real entry/exit and detail
+  movement, zero settings dialog/popup nodes, numeric rejection/acceptance,
+  immediate persistence, multiple shortcuts, narrow-screen navigation and stylus
+  isolation from the canvas. Review captures: `artifacts/android/settings-overlay/final/`.
 - Review PNGs are in `artifacts/ui/preferences/`.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.
