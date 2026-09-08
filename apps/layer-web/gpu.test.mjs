@@ -24,6 +24,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     "chrome-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/150.0.0.0 Safari/537.36",
     chromeos: "Mozilla/5.0 (X11; CrOS x86_64) Chrome/150.0.0.0",
     edge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/150.0.0.0 Edg/150.0.0.0",
+    "edge-linux": "Mozilla/5.0 (X11; Linux x86_64) Chrome/150.0.0.0 Edg/150.0.0.0",
     android: "Mozilla/5.0 (Linux; Android 12) Chrome/150.0.0.0 Mobile Safari/537.36",
     ios: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) Version/26.0 Mobile Safari/605.1.15",
     "ios-chrome": "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) CriOS/150.0 Mobile Safari/605.1.15",
@@ -34,8 +35,8 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
   for (const mode of ["missing-api", "insecure", "no-adapter", "device-failure", "renderer-failure", "pending", ...Object.keys(browsers)]) {
     const missingApi = ["missing-api", "unsupported-browser", "ios", "ios-chrome", "ipad-desktop", "safari", "firefox"].includes(mode);
     const chromeSteps = !["unsupported-browser", "insecure", "android", "ios", "ios-chrome", "ipad-desktop", "safari", "firefox"].includes(mode);
-    const linuxSteps = chromeSteps && !browsers[mode];
-    const noAdapter = ["no-adapter", "non-linux", "chrome-mac", "chromeos", "edge", "android"].includes(mode);
+    const linuxSteps = chromeSteps && (!browsers[mode] || mode === "edge-linux");
+    const noAdapter = ["no-adapter", "non-linux", "chrome-mac", "chromeos", "edge", "edge-linux", "android"].includes(mode);
     await call("Page.navigate", { url: "about:blank" });
     const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
       const originalGpu = navigator.gpu;
@@ -117,13 +118,19 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
           "Reload this page.",
         ]);
         if (linuxSteps) {
-          assert.match(visibleText, /On Linux, if it still fails, set “Override software rendering list” to Enabled/);
-          assert.match(visibleText, /If that still doesn’t work, set “Unsafe WebGPU” to Enabled/);
+          assert.match(visibleText, /On Linux, enable “Override software rendering list”/);
+          assert.match(visibleText, /If needed, enable “Unsafe WebGPU”/);
+          const name = mode === "edge-linux" ? "Edge" : "Chrome";
+          assert.ok(visibleText.includes(`Add --use-angle=vulkan to ${name}’s launcher command line. Fully quit and reopen ${name}.`));
+          assert.match(visibleText, /Display Type should show “ANGLE_VULKAN”/);
+          assert.doesNotMatch(visibleText, /WebGPU should show/);
           assert.ok(await evaluate("[...document.querySelectorAll('.gpu-help > p')].some(n=>n.textContent.startsWith('On Linux,'))"), "Linux help is an unnumbered paragraph");
           assert.equal(await evaluate("document.querySelectorAll('.gpu-steps ol').length"), 0, "No nested troubleshooting steps");
-        } else assert.doesNotMatch(visibleText, /Linux|experimental|chrome:\/\/flags|Unsafe WebGPU/i);
-        assert.match(visibleText, /WebGPU should show “Hardware accelerated”/);
-        const scheme = mode === "edge" ? "edge" : "chrome";
+        } else {
+          assert.doesNotMatch(visibleText, /Linux|experimental|chrome:\/\/flags|Unsafe WebGPU|ANGLE_VULKAN|--use-angle/i);
+          assert.match(visibleText, /WebGPU should show “Hardware accelerated”/);
+        }
+        const scheme = mode.startsWith("edge") ? "edge" : "chrome";
         const addresses = (linuxSteps ? ["settings/system", "flags/#ignore-gpu-blocklist", "flags/#enable-unsafe-webgpu", "gpu"] : ["settings/system", "gpu"]).map(path => `${scheme}://${path}`);
         assert.deepEqual(await evaluate("[...document.querySelectorAll('.gpu-address code')].map(n=>n.textContent)"), addresses);
         assert.ok(await evaluate("(()=>{const rows=[...document.querySelectorAll('.gpu-address code')];return rows.every(n=>Math.abs(n.getBoundingClientRect().left-rows[0].getBoundingClientRect().left)<1)})()"), "All addresses share one left indent");

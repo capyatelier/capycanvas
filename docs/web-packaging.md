@@ -104,14 +104,18 @@ or device is created for detection.
 Browser/platform hints select help only, including desktop-mode iPads and
 Android client hints. Desktop Chromium gets the compact settings → acceleration
 → restart → reload checklist (Edge uses its own internal addresses). Only Linux
-desktop Chromium gets the two unnumbered experimental-flag paragraphs. Android
+desktop Chromium gets the two unnumbered experimental-flag paragraphs and the
+`--use-angle=vulkan` launcher workaround, with a full browser quit and reopen. Android
 gets Chrome/system-update guidance, iOS/iPadOS gets Safari/system-update guidance,
 and Safari and Firefox get their own update guidance. Mobile users do not get
 desktop graphics-acceleration switches or Linux flags.
-The graphics-report instruction checks **WebGPU: Hardware accelerated**, not
-the separate Vulkan status. Windows normally uses D3D12 and Apple platforms use
-Metal; Chromium can also run WebGPU over Vulkan while its compositor stays on
-OpenGL. Every displayed internal address has a Copy button.
+For the Linux workaround, the graphics-report instruction checks **Display Type:
+ANGLE_VULKAN**, not **Vulkan: Enabled**. Other desktop Chromium platforms retain
+the **WebGPU: Hardware accelerated** instruction. Windows normally uses D3D12
+and Apple platforms use Metal; Chromium can also run WebGPU over Vulkan while
+its compositor stays on OpenGL. ANGLE Vulkan is troubleshooting guidance, not an
+app requirement or a replacement for the actual adapter/device startup checks.
+Every displayed internal address has a Copy button.
 The help container shares the panels’ background, text color, corners and shadow
 in both themes, with roomier padding and vertical centering in the canvas area.
 All copyable addresses have the same left indent, and explanatory text uses the

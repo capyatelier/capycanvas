@@ -67,12 +67,14 @@ export function showGpuNotice({ container, error, element, button }) {
     ]) steps.append(element("li", "", text));
     content.append(steps);
     if (system === "linux") {
-      content.append(element("p", "", "On Linux, if it still fails, set “Override software rendering list” to Enabled."));
+      content.append(element("p", "", "On Linux, enable “Override software rendering list”:"));
       address(content, `${scheme}://flags/#ignore-gpu-blocklist`);
-      content.append(element("p", "", "If that still doesn’t work, set “Unsafe WebGPU” to Enabled."));
+      content.append(element("p", "", "If needed, enable “Unsafe WebGPU”:"));
       address(content, `${scheme}://flags/#enable-unsafe-webgpu`);
+      content.append(element("p", "", `Add --use-angle=vulkan to ${name}’s launcher command line. Fully quit and reopen ${name}.`));
     }
-    content.append(element("p", "", `WebGPU should show “Hardware accelerated” in ${name}’s graphics report:`));
+    const report = system === "linux" ? "Display Type should show “ANGLE_VULKAN”" : "WebGPU should show “Hardware accelerated”";
+    content.append(element("p", "", `${report} in ${name}’s graphics report:`));
     address(content, `${scheme}://gpu`);
   } else {
     const help = browser === "safari"
