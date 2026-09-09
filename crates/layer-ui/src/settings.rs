@@ -33,7 +33,6 @@ pub struct Settings {
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub zen_reveal: f32,
-    pub zen_hide: f32,
     pub pan_speed: f32,
     pub zoom_speed: f32,
     pub feedback: bool,
@@ -53,7 +52,6 @@ impl Default for Settings {
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             zen_reveal: 80.0,
-            zen_hide: 40.0,
             pan_speed: 1.0,
             zoom_speed: 1.0,
             feedback: true,
@@ -66,14 +64,15 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    /// Discard only the retired typography preference, preserving strict
-    /// validation of every other field and all of the user's other settings.
+    /// Discard retired preferences, preserving strict validation of every
+    /// other field and all of the user's other settings.
     pub fn deserialize_saved<'de, D: serde::Deserializer<'de>>(
         reader: D,
     ) -> Result<Self, D::Error> {
         let mut value = serde_json::Value::deserialize(reader)?;
         if let Some(fields) = value.as_object_mut() {
             fields.remove("panel_text_pt");
+            fields.remove("zen_hide");
         }
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
@@ -158,7 +157,6 @@ impl SettingsPage {
 pub enum PreferenceId {
     Theme,
     ZenReveal,
-    ZenHide,
     Cursor,
     PanSpeed,
     ZoomSpeed,
@@ -178,7 +176,6 @@ impl PreferenceId {
         match self {
             Self::Theme => "theme",
             Self::ZenReveal => "zen-reveal",
-            Self::ZenHide => "zen-hide",
             Self::Cursor => "cursor",
             Self::PanSpeed => "pan-speed",
             Self::ZoomSpeed => "zoom-speed",
@@ -401,9 +398,7 @@ fn number(
                 PreferenceId::PredictionHorizon => {
                     NumericControl::number(min, max, step, 0).unit("ms")
                 }
-                PreferenceId::ZenReveal | PreferenceId::ZenHide => {
-                    NumericControl::number(min, max, step, 0).unit("px")
-                }
+                PreferenceId::ZenReveal => NumericControl::number(min, max, step, 0).unit("px"),
                 _ => {
                     NumericControl::number(min, max, step, if step < 1.0 { 2 } else { 0 }).unit("×")
                 }
@@ -487,26 +482,15 @@ impl Settings {
                 },
                 PreferenceGroup {
                     title: "Zen mode".into(),
-                    rows: vec![
-                        number(
-                            ZenReveal,
-                            "Reveal distance (px)",
-                            "Reveal controls near an occupied window edge.",
-                            self.zen_reveal,
-                            20.0,
-                            200.0,
-                            1.0,
-                        ),
-                        number(
-                            ZenHide,
-                            "Keep-visible distance (px)",
-                            "Keep controls visible while the pointer is near them.",
-                            self.zen_hide,
-                            10.0,
-                            200.0,
-                            1.0,
-                        ),
-                    ],
+                    rows: vec![number(
+                        ZenReveal,
+                        "Reveal distance (px)",
+                        "Reveal controls near an occupied window edge.",
+                        self.zen_reveal,
+                        20.0,
+                        200.0,
+                        1.0,
+                    )],
                 },
             ],
             vec![
@@ -667,7 +651,6 @@ impl Settings {
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
             Pressure => self.pressure_gamma = n,
             ZenReveal => self.zen_reveal = n,
-            ZenHide => self.zen_hide = n,
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,

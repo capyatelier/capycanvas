@@ -463,12 +463,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .viewport
                 .zip(self.interaction.hover)
                 .is_some_and(|(viewport, position)| {
-                    self.layout(viewport).near_chrome_with_distances(
+                    self.layout(viewport).near_chrome_with_reveal_distance(
                         position,
                         viewport,
                         self.interaction.hidden,
                         self.state.settings.zen_reveal,
-                        self.state.settings.zen_hide,
                     )
                 });
             self.interaction.hidden = !near;
@@ -3412,11 +3411,13 @@ mod tests {
     fn typography_is_fixed_and_retired_preferences_preserve_other_settings() {
         assert_eq!(ui_catalog().text_size_pt, UI_TEXT_PT);
         assert_eq!(UI_TEXT_PT, 11);
-        for platform in [Platform::Gtk, Platform::Web] {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
             s.set_platform(platform);
             for points in [9, 11, 13] {
-                let json = format!(r#"{{"panel_text_pt":{points},"pressure_gamma":1.5}}"#);
+                let json = format!(
+                    r#"{{"panel_text_pt":{points},"zen_hide":200,"zen_reveal":120,"pressure_gamma":1.5}}"#
+                );
                 let native =
                     Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(&json))
                         .unwrap();
@@ -3427,13 +3428,10 @@ mod tests {
                 s.dispatch(action).unwrap();
                 assert_eq!(s.state.settings, native);
                 assert_eq!(native.pressure_gamma, 1.5);
-                assert!(
-                    !serde_json::to_value(native)
-                        .unwrap()
-                        .as_object()
-                        .unwrap()
-                        .contains_key("panel_text_pt")
-                );
+                assert_eq!(native.zen_reveal, 120.0);
+                let saved = serde_json::to_value(native).unwrap();
+                assert!(saved.get("panel_text_pt").is_none());
+                assert!(saved.get("zen_hide").is_none());
             }
             invoke(&mut s, CommandId::Settings);
             assert!(
@@ -3443,7 +3441,9 @@ mod tests {
                     .iter()
                     .flat_map(|p| &p.groups)
                     .flat_map(|g| &g.rows)
-                    .any(|r| r.title == "Panel text size")
+                    .any(
+                        |r| r.title == "Panel text size" || r.title == "Keep-visible distance (px)"
+                    )
             );
         }
         assert!(

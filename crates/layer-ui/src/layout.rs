@@ -1565,16 +1565,16 @@ impl ResolvedLayout {
     /// Hidden chrome reveals only at the window edge; visible chrome remains
     /// available near its controls. Hosts may also pin it for focus/popovers.
     pub fn near_chrome(&self, point: [f32; 2], viewport: [f32; 2], hidden: bool) -> bool {
-        self.near_chrome_with_distances(point, viewport, hidden, 80.0, 40.0)
+        self.near_chrome_with_reveal_distance(point, viewport, hidden, 80.0)
     }
-    pub fn near_chrome_with_distances(
+    pub fn near_chrome_with_reveal_distance(
         &self,
         point: [f32; 2],
         viewport: [f32; 2],
         hidden: bool,
         reveal: f32,
-        margin: f32,
     ) -> bool {
+        const KEEP_VISIBLE_MARGIN: f32 = 40.0;
         let [x, y] = point;
         let [width, height] = viewport;
         if !(Bounds {
@@ -1599,17 +1599,17 @@ impl ResolvedLayout {
         if hidden || edge {
             return edge;
         }
-        y <= crate::HEADER_HEIGHT + margin
-            || (x >= self.status.x - margin
-                && x <= self.status.x + self.status.width + margin
-                && y >= self.status.y - margin
-                && y <= self.status.y + self.status.height + margin)
+        y <= crate::HEADER_HEIGHT + KEEP_VISIBLE_MARGIN
+            || (x >= self.status.x - KEEP_VISIBLE_MARGIN
+                && x <= self.status.x + self.status.width + KEEP_VISIBLE_MARGIN
+                && y >= self.status.y - KEEP_VISIBLE_MARGIN
+                && y <= self.status.y + self.status.height + KEEP_VISIBLE_MARGIN)
             || self.groups.iter().any(|g| {
                 let b = g.bounds;
-                x >= b.x - margin
-                    && x <= b.x + b.width + margin
-                    && y >= b.y - margin
-                    && y <= b.y + b.height + margin
+                x >= b.x - KEEP_VISIBLE_MARGIN
+                    && x <= b.x + b.width + KEEP_VISIBLE_MARGIN
+                    && y >= b.y - KEEP_VISIBLE_MARGIN
+                    && y <= b.y + b.height + KEEP_VISIBLE_MARGIN
             })
     }
 }
@@ -2571,6 +2571,28 @@ mod tests {
         }
         // An empty bottom edge does not reveal, even directly over the HUD.
         assert!(!resolved.near_chrome([600.0, 899.0], VIEWPORT, true));
+        // Reveal sensitivity never changes the fixed 40px margin around panels.
+        let panel = resolved
+            .groups
+            .iter()
+            .find(|g| g.active == Panel::Brushes)
+            .unwrap()
+            .bounds;
+        for reveal in [20.0, 80.0, 200.0] {
+            let right = panel.x + panel.width;
+            assert!(resolved.near_chrome_with_reveal_distance(
+                [right + 40.0, 450.0],
+                VIEWPORT,
+                false,
+                reveal
+            ));
+            assert!(!resolved.near_chrome_with_reveal_distance(
+                [right + 41.0, 450.0],
+                VIEWPORT,
+                false,
+                reveal
+            ));
+        }
     }
     #[test]
     fn zen_reveal_edges_follow_docking_and_panel_visibility() {
