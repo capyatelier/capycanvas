@@ -484,8 +484,8 @@ impl Settings {
                     title: "Zen mode".into(),
                     rows: vec![number(
                         ZenReveal,
-                        "Reveal distance (px)",
-                        "Reveal controls near an occupied window edge.",
+                        "Edge reveal distance",
+                        "Show controls when the pointer nears a window edge.",
                         self.zen_reveal,
                         20.0,
                         200.0,
