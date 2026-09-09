@@ -555,6 +555,132 @@ fn native_zen_icons() {
 }
 
 #[test]
+#[ignore = "native settings typography/geometry reference: requires private Wayland and GPU"]
+fn native_settings_typography() {
+    // Measure an unmodified Adwaita row first, before loading application CSS.
+    adw::init().unwrap();
+    let reference = adw::Window::new();
+    let css = gtk::CssProvider::new();
+    css.load_from_string(&format!("window {{ font-size: {UI_TEXT_PT}pt; }}"));
+    let display = gdk::Display::default().unwrap();
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    let row = adw::ActionRow::builder()
+        .title("Native title")
+        .subtitle("Native description")
+        .build();
+    let list = gtk::ListBox::new();
+    list.append(&row);
+    reference.set_content(Some(&list));
+    reference.present();
+    pump(150);
+    let font_px = |widget: &gtk::Widget| {
+        widget.pango_context().font_description().unwrap().size() as f64 / gtk::pango::SCALE as f64
+    };
+    let title_px = font_px(&find_css(row.upcast_ref(), "title").unwrap());
+    let subtitle_px = font_px(&find_css(row.upcast_ref(), "subtitle").unwrap());
+    assert!(subtitle_px < title_px);
+    eprintln!(
+        "Unmodified Adwaita: title={title_px:.3}px, subtitle={subtitle_px:.3}px, ratio={:.4}",
+        subtitle_px / title_px
+    );
+    reference.destroy();
+    gtk::style_context_remove_provider_for_display(&display, &css);
+
+    fn labels(widget: &gtk::Widget, root: &gtk::Widget, out: &mut Vec<serde_json::Value>) {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>()
+            && widget.is_mapped()
+        {
+            let b = widget.compute_bounds(root).unwrap();
+            out.push(serde_json::json!({"text":label.text().to_string(), "font_px":label.pango_context().font_description().unwrap().size() as f64 / gtk::pango::SCALE as f64,
+                "bounds":[b.x(),b.y(),b.width(),b.height()]}));
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            labels(&c, root, out);
+        }
+    }
+    let app = native_test_app("art.capycanvas.SettingsTypographyTest");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(600);
+    let dir = "../../artifacts/ui/settings-audit";
+    std::fs::create_dir_all(dir).unwrap();
+    for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for page in SettingsPage::ALL {
+            w.dispatch(UiAction::OpenSettings { page });
+            pump(200);
+            let content =
+                find_named(w.preferences.dialog.upcast_ref(), "preferences-content").unwrap();
+            let view = w
+                .gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .preferences()
+                .unwrap();
+            let page = view.pages.iter().find(|p| p.id == page).unwrap();
+            let mut rows = Vec::new();
+            for row in page.groups.iter().flat_map(|g| &g.rows) {
+                let widget = find_named(
+                    w.preferences.dialog.upcast_ref(),
+                    &format!("preference-{}", row.id.key()),
+                )
+                .or_else(|| {
+                    find_named(
+                        w.preferences.dialog.upcast_ref(),
+                        &format!("setting-{}", row.id.key()),
+                    )
+                })
+                .unwrap();
+                let b = widget.compute_bounds(&content).unwrap();
+                let mut text = Vec::new();
+                labels(&widget, &content, &mut text);
+                for (expected, size) in [(&row.title, title_px), (&row.description, subtitle_px)] {
+                    if expected.is_empty() {
+                        continue;
+                    }
+                    let label = text
+                        .iter()
+                        .find(|l| l["text"] == *expected)
+                        .unwrap_or_else(|| panic!("Missing settings label: {expected}"));
+                    assert!(
+                        (label["font_px"].as_f64().unwrap() - size).abs() < 0.02,
+                        "{expected}: {label}"
+                    );
+                }
+                rows.push(serde_json::json!({"id":row.id,"bounds":[b.x(),b.y(),b.width(),b.height()],"labels":text}));
+            }
+            if page.id == SettingsPage::Shortcuts {
+                for id in std::iter::once("shortcuts-search".into())
+                    .chain(view.shortcuts.iter().map(|s| format!("shortcut-{}", s.id)))
+                {
+                    let widget = find_named(w.preferences.dialog.upcast_ref(), &id).unwrap();
+                    let b = widget.compute_bounds(&content).unwrap();
+                    let mut text = Vec::new();
+                    labels(&widget, &content, &mut text);
+                    rows.push(serde_json::json!({"id":id,"bounds":[b.x(),b.y(),b.width(),b.height()],"labels":text}));
+                }
+            }
+            capture_reference(&w, &format!("{dir}/gtk-{}-{name}.png", page.id.key()), 1.0);
+            std::fs::write(format!("{dir}/gtk-{}-{name}.json", page.id.key()), serde_json::to_vec_pretty(&serde_json::json!({
+                "title_px":title_px,"subtitle_px":subtitle_px,"content_width":content.width(),"rows":rows})).unwrap()).unwrap();
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_behaviors() {
     let app = native_test_app("dev.layer.ZenBehaviorsTest");

@@ -282,12 +282,14 @@ dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
 .preferences-search-toggle { position: absolute; left: 6px; width: 34px; padding: 0; display: grid; place-items: center; }
 .preferences-search-results { overflow-y: auto; padding: 6px; }
 .preferences-search-results button { display: flex; flex-direction: column; align-items: start; text-align: left; width: 100%; padding: 10px; font-weight: 400; line-height: 18px; }
-.preferences-search-results small { opacity: .55; font-size: inherit; }
-#shortcuts-search { margin: 0 0 18px; width: 100%; }
+.preferences-search-results small { opacity: .55; font-size: calc(var(--ui-text-size) / 1.2); line-height: 15px; margin-top: 3px; }
+.shortcut-search { position: relative; margin-bottom: 24px; }
+.shortcut-search > svg { position: absolute; left: 9px; top: 9px; opacity: .55; }
+#shortcuts-search { display: block; margin: 0; padding-left: 32px; width: 100%; }
 .preferences-content { position: relative; }
 .preferences-pages { height: 100%; overflow-y: auto; min-height: 0; scrollbar-width: none; }
 .preferences-empty { text-align: center; opacity: .55; margin: 48px 24px; }
-.preferences-page { padding: 24px 40px; }
+.preferences-page { padding: 24px 12px; }
 .settings-group + .settings-group { margin-top: 24px; }
 .settings-group h3 { font-size: inherit; line-height: 18px; height: 34px; padding-top: 8px; margin: 0 0 6px; }
 .preference-group { border-radius: 12px; background: color-mix(in srgb, var(--text) 8%, transparent); box-shadow: 0 1px 4px #0002; overflow: hidden; }
@@ -295,6 +297,7 @@ body[data-theme="light"] .preference-group { background: #fff; }
 .preference-row { display: flex; align-items: center; justify-content: space-between; min-height: 54px; padding: 8px 14px; gap: 12px; }
 .preference-text { min-width: 0; flex: 1; text-align: left; font-weight: 400; line-height: 18px; }
 .preference-text p, .settings-description { opacity: .55; font-size: var(--ui-text-size); line-height: 1.25; margin: 3px 0 0; }
+.preference-text p, .number-preference .number-description { font-size: calc(var(--ui-text-size) / 1.2); line-height: 15px; }
 .settings-description { margin: 0 0 12px; }
 .preference-row.disabled { opacity: .5; }
 .preferences-error { color: #ff7b63; font-size: var(--ui-text-size); }
@@ -303,24 +306,27 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .preferences-content > .preferences-error { margin: 0 18px 6px; }
 .settings-info { user-select: text; -webkit-user-select: text; }
 .settings-link { color: var(--accent); text-decoration: underline; padding: 6px 17px; overflow-wrap: anywhere; }
-.preference-row + .preference-row { border-top: 1px solid #80808026; }
+.preference-row:not(:last-child) { border-bottom: 1px solid #80808026; min-height: 55px; }
 .preference-row select { padding: 0 4px; max-width: 48%; font-weight: 400; background: transparent; }
-.preference-entry { width: 110px; max-width: 48%; height: 34px; padding: 6px 9px; border: 0; border-radius: 6px; background: var(--input); color: var(--text); }
+.preference-entry { width: calc(9ch + 18px); max-width: 48%; height: 34px; padding: 6px 9px; border: 0; border-radius: 6px; background: var(--input); color: var(--text); }
 .number-preference .number-control { max-width: 600px; margin-inline: auto; }
+.number-preference:has(.number-slider) { padding-block: 12px; }
+.number-preference input.number-slider { margin-inline: 8px; }
+.number-preference:has(.number-spin) .number-description { margin-top: 3px; }
 .number-preference .number-value, .number-preference .number-entry { min-height: 34px; height: 34px; padding: 0 9px; }
 .number-preference .number-track { margin-top: 3px; }
 .number-preference { --number-track: color-mix(in srgb, var(--text) 12%, transparent); }
-.settings-group { max-width: 600px; margin-inline: auto; }
+.settings-group, .shortcut-search { max-width: var(--preference-width, 576px); margin-inline: auto; }
 .number-preference .number-spin { background: transparent; }
 .number-preference .number-spin .number-entry { background: transparent; }
-.number-preference .number-spin .number-step { border-radius: 50%; background: var(--button); margin-inline-start: 6px; }
-.settings-switch { appearance: none; flex: none; position: relative; width: 48px; height: 26px; border: 0; border-radius: 20px; background: color-mix(in srgb, var(--text) 20%, transparent); }
+.number-preference .number-spin .number-step { width: 30px; height: 30px; min-width: 30px; min-height: 30px; border-radius: 50%; background: var(--button); margin-inline-start: 10px; }
+.settings-switch { appearance: none; flex: none; position: relative; margin: 0; width: 46px; height: 26px; border: 0; border-radius: 20px; background: color-mix(in srgb, var(--text) 20%, transparent); }
 .settings-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; }
 .settings-switch:checked { background: var(--accent); }
-.settings-switch:checked::after { left: 25px; }
+.settings-switch:checked::after { left: 23px; }
 .shortcut-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .shortcut-heading h3 { margin: 0; height: auto; padding: 0; }
-.shortcut-heading .settings-description { font-size: inherit; line-height: 20px; margin: 6px 0 0; }
+.shortcut-heading .settings-description { font-size: inherit; line-height: 20px; margin: 7px 0 0; }
 .shortcut-heading button { flex: none; }
 .shortcut-row { padding-block: 0; }
 .shortcut-row.modified .shortcut-hint { font-weight: 700; }
@@ -329,13 +335,14 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .preference-group:has(.preference-choice[open]) { overflow: visible; }
 .preference-choice { position: relative; }
 .preference-choice summary, .preference-options button { display: flex; align-items: center; gap: 12px; padding: 8px; font-weight: 400; }
-.preference-choice summary { list-style: none; }
+.preference-choice summary { list-style: none; padding: 5px 0; }
 .preference-choice summary::-webkit-details-marker { display: none; }
 .preference-choice svg { width: 24px; height: 24px; }
+.preference-choice summary svg:last-child { width: 16px; height: 16px; }
 .preference-options { position: absolute; right: 0; top: 100%; z-index: 5; background: var(--popover); border-radius: 12px; box-shadow: 0 2px 12px #0004; padding: 6px; min-width: 210px; }
 .preference-options button { width: 100%; }
-.preference-row.image-preference { flex-direction: column; align-items: stretch; gap: 6px; }
-.preference-image-tiles { display: grid; grid-template-columns: repeat(var(--columns), 64px); justify-content: center; gap: 6px; padding: 6px 0; }
+.preference-row.image-preference { flex-direction: column; align-items: stretch; gap: 12px; padding-block: 12px; }
+.preference-image-tiles { display: grid; grid-template-columns: repeat(var(--columns), 64px); justify-content: center; gap: 6px; }
 .preference-image-tiles button { width: 64px; height: 64px; padding: 8px; display: grid; place-items: center; background: color-mix(in srgb, var(--text) 5%, transparent); }
 .preference-image-tiles svg { width: 48px; height: 48px; }
 .preference-image-tiles button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: inset 0 0 0 2px var(--accent); }
@@ -370,11 +377,9 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
   .preferences-layout { grid-template-columns: minmax(0, 1fr); }
   .preferences-layout:not(.show-content) .preferences-content, .preferences-layout.show-content .preferences-sidebar { display: none; }
   .preferences-back { display: block; }
-  .preferences-page { padding: 24px 36px; }
 }
 @media (max-width: 480px) {
   #settings { width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh; border-radius: 0; }
-  .preferences-page { padding: 24px 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .chrome, .dock-group { transition: none; } }
 @media (max-width: 640px) { #document-title { display: none; } }

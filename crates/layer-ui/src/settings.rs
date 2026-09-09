@@ -637,7 +637,7 @@ impl Settings {
                     row(
                         Theme,
                         "Color theme",
-                        "Match your system theme, or choose light or dark.",
+                        "",
                         PreferenceKind::Choice {
                             presentation: ChoicePresentation::Dropdown,
                             icons: Vec::new(),
@@ -651,8 +651,8 @@ impl Settings {
                     ),
                     row(
                         DarkBase,
-                        "Dark base color",
-                        "Set the dark theme's base color with #RRGGBB.",
+                        "Dark theme base color",
+                        "",
                         PreferenceKind::Text {
                             value: self.dark_base.to_string(),
                             constraint: TextConstraint::HexColor,
@@ -662,8 +662,8 @@ impl Settings {
                     ),
                     row(
                         LightBase,
-                        "Light base color",
-                        "Set the light theme's base color with #RRGGBB.",
+                        "Light theme base color",
+                        "",
                         PreferenceKind::Text {
                             value: self.light_base.to_string(),
                             constraint: TextConstraint::HexColor,
@@ -679,7 +679,7 @@ impl Settings {
                     rows: vec![row(
                         Cursor,
                         "Canvas cursor",
-                        "Choose how the pointer looks over the canvas.",
+                        "",
                         PreferenceKind::Choice {
                             presentation: ChoicePresentation::Dropdown,
                             options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
@@ -705,7 +705,7 @@ impl Settings {
                         number(
                             PanSpeed,
                             "Scroll pan speed",
-                            "Set how far scrolling moves the canvas.",
+                            "",
                             self.pan_speed,
                             0.25,
                             4.0,
@@ -714,7 +714,7 @@ impl Settings {
                         number(
                             ZoomSpeed,
                             "Scroll zoom speed",
-                            "Set how much each scroll changes the zoom.",
+                            "",
                             self.zoom_speed,
                             0.25,
                             4.0,
@@ -750,7 +750,7 @@ impl Settings {
                     row(
                         Renderer,
                         "Canvas rendering",
-                        "Your GPU draws and displays the canvas.",
+                        "",
                         PreferenceKind::Info {
                             value: match platform {
                                 Platform::Gtk => "Vulkan · Wayland",
@@ -787,7 +787,7 @@ impl Settings {
                 row(
                     PreferenceId::ZenRevealMode,
                     "Show controls",
-                    "Choose how to bring controls back into view.",
+                    "",
                     PreferenceKind::Choice {
                         presentation: ChoicePresentation::Dropdown,
                         icons: Vec::new(),
@@ -804,7 +804,7 @@ impl Settings {
                 row(
                     ZenShowButton,
                     "Keep Zen button visible",
-                    "Keep the button visible while controls are hidden.",
+                    "",
                     PreferenceKind::Switch {
                         active: self.zen_show_button,
                     },
@@ -812,7 +812,7 @@ impl Settings {
                 row(
                     PreferenceId::ZenIcon,
                     "Button icon",
-                    "Choose the icon on the Zen button.",
+                    "",
                     PreferenceKind::Choice {
                         presentation: ChoicePresentation::ImageTiles { columns: 4 },
                         options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
@@ -1484,6 +1484,50 @@ mod copy_tests {
         );
         assert_eq!(text, text.trim());
         assert!(!text.contains(['\n', '\r', '\t']));
+    }
+
+    #[test]
+    fn obvious_settings_do_not_repeat_the_title_or_visible_choices() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let settings = Settings::default();
+            for id in [
+                PreferenceId::Theme,
+                PreferenceId::DarkBase,
+                PreferenceId::LightBase,
+                PreferenceId::Cursor,
+                PreferenceId::PanSpeed,
+                PreferenceId::ZoomSpeed,
+                PreferenceId::Renderer,
+                PreferenceId::ZenRevealMode,
+                PreferenceId::ZenShowButton,
+                PreferenceId::ZenIcon,
+            ] {
+                assert!(settings.field(id, platform).unwrap().description.is_empty());
+            }
+            assert_eq!(
+                settings
+                    .field(PreferenceId::DarkBase, platform)
+                    .unwrap()
+                    .title,
+                "Dark theme base color"
+            );
+            assert_eq!(
+                settings
+                    .field(PreferenceId::LightBase, platform)
+                    .unwrap()
+                    .title,
+                "Light theme base color"
+            );
+            for id in [
+                PreferenceId::Pressure,
+                PreferenceId::Feedback,
+                PreferenceId::PredictionHorizon,
+                PreferenceId::TipLock,
+                PreferenceId::License,
+            ] {
+                assert!(!settings.field(id, platform).unwrap().description.is_empty());
+            }
+        }
     }
 
     #[test]

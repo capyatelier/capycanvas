@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 export async function checkPreferences({ call, evaluate, settle }) {
   const dir = "artifacts/ui/preferences";
@@ -187,7 +187,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
       await capture(`${page}-${theme}`);
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
-      assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3})<.02)`), "all settings text uses the shared size");
+      assert.ok(await evaluate(`[...document.querySelectorAll('.preferences-page:not([hidden]) label,.preferences-page:not([hidden]) p,.preferences-page:not([hidden]) h3,.preferences-page:not([hidden]) input,.preferences-page:not([hidden]) .settings-info,.preferences-page:not([hidden]) .settings-link')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-${points * 4 / 3}/(n.matches('.preference-text p,.number-description')?1.2:1))<.02)`), "settings titles use the shared size; subtitles follow Adwaita's smaller font");
       if (page === "canvas") {
         await click('.preference-choice summary');
         assert.equal(await evaluate("document.querySelectorAll('.preference-options [role=option] svg').length"), 5);
@@ -280,6 +280,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("const emptySearch=document.querySelector('#settings-search');emptySearch.value='no-such-preference';emptySearch.dispatchEvent(new Event('input'))");
   assert.equal(await evaluate("document.querySelector('.preferences-empty').hidden"), false);
   await evaluate("const search=document.querySelector('#settings-search');search.value='pressure response';search.dispatchEvent(new Event('input'))");
+  assert.ok(await evaluate("[...document.querySelectorAll('.preferences-search-results small')].every(n=>Math.abs(parseFloat(getComputedStyle(n).fontSize)-parseFloat(getComputedStyle(n.parentElement).fontSize)/1.2)<.02)"), 'search-result descriptions use the same Adwaita subtitle size');
   assert.equal(await evaluate("document.querySelectorAll('.preferences-search-results button').length"), 1);
   await capture("search");
   await click('.preferences-search-results button');
@@ -412,4 +413,59 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#gpu-notice')).backgroundColor"), 'rgb(51, 51, 51)', 'settings still update without a GPU');
   await call('Page.removeScriptToEvaluateOnNewDocument', { identifier });
   console.log("PASS: native-model settings pages, themes, adaptive sidebar, search, dependencies, key recording/conflicts, immediate persistence and executable restored shortcuts");
+}
+
+// Generate GTK fixtures with native_settings_typography first. These compare
+// actual allocations and Pango font sizes, not duplicated expected CSS values.
+export async function checkSettingsParity({ call, evaluate, settle }) {
+  const dir = 'artifacts/ui/settings-audit', differences = [];
+  await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
+  for (const theme of ['dark', 'light']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:'${theme}'})`);
+    for (const page of ['appearance', 'canvas', 'input', 'shortcuts', 'about']) {
+      await evaluate(`layerApp.dispatch({type:'open_settings',page:'${page}'})`);
+      await settle();
+      assert.equal(await evaluate("document.querySelector('#status').textContent"), '', 'settings render without a caught UI error');
+      const native = JSON.parse(await readFile(`${dir}/gtk-${page}-${theme}.json`, 'utf8'));
+      const web = await evaluate(`(() => {
+        const content=document.querySelector('.preferences-content').getBoundingClientRect();
+        const bounds=n=>{const r=n.getBoundingClientRect();return [r.left-content.left,r.top-content.top,r.width,r.height];};
+        const rows = layerApp.app.preferences().pages.find(p=>p.id==='${page}').groups.flatMap(g=>g.rows).map(row=>{
+          const field=document.querySelector('#setting-'+row.id.replaceAll('_','-')), node=field.closest('.preference-row');
+          return {id:row.id,bounds:bounds(node),labels:[...node.querySelectorAll('.preference-text label,.preference-text p,.number-title,.number-description')].map(n=>({text:n.textContent,bounds:bounds(n),font_px:parseFloat(getComputedStyle(n).fontSize)}))};
+        });
+        if ('${page}' === 'shortcuts') {
+          rows.push({id:'shortcuts-search',bounds:bounds(document.querySelector('#shortcuts-search')),labels:[]});
+          for (const node of document.querySelectorAll('.shortcut-row')) rows.push({id:'shortcut-'+node.dataset.shortcut,bounds:bounds(node),labels:[...node.querySelectorAll('.preference-text > span,.preference-text p')].map(n=>({text:n.textContent,bounds:bounds(n),font_px:parseFloat(getComputedStyle(n).fontSize)}))});
+        }
+        return rows;
+      })()`);
+      await writeFile(`${dir}/web-${page}-${theme}.json`, JSON.stringify(web, null, 2));
+      const shot = await call('Page.captureScreenshot', { format: 'png' });
+      await writeFile(`${dir}/web-${page}-${theme}.png`, Buffer.from(shot.data, 'base64'));
+      const check = (id, what, actual, expected, tolerance = 1.1) => {
+        if (Math.abs(actual - expected) > tolerance) differences.push(`${theme}/${page}/${id} ${what}: web ${actual.toFixed(2)}, GTK ${expected.toFixed(2)}`);
+      };
+      let nativeOnlyHeight = 0;
+      for (const row of native.rows) {
+        const actual = web.find(r=>r.id===row.id);
+        // New Window is a native-only command, so later web rows sit higher.
+        if (row.id === 'shortcut-command.NewWindow') {
+          assert.equal(actual, undefined);
+          nativeOnlyHeight += row.bounds[3]; continue;
+        }
+        assert.ok(actual, `Web must render ${row.id}`);
+        row.bounds.forEach((v,i)=>check(row.id,['x','y','width','height'][i],actual.bounds[i],v - (i === 1 ? nativeOnlyHeight : 0)));
+        for (const label of actual.labels) {
+          const expected = row.labels.find(l=>l.text===label.text);
+          assert.ok(expected, `GTK must render ${label.text}`);
+          check(row.id,'font',label.font_px,expected.font_px,.02);
+          check(row.id,'label left',label.bounds[0],expected.bounds[0]);
+          check(row.id,'label center Y',label.bounds[1]+label.bounds[3]/2,expected.bounds[1]+expected.bounds[3]/2-nativeOnlyHeight);
+        }
+      }
+    }
+  }
+  assert.deepEqual(differences, [], 'GTK/web settings geometry and typography');
+  console.log('PASS: all settings pages match measured GTK row geometry and subtitle fonts in both themes');
 }

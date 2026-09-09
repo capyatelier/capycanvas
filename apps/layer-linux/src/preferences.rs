@@ -690,14 +690,17 @@ impl Preferences {
                             let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
                             let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
                             let title = gtk::Label::builder().label(&row.title).xalign(0.0).build();
-                            let description = gtk::Label::builder()
-                                .label(&row.description)
-                                .xalign(0.0)
-                                .wrap(true)
-                                .build();
-                            description.add_css_class("dim-label");
                             text.append(&title);
-                            text.append(&description);
+                            if !row.description.is_empty() {
+                                let description = gtk::Label::builder()
+                                    .label(&row.description)
+                                    .xalign(0.0)
+                                    .wrap(true)
+                                    .build();
+                                description.add_css_class("subtitle");
+                                description.add_css_class("dim-label");
+                                text.append(&description);
+                            }
                             body.append(&text);
                             let selector = crate::image_selector::ImageSelector::new(
                                 options,

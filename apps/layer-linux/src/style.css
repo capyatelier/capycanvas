@@ -85,6 +85,8 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .zen-hidden { opacity: 0; }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
+/* Match libadwaita's ActionRow subtitles despite our global label font rule. */
+.layer-preferences row label.subtitle { font-size: smaller; }
 .preference-entry { background: var(--input-bg); box-shadow: none; }
 .preference-entry:focus-within { box-shadow: none; }
 .layer-preferences *:focus { outline: none; }

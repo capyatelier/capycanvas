@@ -71,8 +71,12 @@ dividers before the visibility toggle and Change icon… settings link. Rust gen
 the same validated, persisted edit action as the settings page. Individual
 preference edits/resets can execute without a settings dialog; navigation and
 shortcut recording still require it to be open.
-All UI text uses the shared Rust `UI_TEXT_PT` constant (11 pt), including panels,
-tabs, menus, preference descriptions and zoom/rotation status text. There is no
+UI text uses the shared Rust `UI_TEXT_PT` base size (11 pt), including panels,
+tabs, menus, preference titles and zoom/rotation status text. GTK settings row
+descriptions follow [libadwaita's smaller subtitle style](https://github.com/GNOME/libadwaita/blob/main/src/stylesheet/widgets/_lists.scss):
+measured at 5/6 of the title size (about 9.17 pt). Web uses the same hierarchy;
+Android keeps its native settings typography described below. Self-explanatory
+rows omit descriptions entirely, without reserving a blank line. There is no
 font-size setting. Text controls and inline step symbols use font-relative sizes;
 tool icons, brush previews, sliders and checkboxes retain their dimensions.
 The core ignores the retired `panel_text_pt`, `zen_hide` and `zen_reveal` fields when loading saved settings,
@@ -309,6 +313,13 @@ remain separate work, not nonfunctional controls in this dialog.
 - `native_preferences_and_shortcuts` exercises real GTK controls/key-controller
   signals, all pages/themes, recording and replacement, adaptive presentation,
   multiple GPU windows, and isolated atomic save/restore into a new window.
+- `native_settings_typography` first measures an unstyled Adwaita row, then
+  checks the application's title/subtitle fonts and captures settings geometry
+  in both themes. Run `node apps/layer-web/test.mjs --package --settings-audit`
+  afterward to compare every shared row's bounds and label positions/fonts,
+  including shortcuts. References and review PNGs: `artifacts/ui/settings-audit/`.
+  Web follows the native page's adaptive width clamp, 24px group spacing,
+  row separators, and slider/image-row padding; omitted subtitles take no space.
 - `node apps/layer-web/test.mjs --preferences` verifies DOM controls, all
   pages/themes, core filtering, search, dependencies, shortcut conflicts,
   compact recording prompt, per-edit persistence, dismissal, persisted reload and executable
@@ -324,6 +335,13 @@ remain separate work, not nonfunctional controls in this dialog.
   isolation from the canvas, persistent search, and catalog-driven row/control
   geometry and numeric ranges. Review captures: `artifacts/android/settings-inline/final/`.
 - Review PNGs are in `artifacts/ui/preferences/`.
+
+The subtitle/copy audit passes 124 shared UI tests, Clippy, both native GTK
+settings suites, and the packaged web settings geometry and interaction suites.
+All five pages were compared in light and dark mode. GTK, web and both Android
+ABIs build successfully; Android retains its typography and only omits the
+newly empty image-selector description. The ten redundant descriptions and
+base-color title changes are defined once in Rust.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.
 

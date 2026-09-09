@@ -136,8 +136,10 @@ line in the tab row, clamped before the fixed trailing grip if tabs overflow.
 Tab labels scroll horizontally without moving the grip.
 Tabs have the same 36px button height as tool tiles, in a shared 36px tab bar
 with no outer padding. The active surface joins directly into its panel.
-All UI text shares the Rust `UI_TEXT_PT` constant (11 pt), including panel text,
-tabs, headings, settings descriptions, menus and zoom/rotation status labels.
+UI text uses the Rust `UI_TEXT_PT` base size (11 pt), including panel text,
+tabs, headings, menus and zoom/rotation status labels. GTK and web settings
+row descriptions follow Adwaita's smaller subtitle role (5/6 of the base size,
+about 9.17 pt); Android settings retain their native 16 sp/14 sp hierarchy.
 Text-bearing inputs/buttons and inline +/− symbols use font-relative sizes.
 There is no font-size setting. Checkboxes stay 16px, sliders retain
 their dimensions, and toolbar icons remain 16px in 36px tiles; brush-size sample

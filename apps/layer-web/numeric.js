@@ -71,7 +71,10 @@ export function createNumberField({ control, label, resolve, onChange, icon }) {
   slider.addEventListener("input", () => { finish(true); apply({ type: "position", position: Number(slider.value) }); });
   root.update = next => show(resolve({ control, value: next, operation: { type: "format" } }));
   root.setDisabled = next => { disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
-  root.setDescription = text => { const p = node("p", "number-description"); p.textContent = text; labels.append(p); };
+  root.setDescription = text => {
+    labels.querySelector('.number-description')?.remove();
+    if (text) { const p = node("p", "number-description"); p.textContent = text; labels.append(p); }
+  };
   root.entry = entry;
   root.cancelEditing = () => finish(true);
   entry.hidden = ranged; valueButton.hidden = !ranged;

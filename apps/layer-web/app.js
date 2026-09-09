@@ -126,7 +126,7 @@ function commandButton(id, text) {
 const icons = new Map();
 async function loadIcons() {
   await Promise.all(
-    [...catalog.icons, "fullscreen-enter", "fullscreen-exit"].map(async (name) => {
+    [...catalog.icons, "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
       const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
       if (!response.ok) throw new Error(`Cannot load icon ${name}`);
       const svg = new DOMParser().parseFromString(

@@ -65,6 +65,7 @@ impl NumberControl {
             description.set_xalign(0.0);
             description.set_wrap(true);
             description.add_css_class("dim-label");
+            description.add_css_class("subtitle");
             labels.append(&description);
         }
         if spec.kind == NumericKind::Number {

@@ -1,6 +1,6 @@
 # Configurable base colors
 
-Appearance offers **Dark base color** (`#333333`) and **Light base color**
+Appearance offers **Dark theme base color** (`#333333`) and **Light theme base color**
 (`#b8b8b8`). These are opaque sRGB hex strings: exactly `#RRGGBB`, case-insensitive,
 stored in lowercase. Editing commits on Enter/Done or leaving the field. Rust
 rejects invalid input without changing the accepted setting or saving it.

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkParity } from "./parity.mjs";
-import { checkPreferences } from "./preferences.test.mjs";
+import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup } from "./gpu.test.mjs";
 import { checkCustomization, checkWorkspace } from "./customization.test.mjs";
@@ -164,7 +164,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--workspace")) {
+  if (process.argv.includes("--settings-audit")) {
+    await checkSettingsParity({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--workspace")) {
     await checkWorkspace({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--customization")) {

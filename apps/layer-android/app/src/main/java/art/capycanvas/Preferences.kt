@@ -314,7 +314,9 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
         Column(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id"))
             .padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(row.getString("title"), fontWeight = FontWeight.Medium)
-            Text(row.getString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
+            row.getString("description").takeIf { it.isNotEmpty() }?.let {
+                Text(it, color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
+            }
             ImageSelector(kind.array("options").values().map { it.toString() }, kind.array("icons").values().map { it.toString() },
                 kind.getJSONObject("presentation").getInt("columns"), kind.getInt("selected"), enabled) {
                 host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))

@@ -109,6 +109,14 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   const empty = element("p", "preferences-empty", "No matching preferences");
   sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
   const pages = element("div", "preferences-pages");
+  // Match the native page's gently tightening width (400→600), then its
+  // 12px inner margins. This is layout only; no setting policy lives here.
+  new ResizeObserver(([entry]) => {
+    const width = entry.contentRect.width;
+    const t = Math.max(0, Math.min(1, (width - 400) / 600));
+    const clamped = width <= 400 ? width : Math.floor(400 + 200 * (1 - (1 - t) ** 3));
+    pages.style.setProperty("--preference-width", `${Math.max(0, clamped - 24)}px`);
+  }).observe(pages);
   const error = element("span", "preferences-error"); error.setAttribute("role", "status");
   content.append(header, error, panelFrame(pages));
   root.append(sidebar, content); dialog.append(root);
@@ -155,7 +163,9 @@ export function createPreferences({ element, button, icon, numberField, panelFra
         for (const row of group.rows) {
           const line = element("div", "preference-row"), text = element("div", "preference-text");
           if (row.reset) line.dataset.preference = row.id;
-          const label = element("label", "", row.title); text.append(label, element("p", "", row.description)); line.append(text);
+          const label = element("label", "", row.title); text.append(label);
+          if (row.description) text.append(element("p", "", row.description));
+          line.append(text);
           const id = `setting-${row.id.replaceAll("_", "-")}`;
           label.htmlFor = id;
           let input, widget;
@@ -230,7 +240,8 @@ export function createPreferences({ element, button, icon, numberField, panelFra
         shortcutSearch.id = "shortcuts-search"; shortcutSearch.placeholder = "Search shortcuts";
         shortcutSearch.setAttribute("aria-label", "Search shortcuts");
         shortcutSearch.addEventListener("input", () => send({ type: "search_shortcuts", query: shortcutSearch.value }));
-        node.append(shortcutSearch);
+        const searchBox = element("div", "shortcut-search");
+        searchBox.append(icon("search"), shortcutSearch); node.append(searchBox);
         const section = element("section", "settings-group");
         const heading = element("div", "shortcut-heading");
         const labels = element("div");
@@ -277,7 +288,8 @@ export function createPreferences({ element, button, icon, numberField, panelFra
       searchResults.replaceChildren();
       for (const result of model.search_results) {
         const row = button("", () => { send(result.action); root.classList.add("show-content"); });
-        row.append(element("span", "", result.title), element("small", "", result.description));
+        row.append(element("span", "", result.title));
+        if (result.description) row.append(element("small", "", result.description));
         searchResults.append(row);
       }
       searchSignature = resultsSignature;
@@ -297,7 +309,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
         if (row.kind.presentation.type === "image_tiles") {
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-pressed", String(Number(choice.dataset.choice) === row.kind.selected));
         } else if (row.kind.icons.length) {
-          widget.querySelector("summary").replaceChildren(icon(row.kind.icons[row.kind.selected]), element("span", "", row.kind.options[row.kind.selected]));
+          widget.querySelector("summary").replaceChildren(icon(row.kind.icons[row.kind.selected]), element("span", "", row.kind.options[row.kind.selected]), icon("chevron-down"));
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === row.kind.selected));
         }
       }
