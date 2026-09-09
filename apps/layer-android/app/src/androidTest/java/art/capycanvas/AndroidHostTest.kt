@@ -347,6 +347,41 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
+    @Test fun typingFromSettingsFocusesSearchWithoutLosingCharacters() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("settings-category-about").performClick()
+        compose.waitForIdle()
+        // Send a burst before Compose can transfer focus; Rust must retain it
+        // and the field must put its caret after the complete query.
+        instrumentation.runOnMainSync {
+            for ((code, meta) in listOf(KeyEvent.KEYCODE_P to KeyEvent.META_SHIFT_ON, KeyEvent.KEYCODE_R to 0)) {
+                for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                    compose.activity.dispatchKeyEvent(KeyEvent(0, 0, action, code, 0, meta))
+                }
+            }
+        }
+        compose.waitUntil(10_000) { preferences().optString("query") == "Pr" }
+        val search = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("settings-search")))
+        search.assertTextEquals("Pr").assertIsFocused()
+        search.performTextInput("essure")
+        compose.waitUntil(10_000) { preferences().optString("query") == "Pressure" }
+        compose.onNodeWithText("Pressure response", substring = true).assertExists()
+        capture("38-type-to-search")
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        compose.waitForIdle()
+        val number = compose.onNodeWithTag("setting-number-prediction_horizon").performScrollTo()
+        number.performTextReplacement("12")
+        instrumentation.runOnMainSync {
+            for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
+                compose.activity.dispatchKeyEvent(KeyEvent(action, KeyEvent.KEYCODE_3))
+        }
+        compose.waitForIdle()
+        assertEquals("Number editing stays local", "", preferences().optString("query"))
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()

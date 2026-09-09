@@ -272,6 +272,7 @@ pub struct PreferencesState {
     pub page: SettingsPage,
     pub query: String,
     pub searching: bool,
+    pub search_focus: u64,
     pub shortcut_query: String,
     pub editing_shortcut: Option<String>,
     pub editing_preference: Option<PreferenceId>,
@@ -284,6 +285,8 @@ pub struct PreferencesView {
     pub page: SettingsPage,
     pub query: String,
     pub searching: bool,
+    /// Changes when typing outside an editor should reveal and focus search.
+    pub search_focus: u64,
     pub search_results: Vec<PreferenceSearchResult>,
     pub shortcut_query: String,
     pub shortcut_editor: Option<ShortcutEditor>,
@@ -772,6 +775,7 @@ impl PreferencesState {
             // Android keeps its search field visible; an empty query shows
             // categories. Desktop/web retain their explicit search toggle.
             searching: self.searching && (platform != Platform::Android || !query.is_empty()),
+            search_focus: self.search_focus,
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,

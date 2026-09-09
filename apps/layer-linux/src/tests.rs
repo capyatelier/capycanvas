@@ -1111,6 +1111,54 @@ fn native_preferences_and_shortcuts() {
     assert_eq!(windows.borrow().len(), 1);
     let dir = "../../artifacts/ui/preferences";
     std::fs::create_dir_all(dir).unwrap();
+    assert_eq!(w.preferences.dialog.content_width(), 1000);
+    w.dispatch(UiAction::OpenSettings {
+        page: SettingsPage::Appearance,
+    });
+    pump(300);
+    find_named(w.preferences.dialog.upcast_ref(), "close-settings")
+        .unwrap()
+        .grab_focus();
+    let controllers = w.window.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .find_map(|i| {
+            controllers
+                .item(i)
+                .and_downcast::<gtk::EventControllerKey>()
+        })
+        .unwrap();
+    assert!(keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[&gdk::Key::P, &0u32, &gdk::ModifierType::SHIFT_MASK]
+    ));
+    keys.emit_by_name::<()>(
+        "key-released",
+        &[&gdk::Key::P, &0u32, &gdk::ModifierType::SHIFT_MASK],
+    );
+    pump(250);
+    let search: gtk::SearchEntry = find_named(w.preferences.dialog.upcast_ref(), "settings-search")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    assert_eq!(search.text().as_str(), "P");
+    assert!(
+        gtk::prelude::GtkWindowExt::focus(&w.window)
+            .is_some_and(|focus| focus.is_ancestor(&search))
+    );
+    assert_eq!(search.position(), 1);
+    assert!(!keys.emit_by_name::<bool>(
+        "key-pressed",
+        &[&gdk::Key::r, &0u32, &gdk::ModifierType::empty()]
+    ));
+    keys.emit_by_name::<()>(
+        "key-released",
+        &[&gdk::Key::r, &0u32, &gdk::ModifierType::empty()],
+    );
+    assert_eq!(
+        state(&w).preferences.query,
+        "P",
+        "focused search uses native text input"
+    );
     for (theme, suffix) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for page in SettingsPage::ALL {

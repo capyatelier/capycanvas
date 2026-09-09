@@ -26,6 +26,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.draw.alpha
@@ -75,20 +79,33 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
     modifier: Modifier = Modifier, label: (@Composable () -> Unit)? = null,
     placeholder: (@Composable () -> Unit)? = null, leadingIcon: (@Composable () -> Unit)? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
-    height: Dp = 36.dp, enabled: Boolean = true,
+    height: Dp = 36.dp, enabled: Boolean = true, focusRequest: Long = 0,
     textStyle: TextStyle = LocalTextStyle.current,
     keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default) {
-    var text by remember { mutableStateOf(value) }
+    var text by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     var focused by remember { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
     val host = LocalCanvasHost.current
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(value, focused) { if (!focused) text = value }
+    LaunchedEffect(value, focused) { if (!focused) text = TextFieldValue(value, TextRange(value.length)) }
+    // A core type-to-search request carries text as well as focus. Apply it
+    // even if another key arrived before the native field gained focus.
+    LaunchedEffect(focusRequest) {
+        if (focusRequest != 0L && value.isNotEmpty()) {
+            text = TextFieldValue(value, TextRange(value.length))
+            requester.requestFocus()
+        }
+    }
     DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
     val colors = LocalPalette.current
     Column(modifier.background(colors.input, RoundedCornerShape(6.dp))) {
         label?.let { Box(Modifier.padding(start = 10.dp, top = 6.dp)) { it() } }
-        BasicTextField(text, { text = it; onChange(it) },
-            Modifier.fillMaxWidth().height(height).onFocusChanged { focused = it.isFocused; host.editingText = focused },
+        BasicTextField(text, { next ->
+            val changed = next.text != text.text
+            text = next
+            if (changed) onChange(next.text)
+        },
+            Modifier.fillMaxWidth().height(height).focusRequester(requester).onFocusChanged { focused = it.isFocused; host.editingText = focused },
             enabled = enabled, singleLine = true, textStyle = textStyle.copy(color = colors.text),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = keyboardOptions.copy(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
@@ -97,7 +114,7 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     leadingIcon?.invoke()
                     Box(Modifier.weight(1f)) {
-                        if (text.isEmpty()) ProvideTextStyle(textStyle.copy(color = colors.secondary)) { placeholder?.invoke() }
+                        if (text.text.isEmpty()) ProvideTextStyle(textStyle.copy(color = colors.secondary)) { placeholder?.invoke() }
                         field()
                     }
                     trailingIcon?.invoke()

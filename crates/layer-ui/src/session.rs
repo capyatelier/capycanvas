@@ -248,6 +248,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 editing,
                 divider,
             } => {
+                // Native editors/IMEs own their text. Elsewhere in settings,
+                // printable keys start search with the original case intact.
+                if pressed
+                    && self.state.settings_open
+                    && !editing
+                    && !modifiers.command
+                    && !modifiers.alt
+                    && self.state.preferences.capture.is_none()
+                    && self.state.preferences.editing_shortcut.is_none()
+                    && key.chars().count() == 1
+                    && key.chars().all(|c| !c.is_control() && !c.is_whitespace())
+                {
+                    let query = format!("{}{key}", self.state.preferences.query);
+                    reply.change = self.dispatch(UiAction::Preferences {
+                        action: PreferenceAction::Search { query },
+                    })?;
+                    self.state.preferences.search_focus += 1;
+                    reply.handled = true;
+                    return Ok(reply);
+                }
                 let key = key.to_ascii_lowercase();
                 if !pressed {
                     self.interaction.keys.remove(&key);
@@ -1599,7 +1619,12 @@ mod tests {
             "release always clears Space even after focus changed"
         );
         invoke(&mut s, CommandId::Settings);
-        assert!(!key(&mut s, "b", true, false, false).handled);
+        assert!(key(&mut s, "b", true, false, false).handled);
+        assert_eq!(
+            s.preferences().unwrap().query,
+            "b",
+            "typing searches instead of selecting a tool"
+        );
         s.dispatch(UiAction::CloseSettings).unwrap();
         s.input(UiInput::Blur).unwrap();
         assert!(key(&mut s, "b", true, false, false).handled);
@@ -2875,6 +2900,69 @@ mod tests {
                 },
             );
             assert!(s.preferences().unwrap().error.is_some());
+        }
+    }
+
+    #[test]
+    fn settings_type_to_search_is_shared_and_preserves_native_editing() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::Settings);
+            let settings = s.state.settings.clone();
+            for character in ["P", "r", "é", "s", "s"] {
+                assert!(key(&mut s, character, true, false, false).handled);
+                key(&mut s, character, false, false, false);
+            }
+            let view = s.preferences().unwrap();
+            assert_eq!(view.query, "Préss");
+            assert_eq!(view.search_focus, 5);
+            assert!(view.searching);
+            for (name, command, editing) in [
+                ("x", false, true),
+                ("c", true, false),
+                ("Dead", false, false),
+                ("ArrowLeft", false, false),
+                (" ", false, false),
+            ] {
+                assert!(!key(&mut s, name, true, command, editing).handled);
+                key(&mut s, name, false, command, editing);
+            }
+            s.input(UiInput::Key {
+                key: "x".into(),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+                editing: false,
+                divider: None,
+            })
+            .unwrap();
+            assert_eq!(s.preferences().unwrap().query, "Préss");
+            assert_eq!(s.preferences().unwrap().search_focus, 5);
+            preference(
+                &mut s,
+                PreferenceAction::EditShortcut {
+                    id: CommandId::Brush.shortcut_id(),
+                },
+            );
+            key(&mut s, "b", true, false, false);
+            assert!(s.preferences().unwrap().query.is_empty());
+            preference(
+                &mut s,
+                PreferenceAction::BeginShortcut {
+                    id: CommandId::Brush.shortcut_id(),
+                },
+            );
+            key(&mut s, "w", true, false, false);
+            assert!(s.preferences().unwrap().capture.unwrap().chord.is_some());
+            assert!(s.preferences().unwrap().query.is_empty());
+            assert_eq!(
+                s.state.settings, settings,
+                "search must not change saved settings"
+            );
         }
     }
 

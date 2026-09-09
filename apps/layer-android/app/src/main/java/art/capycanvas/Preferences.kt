@@ -82,6 +82,9 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     val paneFocus = remember { FocusRequester() }
     LaunchedEffect(view.settingsRoute()) { paneFocus.requestFocus() }
     var showPage by rememberSaveable { mutableStateOf(view.getString("page") != "appearance") }
+    LaunchedEffect(view.optLong("search_focus")) {
+        if (view.optLong("search_focus") != 0L) showPage = false
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding()
         .focusRequester(paneFocus).focusable().testTag("preferences-surface")) {
         val wide = maxWidth >= 840.dp
@@ -190,6 +193,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
                 Modifier.weight(1f).testTag("settings-search"), height = 48.dp, placeholder = { Text("Search settings") },
+                focusRequest = view.optLong("search_focus"),
                 leadingIcon = { Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
                     SharedIcon("search", null, Modifier.size(20.dp).testTag("settings-search-icon"))
                 } },

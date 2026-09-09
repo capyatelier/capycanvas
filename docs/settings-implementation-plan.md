@@ -97,8 +97,20 @@ Header text buttons retain libadwaita's 17px horizontal padding.
 
 Web uses a gear opening Preferences directly, with the same sidebar/page flow,
 native input behavior, original shared SVGs, copyable information values and
-pen-oriented focus appearance. Desktop dialogs target 800 × 620 logical pixels.
+pen-oriented focus appearance. Desktop dialogs target 1000 × 620 logical pixels,
+constrained to the available window. The web sidebar title is centered in the
+whole sidebar, independently of the search button.
 There are no toolkit types in the shared model.
+
+On every platform, printable keyboard input outside an editable control opens
+and focuses preferences search, preserving the first character and its case.
+Rust owns this routing and query accumulation; a transient `search_focus`
+revision asks native/DOM hosts to reveal the sidebar and place the caret at the
+end, including in narrow layouts. Editable controls, IME composition, modifier
+commands, shortcut editing/recording, and Space/Enter activation retain their
+normal input behavior. Android applies focus-request text even when several keys
+arrive before its asynchronous UI update; native field selection changes do not
+emit settings edits.
 
 ### Android
 
@@ -242,6 +254,14 @@ remain separate work, not nonfunctional controls in this dialog.
 - Review PNGs are in `artifacts/ui/preferences/`.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.
+
+The wider-dialog/type-to-search update passes 75 core tests, the native GTK
+preferences suite in an isolated headless Wayland session, 18 Android device
+tests (run `1788915228675`), Android lint, and 18 web packaging/launcher tests.
+Packaged web preferences assertions pass, including first-character/caret
+preservation, editable-field protection and collapsed-sidebar search. Its final
+empty-console check still reports the existing GPU startup warning described
+below. Android search review: `artifacts/android/settings-typing/38-type-to-search.png`.
 
 Validation caveat (2026-09-07): an intermittent native extra-window teardown
 crash was traced to a `GDK_PAD_GROUP_MODE` event with a NULL surface, before any

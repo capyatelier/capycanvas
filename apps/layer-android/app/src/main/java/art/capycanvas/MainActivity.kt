@@ -57,9 +57,10 @@ internal fun CanvasHost.key(event: KeyEvent) {
             KeyEvent.KEYCODE_DPAD_RIGHT -> "arrowright"
             KeyEvent.KEYCODE_DPAD_UP -> "arrowup"
             KeyEvent.KEYCODE_DPAD_DOWN -> "arrowdown"
-            else -> event.getUnicodeChar(0).takeIf { it != 0 }?.toChar()?.lowercase()
+            else -> event.getUnicodeChar(event.metaState and (KeyEvent.META_SHIFT_MASK or KeyEvent.META_CAPS_LOCK_ON))
+                .takeIf { it > 0 && Character.isValidCodePoint(it) }?.let { String(Character.toChars(it)) }
         }
         if (key != null) input(obj("type" to "key", "key" to key, "pressed" to (event.action == KeyEvent.ACTION_DOWN),
             "repeat" to (event.repeatCount > 0), "editing" to editingText,
-            "modifiers" to obj("command" to event.isCtrlPressed, "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
+            "modifiers" to obj("command" to (event.isCtrlPressed || event.isMetaPressed), "shift" to event.isShiftPressed, "alt" to event.isAltPressed)))
 }

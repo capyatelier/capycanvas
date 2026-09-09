@@ -52,6 +52,7 @@ pub struct Preferences {
     search_bar: gtk::SearchBar,
     search_results: gtk::ListBox,
     search: gtk::SearchEntry,
+    search_focus: Cell<u64>,
     shortcut_search: gtk::SearchEntry,
     empty: gtk::Label,
     error: gtk::Label,
@@ -104,7 +105,7 @@ impl Preferences {
     pub fn new() -> Self {
         let dialog = adw::Dialog::builder()
             .title("Preferences")
-            .content_width(800)
+            .content_width(1000)
             .content_height(620)
             .width_request(360)
             .height_request(360)
@@ -213,6 +214,7 @@ impl Preferences {
             search_bar,
             search_results,
             search,
+            search_focus: Cell::new(0),
             shortcut_search,
             empty,
             error,
@@ -604,6 +606,13 @@ impl Preferences {
             }
             if opening_search {
                 self.search.grab_focus();
+            }
+            if self.search_focus.replace(view.search_focus) != view.search_focus
+                && view.search_focus != 0
+            {
+                self.split.set_show_content(false);
+                self.search.grab_focus();
+                self.search.set_position(-1);
             }
             self.search_results.remove_all();
             for result in &view.search_results {

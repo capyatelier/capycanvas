@@ -62,6 +62,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
       await click(`${selector} summary`);
     }
     await click('#header-end [data-command="settings"]');
+    assert.equal(await evaluate("document.querySelector('#settings').getBoundingClientRect().width"), 1000);
+    assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), title=document.querySelector('.preferences-sidebar h2').getBoundingClientRect(); return Math.abs(title.left+title.width/2-sidebar.left-sidebar.width/2)<1; })()`), "sidebar title centers independently of the search button");
     assert.ok(await evaluate(`(() => { const sidebar=document.querySelector('.preferences-sidebar').getBoundingClientRect(), content=document.querySelector('.preferences-content').getBoundingClientRect(); return Math.abs(sidebar.bottom-content.bottom)<1; })()`), "sidebar extends alongside the content footer");
     assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "input", "shortcuts", "about"]);
     for (const page of ["appearance", "canvas", "input", "shortcuts", "about"]) {
@@ -89,6 +91,15 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await action({ type: "close_settings" });
   }
   await click('#header-end [data-command="settings"]');
+  await evaluate("document.querySelector('[data-settings-page=appearance]').focus()");
+  await key("P", { shiftKey: true });
+  assert.equal(await evaluate("document.activeElement.id"), "settings-search");
+  assert.equal(await evaluate("document.querySelector('#settings-search').value"), "P");
+  // Real text input after focus must append, not replace the first character.
+  await call("Input.insertText", { text: "ressure" }); await settle();
+  assert.equal(await evaluate("layerApp.app.preferences().query"), "Pressure");
+  await key("Escape");
+  assert.equal(await evaluate("document.querySelector('#settings-search').hidden"), true);
   await click('.preferences-search-toggle');
   assert.equal(await evaluate("document.querySelector('#settings-search').hidden"), false);
   await preference({ type: "register_action", definition: {
@@ -115,6 +126,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await click('#setting-feedback');
   await evaluate("const pressure=document.querySelector('#setting-pressure');pressure.value='1.5';pressure.dispatchEvent(new Event('input'));pressure.focus()");
   await key("b");
+  assert.equal(await evaluate("layerApp.app.preferences().query"), "", "number editing does not start global search");
   assert.equal(await evaluate("layerApp.app.preferences().capture ?? null"), null);
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
   await action({ type: "open_settings", page: "shortcuts" });
@@ -179,6 +191,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.preferences-sidebar')).display"), "none");
   await click('[data-settings-page="appearance"]');
   assert.equal(await evaluate("layerApp.app.preferences().page"), "appearance");
+  await evaluate("document.querySelector('#close-settings').focus()");
+  await key("p");
+  assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.preferences-sidebar')).display"), "none", "typing reveals a collapsed sidebar");
+  assert.equal(await evaluate("document.activeElement.id"), "settings-search");
+  assert.equal(await evaluate("document.querySelector('#settings-search').value"), "p");
   assert.equal(await evaluate("document.querySelector('#status').textContent"), "");
   console.log("PASS: native-model settings pages, themes, adaptive sidebar, search, dependencies, key recording/conflicts, immediate persistence and executable restored shortcuts");
 }

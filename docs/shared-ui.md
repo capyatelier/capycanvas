@@ -316,6 +316,11 @@ its own title and filled Done button. Setting rows render the core name and
 description on the left and the value/control on the right. Numeric rows share
 one slider/text renderer; `Slide` delegates step snapping to Rust. These panes
 adapt to list/page navigation on narrow screens.
+Printable keys outside editable controls start preferences search through the
+shared input router; the view's transient `search_focus` revision asks each host
+to reveal and focus its search field. Native text editing and shortcut recording
+keep ownership of their input. GTK/web dialogs target 1000 × 620 logical pixels
+and shrink to fit smaller windows.
 `EditPreference`/`ClosePreference` and the shortcut editor state describe inline
 detail pages: Android choice lists and shortcuts slide in from the right, with a pane-local Back
 arrow. Settings never open another Android dialog or popup, including for choices,

@@ -56,7 +56,7 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
   editor.addEventListener("cancel", e => { e.preventDefault(); closeEditor(); });
   editor.addEventListener("close", () => { if (!editor.open && view()?.shortcut_editor) closeEditor(); });
   document.body.append(editor);
-  let editorSignature = "", searchSignature = "";
+  let editorSignature = "", searchSignature = "", searchFocus = 0;
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   const shortcuts = new Map();
@@ -142,6 +142,7 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
   }
   return function refresh(model) {
     if (!model) {
+      searchFocus = 0;
       if (capture.open) capture.close();
       if (editor.open) editor.close();
       if (dialog.open) dialog.close();
@@ -156,6 +157,12 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
     searchToggle.setAttribute("aria-pressed", String(model.searching));
     navigation.hidden = !!model.query;
     if (openingSearch) search.focus();
+    if (searchFocus !== model.search_focus) {
+      searchFocus = model.search_focus;
+      root.classList.remove("show-content");
+      search.focus();
+      search.setSelectionRange(search.value.length, search.value.length);
+    }
     const resultsSignature = JSON.stringify(model.search_results);
     if (searchSignature !== resultsSignature) {
       searchResults.replaceChildren();
