@@ -122,7 +122,7 @@ impl App {
         let change = self.session.frame(now, presentation)?;
         self.dirty = change.canvas_wake;
         let view = self.session.state().camera.view();
-        let surround = self.session.state().theme.canvas_surround();
+        let surround = self.session.state().palette.surround_linear;
         let scale = self.session.state().camera.viewport[0] as f32 / self.logical[0];
         self.session.update_canvas_cursor(&mut self.cursor, false);
         let surface = self.surface.as_mut().unwrap();

@@ -1291,6 +1291,45 @@ fn native_preferences_and_shortcuts() {
         w.dispatch(UiAction::CloseSettings);
         pump(250);
     }
+    for (theme, id, color) in [
+        (Theme::Dark, PreferenceId::DarkBase, "#1C2C3C"),
+        (Theme::Light, PreferenceId::LightBase, "#C0B49C"),
+    ] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::OpenSettings {
+            page: SettingsPage::Appearance,
+        });
+        pump(300);
+        let entry: gtk::Entry = find_named(
+            w.preferences.dialog.upcast_ref(),
+            &format!("setting-text-{}", id.key()),
+        )
+        .unwrap()
+        .downcast()
+        .unwrap();
+        entry.grab_focus();
+        entry.set_text("invalid");
+        entry.emit_activate();
+        assert!(state(&w).preferences.error.is_some());
+        entry.set_text(color);
+        entry.emit_activate();
+        pump(250);
+        assert!(state(&w).preferences.error.is_none());
+        assert_eq!(state(&w).palette.bg.to_string(), color.to_lowercase());
+        let suffix = if theme == Theme::Dark {
+            "dark"
+        } else {
+            "light"
+        };
+        capture_reference(&w, &format!("{dir}/gtk-custom-base-{suffix}.png"), 1.0);
+        w.dispatch(UiAction::CloseSettings);
+        pump(300);
+        capture_reference(&w, &format!("{dir}/gtk-custom-workspace-{suffix}.png"), 1.0);
+    }
+    let mut defaults = state(&w).settings;
+    defaults.dark_base = Theme::Dark.default_base();
+    defaults.light_base = Theme::Light.default_base();
+    w.dispatch(UiAction::RestoreSettings { settings: defaults });
     click(&command(&w, CommandId::KeyboardShortcuts));
     let search: gtk::SearchEntry = find_named(w.preferences.dialog.upcast_ref(), "settings-search")
         .unwrap()

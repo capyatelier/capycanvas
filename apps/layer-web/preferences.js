@@ -81,6 +81,16 @@ export function createPreferences({ element, button, icon, numberField, panelFra
           label.htmlFor = id;
           let input, widget;
           switch (row.kind.type) {
+            case "text":
+              input = element("input", "preference-entry"); input.type = "text";
+              input.maxLength = row.kind.max_length; input.placeholder = row.kind.placeholder;
+              input.spellcheck = false; input.autocomplete = "off"; input.setAttribute("autocapitalize", "off");
+              input.value = row.kind.value;
+              input.addEventListener("change", () => send({ type: "edit", id: row.id, value: input.value }));
+              input.addEventListener("keydown", e => {
+                if (e.key === "Enter") { e.preventDefault(); send({ type: "edit", id: row.id, value: input.value }); }
+              });
+              widget = input; break;
             case "choice":
               if (row.kind.icons.length) {
                 input = element("input"); input.type = "hidden";
@@ -113,7 +123,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
               widget = input; break;
           }
           input.id = id; input.setAttribute("aria-label", row.title);
-          if (row.kind.type !== "number") input.addEventListener("input", () => {
+          if (!["number", "text"].includes(row.kind.type)) input.addEventListener("input", () => {
             if (input.type === "number" && input.value === "") return;
             send({ type: "edit", id: row.id, value: row.kind.type === "switch" ? input.checked : Number(input.value) });
           });
@@ -188,6 +198,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
         }
       }
       else if (row.kind.type === "switch") input.checked = row.kind.active;
+      else if (row.kind.type === "text" && document.activeElement !== input) input.value = row.kind.value;
     }
     for (const [ids, section] of groups) section.hidden = !ids.some((id) => visible.has(id));
     const shortcutIds = new Set(model.shortcuts.map((spec) => spec.id));

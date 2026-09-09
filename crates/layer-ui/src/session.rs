@@ -66,6 +66,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
+                palette: Settings::default().palette(Theme::Light, Platform::Generic),
                 settings_open: false,
                 preferences: PreferencesState::default(),
                 customization: CustomizationState::default(),
@@ -86,6 +87,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn set_platform(&mut self, platform: Platform) {
         self.state.platform = platform;
+        self.state.palette = self.state.settings.palette(self.state.theme, platform);
         self.refresh_commands();
         self.refresh_shortcuts();
     }
@@ -1330,6 +1332,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
+        if regions & regions::SETTINGS != 0 {
+            self.state.palette = self
+                .state
+                .settings
+                .palette(self.state.theme, self.state.platform);
+        }
         if regions != 0 {
             self.state.revision += 1;
         }
@@ -2827,6 +2835,69 @@ mod tests {
     }
     fn edit_preference(s: &mut UiSession<Recorder>, id: PreferenceId, value: PreferenceValue) {
         preference(s, PreferenceAction::Edit { id, value });
+    }
+    #[test]
+    fn base_colors_validate_save_and_follow_the_resolved_theme() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::Settings);
+            let before = s.state.palette;
+            for invalid in ["", "red", "#12345g", "#123", "#12345678"] {
+                edit_preference(
+                    &mut s,
+                    PreferenceId::DarkBase,
+                    PreferenceValue::Text(invalid.into()),
+                );
+                assert!(s.preferences().unwrap().error.is_some());
+                assert_eq!(s.state.palette, before);
+                assert!(s.state.requests.is_empty());
+            }
+            edit_preference(
+                &mut s,
+                PreferenceId::DarkBase,
+                PreferenceValue::Text("#1C2c3C".into()),
+            );
+            assert_eq!(s.state.settings.dark_base.to_string(), "#1c2c3c");
+            assert_eq!(
+                s.state.palette, before,
+                "editing the inactive mode does not recolor the current one"
+            );
+            assert!(
+                s.state
+                    .requests
+                    .iter()
+                    .any(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. }))
+            );
+            s.dispatch(UiAction::SetTheme {
+                theme: Some(Theme::Dark),
+            })
+            .unwrap();
+            assert_eq!(s.state.palette.bg, s.state.settings.dark_base);
+            assert_eq!(s.state.palette.text, HexColor([250, 250, 251]));
+            edit_preference(
+                &mut s,
+                PreferenceId::LightBase,
+                PreferenceValue::Text("#c0b49c".into()),
+            );
+            s.dispatch(UiAction::SetTheme { theme: None }).unwrap();
+            s.dispatch(UiAction::SystemThemeChanged {
+                theme: Theme::Light,
+            })
+            .unwrap();
+            assert_eq!(s.state.palette.bg, s.state.settings.light_base);
+            let json = serde_json::to_string(&s.state.settings).unwrap();
+            let restored: Settings = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, s.state.settings);
+            assert_eq!(restored.palette(s.state.theme, platform), s.state.palette);
+            assert!(serde_json::from_str::<Settings>(&json.replace("#1c2c3c", "bad")).is_err());
+            let mut legacy = serde_json::to_value(&restored).unwrap();
+            legacy.as_object_mut().unwrap().remove("dark_base");
+            legacy.as_object_mut().unwrap().remove("light_base");
+            let legacy: Settings = serde_json::from_value(legacy).unwrap();
+            assert_eq!(legacy.dark_base, Theme::Dark.default_base());
+            assert_eq!(legacy.light_base, Theme::Light.default_base());
+        }
     }
     #[test]
     fn settings_detail_navigation_validation_and_autosave_are_shared() {

@@ -54,24 +54,26 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.caverock.androidsvg.SVG
 
-internal data class Palette(val dark: Boolean) {
-    val surround = Color(if (dark) 0xff333333 else 0xffb8b8b8)
-    val panel = Color(if (dark) 0xff414141 else 0xffededed)
-    val tabs = Color(if (dark) 0xff2e2e2e else 0xffdedede)
-    val input = Color(if (dark) 0xff333333 else 0xfffafafa)
-    val text = Color(if (dark) 0xfffafafb else 0xff2e2e32)
+internal class Palette(val dark: Boolean, private val source: org.json.JSONObject) {
+    private fun role(name: String) = Color(android.graphics.Color.parseColor(source.getString(name)))
+    val surround = role("bg")
+    val panel = role("panel")
+    val tabs = role("tabbar")
+    val sidebar = role("sidebar")
+    val input = role("input")
+    val text = role("text")
     val secondary = text.copy(alpha = .55f)
     val accent = Color(0xff3584e4)
     val sliderFill = lerp(panel, text, .5f)
     val active = accent.copy(alpha = .22f)
-    val button = Color(if (dark) 0x0dffffff else 0x0d000000)
-    val thumb = Color(if (dark) 0xffd3d3d3 else 0xfffafafa)
+    val button = role("button").copy(alpha = 13 / 255f)
+    val thumb = role("thumb")
     val divider = text.copy(alpha = .12f)
-    val settingsBackground = Color(if (dark) 0xff333333 else 0xfffafafa)
-    val settingsCard = Color(if (dark) 0xff414141 else 0xffffffff)
-    val settingsSecondary = Color(if (dark) 0xffbcbcbc else 0xff666666)
+    val settingsBackground = role("settings")
+    val settingsCard = role("card")
+    val settingsSecondary = role("settings_secondary")
 }
-internal val LocalPalette = staticCompositionLocalOf { Palette(true) }
+internal val LocalPalette = staticCompositionLocalOf<Palette> { error("Missing core palette") }
 internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Missing native host") }
 
 /** Editing/composition is native widget state. Rust remains authoritative for
@@ -83,7 +85,8 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
     trailingIcon: (@Composable () -> Unit)? = null,
     height: Dp = 36.dp, enabled: Boolean = true, focusRequest: Long = 0,
     textStyle: TextStyle = LocalTextStyle.current,
-    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default) {
+    keyboardOptions: androidx.compose.foundation.text.KeyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default,
+    maxLength: Int = Int.MAX_VALUE, onCommit: ((String) -> Unit)? = null) {
     var text by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     var focused by remember { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
@@ -105,9 +108,13 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
         BasicTextField(text, { next ->
             val changed = next.text != text.text
             text = next
-            if (changed) onChange(next.text)
+            if (next.text.length > maxLength) text = TextFieldValue(next.text.take(maxLength))
+            if (changed && onCommit == null) onChange(text.text)
         },
-            Modifier.fillMaxWidth().height(height).focusRequester(requester).onFocusChanged { focused = it.isFocused; host.editingText = focused },
+            Modifier.fillMaxWidth().height(height).focusRequester(requester).onFocusChanged {
+                if (focused && !it.isFocused) onCommit?.invoke(text.text)
+                focused = it.isFocused; host.editingText = focused
+            },
             enabled = enabled, singleLine = true, textStyle = textStyle.copy(color = colors.text),
             cursorBrush = SolidColor(colors.accent), keyboardOptions = keyboardOptions.copy(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),

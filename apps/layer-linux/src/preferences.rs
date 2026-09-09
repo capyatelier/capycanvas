@@ -16,6 +16,7 @@ static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static SAVE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 enum Field {
+    Text(adw::ActionRow, gtk::Entry, gtk::EventControllerFocus),
     Choice(adw::ComboRow),
     Spin(adw::SpinRow),
     Number(gtk::ListBoxRow, crate::number_control::NumberControl),
@@ -25,6 +26,7 @@ enum Field {
 impl Field {
     fn widget(&self) -> &gtk::Widget {
         match self {
+            Self::Text(w, _, _) => w.upcast_ref(),
             Self::Choice(w) => w.upcast_ref(),
             Self::Number(w, _) => w.upcast_ref(),
             Self::Spin(w) => w.upcast_ref(),
@@ -36,6 +38,11 @@ impl Field {
         self.widget().set_sensitive(row.enabled);
         self.widget().set_visible(row.visible);
         match (self, &row.kind) {
+            (Self::Text(_, entry, focus), PreferenceKind::Text { value, .. }) => {
+                if !focus.contains_focus() && entry.text().as_str() != value {
+                    entry.set_text(value);
+                }
+            }
             (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
             (Self::Number(_, w), PreferenceKind::Number { value, .. }) => {
                 w.set_value(*value as f64)
@@ -497,6 +504,51 @@ impl Preferences {
                                 )
                             ));
                             Field::Choice(control)
+                        }
+                        PreferenceKind::Text {
+                            max_length,
+                            placeholder,
+                            ..
+                        } => {
+                            let native_row = text_row(&row.title, &row.description);
+                            let entry = gtk::Entry::builder()
+                                .width_chars(9)
+                                .max_width_chars(9)
+                                .max_length(*max_length as i32)
+                                .placeholder_text(placeholder)
+                                .valign(gtk::Align::Center)
+                                .build();
+                            entry.add_css_class("preference-entry");
+                            entry.set_widget_name(&format!("setting-text-{}", id.key()));
+                            entry.connect_activate(glib::clone!(
+                                #[weak]
+                                w,
+                                move |entry| send(
+                                    &w,
+                                    PreferenceAction::Edit {
+                                        id,
+                                        value: PreferenceValue::Text(entry.text().into())
+                                    }
+                                )
+                            ));
+                            let focus = gtk::EventControllerFocus::new();
+                            focus.connect_leave(glib::clone!(
+                                #[weak]
+                                w,
+                                #[weak]
+                                entry,
+                                move |_| send(
+                                    &w,
+                                    PreferenceAction::Edit {
+                                        id,
+                                        value: PreferenceValue::Text(entry.text().into())
+                                    }
+                                )
+                            ));
+                            entry.add_controller(focus.clone());
+                            native_row.add_suffix(&entry);
+                            native_row.set_activatable_widget(Some(&entry));
+                            Field::Text(native_row, entry, focus)
                         }
                         PreferenceKind::Number { control, .. }
                             if control.kind == NumericKind::Number =>

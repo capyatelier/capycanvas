@@ -484,6 +484,8 @@ pub struct Workspace {
     pub gpu: RefCell<Option<GpuCanvas>>,
     pub input: Rc<crate::input::Input>,
     surface: DockSurface,
+    palette_css: gtk::CssProvider,
+    palette: Cell<Option<ThemePalette>>,
     header: adw::HeaderBar,
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_held: Cell<bool>,
@@ -518,6 +520,7 @@ impl Drop for Workspace {
         // Join the GPU worker before any native window/surface fields drop.
         self.gpu.get_mut().take();
         self.customization.dispose();
+        gtk::style_context_remove_provider_for_display(&self.area.display(), &self.palette_css);
     }
 }
 
@@ -536,6 +539,17 @@ impl Workspace {
             .default_height(900)
             .build();
         window.set_icon_name(Some("art.capycanvas.CapyCanvas"));
+        static NEXT_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        window.set_widget_name(&format!(
+            "capy-{}",
+            NEXT_WINDOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let palette_css = gtk::CssProvider::new();
+        gtk::style_context_add_provider_for_display(
+            &gtk::prelude::WidgetExt::display(&window),
+            &palette_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
         if !adw::StyleManager::default().is_dark() {
             window.add_css_class("light-theme");
         }
@@ -602,6 +616,8 @@ impl Workspace {
             area,
             gpu: RefCell::new(None),
             surface,
+            palette_css,
+            palette: Cell::new(None),
             header,
             popovers: RefCell::new(Vec::new()),
             chrome_held: Cell::new(false),
@@ -636,6 +652,14 @@ impl Workspace {
             frame_deadline: Cell::new(0),
             input: Rc::default(),
         });
+        this.apply_palette(Settings::default().palette(
+            if adw::StyleManager::default().is_dark() {
+                Theme::Dark
+            } else {
+                Theme::Light
+            },
+            Platform::Gtk,
+        ));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes, &layers_panel);
         this.customization.bind(&this);
@@ -1424,6 +1448,7 @@ impl Workspace {
             }
         }
         if regions & regions::SETTINGS != 0 {
+            self.apply_palette(state.palette);
             for (id, preview) in self.brush_previews.borrow().iter() {
                 preview.set_paintable(Some(&crate::previews::texture(*id, state.theme)));
             }
@@ -1470,6 +1495,32 @@ impl Workspace {
         if regions & (regions::LAYOUT | regions::SETTINGS) != 0 {
             self.update_zen();
         }
+    }
+
+    fn apply_palette(&self, palette: ThemePalette) {
+        if self.palette.replace(Some(palette)) == Some(palette) {
+            return;
+        }
+        let roles = [
+            ("bg", palette.bg),
+            ("panel", palette.panel),
+            ("tabbar", palette.tabbar),
+            ("input", palette.input),
+            ("view", palette.view),
+            ("settings", palette.settings),
+            ("sidebar", palette.sidebar),
+            ("sidebar-backdrop", palette.sidebar_backdrop),
+            ("dialog", palette.dialog),
+            ("thumb", palette.thumb),
+            ("text", palette.text),
+        ];
+        let mut css = format!("window#{} {{", self.window.widget_name());
+        for (name, color) in roles {
+            use std::fmt::Write;
+            write!(css, "--capy-{name}: {color};").unwrap();
+        }
+        css.push('}');
+        self.palette_css.load_from_string(&css);
     }
 
     fn resolved(&self) -> ResolvedLayout {

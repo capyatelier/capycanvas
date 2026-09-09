@@ -182,7 +182,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     val searching = view.optBoolean("searching")
-    Column(modifier.background(if (colors.dark) colors.tabs else colors.panel).testTag("settings-sidebar").padding(8.dp),
+    Column(modifier.background(colors.sidebar).testTag("settings-sidebar").padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
@@ -257,6 +257,13 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                 }
             }
             when (type) {
+                "text" -> CoreTextField(kind.getString("value"), {},
+                    Modifier.widthIn(max = controlWidth).width(132.dp).testTag("setting-text-" + row.getString("id")),
+                    height = 48.dp, enabled = enabled, maxLength = kind.getInt("max_length"),
+                    placeholder = { Text(kind.getString("placeholder")) },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii, autoCorrectEnabled = false),
+                    onCommit = { host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it)) })
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
                 "choice" -> {
                     val selected = kind.getInt("selected")

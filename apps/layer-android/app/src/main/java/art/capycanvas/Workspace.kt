@@ -131,7 +131,17 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 @Composable fun CapyApp(host: CanvasHost) {
     val snapshot = host.snapshot
     val state = snapshot?.getJSONObject("state")
-    val colors = Palette(state?.optString("theme") != "light")
+    if (state == null) {
+        // The session publishes its palette before the native surface attaches.
+        // Only the launch/error screen uses the fixed launch background.
+        Box(Modifier.fillMaxSize().background(Color(0xff333333)), contentAlignment = Alignment.Center) {
+            host.failure?.let { Text(it, Modifier.padding(24.dp), color = Color.White) }
+        }
+        return
+    }
+    val colors = remember(state.getString("theme"), state.getJSONObject("palette").toString()) {
+        Palette(state.getString("theme") != "light", state.getJSONObject("palette"))
+    }
     val scheme = if (colors.dark) darkColorScheme() else lightColorScheme()
     val activity = LocalActivity.current
     SideEffect {

@@ -123,6 +123,30 @@ export async function checkPreferences({ call, evaluate, settle }) {
     }
     await action({ type: "close_settings" });
   }
+  // Real text fields: invalid/incomplete edits never alter the accepted palette.
+  for (const [theme, color] of [['dark', '#1C2C3C'], ['light', '#C0B49C']]) {
+    await action({ type: 'set_theme', theme });
+    await action({ type: 'open_settings', page: 'appearance' });
+    const selector = `#setting-${theme}-base`;
+    await click(selector);
+    await evaluate(`document.querySelector('${selector}').focus()`);
+    await evaluate(`document.querySelector('${selector}').value='invalid'`); await key('Enter');
+    assert.ok(await evaluate('layerApp.app.preferences().error'));
+    await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
+    assert.equal(await evaluate('layerApp.app.preferences().error ?? null'), null);
+    assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), color.toLowerCase());
+    assert.equal(await evaluate("document.querySelector('meta[name=theme-color]').content"), color.toLowerCase());
+    assert.ok(await evaluate(`(() => {
+      const palette=layerApp.state().palette;
+      const rgb=hex=>'rgb('+hex.slice(1).match(/../g).map(v=>parseInt(v,16)).join(', ')+')';
+      return [['.dock-group','panel'],['.dock-tabs','tabbar'],['#settings','settings'],['.preferences-sidebar','sidebar'],['${selector}','input']]
+        .every(([selector,key])=>getComputedStyle(document.querySelector(selector)).backgroundColor===rgb(palette[key]));
+    })()`), 'all surfaces bind the core palette');
+    await capture(`custom-base-${theme}`);
+    await action({ type: 'close_settings' });
+    await capture(`custom-workspace-${theme}`);
+  }
+  await action({ type: 'restore_settings', settings: { ...await evaluate('layerApp.state().settings'), dark_base: '#333333', light_base: '#b8b8b8' } });
   await click('#header-end [data-command="settings"]');
   await evaluate("document.querySelector('[data-settings-page=appearance]').focus()");
   await key("P", { shiftKey: true });
@@ -239,5 +263,20 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("document.activeElement.id"), "settings-search");
   assert.equal(await evaluate("document.querySelector('#settings-search').value"), "p");
   assert.equal(await evaluate("document.querySelector('#status').textContent"), "");
+  await action({ type: 'set_theme', theme: 'dark' });
+  await preference({ type: 'edit', id: 'dark_base', value: '#1c2c3c' });
+  await action({ type: 'close_settings' });
+  const { identifier } = await call('Page.addScriptToEvaluateOnNewDocument', {
+    source: 'navigator.gpu.requestAdapter = async () => null;',
+  });
+  await call('Page.reload');
+  await evaluate("new Promise((resolve,reject)=>{const start=performance.now();function ready(){if(window.layerApp&&document.body.dataset.gpu==='unavailable')resolve();else if(performance.now()-start>20000)reject(new Error('fallback reload failed'));else setTimeout(ready,50)}ready()})");
+  assert.equal(await evaluate('layerApp.state().settings.dark_base'), '#1c2c3c', 'custom colors persist across reload');
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#gpu-notice')).backgroundColor"), 'rgb(28, 44, 60)');
+  assert.equal(await evaluate("document.querySelector('meta[name=theme-color]').content"), '#1c2c3c');
+  await action({ type: 'open_settings', page: 'appearance' });
+  await preference({ type: 'edit', id: 'dark_base', value: '#333333' });
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#gpu-notice')).backgroundColor"), 'rgb(51, 51, 51)', 'settings still update without a GPU');
+  await call('Page.removeScriptToEvaluateOnNewDocument', { identifier });
   console.log("PASS: native-model settings pages, themes, adaptive sidebar, search, dependencies, key recording/conflicts, immediate persistence and executable restored shortcuts");
 }

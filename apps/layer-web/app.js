@@ -41,11 +41,14 @@ const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 applyTheme(systemTheme.matches ? "dark" : "light");
 
-function applyTheme(theme) {
+function applyTheme(theme, palette) {
   document.body.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
   document.querySelector('meta[name="color-scheme"]').content = theme;
-  document.querySelector('meta[name="theme-color"]').content = theme === "dark" ? "#333333" : "#b8b8b8";
+  if (palette) for (const [name, color] of Object.entries(palette)) {
+    if (typeof color === "string") document.body.style.setProperty(`--${name.replaceAll("_", "-")}`, name === "button" ? `${color}0d` : color);
+  }
+  document.querySelector('meta[name="theme-color"]').content = palette?.bg || (theme === "dark" ? "#333333" : "#b8b8b8");
 }
 
 function element(tag, className, text) {
@@ -601,7 +604,7 @@ function update(regions) {
         }
       }
   if (regions & 16) {
-    applyTheme(state.theme);
+    applyTheme(state.theme, state.palette);
     for (const [id, button] of brushButtons)
       button.querySelector("img").src =
         asset(`brush-previews/${id}-${state.theme}.png`);

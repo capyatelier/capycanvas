@@ -383,6 +383,38 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
+    @Test fun baseColorsAreValidatedTextAndDriveTheNativePalette() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        for ((theme, color) in listOf("dark" to "#1C2C3C", "light" to "#C0B49C")) {
+            compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to theme)) }
+            waitState { it.getString("theme") == theme }
+            compose.onNodeWithTag("settings-category-appearance").performClick()
+            val input = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-" + theme + "_base")))
+            input.performScrollTo().performTextReplacement("invalid")
+            input.performImeAction()
+            compose.waitUntil(10_000) { !preferences().isNull("error") }
+            assertNotEquals("invalid", state().getJSONObject("settings").getString(theme + "_base"))
+            input.performTextReplacement(color)
+            input.performImeAction()
+            waitState { it.getJSONObject("settings").getString(theme + "_base") == color.lowercase() }
+            assertTrue(preferences().isNull("error"))
+            assertEquals(color.lowercase(), state().getJSONObject("palette").getString("bg"))
+            val image = compose.onNodeWithTag("preferences-surface").captureToImage().toPixelMap()
+            val expected = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("settings"))
+            val pixel = image[image.width - 2, image.height - 2]
+            assertEquals(android.graphics.Color.red(expected) / 255f, pixel.red, .01f)
+            assertEquals(android.graphics.Color.green(expected) / 255f, pixel.green, .01f)
+            assertEquals(android.graphics.Color.blue(expected) / 255f, pixel.blue, .01f)
+            capture("40-custom-base-$theme")
+        }
+        compose.runOnIdle {
+            host.preference(obj("type" to "edit", "id" to "dark_base", "value" to "#333333"))
+            host.preference(obj("type" to "edit", "id" to "light_base", "value" to "#b8b8b8"))
+        }
+        waitState { it.getJSONObject("settings").getString("light_base") == "#b8b8b8" }
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()

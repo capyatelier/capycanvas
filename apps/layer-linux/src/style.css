@@ -1,7 +1,6 @@
 /* GTK paints native controls above our full-window Wayland canvas underlay. */
 window.background { background: transparent; }
-window { --window-bg-color: #333333; --window-fg-color: #fafafb; --headerbar-bg-color: #414141; --view-bg-color: #2b2b2b; --popover-bg-color: #414141; --panel-bg: #414141; --tabbar-bg: #2e2e2e; --input-bg: #333333; }
-window.light-theme { --window-bg-color: #b8b8b8; --window-fg-color: #2e2e32; --headerbar-bg-color: #ededed; --view-bg-color: #e4e4e4; --popover-bg-color: #ededed; --panel-bg: #ededed; --tabbar-bg: #dedede; --input-bg: #fafafa; }
+window { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .workspace-header { background: transparent; box-shadow: none; }
@@ -38,6 +37,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .number-control scale { min-height: 32px; padding: 0 8px; margin: 0 6px; }
 .number-control scale trough { min-height: 4px; background: var(--input-bg); }
 .number-control scale slider { min-width: 16px; min-height: 16px; margin: -6px; }
+.number-control scale slider { background: var(--capy-thumb); }
 .dock-panel .number-control button.number-step { min-width: 24px; min-height: 24px; }
 .dock-panel .number-control scale { min-height: 24px; padding: 0; margin: 0 6px; }
 .dock-panel .number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
@@ -75,8 +75,9 @@ window, label, text { font-size: var(--ui-text-size); }
 .workspace-header, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
 /* Preferences are a native surface, not the canvas surround (especially light). */
-.layer-preferences { --window-bg-color: #333333; --headerbar-bg-color: #333333; }
-window.light-theme .layer-preferences { --window-bg-color: #fafafb; --headerbar-bg-color: #fafafb; }
+.layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }
+.preference-entry { background: var(--input-bg); box-shadow: none; }
+.preference-entry:focus-within { box-shadow: none; }
 .layer-preferences *:focus { outline: none; }
 .layer-preferences.touch-input .navigation-sidebar row:hover:not(:selected):not(:active) { background: transparent; }
 .layer-preferences.touch-input .navigation-sidebar row:selected:hover:not(:active) { background: alpha(currentColor, .10); }

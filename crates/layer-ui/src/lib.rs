@@ -13,6 +13,7 @@ mod numeric;
 mod session;
 mod settings;
 mod shortcuts;
+mod theme;
 mod workspace;
 
 pub use camera::{Camera, TouchGesture};
@@ -38,9 +39,10 @@ pub use session::UiSession;
 pub use settings::{
     HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
     PreferenceKind, PreferencePage, PreferenceRow, PreferenceSearchResult, PreferenceValue,
-    PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor,
+    PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor, TextConstraint,
 };
 pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
+pub use theme::{HexColor, Theme, ThemePalette};
 pub use workspace::WorkspaceState;
 
 /// Logical units; rendering still uses the entire physical window viewport.
@@ -272,25 +274,6 @@ fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Theme {
-    Light,
-    Dark,
-}
-impl Theme {
-    /// Linear-sRGB window surround, matching the native/DOM theme color roles.
-    pub fn canvas_surround(self) -> [f32; 4] {
-        let rgb = if self == Self::Dark {
-            [51.0, 51.0, 51.0]
-        } else {
-            [184.0, 184.0, 184.0]
-        };
-        let [r, g, b] = rgb.map(|v: f32| ((v / 255.0 + 0.055) / 1.055).powf(2.4));
-        [r, g, b, 1.0]
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Tool {
     Brush,
     Eraser,
@@ -437,6 +420,7 @@ pub struct UiState {
     pub settings: Settings,
     /// Resolved appearance for widgets, previews and GPU canvas surround.
     pub theme: Theme,
+    pub palette: ThemePalette,
     /// Settings are applied individually; dismissal only closes the view.
     pub settings_open: bool,
     pub preferences: PreferencesState,

@@ -30,6 +30,8 @@ impl Platform {
 pub struct Settings {
     pub version: u32,
     pub theme: Option<Theme>,
+    pub dark_base: HexColor,
+    pub light_base: HexColor,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub zen_reveal: f32,
@@ -49,6 +51,8 @@ impl Default for Settings {
         Self {
             version: 1,
             theme: None,
+            dark_base: Theme::Dark.default_base(),
+            light_base: Theme::Light.default_base(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             zen_reveal: 80.0,
@@ -156,6 +160,8 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
+    DarkBase,
+    LightBase,
     ZenReveal,
     Cursor,
     PanSpeed,
@@ -175,6 +181,8 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::DarkBase => "dark-base",
+            Self::LightBase => "light-base",
             Self::ZenReveal => "zen-reveal",
             Self::Cursor => "cursor",
             Self::PanSpeed => "pan-speed",
@@ -222,6 +230,12 @@ impl PreferenceValue {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceKind {
+    Text {
+        value: String,
+        constraint: TextConstraint,
+        max_length: u32,
+        placeholder: String,
+    },
     Choice {
         options: Vec<String>,
         selected: u32,
@@ -241,6 +255,19 @@ pub enum PreferenceKind {
         label: String,
         url: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextConstraint {
+    HexColor,
+}
+impl TextConstraint {
+    fn validate(self, text: &str) -> Result<(), String> {
+        match self {
+            Self::HexColor => HexColor::try_from(text.to_owned()).map(|_| ()),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferenceRow {
@@ -465,20 +492,44 @@ impl Settings {
             vec![
                 PreferenceGroup {
                     title: "Interface".into(),
-                    rows: vec![row(
-                        Theme,
-                        "Color theme",
-                        "Match your system theme, or choose light or dark.",
-                        PreferenceKind::Choice {
-                            icons: Vec::new(),
-                            options: vec!["System".into(), "Light".into(), "Dark".into()],
-                            selected: match self.theme {
-                                None => 0,
-                                Some(crate::Theme::Light) => 1,
-                                Some(crate::Theme::Dark) => 2,
+                    rows: vec![
+                        row(
+                            Theme,
+                            "Color theme",
+                            "Match your system theme, or choose light or dark.",
+                            PreferenceKind::Choice {
+                                icons: Vec::new(),
+                                options: vec!["System".into(), "Light".into(), "Dark".into()],
+                                selected: match self.theme {
+                                    None => 0,
+                                    Some(crate::Theme::Light) => 1,
+                                    Some(crate::Theme::Dark) => 2,
+                                },
                             },
-                        },
-                    )],
+                        ),
+                        row(
+                            DarkBase,
+                            "Dark base color",
+                            "Set the dark theme's base color with #RRGGBB.",
+                            PreferenceKind::Text {
+                                value: self.dark_base.to_string(),
+                                constraint: TextConstraint::HexColor,
+                                max_length: 7,
+                                placeholder: crate::Theme::Dark.default_base().to_string(),
+                            },
+                        ),
+                        row(
+                            LightBase,
+                            "Light base color",
+                            "Set the light theme's base color with #RRGGBB.",
+                            PreferenceKind::Text {
+                                value: self.light_base.to_string(),
+                                constraint: TextConstraint::HexColor,
+                                max_length: 7,
+                                placeholder: crate::Theme::Light.default_base().to_string(),
+                            },
+                        ),
+                    ],
                 },
                 PreferenceGroup {
                     title: "Zen mode".into(),
@@ -637,6 +688,9 @@ impl Settings {
             (PreferenceKind::Choice { options, .. }, _)
                 if value.choice().is_some_and(|v| (v as usize) < options.len()) => {}
             (PreferenceKind::Switch { .. }, PreferenceValue::Bool(_)) => {}
+            (PreferenceKind::Text { constraint, .. }, PreferenceValue::Text(text)) => {
+                constraint.validate(text)?;
+            }
             _ => return Err("Invalid setting value".into()),
         }
         let n = value.number().unwrap_or(0.0);
@@ -649,6 +703,17 @@ impl Settings {
                 }
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
+            DarkBase | LightBase => {
+                let PreferenceValue::Text(text) = value else {
+                    unreachable!()
+                };
+                let color = HexColor::try_from(text)?;
+                if id == DarkBase {
+                    self.dark_base = color;
+                } else {
+                    self.light_base = color;
+                }
+            }
             Pressure => self.pressure_gamma = n,
             ZenReveal => self.zen_reveal = n,
             PanSpeed => self.pan_speed = n,

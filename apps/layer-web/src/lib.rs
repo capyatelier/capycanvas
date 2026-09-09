@@ -453,7 +453,7 @@ impl WebApp {
             )
             .map_err(js)?;
         let view = self.session.state().camera.view();
-        let surround = self.session.state().theme.canvas_surround();
+        let surround = self.session.state().palette.surround_linear;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         let target = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)

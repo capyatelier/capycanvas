@@ -72,7 +72,7 @@ impl GpuCanvas {
             [area.width().max(1) as f32, area.height().max(1) as f32],
             extent(area),
         )?;
-        let surround = self.session.state().theme.canvas_surround();
+        let surround = self.session.state().palette.surround_linear;
         self.session.renderer_mut().surround = surround;
         let mut changed = self
             .session

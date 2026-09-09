@@ -1,6 +1,7 @@
 /* Compact libadwaita color roles, native DOM controls over a full-window canvas. */
-:root { font: var(--ui-text-size, 1rem) "Adwaita Sans", system-ui, sans-serif; color-scheme: dark; --bg: #333333; --panel: #414141; --tabbar: #2e2e2e; --input: #333333; --popover: #414141; --text: #fafafb; --accent: #3584e4; --selected: color-mix(in srgb, var(--accent) 22%, transparent); --button: #ffffff0d; --thumb: #d3d3d3; }
-body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed; --tabbar: #dedede; --input: #fafafa; --popover: #ededed; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; }
+:root { font: var(--ui-text-size, 1rem) "Adwaita Sans", system-ui, sans-serif; color-scheme: dark; --bg: #333333; --panel: #414141; --tabbar: #2e2e2e; --input: #333333; --text: #fafafb; --accent: #3584e4; --selected: color-mix(in srgb, var(--accent) 22%, transparent); --button: #ffffff0d; --thumb: #d3d3d3; --settings: #333333; --sidebar: #2e2e32; }
+body { --popover: var(--panel); }
+body[data-theme="light"] { color-scheme: light; --bg: #b8b8b8; --panel: #ededed; --tabbar: #dedede; --input: #fafafa; --text: #2e2e32; --button: #0000000d; --thumb: #fafafa; --settings: #fafafb; --sidebar: #ebebed; }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 .panel-context-menu { font-size: var(--ui-text-size); }
@@ -226,8 +227,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .zen-hidden #canvas { outline: none; }
 #status { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: var(--popover); box-shadow: 0 2px 8px #0004; z-index: 10; max-width: 80vw; }
 #status:empty { display: none; }
-dialog { border: 0; border-radius: 16px; background: #333333; color: var(--text); padding: 0; width: 800px; height: 620px; max-width: calc(100vw - 60px); max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
-body[data-theme="light"] dialog { background: #fafafb; }
+dialog { border: 0; border-radius: 16px; background: var(--settings); color: var(--text); padding: 0; width: 800px; height: 620px; max-width: calc(100vw - 60px); max-height: calc(100dvh - 40px); box-shadow: 0 2px 8px #0004, 0 0 0 1px #0001; }
 #settings { width: 1000px; }
 dialog::backdrop { background: #0008; }
 body[data-theme="light"] dialog::backdrop { background: #0002; }
@@ -235,8 +235,7 @@ body[data-theme="light"] dialog::backdrop { background: #0002; }
 dialog h2 { margin: 0; font-size: inherit; font-weight: 700; }
 .dialog-close { position: absolute; right: 11px; top: 11px; min-height: 24px; width: 24px; height: 24px; padding: 0; line-height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); font-size: 20px; }
 .preferences-layout { height: 100%; display: grid; grid-template-columns: 26% minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-.preferences-sidebar { display: flex; flex-direction: column; min-height: 0; background: #2e2e32; box-shadow: inset -1px 0 #0003; }
-body[data-theme="light"] .preferences-sidebar { background: #ebebed; }
+.preferences-sidebar { display: flex; flex-direction: column; min-height: 0; background: var(--sidebar); box-shadow: inset -1px 0 #0003; }
 .preferences-navigation { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
 .preferences-navigation button { display: flex; align-items: center; gap: 12px; text-align: left; font-weight: 400; padding: 12px 14px; height: 42px; line-height: 18px; }
 .preferences-navigation button[aria-selected="true"] { background: color-mix(in srgb, var(--text) 10%, transparent); }
@@ -267,6 +266,7 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .settings-link { color: var(--accent); text-decoration: underline; padding: 6px 17px; overflow-wrap: anywhere; }
 .preference-row + .preference-row { border-top: 1px solid #80808026; }
 .preference-row select { padding: 0 4px; max-width: 48%; font-weight: 400; background: transparent; }
+.preference-entry { width: 110px; max-width: 48%; height: 34px; padding: 6px 9px; border: 0; border-radius: 6px; background: var(--input); color: var(--text); }
 .number-preference .number-control { max-width: 600px; margin-inline: auto; }
 .number-preference .number-value, .number-preference .number-entry { min-height: 34px; height: 34px; padding: 0 9px; }
 .number-preference .number-track { margin-top: 3px; }

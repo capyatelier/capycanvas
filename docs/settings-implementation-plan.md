@@ -45,9 +45,14 @@ Settings slider labels align with other settings rows, without the extra
 6px inset used by panel sliders. GTK uses its existing page-level width clamp,
 not a second centered clamp inside each numeric row.
 
+Text fields carry their value, constraint, maximum length and placeholder in
+the same row model. The two base-color fields use the hex-color constraint;
+validation and palette generation are shared Rust behavior. See the
+[theme color inventory and transformation](theme-colors.md).
+
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; Zen edge-reveal distance |
+| Appearance | System/Light/Dark; dark/light base hex colors; Zen edge-reveal distance |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
