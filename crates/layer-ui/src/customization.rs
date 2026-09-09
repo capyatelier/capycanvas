@@ -11,6 +11,39 @@ pub enum TabStyle {
     Icon,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TileStyle {
+    #[default]
+    Small,
+    Large,
+    Labeled,
+}
+impl TileStyle {
+    pub fn size(self) -> [f32; 2] {
+        let [w, h] = match self {
+            Self::Small => [1.0, 1.0],
+            Self::Large => [2.0, 2.0],
+            Self::Labeled => [3.0, 2.0],
+        };
+        [w * TILE_SIZE, h * TILE_SIZE]
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small Tiles",
+            Self::Large => "Large Tiles",
+            Self::Labeled => "Labeled Tiles",
+        }
+    }
+    pub fn icon_size(self) -> u32 {
+        if self == Self::Large { 32 } else { 16 }
+    }
+    pub(crate) fn floating_width(self) -> f32 {
+        let columns = if self == Self::Labeled { 2.0 } else { 3.0 };
+        columns * (self.size()[0] + 2.0) - 2.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelControl {
@@ -89,14 +122,35 @@ pub struct PanelConfig {
     pub id: Panel,
     #[serde(default)]
     pub tab_style: TabStyle,
+    #[serde(default)]
+    pub hide_tab: bool,
+    #[serde(default)]
+    pub tile_style: TileStyle,
     pub content: PanelContent,
 }
 impl PanelConfig {
+    pub fn icon(&self) -> &'static str {
+        self.tiles()
+            .first()
+            .map(|t| tool_choice(t.control).icon)
+            .unwrap_or(self.id.icon())
+    }
     pub fn title(&self) -> &str {
         match &self.content {
             PanelContent::Toolbar { name, .. } => name,
             PanelContent::Controls { .. } => self.id.label(),
         }
+    }
+    fn menu_name(&self) -> String {
+        format!(
+            "{} {}",
+            self.title(),
+            if self.id.kind() == PanelKind::Content {
+                "panel"
+            } else {
+                "toolbar"
+            }
+        )
     }
     pub fn tiles(&self) -> &[ToolbarTile] {
         match &self.content {
@@ -119,6 +173,8 @@ impl PanelConfig {
             .map(|id| Self {
                 id,
                 tab_style: TabStyle::Name,
+                hide_tab: false,
+                tile_style: TileStyle::Small,
                 content: if id == Panel::Toolbar {
                     PanelContent::Toolbar {
                         name: id.label().into(),
@@ -217,9 +273,39 @@ pub enum ContextTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CustomizationAction {
+    SetPanelVisible {
+        panel: Panel,
+        visible: bool,
+    },
+    AddPanel {
+        panel: Panel,
+        group: u32,
+    },
+    SetTileStyle {
+        panel: Panel,
+        style: TileStyle,
+    },
+    RenameToolbar {
+        panel: Panel,
+    },
+    DuplicateToolbar {
+        panel: Panel,
+    },
+    DeleteToolbar {
+        panel: Panel,
+    },
+    ToolbarName {
+        name: String,
+    },
+    ConfirmToolbar,
+    CancelToolbar,
     SetTabStyle {
         target: ContextTarget,
         style: TabStyle,
+    },
+    SetTabHidden {
+        panel: Panel,
+        hidden: bool,
     },
     ShowAllControls {
         panel: Panel,
@@ -235,7 +321,7 @@ pub enum CustomizationAction {
     },
     CloseControl,
     NewToolbar {
-        group: u32,
+        group: Option<u32>,
     },
     InsertTools {
         panel: Panel,
@@ -261,10 +347,38 @@ pub enum CustomizationAction {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ContextMenuItem {
-    pub label: &'static str,
+    pub label: String,
     /// None is an ordinary command; a value is a radio-style choice.
     pub selected: Option<bool>,
-    pub action: CustomizationAction,
+    pub action: Option<UiAction>,
+    pub enabled: bool,
+    pub hint: String,
+    pub sections: Vec<Vec<ContextMenuItem>>,
+}
+impl ContextMenuItem {
+    pub fn command(label: impl Into<String>, action: UiAction) -> Self {
+        Self {
+            label: label.into(),
+            selected: None,
+            action: Some(action),
+            enabled: true,
+            hint: String::new(),
+            sections: Vec::new(),
+        }
+    }
+    fn edit(label: impl Into<String>, action: CustomizationAction) -> Self {
+        Self::command(label, UiAction::Customize { action })
+    }
+    fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
+        Self {
+            label: label.into(),
+            selected: None,
+            action: None,
+            enabled: sections.iter().any(|s| !s.is_empty()),
+            hint: String::new(),
+            sections,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ContextMenu {
@@ -273,22 +387,20 @@ pub struct ContextMenu {
 }
 impl DockLayout {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
-        let entry = |label, action| ContextMenuItem {
-            label,
-            selected: None,
-            action,
-        };
+        let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
             ContextTarget::Panel { panel } => {
                 let p = self.panel(panel)?;
                 (
-                    p.title().into(),
+                    p.menu_name(),
                     vec![
-                        self.tab_style_items(target, &[panel])?,
-                        vec![entry(
-                            "Configure Panel…",
-                            CustomizationAction::ShowAllControls { panel },
-                        )],
+                        if panel.kind() == PanelKind::Content {
+                            self.tab_style_items(target, &[panel])?
+                        } else {
+                            Vec::new()
+                        },
+                        self.hide_tab_items(target)?,
+                        self.panel_actions(p),
                     ],
                 )
             }
@@ -296,9 +408,29 @@ impl DockLayout {
                 "Panel Group".into(),
                 vec![
                     self.tab_style_items(target, self.group_panels(group)?)?,
+                    self.hide_tab_items(target)?,
+                    if let [panel] = self.group_panels(group)?
+                        && let p = self.panel(*panel)?
+                        && panel.kind() == PanelKind::Content
+                        && p.hide_tab
+                    {
+                        self.panel_actions(p)
+                    } else {
+                        Vec::new()
+                    },
+                    vec![
+                        ContextMenuItem::submenu(
+                            "Add built-in panel",
+                            vec![self.panel_items(PanelKind::Content, Some(group))],
+                        ),
+                        ContextMenuItem::submenu(
+                            "Add Toolbar",
+                            vec![self.panel_items(PanelKind::Tiles, Some(group))],
+                        ),
+                    ],
                     vec![entry(
                         "New Toolbar…",
-                        CustomizationAction::NewToolbar { group },
+                        CustomizationAction::NewToolbar { group: Some(group) },
                     )],
                 ],
             ),
@@ -331,26 +463,116 @@ impl DockLayout {
                 if panel.kind() != PanelKind::Tiles {
                     return Err("Choose a toolbar".into());
                 }
-                (
-                    p.title().into(),
-                    vec![vec![entry(
-                        "Add Tools…",
-                        CustomizationAction::InsertTools {
-                            panel,
-                            before: None,
-                        },
-                    )]],
-                )
+                (p.menu_name(), self.toolbar_options(panel)?)
             }
         };
         Ok(ContextMenu { title, sections })
+    }
+    fn panel_actions(&self, panel: &PanelConfig) -> Vec<ContextMenuItem> {
+        vec![
+            ContextMenuItem::edit(
+                format!("Configure {}…", panel.menu_name()),
+                CustomizationAction::ShowAllControls { panel: panel.id },
+            ),
+            self.hide_item(panel.id),
+        ]
+    }
+    fn hide_item(&self, panel: Panel) -> ContextMenuItem {
+        ContextMenuItem::edit(
+            format!(
+                "Hide {}",
+                self.panel(panel).expect("validated panel").menu_name()
+            ),
+            CustomizationAction::SetPanelVisible {
+                panel,
+                visible: false,
+            },
+        )
+    }
+    pub fn panel_items(&self, kind: PanelKind, group: Option<u32>) -> Vec<ContextMenuItem> {
+        self.panels
+            .iter()
+            .filter(|p| p.id.kind() == kind)
+            .map(|p| {
+                let selected = if let Some(group) = group {
+                    self.panel_group(p.id) == Some(group)
+                } else {
+                    self.panels_visible && self.panel_group(p.id).is_some()
+                };
+                let action = if let Some(group) = group {
+                    CustomizationAction::AddPanel { panel: p.id, group }
+                } else {
+                    CustomizationAction::SetPanelVisible {
+                        panel: p.id,
+                        visible: !selected,
+                    }
+                };
+                let mut item = ContextMenuItem::edit(p.menu_name(), action);
+                item.selected = Some(selected);
+                item.enabled = selected
+                    || group.is_none_or(|g| {
+                        !matches!(self.group_edge(g), Some(Edge::Top | Edge::Bottom))
+                    });
+                item
+            })
+            .collect()
+    }
+    pub fn toolbar_options(&self, panel: Panel) -> Result<Vec<Vec<ContextMenuItem>>, String> {
+        let p = self.panel(panel)?;
+        if panel.kind() != PanelKind::Tiles {
+            return Err("Choose a toolbar".into());
+        }
+        let name = p.menu_name();
+        Ok(vec![
+            vec![
+                ContextMenuItem::edit(
+                    format!("Configure {name}…"),
+                    CustomizationAction::ShowAllControls { panel },
+                ),
+                ContextMenuItem::edit(
+                    "Add Tools…",
+                    CustomizationAction::InsertTools {
+                        panel,
+                        before: None,
+                    },
+                ),
+            ],
+            self.tab_style_items(ContextTarget::Panel { panel }, &[panel])?,
+            [TileStyle::Small, TileStyle::Large, TileStyle::Labeled]
+                .into_iter()
+                .map(|style| {
+                    let mut item = ContextMenuItem::edit(
+                        style.label(),
+                        CustomizationAction::SetTileStyle { panel, style },
+                    );
+                    item.selected = Some(p.tile_style == style);
+                    item
+                })
+                .collect(),
+            vec![
+                ContextMenuItem::edit(
+                    format!("Rename {name}…"),
+                    CustomizationAction::RenameToolbar { panel },
+                ),
+                ContextMenuItem::edit(
+                    format!("Duplicate {name}…"),
+                    CustomizationAction::DuplicateToolbar { panel },
+                ),
+            ],
+            vec![
+                self.hide_item(panel),
+                ContextMenuItem::edit(
+                    format!("Delete {name}…"),
+                    CustomizationAction::DeleteToolbar { panel },
+                ),
+            ],
+        ])
     }
     fn tab_style_items(
         &self,
         target: ContextTarget,
         panels: &[Panel],
     ) -> Result<Vec<ContextMenuItem>, String> {
-        let group = matches!(target, ContextTarget::Group { .. });
         [TabStyle::Name, TabStyle::Icon]
             .into_iter()
             .map(|style| {
@@ -358,29 +580,73 @@ impl DockLayout {
                 for &panel in panels {
                     selected &= self.panel(panel)?.tab_style == style;
                 }
-                Ok(ContextMenuItem {
-                    label: match (group, style) {
-                        (true, TabStyle::Name) => "Tab Names",
-                        (true, TabStyle::Icon) => "Tab Icons",
-                        (false, TabStyle::Name) => "Tab Name",
-                        (false, TabStyle::Icon) => "Tab Icon",
+                let mut item = ContextMenuItem::edit(
+                    match style {
+                        TabStyle::Name => "Tab with name",
+                        TabStyle::Icon => "Tab with icon",
                     },
-                    selected: Some(selected),
-                    action: CustomizationAction::SetTabStyle { target, style },
-                })
+                    CustomizationAction::SetTabStyle { target, style },
+                );
+                item.selected = Some(selected);
+                Ok(item)
             })
             .collect()
     }
+    fn hide_tab_items(&self, target: ContextTarget) -> Result<Vec<ContextMenuItem>, String> {
+        let group = match target {
+            ContextTarget::Panel { panel } => self.panel_group(panel),
+            ContextTarget::Group { group } => Some(group),
+            _ => None,
+        };
+        let Some(group) = group else {
+            return Ok(Vec::new());
+        };
+        let [panel] = self.group_panels(group)? else {
+            return Ok(Vec::new());
+        };
+        if panel.kind() != PanelKind::Content {
+            return Ok(Vec::new());
+        }
+        let hidden = self.panel(*panel)?.hide_tab;
+        let mut item = ContextMenuItem::edit(
+            "Hide tab",
+            CustomizationAction::SetTabHidden {
+                panel: *panel,
+                hidden: !hidden,
+            },
+        );
+        item.selected = Some(hidden);
+        Ok(vec![item])
+    }
     pub fn validate_toolbar_name(&self, name: &str) -> Result<(), String> {
+        self.check_toolbar_name(name, None)
+    }
+    pub(crate) fn check_toolbar_name(
+        &self,
+        name: &str,
+        except: Option<Panel>,
+    ) -> Result<(), String> {
         validate_toolbar_name(name.trim())?;
         if self
             .panels
             .iter()
-            .any(|p| p.title().to_lowercase() == name.trim().to_lowercase())
+            .any(|p| Some(p.id) != except && p.title().to_lowercase() == name.trim().to_lowercase())
         {
             return Err("A panel already uses this name".into());
         }
         Ok(())
+    }
+    fn unused_toolbar_name(&self, stem: &str) -> String {
+        if self.validate_toolbar_name(stem).is_ok() {
+            return stem.into();
+        }
+        for suffix in 2u32.. {
+            let name = format!("{} {suffix}", stem.chars().take(52).collect::<String>());
+            if self.validate_toolbar_name(&name).is_ok() {
+                return name;
+            }
+        }
+        unreachable!("finite registry cannot exhaust names")
     }
 }
 
@@ -401,6 +667,9 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Eraser => "Erase paint from the active layer",
                 CommandId::Undo => "Undo the last change",
                 CommandId::Redo => "Restore the last undone change",
+                CommandId::UndoWorkspace => "Undo the last workspace change",
+                CommandId::RedoWorkspace => "Restore the last undone workspace change",
+                CommandId::NewToolbar => "Create a named toolbar",
                 CommandId::FitCanvas => "Fit the whole drawing in the available space",
                 CommandId::Settings => "Open application preferences",
                 CommandId::ToggleTheme => "Switch between light and dark appearance",
@@ -477,7 +746,7 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolDestination {
-    NewToolbar { group: u32, name: String },
+    NewToolbar { group: Option<u32>, name: String },
     Insert { panel: Panel, before: Option<u32> },
 }
 #[derive(Clone, Debug, Serialize)]
@@ -520,6 +789,8 @@ pub struct PanelView {
     pub title: String,
     pub icon: &'static str,
     pub tab_style: TabStyle,
+    pub tile_style: TileStyle,
+    pub toolbar_options: Vec<Vec<ContextMenuItem>>,
     pub expanded: bool,
     pub configuration_title: String,
     pub configuration_hint: &'static str,
@@ -569,10 +840,18 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
     Ok(PanelView {
         id: panel,
         title: config.title().into(),
-        icon: panel.icon(),
+        icon: config.icon(),
         tab_style: config.tab_style,
+        tile_style: config.tile_style,
+        toolbar_options: if panel.kind() == PanelKind::Tiles {
+            let mut options = state.workspace.layout.toolbar_options(panel)?;
+            options[0].remove(0); // The configuration column is already open.
+            options
+        } else {
+            Vec::new()
+        },
         expanded,
-        configuration_title: format!("Configure {}", config.title()),
+        configuration_title: format!("Configure {}", config.menu_name()),
         configuration_hint: if panel.kind() == crate::PanelKind::Tiles {
             "Add buttons here; drag buttons in the preview to reorder them."
         } else {
@@ -586,7 +865,9 @@ impl ToolPicker {
     fn validate(&self, layout: &DockLayout) -> Result<(), String> {
         match &self.destination {
             ToolDestination::NewToolbar { group, name } => {
-                layout.group_panels(*group)?;
+                if let Some(group) = group {
+                    layout.group_panels(*group)?;
+                }
                 layout.validate_toolbar_name(name)?;
             }
             ToolDestination::Insert { panel, before } => {
@@ -649,25 +930,172 @@ impl ToolPicker {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ToolbarOperation {
+    Rename,
+    Duplicate,
+    Delete,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolbarPrompt {
+    panel: Panel,
+    operation: ToolbarOperation,
+    name: String,
+    error: Option<String>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolbarPromptView {
+    pub title: &'static str,
+    pub message: String,
+    pub name: Option<String>,
+    pub name_label: &'static str,
+    pub confirm_label: &'static str,
+    pub cancel_label: &'static str,
+    pub destructive: bool,
+    pub can_confirm: bool,
+    pub error: Option<String>,
+}
+impl ToolbarPrompt {
+    fn validate(&self, layout: &DockLayout) -> Result<(), String> {
+        layout.panel(self.panel)?;
+        if self.panel.kind() != PanelKind::Tiles {
+            return Err("Choose a toolbar".into());
+        }
+        match self.operation {
+            ToolbarOperation::Rename => layout.check_toolbar_name(&self.name, Some(self.panel)),
+            ToolbarOperation::Duplicate => layout.validate_toolbar_name(&self.name),
+            ToolbarOperation::Delete => Ok(()),
+        }
+    }
+    pub fn view(&self, layout: &DockLayout, undo_shortcut: &str) -> ToolbarPromptView {
+        let (title, confirm_label, destructive) = match self.operation {
+            ToolbarOperation::Rename => ("Rename Toolbar", "Rename", false),
+            ToolbarOperation::Duplicate => ("Duplicate Toolbar", "Duplicate", false),
+            ToolbarOperation::Delete => ("Delete Toolbar?", "Delete Toolbar", true),
+        };
+        let shortcut = if undo_shortcut.is_empty() {
+            String::new()
+        } else {
+            format!(" ({undo_shortcut})")
+        };
+        ToolbarPromptView {
+            title,
+            confirm_label,
+            destructive,
+            cancel_label: "Cancel",
+            name_label: "Toolbar name",
+            message: if destructive {
+                format!(
+                    "Delete “{}” and its tools, not just hide it? You can restore it with Workspace → Undo Workspace Change{shortcut}.",
+                    self.name
+                )
+            } else {
+                String::new()
+            },
+            name: (!destructive).then(|| self.name.clone()),
+            can_confirm: self.validate(layout).is_ok(),
+            error: self.error.clone().or_else(|| self.validate(layout).err()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CustomizationState {
     pub expanded: Option<Panel>,
     pub picker: Option<ToolPicker>,
     pub control: Option<PanelControl>,
+    pub toolbar_prompt: Option<ToolbarPrompt>,
 }
 impl CustomizationState {
     pub fn is_open(&self) -> bool {
-        self.expanded.is_some() || self.picker.is_some() || self.control.is_some()
+        self.expanded.is_some()
+            || self.picker.is_some()
+            || self.control.is_some()
+            || self.toolbar_prompt.is_some()
     }
     pub(crate) fn edit(
         &mut self,
         layout: &mut DockLayout,
         action: CustomizationAction,
         platform: Platform,
+        viewport: [f32; 2],
     ) -> Result<u32, String> {
         use CustomizationAction::*;
         let mut changed = regions::CUSTOMIZATION;
         match action {
+            SetPanelVisible { panel, visible } => {
+                layout.set_panel_visible(panel, visible)?;
+                changed |= regions::LAYOUT;
+            }
+            AddPanel { panel, group } => {
+                layout.add_panel_to_group(panel, group)?;
+                changed |= regions::LAYOUT;
+            }
+            SetTileStyle { panel, style } => {
+                layout.set_tile_style(panel, style, viewport)?;
+                changed |= regions::LAYOUT;
+            }
+            RenameToolbar { panel } | DuplicateToolbar { panel } | DeleteToolbar { panel } => {
+                if panel.kind() != PanelKind::Tiles {
+                    return Err("Choose a toolbar".into());
+                }
+                let operation = match action {
+                    RenameToolbar { .. } => ToolbarOperation::Rename,
+                    DuplicateToolbar { .. } => ToolbarOperation::Duplicate,
+                    _ => ToolbarOperation::Delete,
+                };
+                let title = layout.panel(panel)?.title();
+                let name = if matches!(operation, ToolbarOperation::Duplicate) {
+                    layout.unused_toolbar_name(&format!(
+                        "{} Copy",
+                        title.chars().take(59).collect::<String>()
+                    ))
+                } else {
+                    title.into()
+                };
+                self.picker = None;
+                self.control = None;
+                self.toolbar_prompt = Some(ToolbarPrompt {
+                    panel,
+                    operation,
+                    name,
+                    error: None,
+                });
+            }
+            ToolbarName { name } => {
+                let draft = self
+                    .toolbar_prompt
+                    .as_mut()
+                    .ok_or("The toolbar dialog is closed")?;
+                if matches!(draft.operation, ToolbarOperation::Delete) {
+                    return Err("This dialog does not edit a name".into());
+                }
+                draft.name = name;
+                draft.error = None;
+            }
+            ConfirmToolbar => {
+                let draft = self
+                    .toolbar_prompt
+                    .as_mut()
+                    .ok_or("The toolbar dialog is closed")?;
+                let result = draft.validate(layout).and_then(|_| match draft.operation {
+                    ToolbarOperation::Rename => layout.rename_toolbar(draft.panel, &draft.name),
+                    ToolbarOperation::Duplicate => layout
+                        .duplicate_toolbar(draft.panel, &draft.name)
+                        .map(|_| ()),
+                    ToolbarOperation::Delete => layout.delete_toolbar(draft.panel),
+                });
+                match result {
+                    Ok(()) => {
+                        self.toolbar_prompt = None;
+                        changed |= regions::LAYOUT;
+                    }
+                    Err(error) => draft.error = Some(error),
+                }
+            }
+            CancelToolbar => self.toolbar_prompt = None,
             SetTabStyle { target, style } => {
                 let panels = match target {
                     ContextTarget::Panel { panel } => vec![panel],
@@ -680,6 +1108,14 @@ impl CustomizationState {
                 for panel in panels {
                     layout.panel_mut(panel)?.tab_style = style;
                 }
+                changed |= regions::LAYOUT;
+            }
+            SetTabHidden { panel, hidden } => {
+                let group = layout.panel_group(panel).ok_or("Panel is not docked")?;
+                if panel.kind() != PanelKind::Content || layout.group_panels(group)?.len() != 1 {
+                    return Err("Only a lone built-in panel can hide its tab".into());
+                }
+                layout.panel_mut(panel)?.hide_tab = hidden;
                 changed |= regions::LAYOUT;
             }
             ShowAllControls { panel } => {
@@ -702,7 +1138,7 @@ impl CustomizationState {
                 }
                 let PanelContent::Controls { visible } = &mut layout.panel_mut(panel)?.content
                 else {
-                    return Err("Choose a system panel".into());
+                    return Err("Choose a built-in panel".into());
                 };
                 visible.retain(|c| *c != control);
                 if show {
@@ -723,7 +1159,9 @@ impl CustomizationState {
             }
             CloseControl => self.control = None,
             NewToolbar { group } => {
-                layout.group_panels(group)?;
+                if let Some(group) = group {
+                    layout.group_panels(group)?;
+                }
                 let mut suffix = 1u32;
                 let name = loop {
                     let name = format!("Toolbar {suffix}");
@@ -839,7 +1277,7 @@ mod tests {
         let mut state = original;
         let toolbar = state
             .layout
-            .add_toolbar(8, "Painting", &[PEN, ERASE])
+            .add_toolbar(Some(8), "Painting", &[PEN, ERASE])
             .unwrap();
         state.layout.panel_mut(toolbar).unwrap().tab_style = TabStyle::Icon;
         state
@@ -862,25 +1300,39 @@ mod tests {
             state
         );
         let contents = state.layout.panels.clone();
-        state.layout.reset_docking();
+        state.layout.reset_docking().unwrap();
         assert_eq!(state.layout.panels, contents);
+        assert!(
+            state
+                .layout
+                .bands
+                .iter()
+                .filter(|b| matches!(b.edge, Edge::Top | Edge::Bottom))
+                .all(
+                    |b| matches!(&b.root, crate::DockNode::Tabs { panels, .. } if panels.len() == 1)
+                )
+        );
         state.validate().unwrap();
-        state.layout.add_toolbar(2, "Second", &[PEN]).unwrap();
+        state.layout.add_toolbar(Some(8), "Second", &[PEN]).unwrap();
         state.validate().unwrap();
     }
 
     #[test]
     fn toolbar_names_and_invalid_targets_fail_atomically() {
         let mut layout = DockLayout::default();
-        layout.add_toolbar(8, "  Favorites  ", &[PEN]).unwrap();
+        layout
+            .add_toolbar(Some(8), "  Favorites  ", &[PEN])
+            .unwrap();
         for name in ["favorites", "FAVORITES", " ", "Layers", "a\nb"] {
             let before = layout.clone();
-            assert!(layout.add_toolbar(8, name, &[PEN]).is_err(), "{name:?}");
+            assert!(
+                layout.add_toolbar(Some(8), name, &[PEN]).is_err(),
+                "{name:?}"
+            );
             assert_eq!(layout, before);
         }
         let before = layout.clone();
-        assert!(layout.add_toolbar(999, "Other", &[PEN]).is_err());
-        assert!(layout.add_toolbar(8, "Other", &[]).is_err());
+        assert!(layout.add_toolbar(Some(999), "Other", &[PEN]).is_err());
         assert!(
             layout
                 .insert_tools(Panel::Toolbar, Some(999), &[PEN])
@@ -902,7 +1354,9 @@ mod tests {
     #[test]
     fn tile_moves_preserve_identity_and_order_and_allow_empty_ribbons() {
         let mut layout = DockLayout::default();
-        let custom = layout.add_toolbar(8, "Paint", &[PEN, ERASE, PEN]).unwrap();
+        let custom = layout
+            .add_toolbar(Some(8), "Paint", &[PEN, ERASE, PEN])
+            .unwrap();
         let ids = layout
             .panel(custom)
             .unwrap()
@@ -1007,13 +1461,15 @@ mod tests {
         let mut layout = DockLayout::default();
         let mut state = CustomizationState::default();
         let edit = |state: &mut CustomizationState, layout: &mut DockLayout, action| {
-            state.edit(layout, action, Platform::Gtk).unwrap()
+            state
+                .edit(layout, action, Platform::Gtk, [1200.0, 900.0])
+                .unwrap()
         };
         let original = layout.clone();
         edit(
             &mut state,
             &mut layout,
-            CustomizationAction::NewToolbar { group: 8 },
+            CustomizationAction::NewToolbar { group: Some(8) },
         );
         edit(
             &mut state,
@@ -1086,7 +1542,7 @@ mod tests {
     #[test]
     fn context_targets_offer_only_their_actions_and_group_styles_can_be_overridden() {
         let mut layout = DockLayout::default();
-        let custom = layout.add_toolbar(8, "Paint", &[PEN]).unwrap();
+        let custom = layout.add_toolbar(Some(8), "Paint", &[PEN]).unwrap();
         let mut state = CustomizationState::default();
         let group = ContextTarget::Group { group: 8 };
         state
@@ -1097,6 +1553,7 @@ mod tests {
                     style: TabStyle::Icon,
                 },
                 Platform::Gtk,
+                [1200.0, 900.0],
             )
             .unwrap();
         assert_eq!(
@@ -1112,6 +1569,7 @@ mod tests {
                     style: TabStyle::Name,
                 },
                 Platform::Gtk,
+                [1200.0, 900.0],
             )
             .unwrap();
         assert!(
@@ -1124,7 +1582,7 @@ mod tests {
                 panel: Panel::Brushes,
             })
             .unwrap();
-        assert_eq!(panel.sections[1][0].label, "Configure Panel…");
+        assert_eq!(panel.sections[2][0].label, "Configure Brushes panel…");
         let tile = layout.panel(custom).unwrap().tiles()[0].id;
         assert_eq!(
             layout
@@ -1135,7 +1593,7 @@ mod tests {
                 .unwrap()
                 .sections[0]
                 .iter()
-                .map(|i| i.label)
+                .map(|i| i.label.as_str())
                 .collect::<Vec<_>>(),
             ["Remove Tool", "Insert Tools…"]
         );
@@ -1145,7 +1603,7 @@ mod tests {
                 .unwrap()
                 .sections[0][0]
                 .label,
-            "Add Tools…"
+            "Configure Paint toolbar…"
         );
         assert!(
             layout
@@ -1179,7 +1637,7 @@ mod tests {
         for edge in [Edge::Top, Edge::Left] {
             for count in [0, 1, 7, 30] {
                 let mut layout = DockLayout::default();
-                let custom = layout.add_toolbar(8, "Many", &[PEN]).unwrap();
+                let custom = layout.add_toolbar(Some(8), "Many", &[PEN]).unwrap();
                 let tile = layout.panel(custom).unwrap().tiles()[0].id;
                 layout.remove_tool(custom, tile).unwrap();
                 if count > 0 {

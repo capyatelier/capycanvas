@@ -141,6 +141,8 @@ mod allocation {
         pub(super) layout: RefCell<DockLayout>,
         pub(super) children: RefCell<Vec<(Slot, gtk::Widget)>>,
         pub(super) owner: RefCell<std::rc::Weak<Workspace>>,
+        pub(super) transition: Cell<Option<(u32, Bounds, f32)>>,
+        pub(super) animation: RefCell<Option<adw::TimedAnimation>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for DockSurface {
@@ -166,12 +168,17 @@ mod allocation {
             }
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
-            let resolved = self.layout.borrow().workspace(
+            let mut resolved = self.layout.borrow().workspace(
                 width as f32,
                 height as f32,
                 HEADER_HEIGHT,
                 STATUS_HEIGHT,
             );
+            if let Some((id, from, progress)) = self.transition.get()
+                && let Some(group) = resolved.groups.iter_mut().find(|g| g.id == id)
+            {
+                group.interpolate_from(from, progress);
+            }
             let expansion = self
                 .owner
                 .borrow()
@@ -214,12 +221,20 @@ mod allocation {
                         .iter()
                         .find(|d| d.id == *id)
                         .map(|d| d.bounds),
+                    Slot::FloatingResize(group, edge) => resolved
+                        .groups
+                        .iter()
+                        .find(|g| g.id == *group && expansion.is_none_or(|e| e.group != *group))
+                        .and_then(|g| g.resize_handles.iter().find(|h| h.edge == *edge))
+                        .map(|h| h.bounds),
                 };
+                child.set_child_visible(bounds.is_some());
                 if let Some(b) = bounds {
                     allocate_at(child, b);
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
+                owner.queue_panel_measurements();
                 owner.customization.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
                 let extent = [
@@ -334,6 +349,7 @@ enum Slot {
     Status,
     Group(u32),
     Divider(u32),
+    FloatingResize(u32, ResizeEdge),
 }
 glib::wrapper! {
     pub struct DockSurface(ObjectSubclass<allocation::DockSurface>)
@@ -342,10 +358,15 @@ glib::wrapper! {
 impl DockSurface {
     fn raise_group(&self, id: u32) {
         let mut children = self.imp().children.borrow_mut();
-        if let Some(index) = children
+        let slots: Vec<_> = children
             .iter()
-            .position(|(slot, _)| *slot == Slot::Group(id))
-        {
+            .filter_map(|(slot, _)| {
+                matches!(*slot, Slot::Group(group) | Slot::FloatingResize(group, _) if group == id)
+                    .then_some(*slot)
+            })
+            .collect();
+        for slot in slots {
+            let index = children.iter().position(|(s, _)| *s == slot).unwrap();
             let item = children.remove(index);
             item.1.insert_after(self, children.last().map(|(_, w)| w));
             children.push(item);
@@ -359,14 +380,59 @@ impl DockSurface {
             .push((slot, child.clone().upcast()));
     }
     fn clear_docks(&self) {
-        self.imp().children.borrow_mut().retain(|(slot, widget)| {
-            if matches!(slot, Slot::Canvas | Slot::Header | Slot::Status) {
-                true
-            } else {
-                widget.unparent();
-                false
+        self.remove_slots(|slot| !matches!(slot, Slot::Canvas | Slot::Header | Slot::Status));
+    }
+    fn remove_slots(&self, remove: impl Fn(Slot) -> bool) {
+        if !self
+            .imp()
+            .children
+            .borrow()
+            .iter()
+            .any(|(slot, _)| remove(*slot))
+        {
+            return;
+        }
+        let (retained, removed): (Vec<_>, Vec<_>) = self
+            .imp()
+            .children
+            .take()
+            .into_iter()
+            .partition(|(slot, _)| !remove(*slot));
+        *self.imp().children.borrow_mut() = retained;
+        // Unparenting can synchronously deliver gesture/popover cancellation.
+        // Never retain a mutable collection borrow across GTK callbacks.
+        for (_, widget) in removed {
+            widget.unparent();
+        }
+    }
+    fn animate_size(&self, group: u32, from: Bounds) {
+        if let Some(animation) = self.imp().animation.take() {
+            animation.pause();
+        }
+        self.imp().transition.set(Some((group, from, 0.0)));
+        let target = adw::CallbackAnimationTarget::new(glib::clone!(
+            #[weak(rename_to = surface)]
+            self,
+            move |progress| {
+                surface
+                    .imp()
+                    .transition
+                    .set(Some((group, from, progress as f32)));
+                surface.queue_allocate();
             }
-        });
+        ));
+        let animation = adw::TimedAnimation::new(self, 0.0, 1.0, PANEL_EXPANSION_MS, target);
+        animation.set_easing(adw::Easing::EaseOutCubic);
+        animation.connect_done(glib::clone!(
+            #[weak(rename_to = surface)]
+            self,
+            move |_| {
+                surface.imp().transition.set(None);
+                surface.queue_allocate();
+            }
+        ));
+        *self.imp().animation.borrow_mut() = Some(animation.clone());
+        animation.play();
     }
 }
 
@@ -374,10 +440,60 @@ impl DockSurface {
 #[boxed_type(name = "LayerDockItem")]
 struct NativeDockItem(DockItem);
 
+#[derive(Clone, Copy)]
+enum DragTarget {
+    Dock(DockItem),
+    Divider(u32),
+    Resize(u32, ResizeEdge),
+}
+impl DragTarget {
+    fn action(
+        self,
+        phase: ContactPhase,
+        position: [f32; 2],
+        viewport: [f32; 2],
+        tabs: Vec<TabHit>,
+    ) -> UiAction {
+        match self {
+            Self::Dock(item) => UiAction::DragWorkspace {
+                item,
+                phase,
+                position,
+                viewport,
+                tabs,
+            },
+            Self::Divider(id) => UiAction::DragDivider {
+                id,
+                phase,
+                position,
+                viewport,
+            },
+            Self::Resize(group, edge) => UiAction::ResizeFloating {
+                group,
+                edge,
+                phase,
+                position,
+                viewport,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+struct NativeWorkspaceDrag {
+    target: DragTarget,
+    origin: [f32; 2],
+    point: [f32; 2],
+    started: bool,
+    sequence: Option<gdk::EventSequence>,
+}
+
 struct GroupView {
     id: u32,
     root: PanelColumns,
     panels: Vec<Panel>,
+    floating: bool,
+    tabs_visible: bool,
     stack: gtk::Stack,
     tabs: Vec<(Panel, gtk::Button)>,
     tab_joins: gtk::DrawingArea,
@@ -490,6 +606,9 @@ pub struct Workspace {
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_held: Cell<bool>,
     dragging: Cell<bool>,
+    drag_targets: RefCell<Vec<(glib::WeakRef<gtk::Widget>, DragTarget)>>,
+    workspace_drag: RefCell<Option<NativeWorkspaceDrag>>,
+    measuring_panels: Cell<bool>,
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
     panels: [(Panel, gtk::Widget); Panel::ALL.len()],
@@ -622,7 +741,10 @@ impl Workspace {
             popovers: RefCell::new(Vec::new()),
             chrome_held: Cell::new(false),
             dragging: Cell::new(false),
+            drag_targets: RefCell::new(Vec::new()),
+            workspace_drag: RefCell::new(None),
             drop_hint: RefCell::new(None),
+            measuring_panels: Cell::new(false),
             toolbar: toolbar.clone(),
             groups: RefCell::new(Vec::new()),
             panels: [
@@ -891,6 +1013,9 @@ impl Workspace {
             })
         ));
         let zen = self.command_button(CommandId::ZenMode);
+        if let Some(image) = zen.child().and_downcast::<gtk::Image>() {
+            image.set_pixel_size(ZEN_ICON_SIZE as i32);
+        }
         zen.add_css_class("chrome-control");
         self.header.pack_start(&zen);
         for menu in MENUS {
@@ -1008,6 +1133,19 @@ impl Workspace {
             });
         }
         let popover = gtk::PopoverMenu::from_model(Some(&root));
+        if sections.is_empty() {
+            popover.set_widget_name("workspace-menu");
+            popover.connect_show(glib::clone!(
+                #[weak(rename_to = w)]
+                self,
+                move |popup| {
+                    let model = w.gpu.borrow().as_ref().map(|g| g.session.workspace_menu());
+                    if let Some(model) = model {
+                        w.populate_workspace_menu(popup, model);
+                    }
+                }
+            ));
+        }
         self.watch_popover(popover.upcast_ref());
         menu.set_popover(Some(&popover));
         menu
@@ -1085,6 +1223,10 @@ impl Workspace {
     }
 
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
+        if matches!(input, UiInput::Blur) {
+            self.workspace_drag.borrow_mut().take();
+            self.clear_drop();
+        }
         #[cfg(test)]
         let input_start = std::time::Instant::now();
         let result = self
@@ -1169,6 +1311,7 @@ impl Workspace {
     fn set_chrome_hidden(&self, hidden: bool) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
             if !matches!(slot, Slot::Canvas) {
+                let hidden = hidden && !widget.has_css_class("floating-panel");
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() != hidden {
                     continue;
                 }
@@ -1185,13 +1328,38 @@ impl Workspace {
         if self.refreshing.get() {
             return;
         }
+        let animate = if let UiAction::ResetFloatingSize { group } = action {
+            self.groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == group)
+                .and_then(|g| {
+                    g.root.compute_bounds(&self.surface).map(|b| {
+                        (
+                            group,
+                            Bounds {
+                                x: b.x(),
+                                y: b.y(),
+                                width: b.width(),
+                                height: b.height(),
+                            },
+                        )
+                    })
+                })
+        } else {
+            None
+        };
         let result = self
             .gpu
             .borrow_mut()
             .as_mut()
             .map(|g| g.session.dispatch(action));
         if let Some(result) = result {
+            let succeeded = result.is_ok();
             self.changed(result);
+            if let Some((group, from)) = animate.filter(|_| succeeded) {
+                self.surface.animate_size(group, from);
+            }
         }
     }
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
@@ -1531,16 +1699,77 @@ impl Workspace {
             STATUS_HEIGHT,
         )
     }
+    fn queue_panel_measurements(self: &Rc<Self>) {
+        if self.measuring_panels.replace(true) {
+            return;
+        }
+        glib::idle_add_local_once(glib::clone!(
+            #[weak(rename_to = w)]
+            self,
+            move || {
+                w.measuring_panels.set(false);
+                let Some(layout) = w
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .map(|g| g.session.state().workspace.layout.clone())
+                else {
+                    return;
+                };
+                let groups = w.groups.borrow();
+                let resolved = w.resolved();
+                let measurements = layout
+                    .panels
+                    .iter()
+                    .map(|config| {
+                        let tab_width = groups
+                            .iter()
+                            .flat_map(|g| &g.tabs)
+                            .find(|(id, _)| *id == config.id)
+                            .map_or(0.0, |(_, tab)| {
+                                tab.measure(gtk::Orientation::Horizontal, -1).1 as f32
+                            });
+                        let width = resolved
+                            .groups
+                            .iter()
+                            .find(|g| g.panels.contains(&config.id))
+                            .map_or(232.0, |g| g.bounds.width);
+                        let widget = w.panel_widget(config.id);
+                        let content = widget
+                            .downcast_ref::<gtk::ScrolledWindow>()
+                            .and_then(|s| s.child())
+                            .unwrap_or(widget);
+                        // Manual shrink can clip a panel below its natural
+                        // minimum. GTK still requires a valid measure request.
+                        let width =
+                            (width as i32).max(content.measure(gtk::Orientation::Horizontal, -1).0);
+                        PanelMeasurement {
+                            panel: config.id,
+                            tab_width,
+                            content_height: content.measure(gtk::Orientation::Vertical, width).1
+                                as f32,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                drop(groups);
+                if measurements != layout.measurements {
+                    w.dispatch(UiAction::MeasurePanels { measurements });
+                }
+            }
+        ));
+    }
     fn reconcile_layout(self: &Rc<Self>, layout: &DockLayout) {
         self.customization.reconcile_toolbars(self, layout);
         *self.surface.imp().layout.borrow_mut() = layout.clone();
         let resolved = self.resolved();
-        let same_groups = self
-            .groups
-            .borrow()
-            .iter()
-            .map(|g| (g.id, &g.panels))
-            .eq(resolved.groups.iter().map(|g| (g.id, &g.panels)));
+        let same_groups = self.groups.borrow().len() == resolved.groups.len()
+            && self.groups.borrow().iter().all(|view| {
+                resolved.groups.iter().any(|g| {
+                    view.id == g.id
+                        && view.panels == g.panels
+                        && view.tabs_visible == g.tabs_visible
+                })
+            });
         let same_dividers = self
             .surface
             .imp()
@@ -1555,7 +1784,7 @@ impl Workspace {
                 }
             })
             .eq(resolved.dividers.iter().map(|d| d.id));
-        if !same_groups || !same_dividers {
+        if !same_groups {
             self.customization.collapse_panel();
             for panel in layout.panels.iter().map(|p| self.panel_widget(p.id)) {
                 if let Some(stack) = panel.parent().and_downcast::<gtk::Stack>() {
@@ -1567,7 +1796,10 @@ impl Workspace {
             for group in &resolved.groups {
                 let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 let root = PanelColumns::new(&column);
-                if !group.tabs_visible {
+                if group.floating {
+                    root.add_css_class("floating-panel");
+                }
+                if !group.tabs_visible && group.active.kind() == PanelKind::Tiles {
                     root.add_css_class("tool-strip");
                 }
                 root.set_overflow(gtk::Overflow::Hidden);
@@ -1607,7 +1839,7 @@ impl Workspace {
                     grip.set_size_request(20, 24);
                     grip.set_halign(gtk::Align::End);
                     grip.set_valign(gtk::Align::Center);
-                    self.install_panel_drag(&grip, DockItem::Group { group: group.id });
+                    self.install_panel_drag(&header, DockItem::Group { group: group.id });
                     header.append(&grip);
                     self.install_context(&header, ContextTarget::Group { group: group.id });
                     column.append(&header);
@@ -1622,21 +1854,82 @@ impl Workspace {
                     stack.add_named(&widget, Some(&format!("{panel:?}")));
                 }
                 column.append(&stack);
+                if let Some(bounds) = group.footer_grip {
+                    let footer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    footer.add_css_class("panel-footer");
+                    footer.set_widget_name(&format!("panel-footer-grip-{}", group.id));
+                    footer.set_height_request(bounds.height as i32);
+                    let grip = tiles::grip();
+                    grip.set_hexpand(true);
+                    grip.set_halign(gtk::Align::Center);
+                    grip.set_valign(gtk::Align::Center);
+                    footer.append(&grip);
+                    self.install_panel_drag(&footer, DockItem::Group { group: group.id });
+                    self.install_context(&footer, ContextTarget::Group { group: group.id });
+                    column.append(&footer);
+                }
                 self.surface.add(Slot::Group(group.id), &root);
                 self.groups.borrow_mut().push(GroupView {
                     id: group.id,
                     root,
                     panels: group.panels.clone(),
+                    floating: group.floating,
+                    tabs_visible: group.tabs_visible,
                     stack,
                     tabs,
                     tab_joins,
                 });
             }
+        }
+        if !same_groups || !same_dividers {
+            self.surface
+                .remove_slots(|slot| matches!(slot, Slot::Divider(_)));
             for divider in &resolved.dividers {
                 self.add_divider(divider.clone());
             }
         }
-        for (view, group) in self.groups.borrow().iter().zip(&resolved.groups) {
+        self.surface.remove_slots(|slot| {
+            matches!(slot, Slot::FloatingResize(id, _)
+            if !resolved.groups.iter().any(|g| g.id == id && g.floating))
+        });
+        for group in resolved.groups.iter().filter(|g| g.floating) {
+            for resize in &group.resize_handles {
+                let slot = Slot::FloatingResize(group.id, resize.edge);
+                if self
+                    .surface
+                    .imp()
+                    .children
+                    .borrow()
+                    .iter()
+                    .any(|(s, _)| *s == slot)
+                {
+                    continue;
+                }
+                let handle = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                handle.add_css_class("floating-panel");
+                handle.set_cursor_from_name(Some(resize.edge.cursor()));
+                handle.set_widget_name(&format!("floating-resize-{}-{:?}", group.id, resize.edge));
+                self.register_drag(&handle, DragTarget::Resize(group.id, resize.edge));
+                self.surface.add(slot, &handle);
+            }
+        }
+        // Z-order changes retain widgets and the native pointer grab.
+        self.groups
+            .borrow_mut()
+            .sort_by_key(|g| resolved.groups.iter().position(|r| r.id == g.id));
+        for group in resolved.groups.iter().filter(|g| g.floating) {
+            self.surface.raise_group(group.id);
+        }
+        if let Some(expansion) = self.customization.placement() {
+            self.surface.raise_group(expansion.group);
+        }
+        for (view, group) in self.groups.borrow_mut().iter_mut().zip(&resolved.groups) {
+            view.floating = group.floating;
+            if group.floating {
+                view.root.add_css_class("floating-panel");
+            } else {
+                view.root.remove_css_class("floating-panel");
+            }
             let name = format!("{:?}", group.active);
             if view.stack.child_by_name(&name).is_some() {
                 view.stack.set_visible_child_name(&name);
@@ -1655,7 +1948,7 @@ impl Workspace {
                 if config.tab_style == TabStyle::Name {
                     button.set_label(config.title());
                 } else {
-                    button.set_icon_name(&format!("layer-{}-symbolic", panel.icon()));
+                    button.set_icon_name(&format!("layer-{}-symbolic", config.icon()));
                 }
                 button.set_tooltip_text(Some(config.title()));
                 button.update_property(&[gtk::accessible::Property::Label(config.title())]);
@@ -1666,6 +1959,10 @@ impl Workspace {
         self.surface.queue_allocate();
     }
     fn install_panel_drag(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, item: DockItem) {
+        self.register_drag(widget, DragTarget::Dock(item));
+        if !matches!(item, DockItem::Tile { .. }) {
+            return;
+        }
         let source = gtk::DragSource::builder()
             .actions(gdk::DragAction::MOVE)
             .build();
@@ -1695,9 +1992,8 @@ impl Workspace {
         self.drop_hint.borrow_mut().take();
         self.surface.queue_draw();
     }
-    fn drop_at(&self, x: f32, y: f32, item: DockItem) -> Option<DropHint> {
-        let tabs = self
-            .groups
+    fn tab_hits(&self) -> Vec<TabHit> {
+        self.groups
             .borrow()
             .iter()
             .flat_map(|g| {
@@ -1715,16 +2011,19 @@ impl Workspace {
                     })
                 })
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+    fn drop_at(&self, x: f32, y: f32, item: DockItem) -> Option<DropHint> {
         self.gpu.borrow().as_ref()?.session.drop_hint(
             [self.surface.width() as f32, self.surface.height() as f32],
             [x, y],
-            &tabs,
+            &self.tab_hits(),
             item,
             self.customization.placement(),
         )
     }
     fn install_drop_target(self: &Rc<Self>) {
+        self.install_workspace_drag();
         let drop = gtk::DropTarget::new(NativeDockItem::static_type(), gdk::DragAction::MOVE);
         drop.set_preload(true);
         drop.connect_motion(glib::clone!(
@@ -1792,62 +2091,7 @@ impl Workspace {
         }));
         handle.set_focusable(true);
         handle.set_tooltip_text(Some("Resize dock"));
-        let drag = gtk::GestureDrag::new();
-        drag.connect_drag_begin(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |gesture, x, y| {
-                // Use the gesture's press coordinates. Recognition can happen
-                // without an EventController current-event snapshot.
-                if let Some(point) = gesture.widget().and_then(|widget| {
-                    widget.compute_point(
-                        &this.surface,
-                        &gtk::graphene::Point::new(x as f32, y as f32),
-                    )
-                }) {
-                    this.dispatch(UiAction::DragDivider {
-                        id: divider.id,
-                        phase: ContactPhase::Down,
-                        position: [point.x(), point.y()],
-                        viewport: [this.surface.width() as f32, this.surface.height() as f32],
-                    });
-                    this.dragging.set(true);
-                    this.update_zen();
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                } else {
-                    gesture.set_state(gtk::EventSequenceState::Denied);
-                }
-            }
-        ));
-        drag.connect_drag_update(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |gesture, _, _| {
-                if let Some(point) = this.event_point(gesture) {
-                    this.dispatch(UiAction::DragDivider {
-                        id: divider.id,
-                        phase: ContactPhase::Move,
-                        position: point,
-                        viewport: [this.surface.width() as f32, this.surface.height() as f32],
-                    });
-                }
-            }
-        ));
-        drag.connect_drag_end(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |_, _, _| {
-                this.dispatch(UiAction::DragDivider {
-                    id: divider.id,
-                    phase: ContactPhase::Cancel,
-                    position: [0.0; 2],
-                    viewport: [this.surface.width() as f32, this.surface.height() as f32],
-                });
-                this.dragging.set(false);
-                this.update_zen();
-            }
-        ));
-        handle.add_controller(drag);
+        self.register_drag(&handle, DragTarget::Divider(divider.id));
         let keys = gtk::EventControllerKey::new();
         keys.connect_key_pressed(glib::clone!(
             #[weak(rename_to = this)]
@@ -1873,6 +2117,201 @@ impl Workspace {
         ));
         handle.add_controller(keys);
         self.surface.add(Slot::Divider(divider.id), &handle);
+    }
+
+    fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
+        let mut targets = self.drag_targets.borrow_mut();
+        targets.retain(|(widget, _)| widget.upgrade().is_some());
+        targets.push((widget.as_ref().downgrade(), target));
+    }
+
+    fn drag_target_at(&self, point: [f32; 2]) -> Option<DragTarget> {
+        let mut picked =
+            self.surface
+                .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
+        while let Some(widget) = picked {
+            if let Some(target) = self
+                .drag_targets
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
+            {
+                return (!matches!(target, DragTarget::Dock(DockItem::Tile { .. })))
+                    .then_some(target);
+            }
+            picked = widget.parent();
+        }
+        None
+    }
+
+    fn dispatch_drag(self: &Rc<Self>, target: DragTarget, phase: ContactPhase, position: [f32; 2]) {
+        let tabs = if matches!(target, DragTarget::Dock(_)) && phase == ContactPhase::Up {
+            self.tab_hits()
+        } else {
+            Vec::new()
+        };
+        self.dispatch(target.action(
+            phase,
+            position,
+            [self.surface.width() as f32, self.surface.height() as f32],
+            tabs,
+        ));
+    }
+
+    fn workspace_drag_input(
+        self: &Rc<Self>,
+        phase: ContactPhase,
+        point: [f32; 2],
+        sequence: Option<gdk::EventSequence>,
+    ) -> bool {
+        if phase == ContactPhase::Down {
+            if self.workspace_drag.borrow().is_none()
+                && let Some(target) = self.drag_target_at(point)
+            {
+                *self.workspace_drag.borrow_mut() = Some(NativeWorkspaceDrag {
+                    target,
+                    origin: point,
+                    point,
+                    started: false,
+                    sequence,
+                });
+            }
+            return false;
+        }
+        let Some(mut drag) = self
+            .workspace_drag
+            .borrow()
+            .clone()
+            .filter(|d| d.sequence == sequence)
+        else {
+            return false;
+        };
+        if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
+            self.workspace_drag.borrow_mut().take();
+            if drag.started {
+                self.dispatch_drag(drag.target, phase, point);
+            }
+            self.clear_drop();
+            self.update_zen();
+            return drag.started;
+        }
+        if !drag.started {
+            let recognized = if matches!(drag.target, DragTarget::Dock(_)) {
+                self.surface.drag_check_threshold(
+                    drag.origin[0] as i32,
+                    drag.origin[1] as i32,
+                    point[0] as i32,
+                    point[1] as i32,
+                )
+            } else {
+                point != drag.origin
+            };
+            if !recognized {
+                return false;
+            }
+            // Cancel the source button's click/hold once this is a drag. The
+            // root event controller, unlike child gestures, survives tear-off.
+            let mut picked = self.surface.pick(
+                drag.origin[0] as f64,
+                drag.origin[1] as f64,
+                gtk::PickFlags::DEFAULT,
+            );
+            while let Some(widget) = picked {
+                let controllers = widget.observe_controllers();
+                for i in 0..controllers.n_items() {
+                    if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>() {
+                        gesture.set_state(gtk::EventSequenceState::Denied);
+                    }
+                }
+                if &widget == self.surface.upcast_ref::<gtk::Widget>() {
+                    break;
+                }
+                picked = widget.parent();
+            }
+            drag.started = true;
+            *self.workspace_drag.borrow_mut() = Some(drag.clone());
+            self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
+        }
+        drag.point = point;
+        *self.workspace_drag.borrow_mut() = Some(drag.clone());
+        self.dispatch_drag(drag.target, ContactPhase::Move, point);
+        if let DragTarget::Dock(item) = drag.target {
+            *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);
+            self.surface.queue_draw();
+        }
+        true
+    }
+
+    fn install_workspace_drag(self: &Rc<Self>) {
+        let click = gtk::GestureClick::new();
+        click.set_name(Some("floating-title-reset"));
+        click.set_propagation_phase(gtk::PropagationPhase::Capture);
+        click.connect_pressed(glib::clone!(
+            #[weak(rename_to = w)]
+            self,
+            move |gesture, count, x, y| {
+                if count == 2
+                    && let Some(DragTarget::Dock(item)) = w.drag_target_at([x as f32, y as f32])
+                    && let Some(group) = {
+                        let layout = w.surface.imp().layout.borrow();
+                        layout.floating_reset_target(item)
+                    }
+                {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    w.dispatch(UiAction::ResetFloatingSize { group });
+                }
+            }
+        ));
+        self.surface.add_controller(click);
+        // A window-surface event stream survives unparenting the pressed tab.
+        // GtkGestureDrag cancels that sequence when tear-off rebuilds its group.
+        // Native widgets still receive clicks until GTK's drag threshold passes.
+        let pointer = gtk::EventControllerLegacy::new();
+        pointer.set_name(Some("workspace-drag"));
+        pointer.set_propagation_phase(gtk::PropagationPhase::Capture);
+        pointer.connect_event(glib::clone!(
+            #[weak(rename_to = w)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |controller, event| {
+                let (phase, touch) = match event.event_type() {
+                    gdk::EventType::ButtonPress | gdk::EventType::ButtonRelease => {
+                        if event
+                            .downcast_ref::<gdk::ButtonEvent>()
+                            .is_none_or(|e| e.button() != 1)
+                        {
+                            return glib::Propagation::Proceed;
+                        }
+                        (
+                            if event.event_type() == gdk::EventType::ButtonPress {
+                                ContactPhase::Down
+                            } else {
+                                ContactPhase::Up
+                            },
+                            false,
+                        )
+                    }
+                    gdk::EventType::MotionNotify => (ContactPhase::Move, false),
+                    gdk::EventType::TouchBegin => (ContactPhase::Down, true),
+                    gdk::EventType::TouchUpdate => (ContactPhase::Move, true),
+                    gdk::EventType::TouchEnd => (ContactPhase::Up, true),
+                    gdk::EventType::TouchCancel => (ContactPhase::Cancel, true),
+                    _ => return glib::Propagation::Proceed,
+                };
+                let sequence = touch.then(|| event.event_sequence());
+                let point = w
+                    .event_point(controller)
+                    .or_else(|| w.workspace_drag.borrow().as_ref().map(|d| d.point));
+                if point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence)) {
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
+        ));
+        self.surface.add_controller(pointer);
     }
 }
 

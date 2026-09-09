@@ -31,6 +31,7 @@ pub enum PointerButton {
 pub struct ChromeFacts {
     /// Native title-bar grab (or DOM header contact), including WM-owned grabs.
     pub held: bool,
+    /// Native tool-tile DND only. DragWorkspace owns its own Zen lifecycle.
     pub dragging: bool,
     pub popup_open: bool,
     /// Actual animated columns from shared layout, for outside contact.

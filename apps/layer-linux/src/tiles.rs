@@ -1,6 +1,6 @@
 //! Native square controls; layout and wrapping belong to layer-ui.
 use gtk::{glib, prelude::*, subclass::prelude::*};
-use layer_ui::{Axis, TILE_SIZE, tile_layout};
+use layer_ui::{Axis, TileStyle, tile_layout};
 use std::cell::{Cell, RefCell};
 
 mod imp {
@@ -11,6 +11,7 @@ mod imp {
         pub grip: RefCell<Option<gtk::Widget>>,
         pub vertical: Cell<bool>,
         pub tabbed: Cell<bool>,
+        pub style: Cell<TileStyle>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for TileStrip {
@@ -29,8 +30,11 @@ mod imp {
         }
     }
     impl WidgetImpl for TileStrip {
-        fn measure(&self, _: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
-            let size = TILE_SIZE as i32 + if self.tabbed.get() { 8 } else { 0 };
+        fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
+            let size = self.style.get().size()
+                [usize::from(orientation == gtk::Orientation::Vertical)]
+                as i32
+                + if self.tabbed.get() { 8 } else { 0 };
             (size, size, -1, -1)
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
@@ -46,6 +50,7 @@ mod imp {
                 axis,
                 children.len(),
                 !self.tabbed.get(),
+                self.style.get(),
             );
             let allocate = |child: &gtk::Widget, b: layer_ui::Bounds| {
                 child.allocate(
@@ -82,6 +87,11 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl TileStrip {
+    pub fn set_style(&self, style: TileStyle) {
+        if self.imp().style.replace(style) != style {
+            self.queue_resize();
+        }
+    }
     pub fn new() -> Self {
         let strip: Self = glib::Object::new();
         strip.set_overflow(gtk::Overflow::Hidden);
@@ -90,6 +100,9 @@ impl TileStrip {
     pub fn append(&self, widget: &impl IsA<gtk::Widget>) {
         widget.add_css_class("tile-button");
         widget.set_parent(self);
+        if let Some(grip) = self.imp().grip.borrow().as_ref() {
+            widget.insert_before(self, Some(grip));
+        }
         self.imp()
             .children
             .borrow_mut()
@@ -102,6 +115,9 @@ impl TileStrip {
         self.queue_resize();
     }
     pub fn set_grip(&self, widget: &impl IsA<gtk::Widget>) {
+        if let Some(old) = self.imp().grip.take() {
+            old.unparent();
+        }
         widget.set_parent(self);
         *self.imp().grip.borrow_mut() = Some(widget.clone().upcast());
     }

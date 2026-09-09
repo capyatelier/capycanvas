@@ -174,6 +174,14 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ZenMode" => key("z", false, false),
         "command.Undo" => key("z", true, false),
         "command.Redo" => return vec![key("z", true, true), key("y", true, false)],
+        "command.UndoWorkspace" | "command.RedoWorkspace" => {
+            return vec![KeyChord {
+                key: "z".into(),
+                command: true,
+                alt: true,
+                shift: id == "command.RedoWorkspace",
+            }];
+        }
         "command.Settings" => key(",", true, false),
         "command.KeyboardShortcuts" => key("?", true, true),
         "command.NewWindow" => key("n", true, false),

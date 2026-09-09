@@ -20,16 +20,16 @@ pub use camera::{Camera, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
 pub use customization::{
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
-    PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabStyle, TileView,
-    ToolChoice, ToolPickerView, ToolbarTile, tool_choice,
+    PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabStyle, TileStyle,
+    TileView, ToolChoice, ToolPickerView, ToolbarTile, tool_choice,
 };
 pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,
 };
 pub use layout::{
     Axis, Bounds, Divider, DockBand, DockItem, DockLayout, DockNode, DockTarget, Edge,
-    GroupPlacement, PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel, PanelExpansion,
-    ResolvedLayout,
+    FloatingGroup, FloatingResizeHandle, GroupPlacement, PANEL_CONFIGURATION_WIDTH,
+    PANEL_EXPANSION_MS, Panel, PanelExpansion, PanelMeasurement, ResizeEdge, ResolvedLayout,
 };
 pub use layout::{DropHint, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout, tile_layout};
 pub use numeric::{
@@ -146,7 +146,7 @@ pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct MenuSpec {
     pub label: &'static str,
-    /// Related commands; hosts draw separators between these sections.
+    /// Related commands; empty means the live `UiSession::workspace_menu` model.
     pub sections: &'static [&'static [CommandId]],
 }
 pub const PRIMARY_MENU: &[&[CommandId]] = &[
@@ -174,7 +174,13 @@ pub const MENUS: &[MenuSpec] = &[
             &[CommandId::ResetLayout],
         ],
     },
+    MenuSpec {
+        label: WORKSPACE_MENU_LABEL,
+        sections: &[],
+    },
 ];
+pub const WORKSPACE_MENU_LABEL: &str = "Workspace";
+pub const ZEN_ICON_SIZE: u32 = 24;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {
@@ -199,6 +205,7 @@ pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
 pub struct UiCatalog {
     pub app_name: &'static str,
     pub text_size_pt: u8,
+    pub zen_icon_size: u32,
     pub panel_expansion_ms: u32,
     pub cursors: &'static [(CursorMode, &'static str)],
     pub icons: &'static [&'static str],
@@ -214,6 +221,7 @@ pub struct UiCatalog {
 }
 pub fn ui_catalog() -> UiCatalog {
     UiCatalog {
+        zen_icon_size: ZEN_ICON_SIZE,
         app_name: APP_NAME,
         text_size_pt: UI_TEXT_PT,
         panel_expansion_ms: PANEL_EXPANSION_MS,
@@ -287,6 +295,9 @@ pub enum CommandId {
     Eraser,
     Undo,
     Redo,
+    UndoWorkspace,
+    RedoWorkspace,
+    NewToolbar,
     FitCanvas,
     Settings,
     ToggleTheme,
@@ -310,8 +321,8 @@ impl CommandId {
         Some(match self {
             Self::Brush => "brush",
             Self::Eraser => "eraser",
-            Self::Undo => "undo",
-            Self::Redo => "redo",
+            Self::Undo | Self::UndoWorkspace => "undo",
+            Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
             Self::ZenMode => "zen",
             Self::Settings => "settings",
@@ -322,11 +333,14 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 20] = [
         Self::Brush,
         Self::Eraser,
         Self::Undo,
         Self::Redo,
+        Self::UndoWorkspace,
+        Self::RedoWorkspace,
+        Self::NewToolbar,
         Self::FitCanvas,
         Self::ToggleTheme,
         Self::Settings,
@@ -353,6 +367,9 @@ impl CommandId {
             Self::Eraser => "Eraser",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
+            Self::UndoWorkspace => "Undo Workspace Change",
+            Self::RedoWorkspace => "Redo Workspace Change",
+            Self::NewToolbar => "New Toolbar…",
             Self::FitCanvas => "Fit canvas",
             Self::Settings => "Preferences",
             Self::ToggleTheme => "Dark Mode",
@@ -436,6 +453,27 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    MeasurePanels {
+        measurements: Vec<PanelMeasurement>,
+    },
+    DragWorkspace {
+        item: DockItem,
+        phase: ContactPhase,
+        position: [f32; 2],
+        viewport: [f32; 2],
+        #[serde(default)]
+        tabs: Vec<TabHit>,
+    },
+    ResizeFloating {
+        group: u32,
+        edge: ResizeEdge,
+        phase: ContactPhase,
+        position: [f32; 2],
+        viewport: [f32; 2],
+    },
+    ResetFloatingSize {
+        group: u32,
+    },
     Customize {
         action: CustomizationAction,
     },

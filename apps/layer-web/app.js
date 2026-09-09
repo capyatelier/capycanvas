@@ -147,7 +147,11 @@ function iconButton(id) {
   const node = commandButton(id, "");
   node.dataset.icon = "true";
   node.classList.add("tile-button");
-  node.append(icon(state.commands.find((c) => c.id === id).icon));
+  const glyph = icon(state.commands.find((c) => c.id === id).icon);
+  if (id === "zen_mode") {
+    glyph.style.width = glyph.style.height = `${catalog.zen_icon_size}px`;
+  }
+  node.append(glyph);
   return node;
 }
 function fullscreenButton() {

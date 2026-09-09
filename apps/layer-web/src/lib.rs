@@ -303,17 +303,20 @@ impl WebApp {
     ) -> Result<JsValue, JsValue> {
         let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;
         let axis = serde_wasm_bindgen::from_value(axis).map_err(js)?;
-        let count = self
+        let config = self
             .session
             .state()
             .workspace
             .layout
             .panel(panel)
-            .map_err(js)?
-            .tiles()
-            .len();
+            .map_err(js)?;
         serialize(&layer_ui::tile_layout(
-            width, height, axis, count, standalone,
+            width,
+            height,
+            axis,
+            config.tiles().len(),
+            standalone,
+            config.tile_style,
         ))
     }
     pub fn dispatch(&mut self, action: JsValue) -> Result<JsValue, JsValue> {

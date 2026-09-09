@@ -9,8 +9,9 @@ if (!output) throw new Error('Set LAYER_NATIVE_INPUT_DIR to an empty temporary d
 const ready = Gio.File.new_for_path(`${output}/ready`);
 if (ready.query_exists(null)) throw new Error('Use a fresh output directory');
 const loop = new GLib.MainLoop(null, false);
+const workspaceDrag = ARGV.includes('--workspace-drag');
 const process = Gio.Subprocess.new([
-    'cargo', 'test', '--release', '-p', 'layer-linux', 'native_compositor_input',
+    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
     '--', '--ignored', '--test-threads=1', '--nocapture',
 ], Gio.SubprocessFlags.NONE);
 let passed = false;
@@ -30,6 +31,31 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     const send = (method, signature, values) => call(session, iface, method, signature, values);
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
+    if (workspaceDrag) {
+        const [, bytes] = ready.load_contents(null);
+        const {start, points} = JSON.parse(new TextDecoder().decode(bytes));
+        let previous = [0, 0], index = -2;
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => {
+            if (index === -2) {
+                send('NotifyPointerMotionRelative', '(dd)', start);
+                previous = start;
+            } else if (index === -1) {
+                send('NotifyPointerButton', '(ib)', [272, true]);
+            } else if (index < points.length) {
+                const point = points[index];
+                send('NotifyPointerMotionRelative', '(dd)', [point[0] - previous[0], point[1] - previous[1]]);
+                previous = point;
+            } else {
+                send('NotifyPointerButton', '(ib)', [272, false]);
+                send('Stop', '()', []);
+                GLib.file_set_contents(`${output}/finished`, 'finished');
+                return GLib.SOURCE_REMOVE;
+            }
+            index++;
+            return GLib.SOURCE_CONTINUE;
+        });
+        return GLib.SOURCE_REMOVE;
+    }
     // Separate positioning from focus/press so Mutter cannot coalesce the warp.
     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
         send('NotifyPointerMotionRelative', '(dd)', [800, 500]);

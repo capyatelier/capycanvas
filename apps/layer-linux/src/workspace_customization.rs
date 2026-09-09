@@ -8,6 +8,7 @@ pub(super) struct ToolbarView {
     tiles: Vec<ToolbarTile>,
     buttons: Vec<gtk::Button>,
     palette: gtk::CssProvider,
+    style: TileStyle,
 }
 
 enum FieldValue {
@@ -26,6 +27,12 @@ struct ControlWidget {
     value: Option<FieldValue>,
     configuration: bool,
 }
+struct ToolbarOptionWidget {
+    section: usize,
+    item: usize,
+    widget: gtk::Widget,
+    hint: Option<gtk::Label>,
+}
 
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
@@ -42,6 +49,10 @@ pub(super) struct Customization {
     count: gtk::Label,
     confirm: gtk::Button,
     picker_shown: Cell<bool>,
+    toolbar_dialog: adw::AlertDialog,
+    toolbar_name: adw::EntryRow,
+    toolbar_error: gtk::Label,
+    toolbar_shown: Cell<bool>,
     updating: Cell<bool>,
     controls: RefCell<Vec<ControlWidget>>,
     expanded: Cell<Option<Panel>>,
@@ -51,6 +62,8 @@ pub(super) struct Customization {
     animation: RefCell<Option<adw::TimedAnimation>>,
     expanded_root: RefCell<Option<PanelColumns>>,
     visibility: RefCell<Vec<(PanelControl, gtk::CheckButton)>>,
+    configuration_title: RefCell<Option<gtk::Label>>,
+    toolbar_options: RefCell<Vec<ToolbarOptionWidget>>,
 }
 
 impl Customization {
@@ -77,6 +90,10 @@ impl Customization {
             count: gtk::Label::new(None),
             confirm: gtk::Button::new(),
             picker_shown: Cell::new(false),
+            toolbar_dialog: adw::AlertDialog::new(None, None),
+            toolbar_name: adw::EntryRow::new(),
+            toolbar_error: gtk::Label::new(None),
+            toolbar_shown: Cell::new(false),
             updating: Cell::new(false),
             controls: RefCell::new(Vec::new()),
             expanded: Cell::new(None),
@@ -86,10 +103,49 @@ impl Customization {
             animation: RefCell::new(None),
             expanded_root: RefCell::new(None),
             visibility: RefCell::new(Vec::new()),
+            configuration_title: RefCell::new(None),
+            toolbar_options: RefCell::new(Vec::new()),
         }
     }
 
     pub fn bind(&self, w: &Rc<Workspace>) {
+        self.toolbar_dialog.set_widget_name("toolbar-dialog");
+        self.toolbar_dialog.add_response("cancel", "");
+        self.toolbar_dialog.add_response("confirm", "");
+        self.toolbar_dialog.set_close_response("cancel");
+        self.toolbar_dialog.set_default_response(Some("confirm"));
+        self.toolbar_dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak]
+                w,
+                move |_, response| {
+                    if w.customization.toolbar_shown.replace(false) {
+                        w.customize(if response == "confirm" {
+                            CustomizationAction::ConfirmToolbar
+                        } else {
+                            CustomizationAction::CancelToolbar
+                        });
+                    }
+                }
+            ),
+        );
+        let extra = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let group = adw::PreferencesGroup::new();
+        self.toolbar_name.set_widget_name("edit-toolbar-name");
+        self.toolbar_name.connect_changed(glib::clone!(
+            #[weak]
+            w,
+            move |entry| w.customize(CustomizationAction::ToolbarName {
+                name: entry.text().into()
+            })
+        ));
+        group.add(&self.toolbar_name);
+        self.toolbar_error.add_css_class("error");
+        self.toolbar_error.set_wrap(true);
+        extra.append(&group);
+        extra.append(&self.toolbar_error);
+        self.toolbar_dialog.set_extra_child(Some(&extra));
         for popover in [self.context.upcast_ref::<gtk::Popover>(), &self.popup] {
             popover.set_parent(&w.surface);
             popover.add_css_class("panel-context-menu");
@@ -215,6 +271,8 @@ impl Customization {
     }
 
     pub fn collapse_panel(&self) {
+        self.configuration_title.borrow_mut().take();
+        self.toolbar_options.borrow_mut().clear();
         if let Some(animation) = self.animation.take() {
             animation.pause();
         }
@@ -347,6 +405,7 @@ impl Customization {
                 title.set_hexpand(true);
                 title.set_xalign(0.0);
                 body.append(&title);
+                *self.configuration_title.borrow_mut() = Some(title);
                 let label = gtk::Label::new(Some(view.configuration_hint));
                 label.set_wrap(true);
                 label.set_xalign(0.0);
@@ -375,16 +434,65 @@ impl Customization {
                     w.configuration_control(panel, id, &row);
                     body.append(&row);
                 }
-                if view.controls.is_empty() {
-                    body.append(&w.action_button(
-                        "Add Tools…",
-                        UiAction::Customize {
-                            action: CustomizationAction::InsertTools {
-                                panel: view.id,
-                                before: None,
-                            },
-                        },
-                    ));
+                for (s, section) in view.toolbar_options.iter().enumerate() {
+                    let list = gtk::ListBox::new();
+                    list.set_selection_mode(gtk::SelectionMode::None);
+                    list.add_css_class("boxed-list");
+                    let mut first_check = None;
+                    for (i, item) in section.iter().enumerate() {
+                        let Some(action) = item.action.clone() else {
+                            continue;
+                        };
+                        let mut hint = None;
+                        let widget: gtk::Widget = if let Some(active) = item.selected {
+                            let check = gtk::CheckButton::with_label(&item.label);
+                            check.set_group(first_check.as_ref());
+                            if first_check.is_none() {
+                                first_check = Some(check.clone());
+                            }
+                            check.set_active(active);
+                            margins(&check, 9);
+                            check.connect_toggled(glib::clone!(
+                                #[weak]
+                                w,
+                                move |check| {
+                                    if check.is_active() && !w.customization.updating.get() {
+                                        w.dispatch(action.clone());
+                                    }
+                                }
+                            ));
+                            check.upcast()
+                        } else {
+                            let button = w.action_button(&item.label, action);
+                            button.add_css_class("flat");
+                            if !item.hint.is_empty() {
+                                let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                                let title = gtk::Label::builder()
+                                    .label(&item.label)
+                                    .xalign(0.0)
+                                    .hexpand(true)
+                                    .build();
+                                let value = gtk::Label::new(Some(&item.hint));
+                                value.add_css_class("dim-label");
+                                value.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                                value.set_max_width_chars(20);
+                                row.append(&title);
+                                row.append(&value);
+                                button.set_child(Some(&row));
+                                hint = Some(value);
+                            }
+                            button.upcast()
+                        };
+                        widget.set_sensitive(item.enabled);
+                        list.append(&widget);
+                        self.toolbar_options.borrow_mut().push(ToolbarOptionWidget {
+                            section: s,
+                            item: i,
+                            widget,
+                            hint,
+                        });
+                    }
+                    body.append(&list);
                 }
                 let scroll = gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
@@ -402,6 +510,30 @@ impl Customization {
             self.animate(w, true, None);
         }
         if let Some(view) = view {
+            if let Some(title) = self.configuration_title.borrow().as_ref() {
+                title.set_label(&view.configuration_title);
+            }
+            for ToolbarOptionWidget {
+                section,
+                item: index,
+                widget,
+                hint,
+            } in self.toolbar_options.borrow().iter()
+            {
+                if let Some(item) = view
+                    .toolbar_options
+                    .get(*section)
+                    .and_then(|s| s.get(*index))
+                {
+                    widget.set_sensitive(item.enabled);
+                    if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+                        check.set_active(item.selected.unwrap_or(false));
+                    }
+                    if let Some(hint) = hint {
+                        hint.set_label(&item.hint);
+                    }
+                }
+            }
             for (control, check) in self.visibility.borrow().iter() {
                 if let Some(control) = view.controls.iter().find(|c| c.control == *control) {
                     check.set_active(control.visible_in_panel);
@@ -439,24 +571,44 @@ impl Customization {
                         tiles: Vec::new(),
                         buttons: Vec::new(),
                         palette: gtk::CssProvider::new(),
+                        style: TileStyle::Small,
                     });
                     toolbars.len() - 1
                 }
             };
             let toolbar = &mut toolbars[index];
-            if toolbar.tiles == config.tiles() {
+            if toolbar.tiles == config.tiles() && toolbar.style == config.tile_style {
                 continue;
             }
             toolbar.strip.clear();
+            toolbar.strip.set_style(config.tile_style);
+            toolbar.style = config.tile_style;
             toolbar.buttons.clear();
             for tile in config.tiles() {
                 let choice = tool_choice(tile.control);
                 let panel = config.id;
                 let id = tile.id;
-                let button = gtk::Button::builder()
-                    .icon_name(format!("layer-{}-symbolic", choice.icon))
-                    .tooltip_text(&choice.label)
-                    .build();
+                let button = gtk::Button::builder().tooltip_text(&choice.label).build();
+                let icon = gtk::Image::from_icon_name(&format!("layer-{}-symbolic", choice.icon));
+                icon.set_pixel_size(config.tile_style.icon_size() as i32);
+                if config.tile_style == TileStyle::Labeled {
+                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    icon.set_size_request(TILE_SIZE as i32, -1);
+                    let label = gtk::Label::new(Some(&choice.label));
+                    label.set_hexpand(true);
+                    label.set_wrap(true);
+                    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    label.set_lines(3);
+                    label.set_max_width_chars(1);
+                    label.set_xalign(0.0);
+                    label.set_valign(gtk::Align::Center);
+                    row.append(&icon);
+                    row.append(&label);
+                    button.set_child(Some(&row));
+                } else {
+                    button.set_child(Some(&icon));
+                }
                 button.add_css_class("flat");
                 button.set_widget_name(&format!("tile-{id}"));
                 button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
@@ -497,7 +649,7 @@ impl Customization {
 
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
-        let Some((views, picker, control)) = w.gpu.borrow().as_ref().map(|g| {
+        let Some((views, picker, control, prompt)) = w.gpu.borrow().as_ref().map(|g| {
             (
                 g.session
                     .state()
@@ -509,6 +661,7 @@ impl Customization {
                     .collect::<Vec<_>>(),
                 g.session.tool_picker(),
                 g.session.state().customization.control,
+                g.session.toolbar_prompt(),
             )
         }) else {
             self.updating.set(false);
@@ -659,6 +812,46 @@ impl Customization {
         } else if self.picker_shown.replace(false) {
             self.picker.close();
             self.choices_key.borrow_mut().clear();
+        }
+        if let Some(view) = prompt {
+            self.toolbar_dialog.set_heading(Some(view.title));
+            self.toolbar_dialog.set_body(&view.message);
+            self.toolbar_dialog
+                .extra_child()
+                .unwrap()
+                .set_visible(view.name.is_some() || view.error.is_some());
+            self.toolbar_dialog
+                .set_response_label("cancel", view.cancel_label);
+            self.toolbar_dialog
+                .set_response_label("confirm", view.confirm_label);
+            self.toolbar_dialog
+                .set_response_enabled("confirm", view.can_confirm);
+            self.toolbar_dialog.set_response_appearance(
+                "confirm",
+                if view.destructive {
+                    adw::ResponseAppearance::Destructive
+                } else {
+                    adw::ResponseAppearance::Suggested
+                },
+            );
+            self.toolbar_name.set_title(view.name_label);
+            self.toolbar_name.set_visible(view.name.is_some());
+            if let Some(name) = view.name
+                && self.toolbar_name.text() != name
+            {
+                self.toolbar_name.set_text(&name);
+            }
+            self.toolbar_error
+                .set_label(view.error.as_deref().unwrap_or(""));
+            self.toolbar_error.set_visible(view.error.is_some());
+            if !self.toolbar_shown.replace(true) {
+                self.toolbar_dialog.present(Some(&w.window));
+                if !view.destructive {
+                    self.toolbar_name.grab_focus();
+                }
+            }
+        } else if self.toolbar_shown.replace(false) {
+            self.toolbar_dialog.close();
         }
         self.updating.set(false);
         self.present_popovers();
@@ -951,44 +1144,8 @@ impl Workspace {
             return;
         };
         self.customization.anchor.set([point.x(), point.y()]);
-        let root = gtk::gio::Menu::new();
-        let actions = gtk::gio::SimpleActionGroup::new();
-        for (s, items) in menu.sections.into_iter().enumerate() {
-            let section = gtk::gio::Menu::new();
-            for (i, item) in items.into_iter().enumerate() {
-                let id = format!("item-{s}-{i}");
-                let model = gtk::gio::MenuItem::new(Some(item.label), None);
-                let action = if let Some(selected) = item.selected {
-                    let action = gtk::gio::SimpleAction::new_stateful(
-                        &id,
-                        Some(&String::static_variant_type()),
-                        &(if selected { "selected" } else { "other" }).to_variant(),
-                    );
-                    model.set_action_and_target_value(
-                        Some(&format!("context.{id}")),
-                        Some(&"selected".to_variant()),
-                    );
-                    action
-                } else {
-                    model.set_detailed_action(&format!("context.{id}"));
-                    gtk::gio::SimpleAction::new(&id, None)
-                };
-                action.connect_activate(glib::clone!(
-                    #[weak(rename_to = w)]
-                    self,
-                    move |_, _| {
-                        w.customization.context.popdown();
-                        w.customize(item.action.clone());
-                    }
-                ));
-                actions.add_action(&action);
-                section.append_item(&model);
-            }
-            root.append_section(None, &section);
-        }
         let popover = &self.customization.context;
-        popover.insert_action_group("context", Some(&actions));
-        popover.set_menu_model(Some(&root));
+        self.populate_workspace_menu(popover, menu);
         popover.set_pointing_to(Some(&gdk::Rectangle::new(
             point.x() as i32,
             point.y() as i32,
@@ -997,6 +1154,99 @@ impl Workspace {
         )));
         popover.popup();
         popover.present();
+    }
+
+    pub(super) fn populate_workspace_menu(
+        self: &Rc<Self>,
+        popover: &gtk::PopoverMenu,
+        menu: layer_ui::ContextMenu,
+    ) {
+        fn model(
+            w: &Rc<Workspace>,
+            popup: &gtk::PopoverMenu,
+            sections: Vec<Vec<layer_ui::ContextMenuItem>>,
+            prefix: &str,
+            actions: &gtk::gio::SimpleActionGroup,
+            children: &mut Vec<(String, gtk::Button)>,
+        ) -> gtk::gio::Menu {
+            let root = gtk::gio::Menu::new();
+            for (s, items) in sections.into_iter().enumerate() {
+                if items.is_empty() {
+                    continue;
+                }
+                let section = gtk::gio::Menu::new();
+                for (i, item) in items.into_iter().enumerate() {
+                    let id = format!("{prefix}-{s}-{i}");
+                    if item.action.is_none() {
+                        let submenu = model(w, popup, item.sections, &id, actions, children);
+                        section.append_submenu(Some(&item.label), &submenu);
+                        continue;
+                    }
+                    let model = gtk::gio::MenuItem::new(Some(&item.label), None);
+                    let action = if let Some(selected) = item.selected {
+                        let action =
+                            gtk::gio::SimpleAction::new_stateful(&id, None, &selected.to_variant());
+                        model.set_detailed_action(&format!("context.{id}"));
+                        action
+                    } else {
+                        model.set_detailed_action(&format!("context.{id}"));
+                        gtk::gio::SimpleAction::new(&id, None)
+                    };
+                    action.set_enabled(item.enabled);
+                    if !item.hint.is_empty() {
+                        let button = gtk::Button::new();
+                        button.add_css_class("flat");
+                        button.add_css_class("workspace-menu-item");
+                        button.set_action_name(Some(&format!("context.{id}")));
+                        let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+                        let title = gtk::Label::builder()
+                            .label(&item.label)
+                            .xalign(0.0)
+                            .hexpand(true)
+                            .build();
+                        let hint = gtk::Label::new(Some(&item.hint));
+                        hint.add_css_class("dim-label");
+                        hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        hint.set_max_width_chars(28);
+                        row.append(&title);
+                        row.append(&hint);
+                        button.set_child(Some(&row));
+                        model.set_attribute_value("custom", Some(&id.to_variant()));
+                        children.push((id.clone(), button));
+                    }
+                    let dispatch = item.action.unwrap();
+                    action.connect_activate(glib::clone!(
+                        #[weak]
+                        w,
+                        #[weak]
+                        popup,
+                        move |_, _| {
+                            popup.popdown();
+                            w.dispatch(dispatch.clone());
+                        }
+                    ));
+                    actions.add_action(&action);
+                    section.append_item(&model);
+                }
+                root.append_section(None, &section);
+            }
+            root
+        }
+        let actions = gtk::gio::SimpleActionGroup::new();
+        let mut children = Vec::new();
+        let root = model(
+            self,
+            popover,
+            menu.sections,
+            "item",
+            &actions,
+            &mut children,
+        );
+        popover.insert_action_group("context", Some(&actions));
+        popover.set_menu_model(Some(&root));
+        for (id, child) in children {
+            popover.add_child(&child, &id);
+        }
     }
 }
 

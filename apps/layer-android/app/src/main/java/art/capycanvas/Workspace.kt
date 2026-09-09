@@ -337,7 +337,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconTile("zen", "Zen mode", state.getJSONObject("workspace").optBoolean("zen_mode")) { host.invoke("zen_mode") }
+        IconTile("zen", "Zen mode", state.getJSONObject("workspace").optBoolean("zen_mode"), iconSize = host.catalog.getInt("zen_icon_size").dp) { host.invoke("zen_mode") }
         host.catalog.array("menus").objects().forEach { menu ->
             var open by remember { mutableStateOf(false) }
             DisposableEffect(open) {

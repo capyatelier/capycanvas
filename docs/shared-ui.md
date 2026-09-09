@@ -46,7 +46,7 @@ toolkit, OS handles, filesystem, async runtime, or thread requirement. Target
 bindings live in the app that uses them; no separate binding framework/crate is
 needed for the Rust GTK and Wasm clients.
 
-`ui_catalog()` describes system panels, default toolbar controls and menus,
+`ui_catalog()` describes built-in panels, default toolbar controls and menus,
 brush categories/presets, and [numeric input kind, limits, mapping, units and precision](numeric-controls.md). GTK consumes
 the same typed constants exposed to DOM through the Wasm catalog; hosts supply
 widgets/icons, not separate command lists or numeric rules. The ribbon allocator
@@ -207,11 +207,15 @@ hidden controls only within a fixed 80 logical pixels of an occupied window edge
 not by approaching a hidden toolbar/panel. The top always reveals the header;
 left/right/bottom reveal only when a visible dock band occupies that edge. The
 status HUD alone does not enable bottom-edge reveal. Moving/hiding panels updates
-these targets through the shared resolved layout. Once visible, the original
-40px margin around panels, header and HUD keeps controls available; enabled
+these targets through the shared resolved layout. Once visible, the same
+80px margin around panels, header and HUD keeps controls available; enabled
 edge zones also retain visibility to prevent oscillation. Hosts animate
 opacity over 180 ms and disable hit-testing while hidden. Keyboard navigation,
-open menus, settings and active panel/window drags keep controls available; an initial contact in a hidden
+open menus, settings and native title-bar grabs keep controls available. Floating
+panel movement reveals hidden docks only at an occupied screen edge, then holds
+that visibility for the rest of the drag. Every drop returns to normal cursor
+proximity, without a post-drop pin. These decisions belong to `DragWorkspace`
+and the Rust interaction state, not frontend callbacks. An initial contact in a hidden
 control's reveal zone reveals instead of painting. A captured stroke does not
 reveal controls under its moving tip. Moving away or leaving the window fades
 the chrome, except during a native title-bar grab. A release or subsequent

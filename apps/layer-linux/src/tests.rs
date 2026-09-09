@@ -57,6 +57,17 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
     if let Some((_, button)) = w.commands.borrow().iter().find(|(c, _)| *c == id) {
         return button.clone();
     }
+    for panel in &state(w).workspace.layout.panels {
+        if let Some(tile) = panel
+            .tiles()
+            .iter()
+            .find(|t| t.control.action() == (UiAction::Invoke { command: id }))
+            && let Some(button) =
+                find_named(&w.panel_widget(panel.id), &format!("tile-{}", tile.id))
+        {
+            return button.downcast().unwrap();
+        }
+    }
     // Menu commands are native GActions, not ad-hoc GtkButtons.
     let action = w.menu_actions.lookup_action(&id.shortcut_id()).unwrap();
     let button = gtk::Button::new();
@@ -67,6 +78,584 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
 fn click(button: &gtk::Button) {
     assert!(button.is_sensitive());
     button.emit_clicked();
+    pump(100);
+}
+fn edit_number(control: &crate::number_control::NumberControl, text: &str) {
+    let display: gtk::Button = find_css(control.upcast_ref(), "number-value")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    click(&display);
+    let entry: gtk::Entry = find_css(control.upcast_ref(), "number-entry")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    entry.set_text(text);
+    entry.emit_activate();
+}
+struct WorkspaceDragTest {
+    workspace: Rc<Workspace>,
+    origin: [f32; 2],
+}
+impl WorkspaceDragTest {
+    fn update(&self, delta: [f64; 2]) {
+        self.workspace.workspace_drag_input(
+            ContactPhase::Move,
+            [
+                self.origin[0] + delta[0] as f32,
+                self.origin[1] + delta[1] as f32,
+            ],
+            None,
+        );
+    }
+    fn end(&self) {
+        let point = self
+            .workspace
+            .workspace_drag
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .point;
+        self.workspace
+            .workspace_drag_input(ContactPhase::Up, point, None);
+    }
+}
+fn begin_workspace_drag(
+    w: &Rc<Workspace>,
+    widget: &gtk::Widget,
+    x: f32,
+    y: f32,
+) -> WorkspaceDragTest {
+    let point = widget
+        .compute_point(&w.surface, &gtk::graphene::Point::new(x, y))
+        .unwrap();
+    assert!(
+        w.drag_target_at([point.x(), point.y()]).is_some(),
+        "No drag target at {}, {} (picked {:?}, expected {:?})",
+        point.x(),
+        point.y(),
+        w.surface
+            .pick(point.x() as f64, point.y() as f64, gtk::PickFlags::DEFAULT),
+        widget
+    );
+    let controllers = w.surface.observe_controllers();
+    let _controller = (0..controllers.n_items())
+        .filter_map(|i| {
+            controllers
+                .item(i)
+                .and_downcast::<gtk::EventControllerLegacy>()
+        })
+        .find(|g| g.name().as_deref() == Some("workspace-drag"))
+        .unwrap();
+    let origin = [point.x(), point.y()];
+    w.workspace_drag_input(ContactPhase::Down, origin, None);
+    WorkspaceDragTest {
+        workspace: w.clone(),
+        origin,
+    }
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
+fn native_toolbar_sizing() {
+    let app = native_test_app("dev.layer.ToolbarSizingTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    let initial = state(&w).workspace;
+    let placement = || {
+        w.resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.panels.contains(&Panel::Toolbar))
+            .unwrap()
+    };
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::MovePanel {
+            panel: Panel::Toolbar,
+            viewport,
+            target: DockTarget::Float {
+                position: [600.0, 300.0],
+            },
+        });
+        pump(120);
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTileStyle {
+                    panel: Panel::Toolbar,
+                    style,
+                },
+            });
+            pump(120);
+            let natural = placement();
+            let corner = [
+                natural.bounds.x + natural.bounds.width + 2.0,
+                natural.bounds.y + natural.bounds.height + 2.0,
+            ];
+            for (phase, position) in [
+                (ContactPhase::Down, corner),
+                (ContactPhase::Up, [corner[0] + 150.0, corner[1] + 60.0]),
+            ] {
+                w.dispatch(UiAction::ResizeFloating {
+                    group: natural.id,
+                    edge: ResizeEdge::BottomRight,
+                    phase,
+                    position,
+                    viewport,
+                });
+            }
+            pump(100);
+            let resized = state(&w).workspace;
+            let g = placement();
+            let grip = g.tiles.unwrap().grip.unwrap();
+            // The blank strip beside the dots is part of the draggable/reset area.
+            let point = [
+                g.bounds.x + grip.x + 3.0,
+                g.bounds.y + grip.y + grip.height * 0.5,
+            ];
+            assert!(matches!(
+                w.drag_target_at(point),
+                Some(DragTarget::Dock(DockItem::Panel {
+                    panel: Panel::Toolbar
+                }))
+            ));
+            let controllers = w.surface.observe_controllers();
+            let double_click = (0..controllers.n_items())
+                .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+                .find(|g| g.name().as_deref() == Some("floating-title-reset"))
+                .unwrap();
+            double_click
+                .emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
+            pump(250);
+            assert_eq!(placement().bounds, natural.bounds);
+            capture_reference(
+                &w,
+                &format!("{dir}/toolbar-grip-reset-{style:?}-{theme:?}.png"),
+                1.0,
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&resized).unwrap()
+            );
+            let next = if style == TileStyle::Small {
+                TileStyle::Large
+            } else {
+                TileStyle::Small
+            };
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTileStyle {
+                    panel: Panel::Toolbar,
+                    style: next,
+                },
+            });
+            pump(100);
+            assert_eq!(
+                placement().bounds.width,
+                if next == TileStyle::Large {
+                    220.0
+                } else {
+                    112.0
+                }
+            );
+            assert!(state(&w).workspace.layout.floating[0].height.is_none());
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&resized).unwrap(),
+                "style and refit share one undo entry"
+            );
+            w.dispatch(UiAction::ResetFloatingSize { group: natural.id });
+            w.dispatch(UiAction::MovePanel {
+                panel: Panel::Layers,
+                viewport,
+                target: DockTarget::Tab {
+                    group: natural.id,
+                    index: None,
+                },
+            });
+            pump(100);
+            let b = placement().bounds;
+            for (phase, position) in [
+                (ContactPhase::Down, [b.x + b.width, b.y + b.height]),
+                (
+                    ContactPhase::Up,
+                    [b.x + b.width + 160.0, b.y + b.height + 100.0],
+                ),
+            ] {
+                w.dispatch(UiAction::ResizeFloating {
+                    group: natural.id,
+                    edge: ResizeEdge::BottomRight,
+                    phase,
+                    position,
+                    viewport,
+                });
+            }
+            let grouped = state(&w).workspace;
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetPanelVisible {
+                    panel: Panel::Layers,
+                    visible: false,
+                },
+            });
+            pump(150);
+            assert!(!placement().tabs_visible);
+            assert_eq!(
+                placement().bounds,
+                natural.bounds,
+                "a lone toolbar regains its default grid"
+            );
+            capture_reference(
+                &w,
+                &format!("{dir}/toolbar-group-collapse-{style:?}-{theme:?}.png"),
+                1.0,
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(grouped).unwrap()
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            });
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetPanelVisible {
+                    panel: Panel::Layers,
+                    visible: true,
+                },
+            });
+        }
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            w.dispatch(UiAction::MovePanel {
+                panel: Panel::Toolbar,
+                viewport,
+                target: DockTarget::Edge { edge, outer: true },
+            });
+            pump(100);
+            let g = placement();
+            assert!(!g.floating);
+            assert_eq!(
+                if g.axis == Axis::Vertical {
+                    g.bounds.width
+                } else {
+                    g.bounds.height
+                },
+                if g.axis == Axis::Vertical {
+                    108.0
+                } else {
+                    72.0
+                }
+            );
+            capture_reference(
+                &w,
+                &format!("{dir}/toolbar-docked-{edge:?}-{theme:?}.png"),
+                1.0,
+            );
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
+fn native_floating_gestures() {
+    let app = native_test_app("dev.layer.FloatingGesturesTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Sizes,
+        viewport,
+        target: DockTarget::Float {
+            position: [640.0, 250.0],
+        },
+    });
+    // This regression exercises an explicitly visible floating title bar.
+    w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetTabHidden {
+            panel: Panel::Sizes,
+            hidden: false,
+        },
+    });
+    pump(150);
+    let group = state(&w)
+        .workspace
+        .layout
+        .panel_group(Panel::Sizes)
+        .unwrap();
+    let baseline = state(&w).workspace;
+    let restore = || {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: baseline.clone(),
+        });
+        pump(120);
+    };
+    let bounds = || {
+        w.resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.id == group)
+            .unwrap()
+            .bounds
+    };
+    let root = || {
+        w.groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == group)
+            .unwrap()
+            .root
+            .clone()
+    };
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    let initial = bounds();
+    let handles = w
+        .resolved()
+        .groups
+        .into_iter()
+        .find(|g| g.id == group)
+        .unwrap()
+        .resize_handles;
+    for handle in handles {
+        restore();
+        let b = handle.bounds;
+        let native = find_named(
+            w.surface.upcast_ref(),
+            &format!("floating-resize-{group}-{:?}", handle.edge),
+        )
+        .unwrap();
+        let point = [b.x + b.width / 2.0, b.y + b.height / 2.0];
+        assert!(
+            matches!(w.drag_target_at(point), Some(DragTarget::Resize(id, edge)) if id == group && edge == handle.edge)
+        );
+        assert!(!initial.contains(point[0], point[1]));
+        let drag = begin_workspace_drag(&w, &native, b.width / 2.0, b.height / 2.0);
+        drag.update([18.0f64, 16.0f64]);
+        pump(40);
+        assert_ne!(bounds(), initial);
+        drag.end();
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        assert_eq!(state(&w).workspace, baseline);
+    }
+    // Releasing into each screen edge rebuilds the docking widgets while the
+    // workspace gesture remains alive. This caught the RefCell teardown panic.
+    for (edge, target) in [
+        (Edge::Left, [1.0, viewport[1] * 0.5]),
+        (Edge::Right, [viewport[0] - 1.0, viewport[1] * 0.5]),
+    ] {
+        restore();
+        let tab = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == group)
+            .unwrap()
+            .tabs[0]
+            .1
+            .clone();
+        let origin = tab
+            .compute_point(&w.surface, &gtk::graphene::Point::new(12.0, 12.0))
+            .unwrap();
+        let drag = begin_workspace_drag(&w, tab.upcast_ref(), 12.0, 12.0);
+        let delta = [
+            (target[0] - origin.x()) as f64,
+            (target[1] - origin.y()) as f64,
+        ];
+        drag.update([delta[0], delta[1]]);
+        pump(60);
+        let hint = w
+            .drop_hint
+            .borrow()
+            .clone()
+            .expect("screen edge has a snap line");
+        assert_eq!(hint.target, DockTarget::Edge { edge, outer: true });
+        if edge == Edge::Top {
+            assert_eq!(hint.bounds.y, HEADER_HEIGHT);
+        }
+        capture_reference(&w, &format!("{dir}/snap-{edge:?}.png"), 1.0);
+        drag.end();
+        pump(100);
+        assert!(state(&w).workspace.layout.floating.is_empty());
+        assert_eq!(
+            state(&w).workspace.layout.panel_group(Panel::Sizes),
+            Some(group)
+        );
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        assert_eq!(state(&w).workspace, baseline);
+    }
+    restore();
+    // Create space in the title bar and verify inside-top is move, not resize.
+    let corner = [
+        initial.x + initial.width + 2.0,
+        initial.y + initial.height + 2.0,
+    ];
+    for (phase, position) in [
+        (ContactPhase::Down, corner),
+        (ContactPhase::Up, [corner[0] + 160.0, corner[1] + 80.0]),
+    ] {
+        w.dispatch(UiAction::ResizeFloating {
+            group,
+            edge: ResizeEdge::BottomRight,
+            phase,
+            position,
+            viewport,
+        });
+    }
+    pump(80);
+    let before = bounds();
+    let header = find_css(root().upcast_ref(), "dock-tabs").unwrap();
+    let point = header
+        .compute_point(
+            &w.surface,
+            &gtk::graphene::Point::new(header.width() as f32 - 28.0, 1.0),
+        )
+        .unwrap();
+    assert!(
+        matches!(w.drag_target_at([point.x(), point.y()]), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
+    );
+    let controllers = w.surface.observe_controllers();
+    let click = (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+        .find(|g| g.name().as_deref() == Some("floating-title-reset"))
+        .unwrap();
+    // Tabs are excluded from double-click reset.
+    click.emit_by_name::<()>(
+        "pressed",
+        &[
+            &2i32,
+            &((before.x + 15.0) as f64),
+            &((before.y + 15.0) as f64),
+        ],
+    );
+    assert_eq!(bounds(), before);
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(true);
+    click.emit_by_name::<()>(
+        "pressed",
+        &[&2i32, &(point.x() as f64), &(point.y() as f64)],
+    );
+    assert_eq!(
+        [bounds().width, bounds().height],
+        [initial.width, initial.height]
+    );
+    pump(50);
+    let middle = root().compute_bounds(&w.surface).unwrap();
+    assert!(
+        middle.width() > initial.width && middle.width() < before.width,
+        "reset interpolates: {} < {} < {}",
+        initial.width,
+        middle.width(),
+        before.width
+    );
+    capture_reference(&w, &format!("{dir}/reset-size-mid-animation.png"), 1.0);
+    pump(220);
+    assert_eq!(root().width() as f32, initial.width);
+    capture_reference(&w, &format!("{dir}/reset-size-complete.png"), 1.0);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::UndoWorkspace,
+    });
+    assert_eq!(bounds(), before);
+    restore();
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
+    let center = [650.0, 440.0];
+    assert!(
+        w.chrome_event(ChromeEvent::Motion { position: center })
+            .chrome_hidden
+    );
+    let tab = w
+        .groups
+        .borrow()
+        .iter()
+        .find(|g| g.id == group)
+        .unwrap()
+        .tabs[0]
+        .1
+        .clone();
+    let origin = tab
+        .compute_point(&w.surface, &gtk::graphene::Point::new(12.0, 12.0))
+        .unwrap();
+    let drag = begin_workspace_drag(&w, tab.upcast_ref(), 12.0, 12.0);
+    let move_to = |position: [f32; 2]| {
+        drag.update([
+            ((position[0] - origin.x()) as f64),
+            ((position[1] - origin.y()) as f64),
+        ]);
+        pump(50);
+    };
+    move_to(center);
+    assert!(w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
+    capture_reference(&w, &format!("{dir}/zen-floating-drag-hidden.png"), 1.0);
+    move_to([40.0, 450.0]);
+    assert!(!w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
+    move_to(center);
+    assert!(!w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
+    capture_reference(&w, &format!("{dir}/zen-floating-drag-revealed.png"), 1.0);
+    drag.end();
+    assert!(w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
+    pump(180);
+    capture_reference(&w, &format!("{dir}/zen-floating-drop-hidden.png"), 1.0);
+    // The wider blue line targets the entire original stacked sidebar.
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ResetLayout,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
+    pump(120);
+    let left = w
+        .resolved()
+        .groups
+        .into_iter()
+        .find(|g| g.active == Panel::Brushes)
+        .unwrap();
+    let point = [
+        left.bounds.x + left.bounds.width + 60.0,
+        left.bounds.y + left.bounds.height * 0.5,
+    ];
+    let strip = w.panel_widget(Panel::Toolbar);
+    let grip = find_css(&strip, "panel-grip").unwrap();
+    let origin = grip
+        .compute_point(&w.surface, &gtk::graphene::Point::new(10.0, 10.0))
+        .unwrap();
+    let drag = begin_workspace_drag(&w, &grip, 10.0, 10.0);
+    let delta = [
+        (point[0] - origin.x()) as f64,
+        (point[1] - origin.y()) as f64,
+    ];
+    drag.update([delta[0], delta[1]]);
+    pump(80);
+    assert!(matches!(
+        w.drop_hint.borrow().as_ref().unwrap().target,
+        DockTarget::BesideBand { .. }
+    ));
+    capture_reference(&w, &format!("{dir}/whole-sidebar-snap.png"), 1.0);
+    drag.end();
+    pump(100);
+    assert!(state(&w).workspace.layout.floating.is_empty());
+    w.window.close();
     pump(100);
 }
 fn white_pixels(w: &Workspace) -> usize {
@@ -101,6 +690,30 @@ fn capture_reference(w: &Workspace, path: &str, scale: f32) {
     });
 }
 
+fn menu_action(model: &gtk::gio::MenuModel, label: &str) -> Option<String> {
+    for i in 0..model.n_items() {
+        if model
+            .item_attribute_value(i, "label", None)
+            .and_then(|v| v.get::<String>())
+            .as_deref()
+            == Some(label)
+            && let Some(action) = model
+                .item_attribute_value(i, "action", None)
+                .and_then(|v| v.get::<String>())
+        {
+            return Some(action);
+        }
+        for link in ["section", "submenu"] {
+            if let Some(child) = model.item_link(i, link)
+                && let Some(action) = menu_action(&child, label)
+            {
+                return Some(action);
+            }
+        }
+    }
+    None
+}
+
 fn capture_popover(popover: &gtk::Popover, path: &str) {
     popover.present();
     pump(100);
@@ -129,6 +742,439 @@ fn capture_popover(popover: &gtk::Popover, path: &str) {
         )), None)
         .save_to_png(path)
         .unwrap();
+}
+
+#[test]
+#[ignore = "workspace management: requires a private Wayland/Vulkan display"]
+fn native_workspace_management() {
+    fn submenu(root: &gtk::Widget, label: &str) -> Option<gtk::Widget> {
+        if root.type_().name() == "GtkModelButton" && root.property::<String>("text") == label {
+            return Some(root.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Some(found) = submenu(&widget, label) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let app = native_test_app("dev.layer.WorkspaceManagementTest");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(600);
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    let initial = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let send = |action| {
+        w.dispatch(UiAction::Customize { action });
+        pump(80);
+    };
+    let menu = w
+        .popovers
+        .borrow()
+        .iter()
+        .filter_map(|p| p.upgrade())
+        .find(|p| p.has_css_class("panel-context-menu") && p.is::<gtk::PopoverMenu>())
+        .unwrap()
+        .downcast::<gtk::PopoverMenu>()
+        .unwrap();
+    menu.set_autohide(false);
+    menu.set_pointing_to(Some(&gdk::Rectangle::new(350, 170, 1, 1)));
+    let open_context = |target| {
+        let model = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .context_menu(target)
+            .unwrap();
+        w.populate_workspace_menu(&menu, model);
+        menu.popup();
+        pump(100);
+    };
+    let activate = |popup: &gtk::PopoverMenu, label| {
+        let action = menu_action(&popup.menu_model().unwrap(), label)
+            .unwrap_or_else(|| panic!("Missing menu item {label}"));
+        popup.activate_action(&action, None).unwrap();
+        pump(150);
+    };
+    let workspace_menu = find_named(w.window.upcast_ref(), "workspace-menu")
+        .unwrap()
+        .downcast::<gtk::PopoverMenu>()
+        .unwrap();
+    workspace_menu.set_autohide(false);
+    let snapshot = |name: &str| {
+        pump(120);
+        capture_reference(&w, &format!("{dir}/{name}.png"), 1.0);
+    };
+    let prompt = || {
+        find_named(w.window.upcast_ref(), "toolbar-dialog")
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap()
+    };
+    let confirm_prompt = || {
+        let label = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .toolbar_prompt()
+            .unwrap()
+            .confirm_label;
+        click(&find_button(prompt().upcast_ref(), label).unwrap());
+        pump(180);
+        assert!(
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .toolbar_prompt()
+                .is_none()
+        );
+        assert!(find_named(w.window.upcast_ref(), "toolbar-dialog").is_none());
+    };
+    let group = |panel| state(&w).workspace.layout.panel_group(panel).unwrap();
+    let placement = |panel| {
+        w.resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.panels.contains(&panel))
+            .unwrap()
+    };
+
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(180);
+        workspace_menu.popup();
+        pump(120);
+        capture_popover(
+            workspace_menu.upcast_ref(),
+            &format!("{dir}/workspace-menu-{theme:?}.png"),
+        );
+        activate(&workspace_menu, "Brushes panel");
+        assert!(
+            state(&w)
+                .workspace
+                .layout
+                .panel_group(Panel::Brushes)
+                .is_none()
+        );
+        workspace_menu.popup();
+        activate(&workspace_menu, "Brushes panel");
+        assert!(
+            state(&w)
+                .workspace
+                .layout
+                .panel_group(Panel::Brushes)
+                .is_some()
+        );
+        workspace_menu.popup();
+        activate(&workspace_menu, "New Toolbar…");
+        assert!(find_named(w.window.upcast_ref(), "tool-picker").is_some());
+        send(CustomizationAction::CancelTools);
+
+        open_context(ContextTarget::Ribbon {
+            panel: Panel::Toolbar,
+        });
+        capture_popover(
+            menu.upcast_ref(),
+            &format!("{dir}/toolbar-menu-{theme:?}.png"),
+        );
+        activate(&menu, "Duplicate Tools toolbar…");
+        let name = find_named(w.window.upcast_ref(), "edit-toolbar-name")
+            .unwrap()
+            .downcast::<adw::EntryRow>()
+            .unwrap();
+        assert_eq!(name.text(), "Tools Copy");
+        name.set_text("Brushes");
+        assert!(!prompt().is_response_enabled("confirm"));
+        name.set_text("Painting Tools");
+        assert!(prompt().is_response_enabled("confirm"));
+        snapshot(&format!("duplicate-{theme:?}"));
+        confirm_prompt();
+        let panel = state(&w)
+            .workspace
+            .layout
+            .panels
+            .iter()
+            .find(|p| p.title() == "Painting Tools")
+            .unwrap()
+            .id;
+        open_context(ContextTarget::Ribbon { panel });
+        activate(&menu, "Rename Painting Tools toolbar…");
+        name.set_text("Painting");
+        snapshot(&format!("rename-{theme:?}"));
+        confirm_prompt();
+        assert_eq!(
+            state(&w).workspace.layout.panel(panel).unwrap().title(),
+            "Painting"
+        );
+
+        // Pull away from the source: the live float exists before release,
+        // and free canvas has no target rectangle.
+        let area = w.resolved().work_area;
+        let point = [area.x + area.width * 0.5, area.y + area.height * 0.4];
+        let item = DockItem::Panel { panel };
+        let tab = find_css(&w.panel_widget(panel), "panel-grip").unwrap();
+        let origin = tab
+            .compute_point(&w.surface, &gtk::graphene::Point::new(10.0, 10.0))
+            .unwrap();
+        snapshot(&format!("before-tear-off-{theme:?}"));
+        let drag = begin_workspace_drag(&w, &tab, 10.0, 10.0);
+        let delta = [
+            (point[0] - origin.x()) as f64,
+            (point[1] - origin.y()) as f64,
+        ];
+        drag.update([delta[0], delta[1]]);
+        pump(100);
+        assert!(placement(panel).floating);
+        assert!(w.drop_at(point[0], point[1], item).is_none());
+        assert!(w.drop_hint.borrow().is_none());
+        snapshot(&format!("tear-off-live-{theme:?}"));
+        drag.end();
+        pump(180);
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            open_context(ContextTarget::Ribbon { panel });
+            activate(&menu, style.label());
+            // Recreate using each style's default floating dimensions.
+            w.dispatch(UiAction::MovePanel {
+                panel,
+                viewport,
+                target: DockTarget::Edge {
+                    edge: Edge::Top,
+                    outer: false,
+                },
+            });
+            w.dispatch(UiAction::MovePanel {
+                panel,
+                viewport,
+                target: DockTarget::Float { position: point },
+            });
+            pump(180);
+            let p = placement(panel);
+            let columns = if style == TileStyle::Labeled {
+                2.0
+            } else {
+                3.0
+            };
+            assert_eq!(p.bounds.width, columns * (style.size()[0] + 2.0) - 2.0);
+            let strip = w.panel_widget(panel);
+            let tile = strip
+                .first_child()
+                .unwrap()
+                .next_sibling()
+                .unwrap_or_else(|| strip.first_child().unwrap());
+            assert_eq!(
+                [tile.width(), tile.height()],
+                style.size().map(|v| v as i32)
+            );
+            snapshot(&format!("floating-{style:?}-{theme:?}"));
+        }
+        let p = placement(panel);
+        let strip = w.panel_widget(panel);
+        let grip = find_css(&strip, "panel-grip").unwrap();
+        assert_eq!(grip.width(), strip.width());
+        let drag = begin_workspace_drag(&w, &grip, 3.0, 10.0);
+        drag.update([45.0f64, 30.0f64]);
+        pump(100);
+        assert_eq!(placement(panel).bounds.x, p.bounds.x + 45.0);
+        assert_eq!(placement(panel).bounds.y, p.bounds.y + 30.0);
+        snapshot(&format!("live-toolbar-move-{theme:?}"));
+        drag.end();
+        pump(100);
+        workspace_menu.popup();
+        activate(&workspace_menu, "Undo Workspace Change");
+        assert_eq!(placement(panel).bounds, p.bounds);
+        workspace_menu.popup();
+        activate(&workspace_menu, "Redo Workspace Change");
+        assert_eq!(placement(panel).bounds.x, p.bounds.x + 45.0);
+
+        let floated = group(panel);
+        // Narrow the float first, so adding a tab must actually grow it.
+        let before = placement(panel).bounds;
+        let corner = [before.x + before.width, before.y + before.height];
+        for (phase, position) in [
+            (ContactPhase::Down, corner),
+            (ContactPhase::Up, [before.x + 112.0, corner[1]]),
+        ] {
+            w.dispatch(UiAction::ResizeFloating {
+                group: floated,
+                edge: ResizeEdge::BottomRight,
+                phase,
+                position,
+                viewport,
+            });
+        }
+        pump(100);
+        let narrow_width = placement(panel).bounds.width;
+        open_context(ContextTarget::Group { group: floated });
+        capture_popover(
+            menu.upcast_ref(),
+            &format!("{dir}/group-menu-{theme:?}.png"),
+        );
+        for label in ["Add built-in panel", "Add Toolbar"] {
+            let trigger = submenu(menu.upcast_ref(), label).unwrap();
+            assert!(trigger.activate());
+            pump(100);
+            capture_popover(
+                menu.upcast_ref(),
+                &format!("{dir}/submenu-{label}-{theme:?}.png"),
+            );
+            menu.set_visible_submenu(Some("main"));
+            pump(50);
+        }
+        activate(&menu, "Tools toolbar");
+        assert_eq!(group(Panel::Toolbar), floated);
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        assert_ne!(group(Panel::Toolbar), floated);
+        open_context(ContextTarget::Group { group: floated });
+        activate(&menu, "Layers panel");
+        assert_eq!(group(Panel::Layers), floated);
+        // Addition grows the native allocation to fit measured tab labels.
+        pump(150);
+        let root = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == floated)
+            .unwrap()
+            .root
+            .clone();
+        let labels: i32 = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == floated)
+            .unwrap()
+            .tabs
+            .iter()
+            .map(|(_, t)| t.measure(gtk::Orientation::Horizontal, -1).1)
+            .sum();
+        assert!(root.width() >= labels + 20);
+        assert!(root.width() as f32 > narrow_width);
+        snapshot(&format!("floating-tab-group-{theme:?}"));
+        // Manual sizing takes over again and leaves genuine empty header space.
+        let resize = find_named(
+            w.surface.upcast_ref(),
+            &format!("floating-resize-{floated}-BottomRight"),
+        )
+        .unwrap();
+        let resize_drag = begin_workspace_drag(&w, &resize, 3.0, 3.0);
+        resize_drag.update([80.0f64, 0.0f64]);
+        resize_drag.end();
+        pump(100);
+        let header = find_css(root.upcast_ref(), "dock-tabs").unwrap();
+        let original = placement(panel).bounds;
+        let drag = begin_workspace_drag(&w, &header, header.width() as f32 - 28.0, 12.0);
+        drag.update([-25.0f64, 20.0f64]);
+        pump(100);
+        assert_eq!(placement(panel).bounds.x, original.x - 25.0);
+        assert_eq!(
+            w.groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == floated)
+                .unwrap()
+                .root,
+            root
+        );
+        drag.end();
+        let resize = find_named(
+            w.surface.upcast_ref(),
+            &format!("floating-resize-{floated}-BottomRight"),
+        )
+        .unwrap();
+        let before = placement(panel).bounds;
+        let drag = begin_workspace_drag(&w, &resize, 3.0, 3.0);
+        drag.update([30.0f64, 50.0f64]);
+        pump(100);
+        assert_eq!(placement(panel).bounds.width, before.width + 30.0);
+        drag.end();
+        let tall = placement(panel).bounds.height;
+        let tab = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == floated)
+            .unwrap()
+            .tabs
+            .iter()
+            .find(|(p, _)| *p == panel)
+            .unwrap()
+            .1
+            .clone();
+        click(&tab);
+        assert_ne!(placement(panel).bounds.height, tall);
+        open_context(ContextTarget::Panel { panel });
+        assert!(menu_action(&menu.menu_model().unwrap(), "Rename Painting toolbar…").is_none());
+        activate(&menu, "Configure Painting toolbar…");
+        snapshot(&format!("toolbar-configuration-{theme:?}"));
+        send(CustomizationAction::CloseExpanded);
+        send(CustomizationAction::SetTabStyle {
+            target: ContextTarget::Panel { panel },
+            style: TabStyle::Icon,
+        });
+        let expected = state(&w).workspace.layout.panel(panel).unwrap().icon();
+        assert_eq!(
+            tab.icon_name().as_deref(),
+            Some(format!("layer-{expected}-symbolic").as_str())
+        );
+        send(CustomizationAction::SetTabStyle {
+            target: ContextTarget::Panel { panel },
+            style: TabStyle::Name,
+        });
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::ZenMode,
+        });
+        pump(200);
+        assert!(!root.has_css_class("zen-hidden"));
+        assert!(
+            w.groups
+                .borrow()
+                .iter()
+                .filter(|g| !g.floating)
+                .all(|g| g.root.has_css_class("zen-hidden"))
+        );
+        snapshot(&format!("floating-zen-{theme:?}"));
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::ZenMode,
+        });
+        open_context(ContextTarget::Ribbon { panel });
+        activate(&menu, "Hide Painting toolbar");
+        assert!(state(&w).workspace.layout.panel_group(panel).is_none());
+        workspace_menu.popup();
+        activate(&workspace_menu, "Painting toolbar");
+        open_context(ContextTarget::Ribbon { panel });
+        activate(&menu, "Delete Painting toolbar…");
+        assert!(prompt().body().contains("Undo Workspace Change"));
+        snapshot(&format!("delete-{theme:?}"));
+        confirm_prompt();
+        assert!(state(&w).workspace.layout.panel(panel).is_err());
+        workspace_menu.popup();
+        activate(&workspace_menu, "Undo Workspace Change");
+        assert_eq!(
+            state(&w).workspace.layout.panel(panel).unwrap().title(),
+            "Painting"
+        );
+    }
+    menu.popdown();
+    w.window.close();
+    pump(50);
 }
 
 #[test]
@@ -224,8 +1270,11 @@ fn native_panel_customization() {
         hold(tab.upcast_ref(), 12.0, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("panel-menu-{theme:?}"));
-        menu.activate_action("context.item-0-1", Some(&"selected".to_variant()))
-            .unwrap();
+        menu.activate_action(
+            &menu_action(&menu.menu_model().unwrap(), "Tab with icon").unwrap(),
+            None,
+        )
+        .unwrap();
         pump(100);
         assert_eq!(
             state(&w)
@@ -280,8 +1329,12 @@ fn native_panel_customization() {
         assert!(!compact_opacity.is_visible());
         let opacity = find_named(inspector.upcast_ref(), "configure-Sizes-BrushOpacity").unwrap();
         assert!(opacity.is_visible());
-        let input = opacity.last_child().and_downcast::<gtk::Scale>().unwrap();
+        let input = opacity
+            .last_child()
+            .and_downcast::<crate::number_control::NumberControl>()
+            .unwrap();
         input.set_value(0.42);
+        input.emit_by_name::<()>("value-changed", &[]);
         assert!((state(&w).brush.opacity - 0.42).abs() < 0.001);
         let visible = find_named(inspector.upcast_ref(), "panel-visible-BrushOpacity")
             .unwrap()
@@ -316,7 +1369,11 @@ fn native_panel_customization() {
         hold(&header, (header.width() - 12) as f64, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("group-menu-{theme:?}"));
-        menu.activate_action("context.item-1-0", None).unwrap();
+        menu.activate_action(
+            &menu_action(&menu.menu_model().unwrap(), "New Toolbar…").unwrap(),
+            None,
+        )
+        .unwrap();
         pump(250);
         let name = find_named(w.window.upcast_ref(), "toolbar-name")
             .unwrap()
@@ -392,7 +1449,11 @@ fn native_panel_customization() {
         hold(&root, 10.0, 10.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("tile-menu-{theme:?}"));
-        menu.activate_action("context.item-0-1", None).unwrap();
+        menu.activate_action(
+            &menu_action(&menu.menu_model().unwrap(), "Insert Tools…").unwrap(),
+            None,
+        )
+        .unwrap();
         pump(200);
         send(CustomizationAction::PickerSearch { query: "".into() });
         send(CustomizationAction::PickerSelect {
@@ -416,6 +1477,7 @@ fn native_panel_customization() {
             group,
             panel: Panel::Toolbar,
         });
+        send(CustomizationAction::CloseExpanded);
         pump(250);
         let resolved = w.resolved();
         let destination = resolved
@@ -515,7 +1577,11 @@ fn native_panel_customization() {
         hold(&w.panel_widget(panel), 12.0, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("ribbon-menu-{theme:?}"));
-        menu.activate_action("context.item-0-0", None).unwrap();
+        menu.activate_action(
+            &menu_action(&menu.menu_model().unwrap(), "Add Tools…").unwrap(),
+            None,
+        )
+        .unwrap();
         pump(150);
         assert!(
             w.gpu
@@ -535,7 +1601,7 @@ fn native_panel_customization() {
         let many = overflow
             .layout
             .add_toolbar(
-                group,
+                Some(group),
                 &format!("Many tools {theme:?}"),
                 &vec![
                     ToolbarControl::Command {
@@ -613,9 +1679,33 @@ fn native_menu_sections() {
                 .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
                 .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(label))
                 .unwrap();
+            menu.popup();
+            pump(100);
             let root = menu.menu_model().unwrap();
-            assert_eq!(root.n_items() as usize, sections.len());
-            for (index, commands) in sections.iter().enumerate() {
+            let expected: Vec<Vec<String>> = if sections.is_empty() {
+                w.gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .workspace_menu()
+                    .sections
+                    .into_iter()
+                    .map(|section| section.into_iter().map(|item| item.label).collect())
+                    .collect()
+            } else {
+                sections
+                    .iter()
+                    .map(|section| {
+                        section
+                            .iter()
+                            .map(|command| command.label().to_owned())
+                            .collect()
+                    })
+                    .collect()
+            };
+            assert_eq!(root.n_items() as usize, expected.len());
+            for (index, commands) in expected.iter().enumerate() {
                 let model = root.item_link(index as i32, "section").unwrap();
                 assert_eq!(model.n_items() as usize, commands.len());
                 for (index, command) in commands.iter().enumerate() {
@@ -624,7 +1714,7 @@ fn native_menu_sections() {
                             .item_attribute_value(index as i32, "label", None)
                             .unwrap()
                             .str(),
-                        Some(command.label())
+                        Some(command.as_str())
                     );
                 }
             }
@@ -814,13 +1904,13 @@ fn native_panel_expansion() {
         w.groups
             .borrow()
             .iter()
-            .all(|g| !g.root.has_css_class("zen-hidden"))
+            .all(|g| g.root.has_css_class("zen-hidden"))
     );
     let hide = w.chrome_event(ChromeEvent::Contact {
         position: [600.0, 350.0],
         canvas: true,
     });
-    assert!(hide.handled && hide.chrome_hidden);
+    assert!(!hide.handled && hide.chrome_hidden);
     assert!(
         w.groups
             .borrow()
@@ -907,6 +1997,260 @@ fn native_web_parity_reference() {
 }
 
 #[test]
+#[ignore = "recursive column collapse: requires a private Wayland/Vulkan display"]
+fn native_column_removal() {
+    let app = native_test_app("art.capycanvas.ColumnRemovalTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let initial = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    let placement = |panel| {
+        w.resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.panels.contains(&panel))
+            .unwrap()
+            .bounds
+    };
+    for edge in [Edge::Left, Edge::Right] {
+        for multiple in [false, true] {
+            let mut workspace = initial.clone();
+            let layout = &mut workspace.layout;
+            layout.set_panel_visible(Panel::Toolbar, false).unwrap();
+            let sizes = layout.panel_group(Panel::Sizes).unwrap();
+            layout
+                .move_panel(
+                    viewport,
+                    Panel::Layers,
+                    DockTarget::Split { group: sizes, edge },
+                )
+                .unwrap();
+            if multiple {
+                let toolbar = layout
+                    .add_toolbar(None, "Test", &[ToolbarControl::Color])
+                    .unwrap();
+                let brushes = layout.panel_group(Panel::Brushes).unwrap();
+                layout
+                    .move_panel(
+                        viewport,
+                        toolbar,
+                        DockTarget::Split {
+                            group: brushes,
+                            edge,
+                        },
+                    )
+                    .unwrap();
+            }
+            layout.bands[0].edge = edge;
+            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            pump(180);
+            let before = state(&w).workspace;
+            let original = placement(Panel::Sizes);
+            let band = before.layout.bands[0].extent;
+            let removed = placement(Panel::Layers).width;
+            capture_reference(
+                &w,
+                &format!("{dir}/column-{edge:?}-{multiple}-before.png"),
+                1.0,
+            );
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetPanelVisible {
+                    panel: Panel::Layers,
+                    visible: false,
+                },
+            });
+            pump(180);
+            if multiple {
+                assert_eq!(state(&w).workspace.layout.bands[0].extent, band);
+                assert!(placement(Panel::Sizes).width > original.width);
+            } else {
+                assert!((placement(Panel::Sizes).width - original.width).abs() < 0.1);
+                assert!(
+                    (state(&w).workspace.layout.bands[0].extent - band
+                        + removed
+                        + WORKSPACE_SPACING)
+                        .abs()
+                        < 0.1
+                );
+                assert!((placement(Panel::Brushes).width - original.width).abs() < 0.1);
+            }
+            capture_reference(
+                &w,
+                &format!("{dir}/column-{edge:?}-{multiple}-after.png"),
+                1.0,
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(before).unwrap()
+            );
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "tab visibility and bottom grips: requires a private Wayland/Vulkan display"]
+fn native_hidden_tabs() {
+    let app = native_test_app("art.capycanvas.HiddenTabsTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let initial = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let panel = Panel::Sizes;
+        let group = state(&w).workspace.layout.panel_group(panel).unwrap();
+        for action in [
+            CustomizationAction::SetTabStyle {
+                target: ContextTarget::Panel { panel },
+                style: TabStyle::Icon,
+            },
+            CustomizationAction::SetTabHidden {
+                panel,
+                hidden: true,
+            },
+        ] {
+            w.dispatch(UiAction::Customize { action });
+        }
+        pump(150);
+        let footer = || {
+            find_named(
+                w.surface.upcast_ref(),
+                &format!("panel-footer-grip-{group}"),
+            )
+            .unwrap()
+        };
+        let handle = footer();
+        let b = handle.compute_bounds(&w.surface).unwrap();
+        assert_eq!(b.height(), 20.0);
+        assert!(
+            matches!(w.drag_target_at([b.x() + b.width() / 2.0, b.y() + 10.0]), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
+        );
+        assert!(
+            w.groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .tabs
+                .is_empty()
+        );
+        capture_reference(&w, &format!("{dir}/tab-hidden-docked-{theme:?}.png"), 1.0);
+        // The footer's actual touch context binding still exposes name/icon
+        // selection and the independent Hide tab toggle.
+        let controllers = handle.observe_controllers();
+        let hold = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
+            .find(|c| c.name().as_deref() == Some("workspace-context-hold"))
+            .unwrap();
+        hold.emit_by_name::<()>("pressed", &[&(b.width() as f64 * 0.5), &10.0f64]);
+        pump(150);
+        let menu = w
+            .popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .find(|p| p.has_css_class("panel-context-menu"))
+            .unwrap();
+        capture_popover(&menu, &format!("{dir}/tab-hidden-menu-{theme:?}.png"));
+        let popup = menu.clone().downcast::<gtk::PopoverMenu>().unwrap();
+        let actions = popup.menu_model().unwrap().item_link(2, "section").unwrap();
+        assert_eq!(
+            actions
+                .item_attribute_value(0, "label", None)
+                .unwrap()
+                .get::<String>()
+                .unwrap(),
+            "Configure Brush size panel…"
+        );
+        let action = actions
+            .item_attribute_value(0, "action", None)
+            .unwrap()
+            .get::<String>()
+            .unwrap();
+        popup.activate_action(&action, None).unwrap();
+        pump(300);
+        assert_eq!(state(&w).customization.expanded, Some(panel));
+        capture_reference(
+            &w,
+            &format!("{dir}/tab-hidden-configure-{theme:?}.png"),
+            1.0,
+        );
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::CloseExpanded,
+        });
+        pump(300);
+        menu.popdown();
+        pump(100);
+        let drag = begin_workspace_drag(&w, &handle, b.width() * 0.5, 10.0);
+        let target = [viewport[0] * 0.55, viewport[1] * 0.55];
+        drag.update([
+            (target[0] - drag.origin[0]) as f64,
+            (target[1] - drag.origin[1]) as f64,
+        ]);
+        pump(150);
+        drag.end();
+        pump(100);
+        let placement = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.id == group)
+            .unwrap();
+        assert!(placement.floating && !placement.tabs_visible);
+        assert!(footer().is_mapped());
+        capture_reference(&w, &format!("{dir}/tab-hidden-floating-{theme:?}.png"), 1.0);
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetTabHidden {
+                panel,
+                hidden: false,
+            },
+        });
+        pump(150);
+        let tab = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == group)
+            .unwrap()
+            .tabs[0]
+            .1
+            .clone();
+        assert!(
+            tab.icon_name().is_some(),
+            "showing a tab preserves its icon choice"
+        );
+        assert!(
+            find_named(
+                w.surface.upcast_ref(),
+                &format!("panel-footer-grip-{group}")
+            )
+            .is_none()
+        );
+        capture_reference(
+            &w,
+            &format!("{dir}/tab-restored-floating-{theme:?}.png"),
+            1.0,
+        );
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
 #[ignore = "native divider hit testing: requires a Wayland display"]
 fn native_stacked_divider() {
     let app = native_test_app("art.capycanvas.DividerTest");
@@ -939,22 +2283,9 @@ fn native_stacked_divider() {
         picked, handle,
         "the horizontal divider must own its complete hit area"
     );
-    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let controllers = handle.observe_controllers();
-    let drag = (0..controllers.n_items())
-        .find_map(|i| controllers.item(i).and_downcast::<gtk::GestureDrag>())
-        .unwrap();
-    drag.emit_by_name::<()>(
-        "drag-begin",
-        &[&(b.width as f64 * 0.5), &(b.height as f64 * 0.5)],
-    );
+    let drag = begin_workspace_drag(&w, &handle, b.width * 0.5, b.height * 0.5);
     for dy in [-100.0, 50.0, -70.0] {
-        w.dispatch(UiAction::DragDivider {
-            id: 4,
-            phase: ContactPhase::Move,
-            position: [point[0], point[1] + dy],
-            viewport,
-        });
+        drag.update([0.0f64, (dy as f64)]);
         pump(50);
         let actual = handle.compute_bounds(&w.surface).unwrap();
         assert!(
@@ -964,12 +2295,8 @@ fn native_stacked_divider() {
             b.y + dy
         );
     }
-    w.dispatch(UiAction::DragDivider {
-        id: 4,
-        phase: ContactPhase::Up,
-        position: point,
-        viewport,
-    });
+    drag.update([0.0f64, 0.0f64]);
+    drag.end();
     let mut workspace = state(&w).workspace;
     if let DockNode::Split { id, .. } = &mut workspace.layout.bands[0].root {
         *id = 40;
@@ -1064,7 +2391,14 @@ fn native_ribbon_allocation() {
             };
             let g = layout.resolve(viewport[0], viewport[1]).groups.remove(0);
             strip.allocate(g.bounds.width as i32, g.bounds.height as i32, -1, None);
-            let expected = tile_layout(g.bounds.width, g.bounds.height, axis, 6, true);
+            let expected = tile_layout(
+                g.bounds.width,
+                g.bounds.height,
+                axis,
+                6,
+                true,
+                TileStyle::Small,
+            );
             let mut child = strip.first_child();
             for b in expected.tiles.into_iter().chain(expected.grip) {
                 let widget = child.unwrap();
@@ -2027,7 +3361,11 @@ fn native_workspace_restore() {
             .len(),
         2
     );
-    assert!(!fresh.toolbar.last_child().unwrap().is_child_visible());
+    assert!(
+        !find_css(fresh.toolbar.upcast_ref(), "panel-grip")
+            .unwrap()
+            .is_child_visible()
+    );
     assert!(!fresh.status.is_visible());
     fresh.window.destroy();
     pump(100);
@@ -2192,6 +3530,103 @@ fn native_frame_pacing() {
         crate::capture(&w, &path);
     }
     w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_toolbar_drag_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("dev.layer.ToolbarDragInputTest");
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let target = if std::env::var_os("LAYER_NATIVE_DRAG_TAB").is_some() {
+        w.dispatch(UiAction::MovePanel {
+            panel: Panel::Toolbar,
+            viewport: [w.surface.width() as f32, w.surface.height() as f32],
+            target: DockTarget::Tab {
+                group: 5,
+                index: None,
+            },
+        });
+        pump(150);
+        w.groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == 5)
+            .unwrap()
+            .tabs
+            .iter()
+            .find(|(p, _)| *p == Panel::Toolbar)
+            .unwrap()
+            .1
+            .clone()
+            .upcast::<gtk::Widget>()
+    } else {
+        find_css(&w.panel_widget(Panel::Toolbar), "panel-grip").unwrap()
+    };
+    let start = target
+        .compute_point(&w.surface, &gtk::graphene::Point::new(10.0, 10.0))
+        .unwrap();
+    let middle = [
+        w.surface.width() as f32 * 0.5,
+        w.surface.height() as f32 * 0.5,
+    ];
+    let mut points = Vec::new();
+    let mut from = [start.x(), start.y()];
+    for to in [
+        [middle[0], 260.0],
+        middle,
+        [middle[0] + 170.0, 120.0],
+        [middle[0] - 100.0, middle[1] + 80.0],
+        middle,
+    ] {
+        for i in 1..=12 {
+            let t = i as f32 / 12.0;
+            points.push([
+                from[0] + (to[0] - from[0]) * t,
+                from[1] + (to[1] - from[1]) * t,
+            ]);
+        }
+        from = to;
+    }
+    std::fs::write(
+        dir.join("ready"),
+        serde_json::to_vec(&serde_json::json!({
+            "start": [start.x(), start.y()], "points": points,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let timeout = Instant::now() + Duration::from_secs(12);
+    let mut floated = false;
+    let mut cancelled = false;
+    let mut states = Vec::new();
+    while Instant::now() < timeout && !dir.join("finished").exists() {
+        pump(10);
+        let workspace = state(&w).workspace;
+        let now_floating = !workspace.layout.floating.is_empty();
+        cancelled |= floated && !now_floating;
+        floated |= now_floating;
+        states.push(workspace.layout.floating);
+    }
+    pump(200);
+    capture_reference(&w, &dir.join("toolbar-drag.png").to_string_lossy(), 1.0);
+    std::fs::write(
+        dir.join("states.json"),
+        serde_json::to_vec(&states).unwrap(),
+    )
+    .unwrap();
+    assert!(dir.join("finished").exists(), "native driver timed out");
+    assert!(floated, "real GTK input must tear the ribbon off");
+    assert!(
+        !cancelled,
+        "floating toolbar reverted during a continuous native drag"
+    );
+    assert_eq!(state(&w).workspace.layout.floating.len(), 1);
+    w.window.close();
     pump(100);
 }
 
@@ -2400,7 +3835,7 @@ fn native_workspace_controls_docking_and_ink() {
         .clone();
     click(&size);
     assert_eq!(state(&w).brush.diameter, 96.0);
-    w.size_number.set_value(84.0);
+    edit_number(&w.size_number, "84");
     assert_eq!(state(&w).brush.diameter, 84.0);
     assert_eq!(w.size_number.value(), 84.0);
     click(&command(&w, CommandId::AddLayer));
@@ -2493,10 +3928,10 @@ fn native_workspace_controls_docking_and_ink() {
     visibility().set_active(true);
     pump(100);
     assert!(white_pixels(&w) < initial - 500);
-    w.layer_opacity.set_value(0.5);
+    edit_number(&w.layer_opacity, "50%");
     pump(100);
     assert_eq!(state(&w).layers[0].opacity, 0.5);
-    w.layer_opacity.set_value(1.0);
+    edit_number(&w.layer_opacity, "100%");
     pump(100);
     let painted_id = state(&w).layers[0].id;
     click(&command(&w, CommandId::LowerLayer));
@@ -2512,14 +3947,14 @@ fn native_workspace_controls_docking_and_ink() {
             .unwrap()
             .downcast()
             .unwrap();
-    pressure.set_value(1.45);
+    edit_number(&pressure, "1.45");
     assert_eq!(state(&w).settings.pressure_gamma, 1.45);
     w.preferences.dialog.close();
     pump(300);
     assert!(!state(&w).settings_open);
     assert_eq!(state(&w).settings.pressure_gamma, 1.45);
     click(&command(&w, CommandId::Settings));
-    pressure.set_value(1.5);
+    edit_number(&pressure, "1.5");
     let done = find_button(w.preferences.dialog.upcast_ref(), "Done").unwrap();
     click(&done);
     assert_eq!(state(&w).settings.pressure_gamma, 1.5);
@@ -2616,18 +4051,12 @@ fn native_workspace_controls_docking_and_ink() {
         .unwrap();
     let header = find_css(&root, "dock-tabs").unwrap();
     let grip = header.last_child().unwrap();
-    let controllers = grip.observe_controllers();
-    let source = (0..controllers.n_items())
-        .find_map(|i| controllers.item(i).and_downcast::<gtk::DragSource>())
+    let point = grip
+        .compute_point(&w.surface, &gtk::graphene::Point::new(10.0, 10.0))
         .unwrap();
-    let item = source
-        .content()
-        .unwrap()
-        .value(NativeDockItem::static_type())
-        .unwrap()
-        .get::<NativeDockItem>()
-        .unwrap()
-        .0;
+    let Some(DragTarget::Dock(item)) = w.drag_target_at([point.x(), point.y()]) else {
+        panic!("The group grip must be a workspace drag target");
+    };
     assert_eq!(item, DockItem::Group { group: 8 });
     let b = root.compute_bounds(&w.surface).unwrap();
     let hint = w
@@ -2658,7 +4087,7 @@ fn native_workspace_controls_docking_and_ink() {
         .clone();
     w.dispatch(item.move_action(
         DockTarget::Edge {
-            edge: Edge::Bottom,
+            edge: Edge::Left,
             outer: false,
         },
         [w.surface.width() as f32, w.surface.height() as f32],
@@ -2784,7 +4213,10 @@ fn native_workspace_controls_docking_and_ink() {
         .compute_bounds(&w.toolbar)
         .unwrap();
     assert_eq!(grip.x() + grip.width(), w.toolbar.width() as f32);
-    assert_eq!((grip.width(), grip.height()), (20.0, 24.0));
+    assert_eq!(
+        (grip.width(), grip.height()),
+        (20.0, w.toolbar.height() as f32)
+    );
     assert_eq!(
         grip.y() + grip.height() * 0.5,
         w.toolbar.height() as f32 * 0.5
@@ -2831,7 +4263,10 @@ fn native_workspace_controls_docking_and_ink() {
         .unwrap()
         .compute_bounds(&w.toolbar)
         .unwrap();
-    assert_eq!((grip.width(), grip.height()), (24.0, 20.0));
+    assert_eq!(
+        (grip.width(), grip.height()),
+        (w.toolbar.width() as f32, 20.0)
+    );
     assert_eq!(grip.y() + grip.height(), w.toolbar.height() as f32);
     let layout = state(&w).workspace.layout;
     let band = layout.bands.last().unwrap();
@@ -2931,7 +4366,8 @@ fn native_workspace_controls_docking_and_ink() {
         .unwrap();
     let mut bytes = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut bytes, texture.width() as usize * 4);
-    let offset = (24 * texture.width() as usize + 300) * 4;
+    // Between the live menus and centered document title, not on a menu button.
+    let offset = (24 * texture.width() as usize + 420) * 4;
     assert!(
         bytes[offset..offset + 3].iter().all(|c| *c > 245),
         "zoomed paper must show through the title bar"

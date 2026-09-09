@@ -22,6 +22,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
 .panel-context-menu { font-size: var(--ui-text-size); }
+.workspace-menu-item { font-weight: 400; }
 .dock-tabs { background: var(--tabbar-bg); font-size: inherit; }
 .dock-panel .heading { font-size: inherit; }
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
@@ -52,7 +53,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-panel checkbutton check:checked { -gtk-icon-source: -gtk-icontheme("layer-check-symbolic"); -gtk-icon-transform: none; }
 .dock-panel checkbutton check:indeterminate { -gtk-icon-source: -gtk-icontheme("layer-minus-symbolic"); }
 .dock-panel .panel-grip { -gtk-icon-size: 16px; opacity: .65; -gtk-icon-transform: translateX(-1.6px); }
-.toolbar-controls.vertical > .panel-grip { -gtk-icon-transform: translateY(-1.6px) rotate(90deg); }
+.toolbar-controls.vertical > .panel-grip, .panel-footer > .panel-grip { -gtk-icon-transform: translateY(-1.6px) rotate(90deg); }
 .dock-panel .caption { font-size: 1em; }
 .dock-tabs button { border-radius: 6px 6px 0 0; min-height: 28px; padding: 4px 8px; }
 .dock-tabs button.selected-tool { background: var(--panel-bg); }

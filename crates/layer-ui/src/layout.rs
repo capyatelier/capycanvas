@@ -1,17 +1,21 @@
 //! Semantic docking topology. Coordinates are logical UI units, never pixels
 //! belonging to the raster document. Earlier bands own shared corners.
 
-use crate::{PanelConfig, PanelContent, ToolbarControl, ToolbarTile, WORKSPACE_SPACING};
+use crate::{PanelConfig, PanelContent, TileStyle, ToolbarControl, ToolbarTile, WORKSPACE_SPACING};
 use serde::{Deserialize, Serialize};
 
 pub const TILE_SIZE: f32 = 36.0;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
+const PANEL_GRIP_HEIGHT: f32 = 20.0;
+/// Shared gesture distances in logical UI pixels, not preferences.
+pub const WORKSPACE_PROXIMITY: f32 = 80.0;
+const PANEL_SNAP_DISTANCE: f32 = WORKSPACE_PROXIMITY * 0.5;
 #[cfg(test)]
 const TOOL_TILE_COUNT: usize = crate::TOOLBAR_CONTROLS.len();
 
 // Reserve 20px for the trailing grip and 2px between it and the last tile.
-fn ribbon_lanes(length: f32, count: usize) -> usize {
-    let slots = (((length - 20.0) / (TILE_SIZE + 2.0)).floor() as usize).max(1);
+fn ribbon_lanes(length: f32, count: usize, along: f32) -> usize {
+    let slots = (((length - 20.0) / (along + 2.0)).floor() as usize).max(1);
     count.max(1).div_ceil(slots)
 }
 
@@ -54,7 +58,7 @@ impl TileLayout {
     }
 }
 
-/// One square-tile allocator for native and web strips. Cross-axis resizing
+/// One tile allocator for native and web strips. Cross-axis resizing
 /// adds lanes; standalone ribbons also wrap when their long axis is constrained.
 /// Tabbed tools retain their content inset; standalone strips are flush.
 pub fn tile_layout(
@@ -63,18 +67,25 @@ pub fn tile_layout(
     axis: Axis,
     count: usize,
     standalone: bool,
+    style: TileStyle,
 ) -> TileLayout {
     let horizontal = axis == Axis::Horizontal;
+    let [tile_width, tile_height] = style.size();
+    let (along_size, cross_size) = if horizontal {
+        (tile_width, tile_height)
+    } else {
+        (tile_height, tile_width)
+    };
     let cross = if horizontal { height } else { width };
     let padding = if standalone { 0.0 } else { 4.0 };
-    let mut lanes = (((cross - padding * 2.0 + 2.0) / (TILE_SIZE + 2.0)).floor() as usize)
+    let mut lanes = (((cross - padding * 2.0 + 2.0) / (cross_size + 2.0)).floor() as usize)
         .clamp(1, count.max(1));
     if standalone {
         let length = if horizontal { width } else { height };
-        lanes = lanes.max(ribbon_lanes(length, count));
+        lanes = lanes.max(ribbon_lanes(length, count, along_size));
     }
     let slots = count.max(1).div_ceil(lanes);
-    let grid = lanes as f32 * (TILE_SIZE + 2.0) - 2.0;
+    let grid = lanes as f32 * (cross_size + 2.0) - 2.0;
     let inset = ((cross - grid) * 0.5).max(padding);
     let tiles: Vec<_> = (0..count)
         .map(|i| {
@@ -83,30 +94,30 @@ pub fn tile_layout(
             } else {
                 (i / lanes, i % lanes)
             };
-            let along = padding + along as f32 * (TILE_SIZE + 2.0);
-            let across = inset + across as f32 * (TILE_SIZE + 2.0);
+            let along = padding + along as f32 * (along_size + 2.0);
+            let across = inset + across as f32 * (cross_size + 2.0);
             Bounds {
                 x: if horizontal { along } else { across },
                 y: if horizontal { across } else { along },
-                width: TILE_SIZE,
-                height: TILE_SIZE,
+                width: tile_width,
+                height: tile_height,
             }
         })
         .collect();
-    // Same 20×24 footprint as the tab-bar grip, transposed for a side ribbon.
-    // Matching the footprint also matches the visible dots' trailing inset.
+    // The entire trailing strip is a handle, including beside the centered
+    // dots. A 20px trailing extent keeps their inset aligned with tab grips.
     let grip = standalone.then_some(if horizontal {
         Bounds {
             x: width - 20.0,
-            y: (height - 24.0) * 0.5,
+            y: 0.0,
             width: 20.0,
-            height: 24.0,
+            height,
         }
     } else {
         Bounds {
-            x: (width - 24.0) * 0.5,
+            x: 0.0,
             y: height - 20.0,
-            width: 24.0,
+            width,
             height: 20.0,
         }
     });
@@ -148,8 +159,8 @@ pub fn tile_layout(
         tiles.last().copied().unwrap_or(Bounds {
             x: padding,
             y: padding,
-            width: TILE_SIZE.min(width),
-            height: TILE_SIZE.min(height),
+            width: tile_width.min(width),
+            height: tile_height.min(height),
         }),
         !tiles.is_empty(),
     ));
@@ -178,7 +189,7 @@ impl ResizeDrag {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TabHit {
     pub group: u32,
     pub index: usize,
@@ -311,7 +322,7 @@ pub enum DockNode {
     },
 }
 impl DockNode {
-    fn group_for(&self, panel: Panel) -> Option<(u32, Panel)> {
+    pub(crate) fn group_for(&self, panel: Panel) -> Option<(u32, Panel)> {
         match self {
             Self::Tabs { id, panels, active } => panels.contains(&panel).then_some((*id, *active)),
             Self::Split { first, second, .. } => {
@@ -380,12 +391,39 @@ pub struct DockBand {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FloatingGroup {
+    pub root: DockNode,
+    pub position: [f32; 2],
+    pub width: f32,
+    /// Width inherited on tear-off, retained when manually resizing.
+    #[serde(default)]
+    pub default_width: Option<f32>,
+    /// None sizes to the active content; resizing supplies an explicit height.
+    pub height: Option<f32>,
+}
+
+/// Native measurements only. Rust owns sizing rules and resulting geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PanelMeasurement {
+    pub panel: Panel,
+    pub tab_width: f32,
+    pub content_height: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockLayout {
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
     pub panels_visible: bool,
     #[serde(default = "PanelConfig::defaults")]
     pub panels: Vec<PanelConfig>,
+    #[serde(default)]
+    pub floating: Vec<FloatingGroup>,
+    /// Adding tabs opts a group into natural width; manual width resize opts out.
+    #[serde(default)]
+    pub fit_tab_groups: Vec<u32>,
+    #[serde(skip)]
+    pub measurements: Vec<PanelMeasurement>,
     #[serde(default = "initial_tile_id")]
     next_tile_id: u32,
     next_id: u32,
@@ -397,10 +435,17 @@ fn initial_tile_id() -> u32 {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DockTarget {
+    Float {
+        position: [f32; 2],
+    },
     /// A new band adjacent to the center; `outer` grants corner priority.
     Edge {
         edge: Edge,
         outer: bool,
+    },
+    /// Dock alongside the complete sidebar, without splitting one of its panels.
+    BesideBand {
+        band: u32,
     },
     Tab {
         group: u32,
@@ -457,6 +502,20 @@ pub struct Bounds {
     pub height: f32,
 }
 impl Bounds {
+    pub fn interpolate_from(self, from: Self, progress: f32) -> Self {
+        let p = progress.clamp(0.0, 1.0);
+        let mix = |a: f32, b: f32| a + (b - a) * p;
+        Self {
+            x: mix(from.x, self.x),
+            y: mix(from.y, self.y),
+            width: mix(from.width, self.width),
+            height: mix(from.height, self.height),
+        }
+    }
+    pub fn distance_to(self, point: [f32; 2]) -> f32 {
+        (point[0] - point[0].clamp(self.x, self.x + self.width))
+            .hypot(point[1] - point[1].clamp(self.y, self.y + self.height))
+    }
     pub fn contains(self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
@@ -501,6 +560,61 @@ impl Bounds {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FloatingResizeHandle {
+    pub edge: ResizeEdge,
+    pub bounds: Bounds,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResizeEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+impl ResizeEdge {
+    pub fn cursor(self) -> &'static str {
+        match self {
+            Self::Left | Self::Right => "ew-resize",
+            Self::Top | Self::Bottom => "ns-resize",
+            Self::TopLeft | Self::BottomRight => "nwse-resize",
+            Self::TopRight | Self::BottomLeft => "nesw-resize",
+        }
+    }
+    fn handles(b: Bounds) -> Vec<FloatingResizeHandle> {
+        const HIT: f32 = 6.0;
+        let right = b.x + b.width;
+        let bottom = b.y + b.height;
+        [
+            (Self::Left, [b.x - HIT, b.y, HIT, b.height]),
+            (Self::Right, [right, b.y, HIT, b.height]),
+            (Self::Top, [b.x, b.y - HIT, b.width, HIT]),
+            (Self::Bottom, [b.x, bottom, b.width, HIT]),
+            (Self::TopLeft, [b.x - HIT, b.y - HIT, HIT, HIT]),
+            (Self::TopRight, [right, b.y - HIT, HIT, HIT]),
+            (Self::BottomLeft, [b.x - HIT, bottom, HIT, HIT]),
+            (Self::BottomRight, [right, bottom, HIT, HIT]),
+        ]
+        .into_iter()
+        .map(|(edge, [x, y, width, height])| FloatingResizeHandle {
+            edge,
+            bounds: Bounds {
+                x,
+                y,
+                width,
+                height,
+            },
+        })
+        .collect()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GroupPlacement {
     pub id: u32,
     pub bounds: Bounds,
@@ -508,8 +622,21 @@ pub struct GroupPlacement {
     pub active: Panel,
     pub axis: Axis,
     pub tabs_visible: bool,
+    /// Content-local trailing drag strip for a lone built-in panel with no tab.
+    pub footer_grip: Option<Bounds>,
+    pub floating: bool,
+    pub resize_handles: Vec<FloatingResizeHandle>,
     /// Content-local geometry for the current tool ribbon (no host tab inset math).
     pub tiles: Option<TileLayout>,
+}
+impl GroupPlacement {
+    /// Presentation-only interpolation; external resize targets follow the panel.
+    pub fn interpolate_from(&mut self, from: Bounds, progress: f32) {
+        self.bounds = self.bounds.interpolate_from(from, progress);
+        if self.floating {
+            self.resize_handles = ResizeEdge::handles(self.bounds);
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Divider {
@@ -523,6 +650,7 @@ pub struct Divider {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedLayout {
+    pub viewport: [f32; 2],
     pub tab_bar_height: f32,
     /// Header edge plus edges occupied by visible dock bands. The status HUD
     /// alone does not create a bottom-edge Zen reveal target.
@@ -552,18 +680,12 @@ impl PanelExpansion {
     /// One interpolation for opening, closing and changing tabs. Starting from
     /// the last presented placement also makes interrupted animations continuous.
     pub fn interpolate_from(self, from: Self, progress: f32) -> Self {
-        let p = progress.clamp(0.0, 1.0);
-        let mix = |a: f32, b: f32| a + (b - a) * p;
-        let rect = |a: Bounds, b: Bounds| Bounds {
-            x: mix(a.x, b.x),
-            y: mix(a.y, b.y),
-            width: mix(a.width, b.width),
-            height: mix(a.height, b.height),
-        };
         Self {
-            bounds: rect(from.bounds, self.bounds),
-            preview: rect(from.preview, self.preview),
-            configuration: rect(from.configuration, self.configuration),
+            bounds: self.bounds.interpolate_from(from.bounds, progress),
+            preview: self.preview.interpolate_from(from.preview, progress),
+            configuration: self
+                .configuration
+                .interpolate_from(from.configuration, progress),
             ..self
         }
     }
@@ -589,14 +711,18 @@ impl DockLayout {
     pub fn panel_group(&self, panel: Panel) -> Option<u32> {
         self.bands
             .iter()
-            .find_map(|b| b.root.group_for(panel))
+            .map(|b| &b.root)
+            .chain(self.floating.iter().map(|f| &f.root))
+            .find_map(|root| root.group_for(panel))
             .map(|(id, _)| id)
     }
 
     pub(crate) fn active_panel(&self, panel: Panel) -> Option<Panel> {
         self.bands
             .iter()
-            .find_map(|b| b.root.group_for(panel))
+            .map(|b| &b.root)
+            .chain(self.floating.iter().map(|f| &f.root))
+            .find_map(|root| root.group_for(panel))
             .map(|(_, active)| active)
     }
 
@@ -617,10 +743,11 @@ impl DockLayout {
         {
             return None;
         }
-        let band = self
+        let edge = self
             .bands
             .iter()
-            .find(|b| b.root.group_for(panel).is_some())?;
+            .find(|b| b.root.group_for(panel).is_some())
+            .map(|b| b.edge);
         let resolved = self.workspace(
             viewport[0],
             viewport[1],
@@ -636,7 +763,7 @@ impl DockLayout {
             width: (viewport[0] - gap * 2.0).max(1.0),
             height: (viewport[1] - crate::HEADER_HEIGHT - gap).max(1.0),
         };
-        let side = matches!(band.edge, Edge::Left | Edge::Right);
+        let side = edge.is_none() || matches!(edge, Some(Edge::Left | Edge::Right));
         let preview_width = if side {
             docked.width
         } else {
@@ -657,14 +784,14 @@ impl DockLayout {
             .min(available.height);
         // Side panels open inward. Top/bottom panels retain their nearest
         // horizontal anchor and grow down/up rather than outside the window.
-        let config_left = band.edge == Edge::Right
-            || (!side && docked.x + docked.width * 0.5 > viewport[0] * 0.5);
+        let config_left = edge == Some(Edge::Right)
+            || ((edge.is_none() || !side) && docked.x + docked.width * 0.5 > viewport[0] * 0.5);
         let x = if config_left {
             docked.x + docked.width - width
         } else {
             docked.x
         };
-        let y = if band.edge == Edge::Bottom {
+        let y = if edge == Some(Edge::Bottom) {
             docked.y + docked.height - height
         } else {
             docked.y
@@ -721,6 +848,9 @@ impl Default for DockLayout {
         Self {
             panels_visible: true,
             panels: PanelConfig::defaults(),
+            floating: Vec::new(),
+            fit_tab_groups: Vec::new(),
+            measurements: Vec::new(),
             next_tile_id: initial_tile_id(),
             bands: vec![
                 DockBand {
@@ -754,7 +884,7 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
-    /// A restored topology must contain each configured panel exactly once,
+    /// Visible panels occur exactly once; hidden panels retain their registry entry.
     /// globally unique IDs, finite dimensions, and valid active tabs/ratios.
     pub fn validate(&self) -> Result<(), String> {
         let mut ids = std::collections::BTreeSet::new();
@@ -805,10 +935,33 @@ impl DockLayout {
             }
             node(&band.root, &mut ids, &mut panels, 0)?;
         }
+        for floating in &self.floating {
+            if !matches!(floating.root, DockNode::Tabs { .. })
+                || !floating.position.into_iter().all(f32::is_finite)
+                || !floating.width.is_finite()
+                || floating.width <= 0.0
+                || floating
+                    .default_width
+                    .is_some_and(|w| !w.is_finite() || w <= 0.0)
+                || floating.height.is_some_and(|h| !h.is_finite() || h <= 0.0)
+            {
+                return Err("Invalid floating panel geometry".into());
+            }
+            node(&floating.root, &mut ids, &mut panels, 0)?;
+        }
+        for (i, group) in self.fit_tab_groups.iter().enumerate() {
+            self.group_panels(*group)?;
+            if self.fit_tab_groups[..i].contains(group) {
+                return Err("Duplicate tab sizing identity".into());
+            }
+        }
         let mut tile_ids = std::collections::BTreeSet::new();
         let mut names = std::collections::BTreeSet::new();
-        for config in &self.panels {
+        for (index, config) in self.panels.iter().enumerate() {
             config.validate()?;
+            if self.panels[..index].iter().any(|p| p.id == config.id) {
+                return Err("Duplicate panel configuration".into());
+            }
             if let Panel::CustomToolbar(id) = config.id
                 && (id == 0 || !ids.insert(id))
             {
@@ -822,15 +975,14 @@ impl DockLayout {
                     return Err("Duplicate or invalid toolbar tile identity".into());
                 }
             }
-            let index = panels
-                .iter()
-                .position(|id| *id == config.id)
-                .ok_or("Panel configuration is not docked")?;
-            panels.remove(index);
+            if let Some(index) = panels.iter().position(|id| *id == config.id) {
+                panels.remove(index);
+            }
         }
         if !panels.is_empty()
             || Panel::ALL
                 .iter()
+                .filter(|id| id.kind() == PanelKind::Content)
                 .any(|id| !self.panels.iter().any(|p| p.id == *id))
         {
             return Err("Workspace panel configuration is incomplete".into());
@@ -869,38 +1021,210 @@ impl DockLayout {
         }
         self.bands
             .iter()
-            .find_map(|b| find(&b.root, id))
+            .map(|b| &b.root)
+            .chain(self.floating.iter().map(|f| &f.root))
+            .find_map(|root| find(root, id))
             .ok_or_else(|| "Unknown tab group".into())
     }
 
     pub fn add_toolbar(
         &mut self,
-        group: u32,
+        group: Option<u32>,
         name: &str,
         controls: &[ToolbarControl],
     ) -> Result<Panel, String> {
         let name = name.trim();
         self.validate_toolbar_name(name)?;
-        self.group_panels(group)?;
+        if let Some(group) = group {
+            self.group_panels(group)?;
+        }
         let mut next = self.clone();
         let id = Panel::CustomToolbar(next.allocate()?);
         next.panels.push(PanelConfig {
             id,
             tab_style: crate::TabStyle::Name,
+            hide_tab: false,
+            tile_style: crate::TileStyle::Small,
             content: PanelContent::Toolbar {
                 name: name.into(),
                 tiles: Vec::new(),
             },
         });
-        next.insert_tools(id, None, controls)?;
-        let Some(DockNode::Tabs { panels, active, .. }) = next.node_mut(group) else {
-            unreachable!()
-        };
-        panels.push(id);
-        *active = id;
+        if !controls.is_empty() {
+            next.insert_tools(id, None, controls)?;
+        }
+        if let Some(group) = group {
+            next.add_panel_to_group(id, group)?;
+        } else {
+            next.set_panel_visible(id, true)?;
+        }
         next.validate()?;
         *self = next;
         Ok(id)
+    }
+
+    fn detach(&mut self, panels: &[Panel]) {
+        self.bands = std::mem::take(&mut self.bands)
+            .into_iter()
+            .filter_map(|band| {
+                let mut root = Some(band.root);
+                for panel in panels {
+                    root = root?.remove(*panel);
+                }
+                Some(DockBand {
+                    root: root?,
+                    ..band
+                })
+            })
+            .collect();
+        self.floating = std::mem::take(&mut self.floating)
+            .into_iter()
+            .filter_map(|mut floating| {
+                let was_group =
+                    matches!(&floating.root, DockNode::Tabs { panels, .. } if panels.len() > 1);
+                let mut root = Some(floating.root);
+                for panel in panels {
+                    root = root?.remove(*panel);
+                }
+                floating.root = root?;
+                if was_group
+                    && let DockNode::Tabs { panels, active, .. } = &floating.root
+                    && panels.len() == 1
+                    && active.kind() == PanelKind::Tiles
+                {
+                    let width = self
+                        .panel(*active)
+                        .expect("validated toolbar")
+                        .tile_style
+                        .floating_width();
+                    floating.width = width;
+                    floating.default_width = Some(width);
+                    floating.height = None;
+                }
+                Some(floating)
+            })
+            .collect();
+        let groups = self
+            .fit_tab_groups
+            .iter()
+            .copied()
+            .filter(|g| {
+                self.group_panels(*g)
+                    .is_ok_and(|panels| panels.len() != 1 || panels[0].kind() != PanelKind::Tiles)
+            })
+            .collect();
+        self.fit_tab_groups = groups;
+    }
+
+    pub fn set_panel_visible(&mut self, panel: Panel, visible: bool) -> Result<(), String> {
+        self.panel(panel)?;
+        if visible == self.panel_group(panel).is_some() {
+            if visible {
+                self.panels_visible = true;
+            }
+            return Ok(());
+        }
+        if !visible {
+            self.detach(&[panel]);
+            return Ok(());
+        }
+        let mut next = self.clone();
+        let group = next.allocate()?;
+        let band = next.allocate()?;
+        let edge = match panel {
+            Panel::Brushes | Panel::Sizes => Edge::Left,
+            Panel::Layers => Edge::Right,
+            _ => Edge::Top,
+        };
+        next.bands.push(DockBand {
+            id: band,
+            edge,
+            extent: if panel.kind() == PanelKind::Tiles {
+                next.panel(panel)?.tile_style.size()[1] + WORKSPACE_SPACING
+            } else {
+                232.0
+            },
+            root: DockNode::Tabs {
+                id: group,
+                panels: vec![panel],
+                active: panel,
+            },
+        });
+        next.panels_visible = true;
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
+    pub fn add_panel_to_group(&mut self, panel: Panel, group: u32) -> Result<(), String> {
+        self.panel(panel)?;
+        if self.group_panels(group)?.contains(&panel) {
+            return Ok(());
+        }
+        if matches!(self.group_edge(group), Some(Edge::Top | Edge::Bottom)) {
+            return Err("Top and bottom docks only support standalone toolbars".into());
+        }
+        self.detach(&[panel]);
+        let Some(DockNode::Tabs { panels, active, .. }) = self.node_mut(group) else {
+            unreachable!()
+        };
+        panels.push(panel);
+        *active = panel;
+        let merged = panels.clone();
+        for panel in merged {
+            self.panel_mut(panel)?.hide_tab = false;
+        }
+        self.fit_tabs(group);
+        self.panels_visible = true;
+        Ok(())
+    }
+
+    pub(crate) fn group_edge(&self, group: u32) -> Option<Edge> {
+        let panel = *self.group_panels(group).ok()?.first()?;
+        self.bands
+            .iter()
+            .find(|b| b.root.group_for(panel).is_some())
+            .map(|b| b.edge)
+    }
+
+    pub fn rename_toolbar(&mut self, panel: Panel, name: &str) -> Result<(), String> {
+        self.check_toolbar_name(name, Some(panel))?;
+        let PanelContent::Toolbar { name: old, .. } = &mut self.panel_mut(panel)?.content else {
+            return Err("Built-in panels cannot be renamed".into());
+        };
+        *old = name.trim().into();
+        Ok(())
+    }
+
+    pub fn duplicate_toolbar(&mut self, panel: Panel, name: &str) -> Result<Panel, String> {
+        let original = self.panel(panel)?.clone();
+        if panel.kind() != PanelKind::Tiles {
+            return Err("Choose a toolbar".into());
+        }
+        let id = self.add_toolbar(
+            self.panel_group(panel)
+                .filter(|g| !matches!(self.group_edge(*g), Some(Edge::Top | Edge::Bottom))),
+            name,
+            &original
+                .tiles()
+                .iter()
+                .map(|t| t.control)
+                .collect::<Vec<_>>(),
+        )?;
+        let config = self.panel_mut(id)?;
+        config.tab_style = original.tab_style;
+        config.tile_style = original.tile_style;
+        Ok(id)
+    }
+
+    pub fn delete_toolbar(&mut self, panel: Panel) -> Result<(), String> {
+        self.panel(panel)?;
+        if panel.kind() != PanelKind::Tiles {
+            return Err("Built-in panels can be hidden, not deleted".into());
+        }
+        self.detach(&[panel]);
+        self.panels.retain(|p| p.id != panel);
+        Ok(())
     }
 
     pub fn insert_tools(
@@ -986,20 +1310,28 @@ impl DockLayout {
     }
 
     /// Restore docking defaults without throwing away customized panels/tools.
-    pub fn reset_docking(&mut self) {
+    pub fn reset_docking(&mut self) -> Result<(), String> {
+        let mut next = self.clone();
         let defaults = Self::default();
-        self.bands = defaults.bands;
-        self.panels_visible = true;
-        let tools = self
+        next.bands = defaults.bands;
+        next.floating.clear();
+        next.fit_tab_groups.clear();
+        next.panels_visible = true;
+        let tools: Vec<_> = self
             .panels
             .iter()
             .filter(|p| p.id.kind() == PanelKind::Tiles)
             .map(|p| p.id)
             .collect();
-        if let Some(DockNode::Tabs { panels, active, .. }) = self.node_mut(2) {
-            *panels = tools;
-            *active = Panel::Toolbar;
+        if !tools.contains(&Panel::Toolbar) {
+            next.bands.retain(|b| b.id != 1);
         }
+        for panel in tools {
+            next.set_panel_visible(panel, true)?;
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
     }
 
     pub fn resize_workspace(
@@ -1028,7 +1360,42 @@ impl DockLayout {
     fn node_mut(&mut self, id: u32) -> Option<&mut DockNode> {
         self.bands
             .iter_mut()
-            .find_map(|band| band.root.find_mut(id))
+            .map(|b| &mut b.root)
+            .chain(self.floating.iter_mut().map(|f| &mut f.root))
+            .find_map(|root| root.find_mut(id))
+    }
+    fn fit_tabs(&mut self, group: u32) {
+        if !self.fit_tab_groups.contains(&group) {
+            self.fit_tab_groups.push(group);
+        }
+        if let Some(f) = self.floating.iter_mut().find(|f| f.root.id() == group) {
+            f.height = None;
+        }
+    }
+    fn tab_width(&self, group: u32) -> f32 {
+        if !self.fit_tab_groups.contains(&group) {
+            return 0.0;
+        }
+        self.group_panels(group)
+            .map(|panels| {
+                if let [panel] = panels
+                    && self.panel(*panel).is_ok_and(|p| p.hide_tab)
+                {
+                    return 0.0;
+                }
+                panels
+                    .iter()
+                    .map(|p| {
+                        self.measurements
+                            .iter()
+                            .find(|m| m.panel == *p)
+                            .map_or(0.0, |m| m.tab_width)
+                    })
+                    .sum::<f32>()
+                    + 20.0
+                    + 2.0 * panels.len().saturating_sub(1) as f32
+            })
+            .unwrap_or(0.0)
     }
 
     pub fn move_panel(
@@ -1057,6 +1424,16 @@ impl DockLayout {
         if matches!(target, DockTarget::Tile { .. }) {
             return Err("Only tools can be dropped inside a toolbar".into());
         }
+        if let DockTarget::Split { group, .. } = target
+            && self.floating.iter().any(|f| f.root.id() == group)
+        {
+            return Err("Floating groups accept tabs, not docking splits".into());
+        }
+        if let DockTarget::Float { position } = target
+            && !position.into_iter().all(f32::is_finite)
+        {
+            return Err("Invalid floating panel position".into());
+        }
         let before = self.workspace(
             viewport[0],
             viewport[1],
@@ -1069,7 +1446,9 @@ impl DockLayout {
                 let (id, index, len) = next
                     .bands
                     .iter()
-                    .find_map(|b| find_tab(&b.root, panel))
+                    .map(|b| &b.root)
+                    .chain(next.floating.iter().map(|f| &f.root))
+                    .find_map(|root| find_tab(root, panel))
                     .ok_or("Unknown panel")?;
                 (vec![panel], panel, id, index, len)
             }
@@ -1090,24 +1469,33 @@ impl DockLayout {
         } else {
             next.allocate()?
         };
-        next.bands = next
-            .bands
-            .into_iter()
-            .filter_map(|band| {
-                let mut root = Some(band.root);
-                for panel in &moving {
-                    root = root?.remove(*panel);
-                }
-                Some(DockBand {
-                    root: root?,
-                    ..band
-                })
-            })
-            .collect();
+        let previous_float = self
+            .floating
+            .iter()
+            .find(|f| f.root.id() == source_group && whole)
+            .cloned();
+        let was_fitted = self.fit_tab_groups.contains(&source_group) && whole;
+        next.detach(&moving);
         let tiles = moving.len() == 1 && selected.kind() == PanelKind::Tiles;
+        let dock_edge = match &target {
+            DockTarget::Edge { edge, .. } => Some(*edge),
+            DockTarget::BesideBand { band } => {
+                next.bands.iter().find(|b| b.id == *band).map(|b| b.edge)
+            }
+            DockTarget::Tab { group, .. } | DockTarget::Split { group, .. } => {
+                next.group_edge(*group)
+            }
+            _ => None,
+        };
+        if matches!(dock_edge, Some(Edge::Top | Edge::Bottom))
+            && (!tiles || matches!(target, DockTarget::Tab { .. }))
+        {
+            return Err("Top and bottom docks only support standalone toolbars".into());
+        }
         let source = before.groups.iter().find(|g| g.id == source_group);
-        let moved_width = if tiles && source.is_some_and(|g| g.axis == Axis::Horizontal) {
-            TILE_SIZE
+        let tile_size = next.panel(selected)?.tile_style.size();
+        let moved_width = if tiles {
+            tile_size[0]
         } else {
             source.map(|g| g.bounds.width).unwrap_or(246.0)
         };
@@ -1117,21 +1505,71 @@ impl DockLayout {
             active: selected,
         };
         match target {
+            DockTarget::Float { position } => {
+                if let DockNode::Tabs { panels, .. } = &moving
+                    && let [panel] = panels.as_slice()
+                    && panel.kind() == PanelKind::Content
+                    && previous_float.is_none()
+                {
+                    next.panel_mut(*panel)?.hide_tab = true;
+                }
+                let width = previous_float.as_ref().map(|f| f.width).unwrap_or_else(|| {
+                    if tiles {
+                        next.panel(selected).unwrap().tile_style.floating_width()
+                    } else {
+                        source.map_or(232.0, |g| g.bounds.width)
+                    }
+                });
+                next.floating.push(FloatingGroup {
+                    root: moving,
+                    width,
+                    default_width: previous_float
+                        .as_ref()
+                        .and_then(|f| f.default_width)
+                        .or(Some(width)),
+                    position: [
+                        position[0] - width * 0.5,
+                        position[1] - TAB_BAR_HEIGHT * 0.5,
+                    ],
+                    height: previous_float.and_then(|f| f.height),
+                });
+                if was_fitted {
+                    next.fit_tabs(moving_id);
+                }
+            }
             DockTarget::Tile { .. } => unreachable!(),
-            DockTarget::Edge { edge, outer } => {
+            DockTarget::Edge { .. } | DockTarget::BesideBand { .. } => {
+                let (edge, index) = match target {
+                    DockTarget::Edge { edge, outer } => {
+                        (edge, if outer { 0 } else { next.bands.len() })
+                    }
+                    DockTarget::BesideBand { band } => {
+                        let index = next
+                            .bands
+                            .iter()
+                            .position(|b| b.id == band)
+                            .ok_or("The target sidebar no longer exists")?;
+                        (next.bands[index].edge, index + 1)
+                    }
+                    _ => unreachable!(),
+                };
                 let id = next.allocate()?;
                 let band = DockBand {
                     id,
                     edge,
-                    extent: if tiles {
-                        TILE_SIZE + WORKSPACE_SPACING
+                    extent: if edge.axis() == Axis::Horizontal {
+                        moved_width + WORKSPACE_SPACING
+                    } else if tiles {
+                        tile_size[usize::from(edge.axis() == Axis::Vertical)] + WORKSPACE_SPACING
                     } else {
                         252.0
                     },
                     root: moving,
                 };
-                let index = if outer { 0 } else { next.bands.len() };
                 next.bands.insert(index, band);
+                if was_fitted {
+                    next.fit_tabs(moving_id);
+                }
             }
             DockTarget::Tab { group, index } => {
                 let Some(DockNode::Tabs { panels, active, .. }) = next.node_mut(group) else {
@@ -1147,6 +1585,11 @@ impl DockLayout {
                 let index = index.min(panels.len());
                 panels.splice(index..index, moved);
                 *active = selected;
+                let merged = panels.clone();
+                for panel in merged {
+                    next.panel_mut(panel)?.hide_tab = false;
+                }
+                next.fit_tabs(group);
             }
             DockTarget::Split { group, edge } => {
                 let mut fraction = 0.5;
@@ -1195,7 +1638,13 @@ impl DockLayout {
                     let desired = target_width + moved_width + WORKSPACE_SPACING;
                     let grow = desired - current;
                     if band.edge.axis() == Axis::Horizontal {
-                        grow_node_width(&mut band.root, group, root_width, grow);
+                        resize_node_extent(
+                            &mut band.root,
+                            group,
+                            Axis::Horizontal,
+                            root_width,
+                            grow,
+                        );
                         band.extent = root_width + grow + WORKSPACE_SPACING;
                     } else if grow > 0.5 {
                         return Err("Not enough horizontal space to preserve panel widths".into());
@@ -1230,6 +1679,9 @@ impl DockLayout {
                     first: Box::new(first),
                     second: Box::new(second),
                 };
+                if was_fitted {
+                    next.fit_tabs(moving_id);
+                }
             }
         }
         if let DockTarget::Split {
@@ -1254,15 +1706,138 @@ impl DockLayout {
             if width(&after, group) + 0.5 < width(&before, group)
                 || width(&after, moving_id) + 0.5 < moved_width
                 || after.groups.iter().any(|g| {
-                    g.axis == Axis::Vertical && g.bounds.width + 0.5 < width(&before, g.id)
+                    g.id != moving_id
+                        && g.axis == Axis::Vertical
+                        && g.bounds.width + 0.5 < width(&before, g.id)
                 })
             {
                 return Err("Not enough horizontal space to preserve panel widths".into());
             }
         }
+        next.reclaim_removed_columns(self, &before);
+        next.validate()?;
         *self = next;
         Ok(())
     }
+
+    /// A single multi-column section determines a sidebar's natural width;
+    /// full-width rows follow it. Independent multi-column sections keep the
+    /// shared width and let the surviving children fill their vacated space.
+    pub(crate) fn reclaim_removed_columns(&mut self, before: &Self, geometry: &ResolvedLayout) {
+        // Horizontal splits form one row, regardless of their binary nesting.
+        // Vertical splits combine independent rows in the current column.
+        // Return (original width, surviving width, split rows in this column).
+        fn measure(
+            node: &DockNode,
+            retained: &DockNode,
+            geometry: &ResolvedLayout,
+            widths: &mut Vec<(u32, f32)>,
+        ) -> (f32, Option<f32>, usize) {
+            let result = match node {
+                DockNode::Tabs { id, panels, .. } => {
+                    let width = geometry
+                        .groups
+                        .iter()
+                        .find(|g| g.id == *id)
+                        .map(|g| g.bounds.width)
+                        .unwrap_or(0.0);
+                    let present = panels.iter().any(|p| {
+                        retained
+                            .group_for(*p)
+                            .is_some_and(|(group, _)| group == *id)
+                    });
+                    (width, present.then_some(width), 0)
+                }
+                DockNode::Split {
+                    axis,
+                    first,
+                    second,
+                    ..
+                } => {
+                    let (old_a, a, sections_a) = measure(first, retained, geometry, widths);
+                    let (old_b, b, sections_b) = measure(second, retained, geometry, widths);
+                    if *axis == Axis::Horizontal {
+                        let width = match (a, b) {
+                            (Some(a), Some(b)) => Some(a + b + WORKSPACE_SPACING),
+                            (a, b) => a.or(b),
+                        };
+                        (old_a + old_b + WORKSPACE_SPACING, width, 1)
+                    } else {
+                        let old = old_a.max(old_b);
+                        let sections = sections_a + sections_b;
+                        let width = if a.is_none() && b.is_none() {
+                            None
+                        } else if sections == 1 {
+                            // Full-width rows follow the only split row. If
+                            // that entire row disappears, keep the old width.
+                            Some(if sections_a == 1 { a } else { b }.unwrap_or(old))
+                        } else {
+                            Some(old)
+                        };
+                        (old, width, sections)
+                    }
+                }
+            };
+            if let Some(width) = result.1 {
+                widths.push((node.id(), width));
+            }
+            result
+        }
+        fn reweight(node: &mut DockNode, widths: &[(u32, f32)]) -> Option<f32> {
+            match node {
+                DockNode::Tabs { .. } => (),
+                DockNode::Split {
+                    axis,
+                    fraction,
+                    first,
+                    second,
+                    ..
+                } => {
+                    let a = reweight(first, widths)?;
+                    let b = reweight(second, widths)?;
+                    if *axis == Axis::Horizontal {
+                        *fraction = a / (a + b).max(1.0);
+                    }
+                }
+            }
+            widths
+                .iter()
+                .find(|(id, _)| *id == node.id())
+                .map(|(_, w)| *w)
+        }
+        for band in &mut self.bands {
+            if band.edge.axis() != Axis::Horizontal {
+                continue;
+            }
+            let Some(old) = before.bands.iter().find(|b| b.id == band.id) else {
+                continue;
+            };
+            // Relocating into another part of this band can add a new split;
+            // its explicit docking allocation must not be overwritten here.
+            let old_groups: Vec<_> = before
+                .panels
+                .iter()
+                .filter_map(|p| old.root.group_for(p.id).map(|g| g.0))
+                .collect();
+            if self
+                .panels
+                .iter()
+                .filter_map(|p| band.root.group_for(p.id))
+                .any(|(id, _)| !old_groups.contains(&id))
+            {
+                continue;
+            }
+            let mut widths = Vec::new();
+            let (was, now, _) = measure(&old.root, &band.root, geometry, &mut widths);
+            if let Some(now) = now
+                && now + 0.5 < was
+            {
+                band.extent = now + WORKSPACE_SPACING;
+                reweight(&mut band.root, &widths);
+            }
+        }
+    }
+
     /// Select a tab, returning whether the active tab changed.
     pub fn select_tab(&mut self, group: u32, panel: Panel) -> Result<bool, String> {
         if let Some(DockNode::Tabs { panels, active, .. }) = self.node_mut(group)
@@ -1270,6 +1845,11 @@ impl DockLayout {
         {
             let changed = *active != panel;
             *active = panel;
+            if changed
+                && let Some(floating) = self.floating.iter_mut().find(|f| f.root.id() == group)
+            {
+                floating.height = None;
+            }
             Ok(changed)
         } else {
             Err("Panel is not in this tab group".into())
@@ -1302,6 +1882,21 @@ impl DockLayout {
         let coordinate = position[usize::from(d.axis == Axis::Vertical)];
         if (coordinate - center).abs() < 0.001 {
             return Ok(());
+        }
+        if d.axis == Axis::Horizontal {
+            // A deliberate width adjustment takes over from tab auto-sizing.
+            let affected: Vec<_> = resolved
+                .groups
+                .iter()
+                .filter(|g| {
+                    d.parent.contains(
+                        g.bounds.x + g.bounds.width / 2.0,
+                        g.bounds.y + g.bounds.height / 2.0,
+                    )
+                })
+                .map(|g| g.id)
+                .collect();
+            self.fit_tab_groups.retain(|g| !affected.contains(g));
         }
         let (offset, extent, gap) = if d.axis == Axis::Horizontal {
             (position[0] - d.parent.x, d.parent.width, d.bounds.width)
@@ -1339,6 +1934,7 @@ impl DockLayout {
             height: finite_extent(height),
         };
         let mut result = ResolvedLayout {
+            viewport: [width, height],
             tab_bar_height: TAB_BAR_HEIGHT,
             reveal_edges: vec![Edge::Top],
             work_area: remaining,
@@ -1361,7 +1957,12 @@ impl DockLayout {
             } else {
                 remaining.height
             };
-            let ribbon_min = ribbon_cross_min(&band.root, axis, length, self);
+            let ribbon_min =
+                ribbon_cross_min(&band.root, axis, length, self).max(if axis == Axis::Vertical {
+                    tab_min_width(&band.root, self)
+                } else {
+                    0.0
+                });
             let available = if band.edge.axis() == Axis::Horizontal {
                 remaining.width
             } else {
@@ -1415,19 +2016,20 @@ impl DockLayout {
             (width - WORKSPACE_SPACING * 2.0).max(1.0),
             (height - top - WORKSPACE_SPACING).max(1.0),
         );
+        result.viewport = [width, height];
         let offset = |b: &mut Bounds| {
             b.x += WORKSPACE_SPACING;
             b.y += top;
         };
         offset(&mut result.work_area);
-        let height = bottom.min(result.work_area.height);
+        let hud_height = bottom.min(result.work_area.height);
         result.status = Bounds {
             x: result.work_area.x,
-            y: result.work_area.y + result.work_area.height - height,
+            y: result.work_area.y + result.work_area.height - hud_height,
             width: result.work_area.width,
-            height,
+            height: hud_height,
         };
-        result.work_area.height -= height;
+        result.work_area.height -= hud_height;
         for group in &mut result.groups {
             offset(&mut group.bounds);
         }
@@ -1435,13 +2037,289 @@ impl DockLayout {
             offset(&mut divider.bounds);
             offset(&mut divider.parent);
         }
+        for floating in &self.floating {
+            let DockNode::Tabs { id, panels, active } = &floating.root else {
+                continue;
+            };
+            let config = self.panel(*active).expect("validated floating panel");
+            let toolbar = panels.len() == 1 && active.kind() == PanelKind::Tiles;
+            let max_width = (width - WORKSPACE_SPACING * 2.0).max(1.0);
+            let max_height = (height - top - WORKSPACE_SPACING).max(1.0);
+            let width = floating.width.max(self.tab_width(*id)).min(max_width);
+            let natural = if toolbar {
+                let [tile_width, tile_height] = config.tile_style.size();
+                let columns = ((width + 2.0) / (tile_width + 2.0)).floor().max(1.0) as usize;
+                config.tiles().len().max(1).div_ceil(columns) as f32 * (tile_height + 2.0) - 2.0
+                    + 22.0
+            } else if active.kind() == PanelKind::Tiles {
+                let [w, h] = config.tile_style.size();
+                let columns = ((width - 8.0 + 2.0) / (w + 2.0)).floor().max(1.0) as usize;
+                config.tiles().len().max(1).div_ceil(columns) as f32 * (h + 2.0) - 2.0
+                    + 8.0
+                    + TAB_BAR_HEIGHT
+            } else {
+                (self
+                    .measurements
+                    .iter()
+                    .find(|m| m.panel == *active)
+                    .map_or(320.0, |m| m.content_height)
+                    + if panels.len() == 1 && config.hide_tab {
+                        PANEL_GRIP_HEIGHT
+                    } else {
+                        TAB_BAR_HEIGHT
+                    })
+                .min(height * 0.75)
+            };
+            let height = floating
+                .height
+                .unwrap_or(natural)
+                .max(TAB_BAR_HEIGHT)
+                .min(max_height);
+            let bounds = Bounds {
+                x: floating.position[0]
+                    .clamp(WORKSPACE_SPACING, WORKSPACE_SPACING + max_width - width),
+                y: floating.position[1].clamp(top, top + max_height - height),
+                width,
+                height,
+            };
+            resolve_node(&floating.root, bounds, Axis::Vertical, self, &mut result);
+            let group = result.groups.last_mut().unwrap();
+            group.floating = true;
+            group.resize_handles = ResizeEdge::handles(bounds);
+        }
         result
+    }
+
+    /// Move without changing size or replacing the group; native hosts retain
+    /// their widgets and pointer grab throughout the gesture.
+    pub fn move_floating(
+        &mut self,
+        group: u32,
+        position: [f32; 2],
+        viewport: [f32; 2],
+    ) -> Result<(), String> {
+        if !viewport.into_iter().all(|v| v.is_finite() && v > 0.0)
+            || !position.into_iter().all(f32::is_finite)
+        {
+            return Err("Invalid floating panel position".into());
+        }
+        let b = self
+            .workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+            .groups
+            .into_iter()
+            .find(|g| g.id == group && g.floating)
+            .ok_or("Unknown floating group")?
+            .bounds;
+        self.floating
+            .iter_mut()
+            .find(|f| f.root.id() == group)
+            .unwrap()
+            .position = [
+            position[0].clamp(
+                WORKSPACE_SPACING,
+                (viewport[0] - WORKSPACE_SPACING - b.width).max(WORKSPACE_SPACING),
+            ),
+            position[1].clamp(
+                crate::HEADER_HEIGHT,
+                (viewport[1] - WORKSPACE_SPACING - b.height).max(crate::HEADER_HEIGHT),
+            ),
+        ];
+        Ok(())
+    }
+
+    pub fn resize_floating(
+        &mut self,
+        group: u32,
+        edge: ResizeEdge,
+        start: Bounds,
+        delta: [f32; 2],
+        viewport: [f32; 2],
+    ) -> Result<(), String> {
+        if !viewport.into_iter().all(|v| v.is_finite() && v > 0.0)
+            || !delta.into_iter().all(f32::is_finite)
+            || ![start.x, start.y, start.width, start.height]
+                .into_iter()
+                .all(f32::is_finite)
+            || start.width <= 0.0
+            || start.height <= 0.0
+        {
+            return Err("Invalid floating panel size".into());
+        }
+        let floating = self
+            .floating
+            .iter_mut()
+            .find(|f| f.root.id() == group)
+            .ok_or("Unknown floating group")?;
+        let mut left = start.x;
+        let mut right = start.x + start.width;
+        let mut top = start.y;
+        let mut bottom = start.y + start.height;
+        if matches!(
+            edge,
+            ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft
+        ) {
+            left = (left + delta[0]).clamp(
+                WORKSPACE_SPACING,
+                (right - TILE_SIZE).max(WORKSPACE_SPACING),
+            );
+        }
+        if matches!(
+            edge,
+            ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight
+        ) {
+            right = (right + delta[0]).clamp(
+                left + TILE_SIZE,
+                (viewport[0] - WORKSPACE_SPACING).max(left + TILE_SIZE),
+            );
+        }
+        if matches!(
+            edge,
+            ResizeEdge::Top | ResizeEdge::TopLeft | ResizeEdge::TopRight
+        ) {
+            top = (top + delta[1]).clamp(
+                crate::HEADER_HEIGHT,
+                (bottom - TAB_BAR_HEIGHT).max(crate::HEADER_HEIGHT),
+            );
+        }
+        if matches!(
+            edge,
+            ResizeEdge::Bottom | ResizeEdge::BottomLeft | ResizeEdge::BottomRight
+        ) {
+            bottom = (bottom + delta[1]).clamp(
+                top + TAB_BAR_HEIGHT,
+                (viewport[1] - WORKSPACE_SPACING).max(top + TAB_BAR_HEIGHT),
+            );
+        }
+        floating.position = [left, top];
+        floating.width = right - left;
+        floating.height = Some(bottom - top);
+        self.fit_tab_groups.retain(|id| *id != group);
+        Ok(())
+    }
+
+    /// Empty group headers and standalone toolbar grips share reset semantics;
+    /// a tab label never resets the size, even in a singleton content group.
+    pub fn floating_reset_target(&self, item: DockItem) -> Option<u32> {
+        self.floating.iter().find_map(|f| {
+            let eligible = match item {
+                DockItem::Group { group } => f.root.id() == group,
+                DockItem::Panel { panel } => {
+                    panel.kind() == PanelKind::Tiles
+                        && matches!(&f.root, DockNode::Tabs { panels, .. } if panels == &[panel])
+                }
+                DockItem::Tile { .. } => false,
+            };
+            eligible.then_some(f.root.id())
+        })
+    }
+
+    pub fn set_tile_style(
+        &mut self,
+        panel: Panel,
+        style: TileStyle,
+        viewport: [f32; 2],
+    ) -> Result<(), String> {
+        if panel.kind() != PanelKind::Tiles {
+            return Err("Choose a toolbar".into());
+        }
+        let old = self.panel(panel)?.tile_style;
+        if old == style {
+            return Ok(());
+        }
+        let before = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        self.panel_mut(panel)?.tile_style = style;
+        let Some(group) = before
+            .groups
+            .iter()
+            .find(|g| g.active == panel && !g.tabs_visible)
+        else {
+            return Ok(());
+        };
+        if group.floating {
+            return self.reset_floating_size(group.id);
+        }
+        let axis = if group.axis == Axis::Horizontal {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        };
+        let cross = if axis == Axis::Horizontal {
+            group.bounds.width
+        } else {
+            group.bounds.height
+        };
+        let dimension = usize::from(axis == Axis::Vertical);
+        // Preserve manually expanded multi-lane ribbons. A one-lane ribbon
+        // follows the new tile size in either direction, including shrinking.
+        if cross + 2.0 >= (old.size()[dimension] + 2.0) * 2.0 {
+            return Ok(());
+        }
+        let band = self
+            .bands
+            .iter_mut()
+            .find(|b| b.root.group_for(panel).is_some())
+            .unwrap();
+        let divider = before
+            .dividers
+            .iter()
+            .find(|d| d.band && d.id == band.id)
+            .unwrap();
+        let extent = if axis == Axis::Horizontal {
+            if divider.reversed {
+                divider.parent.x + divider.parent.width - divider.bounds.x - divider.bounds.width
+            } else {
+                divider.bounds.x - divider.parent.x
+            }
+        } else if divider.reversed {
+            divider.parent.y + divider.parent.height - divider.bounds.y - divider.bounds.height
+        } else {
+            divider.bounds.y - divider.parent.y
+        };
+        let delta = style.size()[dimension] - cross;
+        resize_node_extent(&mut band.root, group.id, axis, extent, delta);
+        band.extent = extent + delta + WORKSPACE_SPACING;
+        Ok(())
+    }
+
+    pub fn reset_floating_size(&mut self, group: u32) -> Result<(), String> {
+        let floating = self
+            .floating
+            .iter()
+            .find(|f| f.root.id() == group)
+            .ok_or("Unknown floating group")?;
+        let DockNode::Tabs { panels, active, .. } = &floating.root else {
+            return Err("Invalid floating group".into());
+        };
+        let width = if panels.len() == 1 && active.kind() == PanelKind::Tiles {
+            self.panel(*active)?.tile_style.floating_width()
+        } else {
+            floating.default_width.unwrap_or(floating.width)
+        };
+        let floating = self
+            .floating
+            .iter_mut()
+            .find(|f| f.root.id() == group)
+            .unwrap();
+        floating.width = width;
+        floating.height = None;
+        self.fit_tabs(group);
+        Ok(())
     }
 }
 
 impl ResolvedLayout {
     pub fn tile_drop_hint(&self, point: [f32; 2], config: &DockLayout) -> Option<DropHint> {
-        for group in &self.groups {
+        for group in self.groups.iter().rev() {
             let Some(tiles) = &group.tiles else { continue };
             let mut body = group.bounds;
             if group.tabs_visible {
@@ -1474,16 +2352,22 @@ impl ResolvedLayout {
     }
     /// Measured native tab rectangles take priority over split zones. Body
     /// centers append tabs; the top/bottom 20% of the body split vertically.
-    pub fn drop_hint(&self, x: f32, y: f32, tabs: &[TabHit]) -> DropHint {
-        for group in &self.groups {
+    pub fn drop_hint(&self, x: f32, y: f32, tabs: &[TabHit]) -> Option<DropHint> {
+        let screen = Bounds {
+            width: self.viewport[0],
+            height: self.viewport[1],
+            ..Bounds::default()
+        };
+        if !screen.contains(x, y) {
+            return None;
+        }
+        for group in self.groups.iter().rev() {
             let b = group.bounds;
             if !b.contains(x, y) {
                 continue;
             }
-            let header = !(group.panels.len() == 1 && group.active.kind() == PanelKind::Tiles);
-            if header && y < b.y + TAB_BAR_HEIGHT {
+            if group.tabs_visible && y < b.y + TAB_BAR_HEIGHT {
                 let mut index = group.panels.len();
-                // The trailing grip is fixed even when tabs scroll/overflow.
                 for tab in tabs
                     .iter()
                     .filter(|t| t.group == group.id && x < b.x + b.width - 20.0)
@@ -1493,15 +2377,24 @@ impl ResolvedLayout {
                         break;
                     }
                 }
-                return DropHint {
+                return Some(DropHint {
                     target: DockTarget::Tab {
                         group: group.id,
                         index: Some(index),
                     },
                     bounds: tab_insertion_line(group, tabs, index),
-                };
+                });
             }
-            let body = if header {
+            if group.floating {
+                return Some(DropHint {
+                    target: DockTarget::Tab {
+                        group: group.id,
+                        index: None,
+                    },
+                    bounds: tab_insertion_line(group, tabs, group.panels.len()),
+                });
+            }
+            let body = if group.tabs_visible {
                 Bounds {
                     y: b.y + TAB_BAR_HEIGHT,
                     height: (b.height - TAB_BAR_HEIGHT).max(0.0),
@@ -1510,9 +2403,21 @@ impl ResolvedLayout {
             } else {
                 b
             };
-            // Side strips stay narrow; vertical splits get generous targets.
-            // Header handling above always wins over the upper body zone.
-            let edge = if x < body.x + 18.0 {
+            let narrow_center = !group.tabs_visible
+                && group.axis == Axis::Vertical
+                && body.width
+                    < group
+                        .tiles
+                        .as_ref()
+                        .and_then(|t| t.tiles.first())
+                        .map_or(TILE_SIZE, |t| t.width)
+                        * 2.0
+                        + 2.0
+                && x >= body.x + body.width / 3.0
+                && x <= body.x + body.width * 2.0 / 3.0;
+            let edge = if narrow_center {
+                None
+            } else if x < body.x + 18.0 {
                 Some(Edge::Left)
             } else if x > body.x + body.width - 18.0 {
                 Some(Edge::Right)
@@ -1523,50 +2428,137 @@ impl ResolvedLayout {
             } else {
                 None
             };
-            if let Some(edge) = edge {
-                return DropHint {
+            return Some(if let Some(edge) = edge {
+                DropHint {
                     target: DockTarget::Split {
                         group: group.id,
                         edge,
                     },
                     bounds: edge_line(b, edge),
-                };
-            }
-            return DropHint {
-                target: DockTarget::Tab {
-                    group: group.id,
-                    index: None,
-                },
-                bounds: tab_insertion_line(group, tabs, group.panels.len()),
-            };
+                }
+            } else {
+                DropHint {
+                    target: DockTarget::Tab {
+                        group: group.id,
+                        index: None,
+                    },
+                    bounds: tab_insertion_line(group, tabs, group.panels.len()),
+                }
+            });
         }
-        let mut all = self.work_area;
-        all.height += self.status.height;
-        for g in &self.groups {
-            let right = (all.x + all.width).max(g.bounds.x + g.bounds.width);
-            let bottom = (all.y + all.height).max(g.bounds.y + g.bounds.height);
-            all.x = all.x.min(g.bounds.x);
-            all.y = all.y.min(g.bounds.y);
-            all.width = right - all.x;
-            all.height = bottom - all.y;
-        }
-        let (distance, outer_edge) = nearest_edge(all, x, y);
-        let outer = distance < 12.0;
-        let edge = if outer {
-            outer_edge
-        } else {
-            nearest_edge(self.work_area, x, y).1
+        // Free canvas has no drop indicator. Within the fixed snap reach,
+        // prefer the closest panel boundary or the window edge.
+        // The drawing workspace begins below the app title bar. Its top snap
+        // distances and indicator share this boundary, not the window's y=0.
+        let dock_screen = Bounds {
+            y: crate::HEADER_HEIGHT.min(screen.height),
+            height: (screen.height - crate::HEADER_HEIGHT).max(0.0),
+            ..screen
         };
-        DropHint {
-            target: DockTarget::Edge { edge, outer },
-            bounds: edge_line(if outer { all } else { self.work_area }, edge),
+        let (screen_distance, screen_edge) = nearest_edge(dock_screen, x, y);
+        let nearest = self
+            .groups
+            .iter()
+            .rev()
+            .map(|g| (g.bounds.distance_to([x, y]), g))
+            .filter(|(distance, group)| {
+                *distance
+                    <= if group.floating {
+                        WORKSPACE_PROXIMITY
+                    } else {
+                        PANEL_SNAP_DISTANCE
+                    }
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((distance, group)) = nearest
+            && distance < screen_distance
+        {
+            if group.floating {
+                return Some(DropHint {
+                    target: DockTarget::Tab {
+                        group: group.id,
+                        index: None,
+                    },
+                    bounds: tab_insertion_line(group, tabs, group.panels.len()),
+                });
+            }
+            let edge = nearest_edge(group.bounds, x, y).1;
+            return Some(DropHint {
+                target: DockTarget::Split {
+                    group: group.id,
+                    edge,
+                },
+                bounds: edge_line(group.bounds, edge),
+            });
         }
+        // Beyond an individual panel's 40px reach, the next 40px selects the
+        // whole sidebar. Its complete inner divider is the insertion line.
+        let sidebar = self
+            .dividers
+            .iter()
+            .filter(|d| d.band)
+            .filter(|d| {
+                let mut body = d.parent;
+                match (d.axis, d.reversed) {
+                    (Axis::Horizontal, false) => body.width = d.bounds.x - body.x,
+                    (Axis::Horizontal, true) => {
+                        body.width -= d.bounds.x + d.bounds.width - body.x;
+                        body.x = d.bounds.x + d.bounds.width;
+                    }
+                    (Axis::Vertical, false) => body.height = d.bounds.y - body.y,
+                    (Axis::Vertical, true) => {
+                        body.height -= d.bounds.y + d.bounds.height - body.y;
+                        body.y = d.bounds.y + d.bounds.height;
+                    }
+                }
+                self.groups.iter().any(|g| {
+                    !g.floating
+                        && body.contains(
+                            g.bounds.x + g.bounds.width * 0.5,
+                            g.bounds.y + g.bounds.height * 0.5,
+                        )
+                })
+            })
+            .map(|d| (d.bounds.distance_to([x, y]), d))
+            .filter(|(distance, _)| *distance <= WORKSPACE_PROXIMITY && *distance < screen_distance)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, divider)) = sidebar {
+            let mut line = divider.bounds;
+            if divider.axis == Axis::Horizontal {
+                line.x += (line.width - 3.0) * 0.5;
+                line.width = 3.0;
+            } else {
+                line.y += (line.height - 3.0) * 0.5;
+                line.height = 3.0;
+            }
+            return Some(DropHint {
+                target: DockTarget::BesideBand { band: divider.id },
+                bounds: line,
+            });
+        }
+        (screen_distance <= WORKSPACE_PROXIMITY).then(|| {
+            let outer = !matches!(screen_edge, Edge::Top | Edge::Bottom)
+                || screen_distance <= PANEL_SNAP_DISTANCE;
+            let bounds = if outer {
+                dock_screen
+            } else {
+                Bounds {
+                    height: self.work_area.height + self.status.height,
+                    ..self.work_area
+                }
+            };
+            DropHint {
+                target: DockTarget::Edge {
+                    edge: screen_edge,
+                    outer,
+                },
+                bounds: edge_line(bounds, screen_edge),
+            }
+        })
     }
     /// Hidden chrome reveals only at the window edge; visible chrome remains
     /// available near its controls. Hosts may also pin it for focus/popovers.
     pub fn near_chrome(&self, point: [f32; 2], viewport: [f32; 2], hidden: bool) -> bool {
-        const EDGE_REVEAL_DISTANCE: f32 = 80.0;
-        const KEEP_VISIBLE_MARGIN: f32 = 40.0;
         let [x, y] = point;
         let [width, height] = viewport;
         if !(Bounds {
@@ -1583,25 +2575,25 @@ impl ResolvedLayout {
         // the HUD alone must not activate an otherwise empty bottom edge.
         // Keep enabled reveal zones visible too, preserving hysteresis.
         let edge = self.reveal_edges.iter().any(|edge| match edge {
-            Edge::Top => y <= EDGE_REVEAL_DISTANCE,
-            Edge::Bottom => height - y <= EDGE_REVEAL_DISTANCE,
-            Edge::Left => x <= EDGE_REVEAL_DISTANCE,
-            Edge::Right => width - x <= EDGE_REVEAL_DISTANCE,
+            Edge::Top => y <= WORKSPACE_PROXIMITY,
+            Edge::Bottom => height - y <= WORKSPACE_PROXIMITY,
+            Edge::Left => x <= WORKSPACE_PROXIMITY,
+            Edge::Right => width - x <= WORKSPACE_PROXIMITY,
         });
         if hidden || edge {
             return edge;
         }
-        y <= crate::HEADER_HEIGHT + KEEP_VISIBLE_MARGIN
-            || (x >= self.status.x - KEEP_VISIBLE_MARGIN
-                && x <= self.status.x + self.status.width + KEEP_VISIBLE_MARGIN
-                && y >= self.status.y - KEEP_VISIBLE_MARGIN
-                && y <= self.status.y + self.status.height + KEEP_VISIBLE_MARGIN)
-            || self.groups.iter().any(|g| {
+        y <= crate::HEADER_HEIGHT + WORKSPACE_PROXIMITY
+            || (x >= self.status.x - WORKSPACE_PROXIMITY
+                && x <= self.status.x + self.status.width + WORKSPACE_PROXIMITY
+                && y >= self.status.y - WORKSPACE_PROXIMITY
+                && y <= self.status.y + self.status.height + WORKSPACE_PROXIMITY)
+            || self.groups.iter().filter(|g| !g.floating).any(|g| {
                 let b = g.bounds;
-                x >= b.x - KEEP_VISIBLE_MARGIN
-                    && x <= b.x + b.width + KEEP_VISIBLE_MARGIN
-                    && y >= b.y - KEEP_VISIBLE_MARGIN
-                    && y <= b.y + b.height + KEEP_VISIBLE_MARGIN
+                x >= b.x - WORKSPACE_PROXIMITY
+                    && x <= b.x + b.width + WORKSPACE_PROXIMITY
+                    && y >= b.y - WORKSPACE_PROXIMITY
+                    && y <= b.y + b.height + WORKSPACE_PROXIMITY
             })
     }
 }
@@ -1614,24 +2606,60 @@ fn finite_extent(value: f32) -> f32 {
     }
 }
 
+fn tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
+    match node {
+        DockNode::Tabs { id, .. } => layout.tab_width(*id),
+        DockNode::Split {
+            axis,
+            first,
+            second,
+            ..
+        } => {
+            let a = tab_min_width(first, layout);
+            let b = tab_min_width(second, layout);
+            if *axis == Axis::Horizontal && (a > 0.0 || b > 0.0) {
+                a + b + WORKSPACE_SPACING
+            } else {
+                a.max(b)
+            }
+        }
+    }
+}
+
 // Intrinsic ribbon thickness, including ribbons nested beside other panels.
 // Use the same split fractions as allocation; no resize callbacks or feedback.
 fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout) -> f32 {
-    match node {
+    let minimum = match node {
         DockNode::Tabs { panels, active, .. }
             if panels.len() == 1 && active.kind() == PanelKind::Tiles =>
         {
+            let config = layout.panel(*active).unwrap();
+            let [w, h] = config.tile_style.size();
             ribbon_lanes(
                 length,
-                layout.panel(*active).map(|p| p.tiles().len()).unwrap_or(0),
+                config.tiles().len(),
+                if ribbon_axis == Axis::Horizontal {
+                    w
+                } else {
+                    h
+                },
             ) as f32
-                * (TILE_SIZE + 2.0)
+                * (if ribbon_axis == Axis::Horizontal {
+                    h
+                } else {
+                    w
+                } + 2.0)
                 - 2.0
         }
         DockNode::Tabs { panels, .. } if panels.iter().any(|p| p.kind() == PanelKind::Tiles) => {
             // A tab bar must not consume the ribbon's entire old one-row
             // allocation. Reserve one padded lane; additional tiles may clip.
-            TILE_SIZE
+            panels
+                .iter()
+                .filter_map(|p| layout.panel(*p).ok())
+                .filter(|p| p.id.kind() == PanelKind::Tiles)
+                .map(|p| p.tile_style.size()[usize::from(ribbon_axis == Axis::Horizontal)])
+                .fold(TILE_SIZE, f32::max)
                 + 8.0
                 + if ribbon_axis == Axis::Horizontal {
                     TAB_BAR_HEIGHT
@@ -1658,10 +2686,17 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
                 if a == 0.0 && b == 0.0 {
                     0.0
                 } else {
-                    (a / fraction).max(b / (1.0 - fraction)) + WORKSPACE_SPACING
+                    a + b + WORKSPACE_SPACING
                 }
             }
         }
+    };
+    if ribbon_axis == Axis::Vertical
+        && let DockNode::Tabs { id, .. } = node
+    {
+        minimum.max(layout.tab_width(*id))
+    } else {
+        minimum
     }
 }
 fn find_tab(node: &DockNode, panel: Panel) -> Option<(u32, usize, usize)> {
@@ -1677,7 +2712,13 @@ fn find_tab(node: &DockNode, panel: Panel) -> Option<(u32, usize, usize)> {
 }
 // Expand only the target branch. Horizontal siblings keep their width;
 // vertical siblings share the wider column, keeping their height fractions.
-fn grow_node_width(node: &mut DockNode, group: u32, width: f32, delta: f32) -> bool {
+fn resize_node_extent(
+    node: &mut DockNode,
+    group: u32,
+    dimension: Axis,
+    width: f32,
+    delta: f32,
+) -> bool {
     if let DockNode::Tabs { id, .. } = node {
         return *id == group;
     }
@@ -1691,16 +2732,16 @@ fn grow_node_width(node: &mut DockNode, group: u32, width: f32, delta: f32) -> b
     else {
         unreachable!()
     };
-    if *axis == Axis::Vertical {
-        return grow_node_width(first, group, width, delta)
-            || grow_node_width(second, group, width, delta);
+    if *axis != dimension {
+        return resize_node_extent(first, group, dimension, width, delta)
+            || resize_node_extent(second, group, dimension, width, delta);
     }
     let usable = (width - WORKSPACE_SPACING).max(0.0);
     let first_width = usable * *fraction;
-    if grow_node_width(first, group, first_width, delta) {
+    if resize_node_extent(first, group, dimension, first_width, delta) {
         *fraction = (first_width + delta) / (usable + delta);
         true
-    } else if grow_node_width(second, group, usable - first_width, delta) {
+    } else if resize_node_extent(second, group, dimension, usable - first_width, delta) {
         *fraction = first_width / (usable + delta);
         true
     } else {
@@ -1755,7 +2796,9 @@ fn resolve_node(
     match node {
         DockNode::Tabs { id, panels, active } => {
             let standalone = panels.len() == 1;
-            let tabs_visible = !standalone || active.kind() != PanelKind::Tiles;
+            let config = layout.panel(*active).expect("validated panel");
+            let tabs_visible =
+                !standalone || (active.kind() != PanelKind::Tiles && !config.hide_tab);
             result.groups.push(GroupPlacement {
                 id: *id,
                 bounds,
@@ -1763,6 +2806,16 @@ fn resolve_node(
                 active: *active,
                 axis: orientation,
                 tabs_visible,
+                footer_grip: (!tabs_visible && active.kind() == PanelKind::Content).then_some(
+                    Bounds {
+                        x: 0.0,
+                        y: (bounds.height - PANEL_GRIP_HEIGHT).max(0.0),
+                        width: bounds.width,
+                        height: PANEL_GRIP_HEIGHT.min(bounds.height),
+                    },
+                ),
+                floating: false,
+                resize_handles: Vec::new(),
                 tiles: (active.kind() == PanelKind::Tiles).then(|| {
                     tile_layout(
                         bounds.width,
@@ -1770,6 +2823,10 @@ fn resolve_node(
                         orientation,
                         layout.panel(*active).map(|p| p.tiles().len()).unwrap_or(0),
                         standalone,
+                        layout
+                            .panel(*active)
+                            .map(|p| p.tile_style)
+                            .unwrap_or_default(),
                     )
                 }),
             });
@@ -1793,7 +2850,40 @@ fn resolve_node(
             } else {
                 Edge::Top
             };
-            let a = rest.strip(edge, (length - gap) * fraction);
+            let usable = length - gap;
+            let mut first_size = usable * fraction;
+            if *axis == Axis::Horizontal || *axis != orientation {
+                let minimum = |node: &DockNode| {
+                    let tabs = if *axis == Axis::Horizontal {
+                        tab_min_width(node, layout)
+                    } else {
+                        0.0
+                    };
+                    let ribbon = if *axis != orientation {
+                        ribbon_cross_min(
+                            node,
+                            orientation,
+                            if orientation == Axis::Horizontal {
+                                bounds.width
+                            } else {
+                                bounds.height
+                            },
+                            layout,
+                        )
+                    } else {
+                        0.0
+                    };
+                    tabs.max(ribbon)
+                };
+                let a = minimum(first);
+                let b = minimum(second);
+                first_size = if a + b <= usable {
+                    first_size.clamp(a, usable - b)
+                } else {
+                    usable * a / (a + b)
+                };
+            }
+            let a = rest.strip(edge, first_size);
             let divider = rest.strip(edge, gap);
             result.dividers.push(Divider {
                 id: *id,
@@ -1812,6 +2902,1095 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn column_fixture(two_sections: bool) -> (DockLayout, [Panel; 4]) {
+        let mut layout = DockLayout::default();
+        let mut panels = [Panel::Toolbar; 4];
+        for (i, panel) in panels.iter_mut().enumerate().skip(1) {
+            *panel = layout
+                .add_toolbar(None, &format!("Column {i}"), &[ToolbarControl::Color])
+                .unwrap();
+        }
+        let tab = |id, panel| DockNode::Tabs {
+            id,
+            panels: vec![panel],
+            active: panel,
+        };
+        let horizontal = |id, fraction, first, second| DockNode::Split {
+            id,
+            axis: Axis::Horizontal,
+            fraction,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        let section = if two_sections {
+            DockNode::Split {
+                id: 107,
+                axis: Axis::Vertical,
+                fraction: 0.5,
+                first: Box::new(horizontal(
+                    108,
+                    0.35,
+                    tab(102, panels[0]),
+                    tab(103, panels[1]),
+                )),
+                second: Box::new(horizontal(
+                    109,
+                    0.4,
+                    tab(104, panels[2]),
+                    tab(105, panels[3]),
+                )),
+            }
+        } else {
+            horizontal(
+                107,
+                0.15,
+                tab(102, panels[0]),
+                horizontal(108, 0.35, tab(103, panels[1]), tab(104, panels[2])),
+            )
+        };
+        layout.bands = vec![DockBand {
+            id: 99,
+            edge: Edge::Left,
+            extent: 612.0,
+            root: DockNode::Split {
+                id: 100,
+                axis: Axis::Vertical,
+                fraction: 0.2,
+                first: Box::new(tab(101, Panel::Brushes)),
+                second: Box::new(section),
+            },
+        }];
+        layout.next_id = 110;
+        layout.validate().unwrap();
+        (layout, panels)
+    }
+
+    #[test]
+    fn removing_nested_columns_reclaims_only_a_unique_multicolumn_section() {
+        let viewport = [1600.0, 1600.0];
+        for two_sections in [false, true] {
+            for (index, merge) in (0..3).flat_map(|i| [(i, false), (i, true)]) {
+                let (mut layout, panels) = column_fixture(two_sections);
+                let before = layout.workspace(
+                    viewport[0],
+                    viewport[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                );
+                let removed = group(&before, panels[index]).width;
+                let original_width = group(&before, Panel::Brushes).width;
+                layout
+                    .move_panel(
+                        viewport,
+                        panels[index],
+                        if merge {
+                            DockTarget::Tab {
+                                group: layout.panel_group(panels[(index + 1) % 3]).unwrap(),
+                                index: None,
+                            }
+                        } else {
+                            DockTarget::Float {
+                                position: [1000.0, 600.0],
+                            }
+                        },
+                    )
+                    .unwrap();
+                let after = layout.workspace(
+                    viewport[0],
+                    viewport[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                );
+                assert!(
+                    (group(&after, Panel::Brushes).width
+                        - if two_sections {
+                            original_width
+                        } else {
+                            original_width - removed - WORKSPACE_SPACING
+                        })
+                    .abs()
+                        < 0.01
+                );
+                if !two_sections {
+                    for (other, panel) in panels[..3].iter().enumerate() {
+                        if other != index {
+                            assert!(
+                                (group(&after, *panel).width - group(&before, *panel).width).abs()
+                                    < 0.01,
+                                "surviving subcolumns retain their widths"
+                            );
+                        }
+                    }
+                }
+                layout.validate().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn column_reclaim_recurses_through_stacked_rows_inside_subcolumns() {
+        let (mut layout, panels) = column_fixture(false);
+        *layout.node_mut(103).unwrap() = DockNode::Split {
+            id: 110,
+            axis: Axis::Vertical,
+            fraction: 0.3,
+            first: Box::new(DockNode::Tabs {
+                id: 111,
+                panels: vec![Panel::Sizes],
+                active: Panel::Sizes,
+            }),
+            second: Box::new(DockNode::Split {
+                id: 112,
+                axis: Axis::Horizontal,
+                fraction: 0.45,
+                first: Box::new(DockNode::Tabs {
+                    id: 113,
+                    panels: vec![panels[1]],
+                    active: panels[1],
+                }),
+                second: Box::new(DockNode::Tabs {
+                    id: 114,
+                    panels: vec![panels[3]],
+                    active: panels[3],
+                }),
+            }),
+        };
+        layout.next_id = 115;
+        layout.validate().unwrap();
+        let viewport = [1800.0, 1800.0];
+        let before = layout.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        layout
+            .move_panel(
+                viewport,
+                panels[1],
+                DockTarget::Float {
+                    position: [1200.0, 800.0],
+                },
+            )
+            .unwrap();
+        let after = layout.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        let removed = group(&before, panels[1]).width + WORKSPACE_SPACING;
+        for panel in [Panel::Brushes, Panel::Sizes] {
+            assert!(
+                (group(&after, panel).width - group(&before, panel).width + removed).abs() < 0.01
+            );
+        }
+        for panel in [panels[0], panels[2], panels[3]] {
+            assert!((group(&after, panel).width - group(&before, panel).width).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn column_shrinking_continues_after_each_nested_child_hits_its_minimum() {
+        let (mut layout, panels) = column_fixture(false);
+        layout.panel_mut(panels[1]).unwrap().tile_style = TileStyle::Large;
+        layout.panel_mut(panels[2]).unwrap().tile_style = TileStyle::Large;
+        let minimum = 36.0 + 72.0 + 72.0 + WORKSPACE_SPACING * 2.0;
+        for requested in [600.0, 400.0, 300.0, 250.0, 220.0, 200.0, 192.0, 160.0] {
+            layout.bands[0].extent = requested + WORKSPACE_SPACING;
+            let resolved =
+                layout.workspace(1600.0, 2000.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+            let full_width = group(&resolved, Panel::Brushes).width;
+            assert!(
+                (full_width - requested.max(minimum)).abs() < 0.01,
+                "requested={requested}, actual={full_width}"
+            );
+            for (i, panel) in panels[..3].iter().enumerate() {
+                let width = group(&resolved, *panel).width;
+                let min = if i == 0 { 36.0 } else { 72.0 };
+                assert!(width + 0.01 >= min);
+                if requested < minimum {
+                    assert!((width - min).abs() < 0.01);
+                }
+            }
+        }
+        // Mixed content/ribbon minima compose before applying split ratios;
+        // max(sum(tab minima), sum(tile minima)) would undercount this case.
+        *layout.node_mut(103).unwrap() = DockNode::Tabs {
+            id: 103,
+            panels: vec![Panel::Sizes],
+            active: Panel::Sizes,
+        };
+        layout.fit_tabs(103);
+        layout.measurements.push(PanelMeasurement {
+            panel: Panel::Sizes,
+            tab_width: 80.0,
+            content_height: 100.0,
+        });
+        layout.bands[0].extent = 50.0;
+        let resolved = layout.workspace(1600.0, 2000.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+        assert_eq!(group(&resolved, Panel::Sizes).width, 100.0);
+        assert_eq!(
+            group(&resolved, Panel::Brushes).width,
+            36.0 + 100.0 + 72.0 + 12.0
+        );
+    }
+
+    #[test]
+    fn sidebar_snap_has_distinct_panel_and_whole_stack_zones() {
+        for edge in [Edge::Left, Edge::Right] {
+            let mut layout = DockLayout::default();
+            // Keep only the stacked Sizes/Brushes band and the Layers band.
+            layout.set_panel_visible(Panel::Toolbar, false).unwrap();
+            layout
+                .bands
+                .iter_mut()
+                .find(|b| b.root.group_for(Panel::Layers).is_some())
+                .unwrap()
+                .edge = if edge == Edge::Left {
+                Edge::Right
+            } else {
+                Edge::Left
+            };
+            let band = layout
+                .bands
+                .iter_mut()
+                .find(|b| b.root.group_for(Panel::Sizes).is_some())
+                .unwrap();
+            band.edge = edge;
+            let band_id = band.id;
+            let r = layout.workspace(1600.0, 1000.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+            let divider = r
+                .dividers
+                .iter()
+                .find(|d| d.id == band_id && d.band)
+                .unwrap();
+            for panel in [Panel::Sizes, Panel::Brushes] {
+                let g = r.groups.iter().find(|g| g.panels.contains(&panel)).unwrap();
+                let y = g.bounds.y + g.bounds.height * 0.5;
+                let boundary = if edge == Edge::Left {
+                    g.bounds.x + g.bounds.width
+                } else {
+                    g.bounds.x
+                };
+                let sign = if edge == Edge::Left { 1.0 } else { -1.0 };
+                let split = if edge == Edge::Left {
+                    Edge::Right
+                } else {
+                    Edge::Left
+                };
+                for distance in [1.0, 20.0, 40.0] {
+                    assert_eq!(
+                        r.drop_hint(boundary + sign * distance, y, &[])
+                            .unwrap()
+                            .target,
+                        DockTarget::Split {
+                            group: g.id,
+                            edge: split
+                        }
+                    );
+                }
+                let hint = r.drop_hint(boundary + sign * 60.0, y, &[]).unwrap();
+                assert_eq!(hint.target, DockTarget::BesideBand { band: band_id });
+                assert_eq!(hint.bounds.height, divider.bounds.height);
+                let mut moved = layout.clone();
+                let old_width = r
+                    .groups
+                    .iter()
+                    .find(|g| g.active == Panel::Layers)
+                    .unwrap()
+                    .bounds
+                    .width;
+                moved
+                    .move_panel([1600.0, 1000.0], Panel::Layers, hint.target)
+                    .unwrap();
+                let after =
+                    moved.workspace(1600.0, 1000.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+                let layers = after
+                    .groups
+                    .iter()
+                    .find(|g| g.active == Panel::Layers)
+                    .unwrap();
+                assert_eq!(layers.bounds.height, divider.bounds.height);
+                assert_eq!(layers.bounds.width, old_width);
+                assert_eq!(
+                    moved.bands.iter().find(|b| b.id == band_id).unwrap().root,
+                    layout.bands.iter().find(|b| b.id == band_id).unwrap().root
+                );
+                assert!(r.drop_hint(boundary + sign * 90.0, y, &[]).is_none());
+            }
+        }
+        let empty = DockLayout {
+            panels_visible: false,
+            ..Default::default()
+        }
+        .workspace(1200.0, 900.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+        let top = empty.drop_hint(600.0, 0.0, &[]).unwrap();
+        assert_eq!(
+            top.target,
+            DockTarget::Edge {
+                edge: Edge::Top,
+                outer: true
+            }
+        );
+        assert_eq!(top.bounds.y, crate::HEADER_HEIGHT);
+        let mut layout = DockLayout::default();
+        layout.set_panel_visible(Panel::Toolbar, false).unwrap();
+        let r = layout.workspace(1200.0, 900.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+        for edge in [Edge::Top, Edge::Bottom] {
+            for (distance, outer) in [(1.0, true), (40.0, true), (41.0, false), (80.0, false)] {
+                let y = if edge == Edge::Top {
+                    crate::HEADER_HEIGHT + distance
+                } else {
+                    900.0 - distance
+                };
+                let hint = r.drop_hint(600.0, y, &[]).unwrap();
+                assert_eq!(hint.target, DockTarget::Edge { edge, outer });
+                assert_eq!(
+                    hint.bounds.width,
+                    if outer { 1200.0 } else { r.work_area.width }
+                );
+                assert_eq!(hint.bounds.x, if outer { 0.0 } else { r.work_area.x });
+            }
+            let y = if edge == Edge::Top {
+                crate::HEADER_HEIGHT + 81.0
+            } else {
+                819.0
+            };
+            assert!(r.drop_hint(600.0, y, &[]).is_none());
+        }
+    }
+
+    #[test]
+    fn toolbar_style_changes_refit_floats_and_single_lane_docks() {
+        let viewport = [1600.0, 1200.0];
+        let resolve = |l: &DockLayout| {
+            l.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+        };
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            let mut layout = DockLayout::default();
+            layout
+                .move_panel(
+                    viewport,
+                    Panel::Toolbar,
+                    DockTarget::Edge { edge, outer: true },
+                )
+                .unwrap();
+            for style in [TileStyle::Large, TileStyle::Labeled, TileStyle::Small] {
+                layout
+                    .set_tile_style(Panel::Toolbar, style, viewport)
+                    .unwrap();
+                let g = resolve(&layout)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.active == Panel::Toolbar)
+                    .unwrap();
+                assert_eq!(
+                    if edge.axis() == Axis::Horizontal {
+                        g.bounds.width
+                    } else {
+                        g.bounds.height
+                    },
+                    style.size()[usize::from(edge.axis() == Axis::Vertical)],
+                    "{edge:?} {style:?}"
+                );
+                layout.validate().unwrap();
+            }
+            // An explicitly expanded, multi-lane dock keeps its allocation.
+            let band = layout
+                .bands
+                .iter_mut()
+                .find(|b| b.root.group_for(Panel::Toolbar).is_some())
+                .unwrap();
+            band.extent = 180.0;
+            let before = resolve(&layout)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Toolbar)
+                .unwrap()
+                .bounds;
+            layout
+                .set_tile_style(Panel::Toolbar, TileStyle::Large, viewport)
+                .unwrap();
+            let after = resolve(&layout)
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Toolbar)
+                .unwrap()
+                .bounds;
+            assert_eq!(before, after);
+        }
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                viewport,
+                Panel::Toolbar,
+                DockTarget::Float {
+                    position: [700.0, 350.0],
+                },
+            )
+            .unwrap();
+        let group = layout.panel_group(Panel::Toolbar).unwrap();
+        assert_eq!(
+            layout.floating_reset_target(DockItem::Panel {
+                panel: Panel::Toolbar
+            }),
+            Some(group)
+        );
+        for style in [TileStyle::Large, TileStyle::Labeled, TileStyle::Small] {
+            layout.floating[0].width = 390.0;
+            layout.floating[0].height = Some(310.0);
+            let position = layout.floating[0].position;
+            layout
+                .set_tile_style(Panel::Toolbar, style, viewport)
+                .unwrap();
+            assert_eq!(layout.floating[0].width, style.floating_width());
+            assert_eq!(layout.floating[0].height, None);
+            assert_eq!(layout.floating[0].position, position);
+        }
+        layout
+            .move_panel(
+                viewport,
+                Panel::Sizes,
+                DockTarget::Tab { group, index: None },
+            )
+            .unwrap();
+        layout.floating[0].width = 390.0;
+        layout.floating[0].height = Some(310.0);
+        layout
+            .set_tile_style(Panel::Toolbar, TileStyle::Large, viewport)
+            .unwrap();
+        assert_eq!(layout.floating[0].width, 390.0);
+        assert_eq!(layout.floating[0].height, Some(310.0));
+        assert_eq!(
+            layout.floating_reset_target(DockItem::Panel {
+                panel: Panel::Toolbar
+            }),
+            None
+        );
+        assert_eq!(
+            layout.floating_reset_target(DockItem::Panel {
+                panel: Panel::Sizes
+            }),
+            None
+        );
+        assert_eq!(
+            layout.floating_reset_target(DockItem::Group { group }),
+            Some(group)
+        );
+    }
+
+    #[test]
+    fn docking_resets_toolbar_width_and_nested_tile_refits_preserve_neighbors() {
+        let viewport = [1600.0, 2200.0];
+        let resolve = |l: &DockLayout| {
+            l.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+        };
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            for edge in [Edge::Left, Edge::Right] {
+                for split in [false, true] {
+                    let mut layout = DockLayout::default();
+                    layout
+                        .set_tile_style(Panel::Toolbar, style, viewport)
+                        .unwrap();
+                    layout
+                        .move_panel(
+                            viewport,
+                            Panel::Toolbar,
+                            DockTarget::Float {
+                                position: [700.0, 350.0],
+                            },
+                        )
+                        .unwrap();
+                    layout.floating[0].width = 400.0;
+                    layout.floating[0].height = Some(250.0);
+                    let sizes = layout.panel_group(Panel::Sizes).unwrap();
+                    let target = if split {
+                        DockTarget::Split { group: sizes, edge }
+                    } else {
+                        DockTarget::Edge { edge, outer: true }
+                    };
+                    layout.move_panel(viewport, Panel::Toolbar, target).unwrap();
+                    let before = resolve(&layout);
+                    let toolbar = before
+                        .groups
+                        .iter()
+                        .find(|g| g.active == Panel::Toolbar)
+                        .unwrap();
+                    assert!(
+                        (toolbar.bounds.width - style.size()[0]).abs() < 0.01,
+                        "{edge:?} {style:?} split={split}: {:?}",
+                        toolbar.bounds
+                    );
+                    let other = before
+                        .groups
+                        .iter()
+                        .find(|g| g.id == sizes)
+                        .unwrap()
+                        .bounds
+                        .width;
+                    let next = if style == TileStyle::Small {
+                        TileStyle::Large
+                    } else {
+                        TileStyle::Small
+                    };
+                    layout
+                        .set_tile_style(Panel::Toolbar, next, viewport)
+                        .unwrap();
+                    let after = resolve(&layout);
+                    assert!(
+                        (after
+                            .groups
+                            .iter()
+                            .find(|g| g.active == Panel::Toolbar)
+                            .unwrap()
+                            .bounds
+                            .width
+                            - next.size()[0])
+                            .abs()
+                            < 0.01,
+                        "{edge:?} {style:?}->{next:?} split={split}: {:?}",
+                        after
+                            .groups
+                            .iter()
+                            .find(|g| g.active == Panel::Toolbar)
+                            .unwrap()
+                            .bounds
+                    );
+                    assert!(
+                        (after
+                            .groups
+                            .iter()
+                            .find(|g| g.id == sizes)
+                            .unwrap()
+                            .bounds
+                            .width
+                            - other)
+                            .abs()
+                            < 0.01
+                    );
+                    layout.validate().unwrap();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_docks_reject_content_and_tab_groups_including_existing_ribbon_targets() {
+        for edge in [Edge::Top, Edge::Bottom] {
+            let mut base = DockLayout::default();
+            base.move_panel(
+                VIEWPORT,
+                Panel::Toolbar,
+                DockTarget::Edge { edge, outer: true },
+            )
+            .unwrap();
+            let toolbar = base.panel_group(Panel::Toolbar).unwrap();
+            let band = base
+                .bands
+                .iter()
+                .find(|b| b.root.id() == toolbar)
+                .unwrap()
+                .id;
+            for grouped in [false, true] {
+                let mut layout = base.clone();
+                if grouped {
+                    layout.add_panel_to_group(Panel::Sizes, 5).unwrap();
+                }
+                let item = if grouped {
+                    DockItem::Group { group: 5 }
+                } else {
+                    DockItem::Panel {
+                        panel: Panel::Brushes,
+                    }
+                };
+                for target in [
+                    DockTarget::Edge { edge, outer: false },
+                    DockTarget::Edge { edge, outer: true },
+                    DockTarget::BesideBand { band },
+                    DockTarget::Tab {
+                        group: toolbar,
+                        index: None,
+                    },
+                    DockTarget::Split {
+                        group: toolbar,
+                        edge: Edge::Top,
+                    },
+                    DockTarget::Split {
+                        group: toolbar,
+                        edge: Edge::Bottom,
+                    },
+                ] {
+                    let before = layout.clone();
+                    assert!(layout.move_item(VIEWPORT, item, target).is_err());
+                    assert_eq!(layout, before, "a rejected drop is atomic");
+                }
+                layout
+                    .move_item(
+                        VIEWPORT,
+                        item,
+                        DockTarget::Split {
+                            group: 8,
+                            edge: Edge::Top,
+                        },
+                    )
+                    .unwrap();
+            }
+            assert!(base.add_panel_to_group(Panel::Brushes, toolbar).is_err());
+            let duplicate = base
+                .duplicate_toolbar(Panel::Toolbar, "Another toolbar")
+                .unwrap();
+            assert_ne!(base.panel_group(duplicate), Some(toolbar));
+            assert_eq!(base.group_panels(toolbar).unwrap(), &[Panel::Toolbar]);
+            assert!(
+                base.move_panel(
+                    VIEWPORT,
+                    duplicate,
+                    DockTarget::Tab {
+                        group: toolbar,
+                        index: None
+                    }
+                )
+                .is_err()
+            );
+            base.move_panel(VIEWPORT, duplicate, DockTarget::Edge { edge, outer: false })
+                .unwrap();
+            base.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn snapped_toolbars_add_only_the_lanes_required_to_avoid_overflow() {
+        let viewport = [1000.0, 800.0];
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+                for count in [6, 17, 29] {
+                    let mut layout = DockLayout::default();
+                    let panel = layout
+                        .add_toolbar(None, "Wrapping", &vec![ToolbarControl::Color; count])
+                        .unwrap();
+                    layout.set_tile_style(panel, style, viewport).unwrap();
+                    layout
+                        .move_panel(
+                            viewport,
+                            panel,
+                            DockTarget::Float {
+                                position: [500.0, 400.0],
+                            },
+                        )
+                        .unwrap();
+                    layout.floating[0].width = 480.0;
+                    layout
+                        .move_panel(viewport, panel, DockTarget::Edge { edge, outer: true })
+                        .unwrap();
+                    let resolved = layout.workspace(
+                        viewport[0],
+                        viewport[1],
+                        crate::HEADER_HEIGHT,
+                        crate::STATUS_HEIGHT,
+                    );
+                    let g = resolved.groups.iter().find(|g| g.active == panel).unwrap();
+                    let horizontal = edge.axis() == Axis::Vertical;
+                    let (length, cross, along_size, cross_size) = if horizontal {
+                        (
+                            g.bounds.width,
+                            g.bounds.height,
+                            style.size()[0],
+                            style.size()[1],
+                        )
+                    } else {
+                        (
+                            g.bounds.height,
+                            g.bounds.width,
+                            style.size()[1],
+                            style.size()[0],
+                        )
+                    };
+                    let slots = ((length - 20.0) / (along_size + 2.0)).floor() as usize;
+                    let lanes = count.div_ceil(slots);
+                    assert_eq!(
+                        cross,
+                        lanes as f32 * (cross_size + 2.0) - 2.0,
+                        "{style:?} {edge:?} count={count}"
+                    );
+                    let tiles = g.tiles.as_ref().unwrap();
+                    let grip = tiles.grip.unwrap();
+                    for tile in &tiles.tiles {
+                        assert!(tile.x >= 0.0 && tile.y >= 0.0);
+                        assert!(
+                            tile.x + tile.width <= g.bounds.width
+                                && tile.y + tile.height <= g.bounds.height
+                        );
+                        assert!(tile.intersection(grip).is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn floating_resize_targets_are_external_and_anchor_the_opposite_edges() {
+        let viewport = [1600.0, 1200.0];
+        let resolve = |l: &DockLayout| {
+            l.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+        };
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                viewport,
+                Panel::Sizes,
+                DockTarget::Float {
+                    position: [700.0, 350.0],
+                },
+            )
+            .unwrap();
+        let g = resolve(&layout)
+            .groups
+            .into_iter()
+            .find(|g| g.floating)
+            .unwrap();
+        let b = g.bounds;
+        for (i, handle) in g.resize_handles.iter().enumerate() {
+            assert!(handle.bounds.intersection(b).is_none());
+            assert!(
+                g.resize_handles[..i]
+                    .iter()
+                    .all(|other| other.bounds.intersection(handle.bounds).is_none())
+            );
+            let mut changed = layout.clone();
+            changed
+                .resize_floating(g.id, handle.edge, b, [20.0, 30.0], viewport)
+                .unwrap();
+            let actual = resolve(&changed)
+                .groups
+                .into_iter()
+                .find(|f| f.id == g.id)
+                .unwrap()
+                .bounds;
+            let (left, right, top, bottom) = match handle.edge {
+                ResizeEdge::Left => (20.0, 0.0, 0.0, 0.0),
+                ResizeEdge::Right => (0.0, 20.0, 0.0, 0.0),
+                ResizeEdge::Top => (0.0, 0.0, 30.0, 0.0),
+                ResizeEdge::Bottom => (0.0, 0.0, 0.0, 30.0),
+                ResizeEdge::TopLeft => (20.0, 0.0, 30.0, 0.0),
+                ResizeEdge::TopRight => (0.0, 20.0, 30.0, 0.0),
+                ResizeEdge::BottomLeft => (20.0, 0.0, 0.0, 30.0),
+                ResizeEdge::BottomRight => (0.0, 20.0, 0.0, 30.0),
+            };
+            assert_eq!(
+                actual,
+                Bounds {
+                    x: b.x + left,
+                    y: b.y + top,
+                    width: b.width + right - left,
+                    height: b.height + bottom - top
+                }
+            );
+            changed.reset_floating_size(g.id).unwrap();
+            let reset = resolve(&changed)
+                .groups
+                .into_iter()
+                .find(|f| f.id == g.id)
+                .unwrap()
+                .bounds;
+            assert_eq!([reset.width, reset.height], [b.width, b.height]);
+            assert_eq!([reset.x, reset.y], [actual.x, actual.y]);
+        }
+    }
+
+    #[test]
+    fn tile_modes_share_allocation_without_overlap_or_grip_collisions() {
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            for axis in [Axis::Horizontal, Axis::Vertical] {
+                for standalone in [false, true] {
+                    for count in [0, 1, 2, 7, 31] {
+                        let layout = tile_layout(1000.0, 800.0, axis, count, standalone, style);
+                        assert_eq!(layout.tiles.len(), count);
+                        assert_eq!(layout.insertion.len(), count + 1);
+                        for (i, tile) in layout.tiles.iter().enumerate() {
+                            assert_eq!([tile.width, tile.height], style.size());
+                            assert!(
+                                tile.x >= 0.0
+                                    && tile.y >= 0.0
+                                    && tile.x + tile.width <= 1000.0
+                                    && tile.y + tile.height <= 800.0
+                            );
+                            assert!(
+                                layout.tiles[..i]
+                                    .iter()
+                                    .all(|other| tile.intersection(*other).is_none())
+                            );
+                            assert!(layout.grip.is_none_or(|g| tile.intersection(g).is_none()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn floating_groups_share_tabs_size_from_content_and_survive_hidden_docks() {
+        let viewport = [1200.0, 900.0];
+        let resolve = |layout: &DockLayout| {
+            layout.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            )
+        };
+        let mut layout = DockLayout {
+            measurements: vec![
+                PanelMeasurement {
+                    panel: Panel::Brushes,
+                    tab_width: 200.0,
+                    content_height: 1000.0,
+                },
+                PanelMeasurement {
+                    panel: Panel::Layers,
+                    tab_width: 140.0,
+                    content_height: 100.0,
+                },
+            ],
+            ..Default::default()
+        };
+        let initial = resolve(&layout);
+        let original_width = initial
+            .groups
+            .iter()
+            .find(|g| g.active == Panel::Brushes)
+            .unwrap()
+            .bounds
+            .width;
+        let center = [
+            initial.work_area.x + initial.work_area.width / 2.0,
+            initial.work_area.y + initial.work_area.height / 2.0,
+        ];
+        assert!(initial.drop_hint(center[0], center[1], &[]).is_none());
+        layout
+            .move_panel(
+                viewport,
+                Panel::Brushes,
+                DockTarget::Float { position: center },
+            )
+            .unwrap();
+        let group = layout.panel_group(Panel::Brushes).unwrap();
+        let floating = resolve(&layout)
+            .groups
+            .into_iter()
+            .find(|g| g.id == group)
+            .unwrap();
+        assert!(floating.floating && floating.resize_handles.len() == 8);
+        assert_eq!(floating.bounds.width, original_width);
+        assert_eq!(floating.bounds.height, 675.0);
+        layout.panels_visible = false;
+        assert_eq!(
+            resolve(&layout).groups.len(),
+            1,
+            "global dock visibility never hides floating groups"
+        );
+        layout.add_panel_to_group(Panel::Layers, group).unwrap();
+        let current = resolve(&layout);
+        let floating = current.groups.iter().find(|g| g.id == group).unwrap();
+        assert_eq!(floating.bounds.width, 362.0);
+        assert_eq!(floating.bounds.height, 136.0);
+        for [x, y] in [
+            [floating.bounds.x + 1.0, floating.bounds.y + 1.0],
+            [
+                floating.bounds.x + floating.bounds.width - 1.0,
+                floating.bounds.y + floating.bounds.height - 1.0,
+            ],
+        ] {
+            assert!(
+                matches!(current.drop_hint(x, y, &[]).unwrap().target, DockTarget::Tab { group: id, .. } if id == group)
+            );
+        }
+        layout
+            .resize_floating(
+                group,
+                ResizeEdge::BottomRight,
+                floating.bounds,
+                [
+                    230.0 - floating.bounds.width,
+                    300.0 - floating.bounds.height,
+                ],
+                viewport,
+            )
+            .unwrap();
+        layout.select_tab(group, Panel::Brushes).unwrap();
+        let resized = resolve(&layout)
+            .groups
+            .into_iter()
+            .find(|g| g.id == group)
+            .unwrap();
+        assert_eq!(resized.bounds.width, 230.0);
+        assert_eq!(
+            resized.bounds.height, 675.0,
+            "changing tabs restores natural height after manual resize"
+        );
+        layout.validate().unwrap();
+        let saved = serde_json::to_value(&layout).unwrap();
+        assert!(saved.get("measurements").is_none());
+        let restored: DockLayout = serde_json::from_value(saved).unwrap();
+        restored.validate().unwrap();
+        layout
+            .move_item(
+                viewport,
+                DockItem::Group { group },
+                DockTarget::Edge {
+                    edge: Edge::Left,
+                    outer: false,
+                },
+            )
+            .unwrap();
+        assert!(layout.floating.is_empty());
+        assert_eq!(
+            layout.group_panels(group).unwrap(),
+            &[Panel::Brushes, Panel::Layers]
+        );
+    }
+
+    #[test]
+    fn floating_toolbars_default_to_three_small_or_large_columns_and_two_labeled() {
+        for (style, columns) in [
+            (TileStyle::Small, 3),
+            (TileStyle::Large, 3),
+            (TileStyle::Labeled, 2),
+        ] {
+            let mut layout = DockLayout::default();
+            layout.panel_mut(Panel::Toolbar).unwrap().tile_style = style;
+            layout
+                .move_panel(
+                    VIEWPORT,
+                    Panel::Toolbar,
+                    DockTarget::Float {
+                        position: [600.0, 350.0],
+                    },
+                )
+                .unwrap();
+            let resolved = layout.workspace(
+                VIEWPORT[0],
+                VIEWPORT[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            );
+            let group = resolved
+                .groups
+                .iter()
+                .find(|g| g.active == Panel::Toolbar)
+                .unwrap();
+            let [w, h] = style.size();
+            assert_eq!(group.bounds.width, columns as f32 * (w + 2.0) - 2.0);
+            assert_eq!(
+                group.bounds.height,
+                crate::TOOLBAR_CONTROLS.len().div_ceil(columns) as f32 * (h + 2.0) + 20.0
+            );
+            let tiles = group.tiles.as_ref().unwrap();
+            assert!(
+                tiles
+                    .tiles
+                    .iter()
+                    .all(|t| t.x + t.width <= group.bounds.width
+                        && t.y + t.height <= group.bounds.height - 22.0)
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_vertical_toolbar_has_a_merge_target_and_tab_growth_is_reversible() {
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                VIEWPORT,
+                Panel::Toolbar,
+                DockTarget::Edge {
+                    edge: Edge::Left,
+                    outer: false,
+                },
+            )
+            .unwrap();
+        let resolved = layout.workspace(
+            VIEWPORT[0],
+            VIEWPORT[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        let ribbon = resolved
+            .groups
+            .iter()
+            .find(|g| g.active == Panel::Toolbar)
+            .unwrap();
+        assert_eq!(ribbon.bounds.width, 36.0);
+        let hint = resolved
+            .drop_hint(ribbon.bounds.x + 18.0, ribbon.bounds.y + 100.0, &[])
+            .unwrap();
+        assert!(matches!(hint.target, DockTarget::Tab { .. }));
+        layout.measurements = vec![
+            PanelMeasurement {
+                panel: Panel::Brushes,
+                tab_width: 150.0,
+                content_height: 200.0,
+            },
+            PanelMeasurement {
+                panel: Panel::Layers,
+                tab_width: 180.0,
+                content_height: 200.0,
+            },
+        ];
+        layout.add_panel_to_group(Panel::Brushes, 8).unwrap();
+        let resolved = layout.workspace(
+            VIEWPORT[0],
+            VIEWPORT[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        assert_eq!(
+            resolved
+                .groups
+                .iter()
+                .find(|g| g.id == 8)
+                .unwrap()
+                .bounds
+                .width,
+            352.0
+        );
+        let divider = resolved.dividers.iter().find(|d| d.id == 7).unwrap();
+        layout
+            .resize_workspace(7, [divider.bounds.x + 83.0, divider.bounds.y], VIEWPORT)
+            .unwrap();
+        assert!(
+            layout
+                .workspace(
+                    VIEWPORT[0],
+                    VIEWPORT[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT
+                )
+                .groups
+                .iter()
+                .find(|g| g.id == 8)
+                .unwrap()
+                .bounds
+                .width
+                < 352.0
+        );
+    }
 
     #[test]
     fn expanded_columns_open_inward_and_only_grow_to_content() {
@@ -1955,7 +4134,7 @@ mod tests {
         for axis in [Axis::Horizontal, Axis::Vertical] {
             for standalone in [false, true] {
                 for (width, height) in [(59.0, 75.0), (81.0, 51.0)] {
-                    let layout = tile_layout(width, height, axis, 30, standalone);
+                    let layout = tile_layout(width, height, axis, 30, standalone, TileStyle::Small);
                     let clip = Bounds {
                         width,
                         height,
@@ -1980,7 +4159,8 @@ mod tests {
                     }
                     assert!(!targets.is_empty());
                     assert!(targets.len() < 31);
-                    let expanded = tile_layout(900.0, 900.0, axis, 30, standalone);
+                    let expanded =
+                        tile_layout(900.0, 900.0, axis, 30, standalone, TileStyle::Small);
                     for (index, line) in expanded.insertion.iter().enumerate() {
                         let point = [line.x + line.width * 0.5, line.y + line.height * 0.5];
                         assert_eq!(expanded.drop_slot(point, 900.0, 900.0).unwrap().0, index);
@@ -1991,13 +4171,69 @@ mod tests {
     }
 
     #[test]
+    fn floating_group_becoming_a_lone_toolbar_restores_its_default_grid() {
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            for hide in [false, true] {
+                let mut layout = DockLayout::default();
+                layout.panel_mut(Panel::Toolbar).unwrap().tile_style = style;
+                layout
+                    .move_panel(
+                        VIEWPORT,
+                        Panel::Toolbar,
+                        DockTarget::Float {
+                            position: [600.0, 450.0],
+                        },
+                    )
+                    .unwrap();
+                let group = layout.panel_group(Panel::Toolbar).unwrap();
+                layout.add_panel_to_group(Panel::Layers, group).unwrap();
+                let f = &mut layout.floating[0];
+                f.width = 450.0;
+                f.height = Some(600.0);
+                let position = f.position;
+                if hide {
+                    layout.set_panel_visible(Panel::Layers, false).unwrap();
+                } else {
+                    layout
+                        .move_panel(
+                            VIEWPORT,
+                            Panel::Layers,
+                            DockTarget::Edge {
+                                edge: Edge::Right,
+                                outer: true,
+                            },
+                        )
+                        .unwrap();
+                }
+                let f = &layout.floating[0];
+                assert_eq!(f.root.id(), group);
+                assert_eq!(f.position, position);
+                assert_eq!(f.width, style.floating_width());
+                assert_eq!(f.default_width, Some(style.floating_width()));
+                assert_eq!(f.height, None);
+                assert!(!layout.fit_tab_groups.contains(&group));
+                let resolved = layout.workspace(
+                    VIEWPORT[0],
+                    VIEWPORT[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                );
+                let toolbar = resolved.groups.iter().find(|g| g.id == group).unwrap();
+                assert!(!toolbar.tabs_visible);
+                assert_eq!(toolbar.bounds.width, style.floating_width());
+                assert!(toolbar.bounds.height < 600.0);
+            }
+        }
+    }
+
+    #[test]
     fn hidden_slots_are_not_clamped_into_the_last_visible_row() {
-        let layout = tile_layout(36.0, 36.0, Axis::Horizontal, 12, true);
+        let layout = tile_layout(36.0, 36.0, Axis::Horizontal, 12, true, TileStyle::Small);
         let (index, line) = layout.drop_slot([1.0, 35.5], 36.0, 36.0).unwrap();
         assert_eq!(index, 0);
         assert_eq!(line.y, 0.0);
         // The next row is still hidden even if its marker straddles the clip.
-        let layout = tile_layout(80.0, 38.0, Axis::Horizontal, 12, true);
+        let layout = tile_layout(80.0, 38.0, Axis::Horizontal, 12, true, TileStyle::Small);
         assert_eq!(layout.drop_slot([1.0, 37.5], 80.0, 38.0).unwrap().0, 0);
     }
 
@@ -2124,7 +4360,7 @@ mod tests {
                 VIEWPORT,
                 DockItem::Group { group: 8 },
                 DockTarget::Edge {
-                    edge: Edge::Bottom,
+                    edge: Edge::Left,
                     outer: false,
                 },
             )
@@ -2132,8 +4368,8 @@ mod tests {
         assert_eq!(layout.bands.last().unwrap().root, original);
         assert_eq!(
             layout.bands.last().unwrap().extent,
-            252.0,
-            "a mixed tab group is not a thin tool ribbon"
+            232.0,
+            "a mixed tab group retains its width"
         );
         layout
             .move_item(
@@ -2166,16 +4402,16 @@ mod tests {
             (Axis::Horizontal, 500.0, TILE_SIZE),
             (Axis::Vertical, TILE_SIZE, 500.0),
         ] {
-            let layout = tile_layout(width, height, axis, 6, true);
+            let layout = tile_layout(width, height, axis, 6, true, TileStyle::Small);
             assert_eq!((layout.tiles[0].x, layout.tiles[0].y), (0.0, 0.0));
             assert!(layout.grip.is_some());
             let grip = layout.grip.unwrap();
             assert_eq!(
                 (grip.width, grip.height),
                 if axis == Axis::Horizontal {
-                    (20.0, 24.0)
+                    (20.0, height)
                 } else {
-                    (24.0, 20.0)
+                    (width, 20.0)
                 }
             );
             assert_eq!(
@@ -2207,10 +4443,10 @@ mod tests {
                     })
             );
         }
-        let rows = tile_layout(500.0, 82.0, Axis::Horizontal, 6, true);
+        let rows = tile_layout(500.0, 82.0, Axis::Horizontal, 6, true, TileStyle::Small);
         assert_eq!(rows.tiles[0].x, rows.tiles[3].x);
         assert_eq!(rows.tiles[0].y, rows.tiles[2].y);
-        let columns = tile_layout(82.0, 500.0, Axis::Vertical, 6, false);
+        let columns = tile_layout(82.0, 500.0, Axis::Vertical, 6, false, TileStyle::Small);
         assert!(columns.grip.is_none());
         assert_eq!((columns.tiles[0].x, columns.tiles[0].y), (4.0, 4.0));
         assert_eq!(columns.tiles[0].y, columns.tiles[1].y);
@@ -2252,6 +4488,7 @@ mod tests {
                     g.axis,
                     TOOL_TILE_COUNT,
                     true,
+                    TileStyle::Small,
                 );
                 let grip = tiles.grip.unwrap();
                 for tile in &tiles.tiles {
@@ -2303,7 +4540,14 @@ mod tests {
             };
             let resolved = layout.resolve(200.0, 800.0);
             let b = group(&resolved, Panel::Toolbar);
-            let tiles = tile_layout(b.width, b.height, Axis::Horizontal, TOOL_TILE_COUNT, true);
+            let tiles = tile_layout(
+                b.width,
+                b.height,
+                Axis::Horizontal,
+                TOOL_TILE_COUNT,
+                true,
+                TileStyle::Small,
+            );
             assert!(tiles.tiles.iter().all(
                 |t| t.y + t.height <= b.height && t.x + t.width + 2.0 <= tiles.grip.unwrap().x
             ));
@@ -2330,10 +4574,13 @@ mod tests {
     #[test]
     fn toolbar_and_status_stay_between_sides_and_above_bottom() {
         let mut layout = DockLayout::default();
+        let bottom_panel = layout
+            .add_toolbar(None, "Bottom", &[ToolbarControl::Color])
+            .unwrap();
         layout
             .move_panel(
                 VIEWPORT,
-                Panel::Sizes,
+                bottom_panel,
                 DockTarget::Edge {
                     edge: Edge::Bottom,
                     outer: false,
@@ -2342,7 +4589,7 @@ mod tests {
             .unwrap();
         let r = layout.workspace(1200.0, 900.0, 48.0, 28.0);
         let toolbar = group(&r, Panel::Toolbar);
-        let bottom = group(&r, Panel::Sizes);
+        let bottom = group(&r, bottom_panel);
         assert_eq!(toolbar.y, 48.0, "header padding must not be counted twice");
         assert_eq!(toolbar.x, r.status.x);
         assert_eq!(toolbar.width, r.status.width);
@@ -2383,11 +4630,13 @@ mod tests {
             (0.81, Some(Edge::Bottom)),
             (0.99, Some(Edge::Bottom)),
         ] {
-            let hint = layout.drop_hint(
-                b.x + b.width * 0.5,
-                b.y + TAB_BAR_HEIGHT + (b.height - TAB_BAR_HEIGHT) * fraction,
-                &[],
-            );
+            let hint = layout
+                .drop_hint(
+                    b.x + b.width * 0.5,
+                    b.y + TAB_BAR_HEIGHT + (b.height - TAB_BAR_HEIGHT) * fraction,
+                    &[],
+                )
+                .unwrap();
             assert_eq!(
                 hint.target,
                 match edge {
@@ -2400,7 +4649,10 @@ mod tests {
             );
         }
         assert!(matches!(
-            layout.drop_hint(b.x + 40.0, b.y + 10.0, &[]).target,
+            layout
+                .drop_hint(b.x + 40.0, b.y + 10.0, &[])
+                .unwrap()
+                .target,
             DockTarget::Tab { .. }
         ));
     }
@@ -2419,7 +4671,9 @@ mod tests {
                     ..b
                 },
             }];
-            let hint = layout.drop_hint(b.x + b.width * 0.5, b.y + b.height * 0.5, &tabs);
+            let hint = layout
+                .drop_hint(b.x + b.width * 0.5, b.y + b.height * 0.5, &tabs)
+                .unwrap();
             assert_eq!(
                 hint.target,
                 DockTarget::Tab {
@@ -2431,7 +4685,9 @@ mod tests {
             assert_eq!(hint.bounds.height, TILE_SIZE);
             assert_eq!(hint.bounds.y, b.y);
             assert_eq!(hint.bounds.x, (b.x + width - 1.5).min(b.x + b.width - 23.0));
-            let over_grip = layout.drop_hint(b.x + b.width - 10.0, b.y + 10.0, &tabs);
+            let over_grip = layout
+                .drop_hint(b.x + b.width - 10.0, b.y + 10.0, &tabs)
+                .unwrap();
             assert_eq!(
                 over_grip.target,
                 DockTarget::Tab {
@@ -2478,7 +4734,7 @@ mod tests {
                 },
             },
         ];
-        let hint = r.drop_hint(b.x + 10.0, b.y + 5.0, &tabs);
+        let hint = r.drop_hint(b.x + 10.0, b.y + 5.0, &tabs).unwrap();
         assert_eq!(
             hint.target,
             DockTarget::Tab {
@@ -2507,7 +4763,9 @@ mod tests {
             matches!(layout.node_mut(8).unwrap(), DockNode::Tabs {panels, ..} if *panels == [Panel::Layers, Panel::Brushes])
         );
         assert_eq!(
-            r.drop_hint(b.x + 100.0, b.y + b.height - 2.0, &tabs).target,
+            r.drop_hint(b.x + 100.0, b.y + b.height - 2.0, &tabs)
+                .unwrap()
+                .target,
             DockTarget::Split {
                 group: 8,
                 edge: Edge::Bottom
@@ -2557,13 +4815,13 @@ mod tests {
             assert!(!resolved.near_chrome(point, VIEWPORT, true));
             assert!(resolved.near_chrome(point, VIEWPORT, false));
         }
-        for point in [[600.0, 125.0], [600.0, 450.0], [-1.0, 20.0]] {
+        for point in [[600.0, 165.0], [600.0, 450.0], [-1.0, 20.0]] {
             assert!(!resolved.near_chrome(point, VIEWPORT, true));
             assert!(!resolved.near_chrome(point, VIEWPORT, false));
         }
         // An empty bottom edge does not reveal, even directly over the HUD.
         assert!(!resolved.near_chrome([600.0, 899.0], VIEWPORT, true));
-        // Visible controls retain their fixed 40px margin.
+        // Visible controls retain the same fixed 80px proximity distance.
         let panel = resolved
             .groups
             .iter()
@@ -2571,8 +4829,8 @@ mod tests {
             .unwrap()
             .bounds;
         let right = panel.x + panel.width;
-        assert!(resolved.near_chrome([right + 40.0, 450.0], VIEWPORT, false));
-        assert!(!resolved.near_chrome([right + 41.0, 450.0], VIEWPORT, false));
+        assert!(resolved.near_chrome([right + 80.0, 450.0], VIEWPORT, false));
+        assert!(!resolved.near_chrome([right + 81.0, 450.0], VIEWPORT, false));
     }
     #[test]
     fn zen_reveal_edges_follow_docking_and_panel_visibility() {
@@ -2585,23 +4843,14 @@ mod tests {
         ];
         for destination in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             let mut layout = DockLayout::default();
-            // Consolidate every tab into one group, then move it as a unit.
-            for panel in [Panel::Toolbar, Panel::Sizes, Panel::Layers] {
-                layout
-                    .move_panel(
-                        VIEWPORT,
-                        panel,
-                        DockTarget::Tab {
-                            group: 5,
-                            index: None,
-                        },
-                    )
-                    .unwrap();
+            // Leave one standalone toolbar; top/bottom docks only accept these.
+            for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
+                layout.set_panel_visible(panel, false).unwrap();
             }
             layout
                 .move_item(
                     VIEWPORT,
-                    DockItem::Group { group: 5 },
+                    DockItem::Group { group: 2 },
                     DockTarget::Edge {
                         edge: destination,
                         outer: true,
@@ -2638,7 +4887,7 @@ mod tests {
         layout
             .groups
             .iter()
-            .find(|g| g.active == panel)
+            .find(|g| g.panels.contains(&panel))
             .unwrap()
             .bounds
     }
@@ -2656,10 +4905,13 @@ mod tests {
     #[test]
     fn divider_centers_roundtrip_for_every_edge_and_nested_split() {
         let mut layout = DockLayout::default();
+        let bottom_panel = layout
+            .add_toolbar(None, "Bottom", &[ToolbarControl::Color])
+            .unwrap();
         layout
             .move_panel(
                 VIEWPORT,
-                Panel::Sizes,
+                bottom_panel,
                 DockTarget::Edge {
                     edge: Edge::Bottom,
                     outer: false,

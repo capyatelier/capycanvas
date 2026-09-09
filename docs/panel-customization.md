@@ -3,24 +3,50 @@
 ## Interaction contract
 
 The Rust UI core owns customization and the complete serializable workspace.
-GTK and web translate native events and render its menu/dialog/control models.
+GTK, web and Android translate native events and render its menu/dialog/control models.
 This feature does not add another canvas/rendering path.
 
-- A panel tab or panel body opens that panel's context menu: **Tab Name** /
-  **Tab Icon** and **Configure Panel…**. A single tap on the selected tab toggles
+The rollout and per-platform evidence are tracked in
+[workspace-management-progress.md](workspace-management-progress.md).
+
+- **Workspace** contains Undo/Redo Workspace Change, checkable built-in-panel
+  visibility, a separate toolbar-visibility section, and **New Toolbar…**.
+  Hiding removes placement, not configuration; checking the item shows it again.
+- A built-in-panel tab or body opens **Tab with name** / **Tab with icon**,
+  **Configure Brushes panel…**, and **Hide Brushes panel** (using its actual
+  name). A toolbar tab/body has **Configure Tools toolbar…** and
+  **Hide Tools toolbar**, likewise using its actual name; display and management
+  options are in its configuration column. A single tap on the selected tab toggles
   configuration; an inactive tab selects it. Inputs retain native behavior.
 - Empty tab-header space and the group grip target the whole tab group:
-  **Tab Names** / **Tab Icons** and **New Toolbar…**. Group changes apply to
+  **Tab with name** / **Tab with icon**, **Add built-in panel** / **Add Toolbar** submenus,
+  and **New Toolbar…**. Submenu checks show current group membership; choosing
+  another panel moves it here, never duplicates it. Group style changes apply to
   every current tab; an individual tab can subsequently override its style.
+- A lone built-in panel also offers **Hide tab**, in a separate section, in
+  both its panel and group menus. This flag is independent of name/icon style.
+  Its content replaces the header with a 20px bottom-center drag strip using
+  the horizontal grip glyph. The strip's menu includes that panel's Configure
+  and Hide actions; configuration opens the same live two-column drawer.
+  Tearing off a single panel hides its tab immediately. During that drag,
+  docking alone restores its original hide flag, while merging into a group
+  clears the flag and retains its name/icon style. Dropping on the canvas
+  keeps the tab hidden; the menu can show it again. Moving an already-floating
+  panel preserves its current choice. Multi-tab groups always show their tabs.
 - A ribbon tile targets that tile: **Remove Tool**, **Insert Tools…**.
-  Empty ribbon space targets the ribbon: **Add Tools…** (append).
-  A standalone ribbon's grip still drags the entire ribbon; its context menu
-  uses the empty-ribbon actions. A tabbed ribbon keeps the group grip.
+  Empty standalone ribbon space and its grip target the toolbar: configuration,
+  append tools, tab style, tile style, rename, duplicate, hide, and delete.
+  Configure, Rename, Duplicate, Hide and Delete include the actual toolbar
+  name; generic creation/addition entries use “toolbar.” Duplicate suggests a
+  unique editable name. Names are case-insensitively unique across built-in panels and
+  toolbars. Delete confirms removal of the toolbar and its tools, distinct from
+  hiding, and explains Workspace Undo with the current shortcut. A tabbed
+  toolbar keeps the group grip; its configuration column contains these options.
 - Mouse/pen secondary click and touch press-and-hold open the same menu.
   Native gesture recognition owns timing/slop; the deepest applicable target
   wins. Recognized hold/drag suppresses the ordinary click, and scrolling cancels
   a pending hold. Existing input/context menus inside text inputs remain native.
-- **Configure Panel…** raises the existing tab group and animates its bounds
+- **Configure <name> panel…** / **Configure <name> toolbar…** raises the existing tab group and animates its bounds
   into a two-column layout. The original column remains a live preview of the
   compact panel; a wider configuration column opens on the canvas-facing side.
   Its controls edit the same Rust state, and visibility checkboxes immediately
@@ -57,11 +83,77 @@ This feature does not add another canvas/rendering path.
   They do not scroll: dragging remains reserved for tile reordering. Clipping
   preserves every configured tile, so resizing can reveal it again. Insertion
   previews only target visible slots and are clipped to the same boundary.
-- Zen keeps chrome visible for the complete drag lifecycle, including pointer
-  leave and focus loss while the native DND grab owns input. Drop or cancellation
-  changes that pin to the same wait-for-another-contact state as drawer dismissal,
-  so the resulting layout stays visible. Blur still cancels canvas input but
-  does not end UI dragging.
+- Tiles use Small 36×36, Large 72×72, or Labeled 108×72 logical units. Large
+  icons are 32px; Small/Labeled use 16px. Labeled tiles reserve 36px for the
+  centered icon and 72px for the vertically centered name, wrapping at words or
+  characters with an ellipsis after three lines. The first tool supplies the
+  toolbar's tab icon. All geometry and insertion slots use the same allocator.
+- A standalone vertical toolbar narrower than two tiles keeps a center-third
+  tab-merge target. Adding tabs grows the group to fit measured native tab
+  widths. Manual horizontal resizing releases that automatic minimum.
+- Docking a standalone toolbar resets its cross-axis size to one column on a
+  vertical dock or one row on a horizontal dock. Add only the lanes required
+  to fit its tiles and trailing grip in the available length; floating widths
+  never carry over into a dock. Changing tile size refits single-lane docked
+  toolbars and all standalone floating toolbars. Wider manually resized docks
+  and tabbed panel groups retain their allocation. Style plus refit is one undo.
+- Top/bottom dock bands only accept standalone toolbars. Built-in panels and
+  tabbed groups cannot dock at those window edges or stack/merge onto an existing
+  horizontal toolbar there. Vertical sidebar stacking remains supported. The
+  core rejects these destinations before showing a snap indicator or editing
+  the layout. Duplicating a horizontal toolbar creates a separate ribbon;
+  resetting docking also keeps each toolbar in its own ribbon.
+- Removing a subcolumn reclaims its width when it belonged to the column's
+  only split row; full-width rows shrink with that row. Multiple independent
+  split rows retain the overall column width and expand surviving branches.
+  Apply this rule recursively within nested columns. Removing the edge-most
+  neighbor also preserves the survivor's width and shifts it to the edge.
+  Hiding, moving, and merging use the same rule and remain undoable.
+  Width constraints add sibling minima instead of preserving an impossible
+  original ratio: a branch at minimum width stays clamped while the others
+  continue to shrink, stopping only at their combined minimum.
+- Pulling a panel, group or toolbar more than **80px outside its original
+  group** turns it into a live float that follows the pointer. Free canvas has
+  no drop indicator; release leaves the float at its current position. Within
+  80px of a sidebar or screen edge, a blue line previews snapping. Individual
+  panel side targets reach only 40px, leaving a distinct outer zone for docking
+  beside the complete sidebar. Top/bottom screen snaps use the nearest 40px for
+  outside the sidebars and the next 40px for between them. The bare top edge's
+  distances and line both start below the app header, not at the window's top.
+  Tear-off, snap reach and Zen proximity share one
+  80px Rust constant; the smaller snap zone is half that distance.
+  Floating groups retain their width and default to the smaller of 75% of viewport height or
+  natural active content plus tabs. Standalone floating toolbars default to
+  three Small or Large columns, or two Labeled columns, with enough rows for
+  every tool. Manual resizing overrides this; changing tabs restores natural
+  height. Floating groups accept tab merges anywhere inside, never split drops.
+  When removal leaves a floating group with only a toolbar, clear the group's
+  manual size and tab-fit constraint and restore that toolbar's default grid,
+  without moving its anchor. This applies to hiding and moving panels alike.
+- Floating panels remain visible in Zen. Empty tab-bar space and the group
+  grip move the whole float; standalone toolbars use the entire trailing grip
+  strip. Movement is live, preserving the grab offset and native widget/grab.
+  Dragged floats rise above other floats. Releasing over a dock or another
+  float docks/merges; releasing on free canvas keeps the current live position.
+  A click without motion never merges a float with a panel underneath.
+  A singleton tab moves its whole group; a tab in a multi-tab group tears off
+  only that tab. All eight resize hit regions sit 6px outside the border;
+  inside the title bar is for moving, not resizing. Double-clicking empty
+  floating title-bar space or a standalone toolbar's trailing grip strip resets
+  default width and natural height with a brief animation, without moving the
+  group. Tabs do not trigger this reset.
+- All durable workspace edits have independent undo/redo, including panel/tab
+  moves, tile ordering, names, visibility, style, and floating geometry. Resize
+  and live-move gestures coalesce into one entry; cancel restores the start.
+  Default shortcuts are Ctrl+Alt+Z and Ctrl+Alt+Shift+Z (Command on Apple).
+  Workspace history never changes drawing undo or stores document pixels.
+- Dragging a floating panel in Zen does not reveal hidden docks. Reaching an
+  occupied screen edge reveals them normally and latches that visibility only
+  until the drag ends. After any drop or cancellation, visibility uses normal
+  cursor proximity; neither floating nor docked drops force docks to stay open.
+  Floating panels remain visible independently. Native tool-tile DND keeps
+  chrome visible for its active grab. Loss of focus cancels ordinary captured
+  move/resize gestures and restores their original geometry.
 
 Expansion is transient presentation, not a change to the saved dock. Shared Rust
 geometry accepts the host's measured content heights and animation fraction;
@@ -79,12 +171,25 @@ no third-party code or assets are imported.
 
 ## Model
 
-- System panel identities remain stable. Custom toolbar identities are allocated
+- Built-in panel identities remain stable. Custom toolbar identities are allocated
   independently of their editable display names and can be docked/tabbed exactly
-  like system panels. There is no fixed toolbar count.
-- `DockLayout` contains panel configurations alongside its docking tree, so
+  like built-in panels. There is no fixed toolbar count.
+- `DockLayout` contains one panel registry alongside dock bands and floating
+  tab groups. Hidden panels have no placement; only toolbars can be deleted.
+  Therefore
   geometry, tab styles, visible controls, toolbar names and ordered tiles restore
   atomically. The existing `WorkspaceState` wraps it and Zen mode.
+- Floating groups share IDs, tab selection, content, and move operations with
+  docks. Native text/content measurements are transient geometry input, not
+  saved settings or undo entries. Hosts do not decide widths, heights, targets,
+  naming rules or menu availability. `DragWorkspace` owns tear-off, live movement,
+  snapping, singleton/group semantics and Zen reveal state. `ResizeFloating`
+  owns eight-edge resizing; `ResetFloatingSize` restores intrinsic dimensions.
+  Both continuous gestures use Down/Move/Up/Cancel and coalesced history. Native
+  hosts retain their gesture on the workspace container, not a replaceable tab
+  widget. `ChromeFacts.dragging` is reserved for native tool-tile DND, not shared
+  workspace gestures. Session-only workspace history
+  starts empty on restore; picker and confirmation drafts remain transient.
 - Toolbar tiles have stable IDs and typed controls. The available-button catalog
   includes application commands, brush presets, size presets and color/opacity
   buttons; control values and execution remain in the existing Rust session.
