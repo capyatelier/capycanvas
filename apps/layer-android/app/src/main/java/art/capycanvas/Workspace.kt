@@ -342,8 +342,12 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val textStyle = LocalTextStyle.current.copy(fontWeight = FontWeight.Bold)
     group.array("panels").values().forEach { id ->
         panels[id.toString()]?.let { view ->
-            val width = if (view.getString("tab_style") == "icon") 32f else
-                measurer.measure(AnnotatedString(view.getString("title")), textStyle).size.width / dock.density + 16f
+            val tab = view.getJSONObject("tab")
+            val showIcon = tab.getBoolean("show_icon")
+            val showName = tab.getBoolean("show_name")
+            val width = 16f + (if (showIcon) 16f else 0f) +
+                (if (showName) measurer.measure(AnnotatedString(view.getString("title")), textStyle).size.width / dock.density else 0f) +
+                (if (showIcon && showName) 6f else 0f)
             SideEffect { dock.measure(id.toString(), tabWidth = width) }
         }
     }
@@ -380,8 +384,10 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                             }
                             .combinedClickable(onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to id)) },
                                 onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 8.dp)
-                        Box(tab, contentAlignment = Alignment.Center) {
-                            if (p.getString("tab_style") == "icon") SharedIcon(p.getString("icon"), p.getString("title")) else Text(p.getString("title"), fontWeight = FontWeight.Bold)
+                        Row(tab, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            val content = p.getJSONObject("tab")
+                            if (content.getBoolean("show_icon")) SharedIcon(p.getString("icon"), if (content.getBoolean("show_name")) null else p.getString("title"), Modifier.testTag("tab-icon-$id"))
+                            if (content.getBoolean("show_name")) Text(p.getString("title"), Modifier.testTag("tab-name-$id"), fontWeight = FontWeight.Bold)
                         }
                     }
                 }

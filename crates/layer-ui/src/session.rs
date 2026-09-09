@@ -3307,10 +3307,158 @@ mod tests {
     }
 
     #[test]
+    fn group_tab_presentation_selection_moves_and_history_are_shared() {
+        let viewport = [1600.0, 1000.0];
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut app = session();
+            app.set_platform(platform);
+            let group = app
+                .state
+                .workspace
+                .layout
+                .panel_group(Panel::Brushes)
+                .unwrap();
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Sizes,
+                target: DockTarget::Tab { group, index: None },
+                viewport,
+            })
+            .unwrap();
+            for style in TabStyle::ALL {
+                let before = app.state.workspace.clone();
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTabStyle { group, style },
+                })
+                .unwrap();
+                let after = app.state.workspace.clone();
+                if before != after {
+                    invoke(&mut app, CommandId::UndoWorkspace);
+                    assert_eq!(app.state.workspace, before);
+                    invoke(&mut app, CommandId::RedoWorkspace);
+                    assert_eq!(app.state.workspace, after);
+                }
+                for active in [Panel::Brushes, Panel::Sizes] {
+                    app.dispatch(UiAction::SelectPanelTab {
+                        group,
+                        panel: active,
+                    })
+                    .unwrap();
+                    for panel in [Panel::Brushes, Panel::Sizes] {
+                        let tab = app.panel_view(panel).unwrap().tab;
+                        assert_eq!(tab.show_icon, style != TabStyle::Name);
+                        assert_eq!(
+                            tab.show_name,
+                            style == TabStyle::Name
+                                || (style == TabStyle::ActiveName && active == panel)
+                        );
+                    }
+                }
+                let saved = serde_json::to_string(&app.state.workspace).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<WorkspaceState>(&saved).unwrap(),
+                    app.state.workspace
+                );
+                app.dispatch(UiAction::MoveGroup {
+                    group,
+                    viewport,
+                    target: DockTarget::Float {
+                        position: [800.0, 300.0],
+                    },
+                })
+                .unwrap();
+                assert_eq!(
+                    app.state.workspace.layout.group_tab_style(group).unwrap(),
+                    style
+                );
+            }
+            let destination = app
+                .state
+                .workspace
+                .layout
+                .panel_group(Panel::Layers)
+                .unwrap();
+            app.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTabStyle {
+                    group: destination,
+                    style: TabStyle::Name,
+                },
+            })
+            .unwrap();
+            app.dispatch(UiAction::MoveGroup {
+                group,
+                viewport,
+                target: DockTarget::Tab {
+                    group: destination,
+                    index: None,
+                },
+            })
+            .unwrap();
+            for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
+                assert_eq!(
+                    app.panel_view(panel).unwrap().tab,
+                    TabPresentation {
+                        show_icon: false,
+                        show_name: true
+                    }
+                );
+            }
+            // Splitting a tab creates a fresh group's default, not a per-panel preference.
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Sizes,
+                viewport,
+                target: DockTarget::Float {
+                    position: [600.0, 400.0],
+                },
+            })
+            .unwrap();
+            let detached = app
+                .state
+                .workspace
+                .layout
+                .panel_group(Panel::Sizes)
+                .unwrap();
+            assert_eq!(
+                app.state
+                    .workspace
+                    .layout
+                    .group_tab_style(detached)
+                    .unwrap(),
+                TabStyle::ActiveName
+            );
+            assert_eq!(
+                app.state
+                    .workspace
+                    .layout
+                    .group_tab_style(destination)
+                    .unwrap(),
+                TabStyle::Name
+            );
+            let before = app.state.workspace.clone();
+            assert!(
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTabStyle {
+                        group: u32::MAX,
+                        style: TabStyle::Icon
+                    }
+                })
+                .is_err()
+            );
+            assert_eq!(app.state.workspace, before);
+            assert!(serde_json::from_value::<CustomizationAction>(serde_json::json!({"type":"set_tab_style","target":{"kind":"panel","panel":"sizes"},"style":"icon"})).is_err());
+            assert!(
+                serde_json::to_value(app.state.workspace.layout.panel(Panel::Sizes).unwrap())
+                    .unwrap()
+                    .get("tab_style")
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
     fn hidden_tabs_preserve_style_and_restore_docking_choice_through_tear_off() {
         let viewport = [1600.0, 1200.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for style in [TabStyle::Name, TabStyle::Icon] {
+            for style in TabStyle::ALL {
                 for hidden in [false, true] {
                     for destination in ["float", "edge", "merge", "cancel"] {
                         let mut app = session();
@@ -3318,10 +3466,7 @@ mod tests {
                         let panel = Panel::Sizes;
                         let group = app.state.workspace.layout.panel_group(panel).unwrap();
                         for action in [
-                            CustomizationAction::SetTabStyle {
-                                target: ContextTarget::Panel { panel },
-                                style,
-                            },
+                            CustomizationAction::SetTabStyle { group, style },
                             CustomizationAction::SetTabHidden { panel, hidden },
                         ] {
                             app.dispatch(UiAction::Customize { action }).unwrap();
@@ -3337,17 +3482,30 @@ mod tests {
                                     .iter()
                                     .map(|i| i.label.as_str())
                                     .collect::<Vec<_>>(),
-                                ["Tab with name", "Tab with icon"]
+                                if matches!(target, ContextTarget::Group { .. }) {
+                                    TabStyle::ALL.map(TabStyle::label).to_vec()
+                                } else {
+                                    vec!["Hide tab"]
+                                }
                             );
                             assert_eq!(
                                 menu.sections[0]
                                     .iter()
                                     .filter(|i| i.selected == Some(true))
                                     .count(),
-                                1
+                                if matches!(target, ContextTarget::Group { .. }) {
+                                    1
+                                } else {
+                                    usize::from(hidden)
+                                }
                             );
-                            assert_eq!(menu.sections[1][0].label, "Hide tab");
-                            assert_eq!(menu.sections[1][0].selected, Some(hidden));
+                            let hide = menu
+                                .sections
+                                .iter()
+                                .flatten()
+                                .find(|i| i.label == "Hide tab")
+                                .unwrap();
+                            assert_eq!(hide.selected, Some(hidden));
                             if hidden {
                                 assert!(menu.sections.iter().flatten().any(|i| i.label
                                     == "Configure Brush size panel…"
@@ -3421,7 +3579,19 @@ mod tests {
                             continue;
                         }
                         let config = app.state.workspace.layout.panel(panel).unwrap();
-                        assert_eq!(config.tab_style, style);
+                        let current_group = app.state.workspace.layout.panel_group(panel).unwrap();
+                        assert_eq!(
+                            app.state
+                                .workspace
+                                .layout
+                                .group_tab_style(current_group)
+                                .unwrap(),
+                            if destination == "merge" {
+                                TabStyle::default()
+                            } else {
+                                style
+                            }
+                        );
                         assert_eq!(
                             config.hide_tab,
                             match destination {
@@ -3584,12 +3754,9 @@ mod tests {
             app.set_platform(platform);
             let panel = Panel::Sizes;
             let group = app.state.workspace.layout.panel_group(panel).unwrap();
-            for style in [TabStyle::Name, TabStyle::Icon] {
+            for style in TabStyle::ALL {
                 app.dispatch(UiAction::Customize {
-                    action: CustomizationAction::SetTabStyle {
-                        target: ContextTarget::Panel { panel },
-                        style,
-                    },
+                    action: CustomizationAction::SetTabStyle { group, style },
                 })
                 .unwrap();
                 let initial = app.state.workspace.clone();

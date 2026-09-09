@@ -555,6 +555,69 @@ fn native_zen_icons() {
 }
 
 #[test]
+#[ignore = "group tab presentation: requires private Wayland and GPU"]
+fn native_group_tab_styles() {
+    let app = native_test_app("art.capycanvas.GroupTabStylesTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(500);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let group = state(&w)
+        .workspace
+        .layout
+        .panel_group(Panel::Brushes)
+        .unwrap();
+    for panel in [Panel::Sizes, Panel::Layers] {
+        w.dispatch(UiAction::MovePanel {
+            panel,
+            viewport,
+            target: DockTarget::Tab { group, index: None },
+        });
+    }
+    let dir = "../../artifacts/ui/group-tab-styles";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for style in TabStyle::ALL {
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTabStyle { group, style },
+            });
+            for active in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
+                w.dispatch(UiAction::SelectPanelTab {
+                    group,
+                    panel: active,
+                });
+                pump(150);
+                let layout = state(&w).workspace.layout;
+                for (panel, button) in &w
+                    .groups
+                    .borrow()
+                    .iter()
+                    .find(|g| g.id == group)
+                    .unwrap()
+                    .tabs
+                {
+                    let content = button.child().unwrap();
+                    let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();
+                    let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
+                    let expected = layout.tab_presentation(*panel);
+                    assert_eq!(icon.is_visible(), expected.show_icon);
+                    assert_eq!(label.is_visible(), expected.show_name);
+                    assert_eq!(label.text(), layout.panel(*panel).unwrap().title());
+                    assert_eq!(
+                        button.compute_bounds(&w.surface).unwrap().height(),
+                        TAB_BAR_HEIGHT
+                    );
+                }
+            }
+            capture_reference(&w, &format!("{dir}/gtk-{theme:?}-{style:?}.png"), 1.0);
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
 #[ignore = "native settings typography/geometry reference: requires private Wayland and GPU"]
 fn native_settings_typography() {
     // Measure an unmodified Adwaita row first, before loading application CSS.
@@ -1895,16 +1958,22 @@ fn native_workspace_management() {
         snapshot(&format!("toolbar-configuration-{theme:?}"));
         send(CustomizationAction::CloseExpanded);
         send(CustomizationAction::SetTabStyle {
-            target: ContextTarget::Panel { panel },
+            group: floated,
             style: TabStyle::Icon,
         });
         let expected = state(&w).workspace.layout.panel(panel).unwrap().icon();
         assert_eq!(
-            tab.icon_name().as_deref(),
+            tab.child()
+                .unwrap()
+                .first_child()
+                .and_downcast::<gtk::Image>()
+                .unwrap()
+                .icon_name()
+                .as_deref(),
             Some(format!("layer-{expected}-symbolic").as_str())
         );
         send(CustomizationAction::SetTabStyle {
-            target: ContextTarget::Panel { panel },
+            group: floated,
             style: TabStyle::Name,
         });
         w.dispatch(UiAction::Invoke {
@@ -2039,26 +2108,49 @@ fn native_panel_customization() {
         hold(tab.upcast_ref(), 12.0, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("panel-menu-{theme:?}"));
+        assert!(menu_action(&menu.menu_model().unwrap(), "Icons only").is_none());
+        menu.popdown();
+        let group = state(&w)
+            .workspace
+            .layout
+            .panel_group(Panel::Sizes)
+            .unwrap();
+        let root = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == group)
+            .unwrap()
+            .root
+            .clone();
+        let header = find_css(root.upcast_ref(), "dock-tabs").unwrap();
+        hold(&header, header.width() as f64 - 10.0, 12.0);
+        let menu = context();
         menu.activate_action(
-            &menu_action(&menu.menu_model().unwrap(), "Tab with icon").unwrap(),
+            &menu_action(&menu.menu_model().unwrap(), "Icons only").unwrap(),
             None,
         )
         .unwrap();
         pump(100);
         assert_eq!(
-            state(&w)
-                .workspace
-                .layout
-                .panel(Panel::Sizes)
-                .unwrap()
-                .tab_style,
+            state(&w).workspace.layout.group_tab_style(group).unwrap(),
             TabStyle::Icon
         );
-        assert_eq!(tab.icon_name().as_deref(), Some("layer-size-symbolic"));
+        assert_eq!(
+            tab.child()
+                .unwrap()
+                .first_child()
+                .and_downcast::<gtk::Image>()
+                .unwrap()
+                .icon_name()
+                .as_deref(),
+            Some("layer-size-symbolic")
+        );
         send(CustomizationAction::SetTabStyle {
-            target: ContextTarget::Group { group: 8 },
+            group: 8,
             style: TabStyle::Name,
         });
+        let before_expansion = state(&w).workspace.layout.bands;
 
         let original_panel = w.panel_widget(Panel::Sizes);
         let original_parent = original_panel.parent().unwrap();
@@ -2089,7 +2181,7 @@ fn native_panel_customization() {
                 .filter_map(|p| p.upgrade())
                 .all(|p| !p.has_css_class("expanded-panel"))
         );
-        assert_eq!(state(&w).workspace.layout.bands, initial.layout.bands);
+        assert_eq!(state(&w).workspace.layout.bands, before_expansion);
         let compact_opacity = find_named(
             original_panel.upcast_ref(),
             "panel-field-Sizes-BrushOpacity",
@@ -2882,12 +2974,9 @@ fn native_docked_handles() {
     std::fs::create_dir_all(dir).unwrap();
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        for style in [TabStyle::Name, TabStyle::Icon] {
+        for style in TabStyle::ALL {
             w.dispatch(UiAction::Customize {
-                action: CustomizationAction::SetTabStyle {
-                    target: ContextTarget::Panel { panel },
-                    style,
-                },
+                action: CustomizationAction::SetTabStyle { group, style },
             });
             pump(200);
             let initial = state(&w).workspace;
@@ -3030,7 +3119,7 @@ fn native_hidden_tabs() {
         let group = state(&w).workspace.layout.panel_group(panel).unwrap();
         for action in [
             CustomizationAction::SetTabStyle {
-                target: ContextTarget::Panel { panel },
+                group,
                 style: TabStyle::Icon,
             },
             CustomizationAction::SetTabHidden {
@@ -3144,10 +3233,9 @@ fn native_hidden_tabs() {
             .tabs[0]
             .1
             .clone();
-        assert!(
-            tab.icon_name().is_some(),
-            "showing a tab preserves its icon choice"
-        );
+        let content = tab.child().unwrap();
+        assert!(content.first_child().unwrap().is_visible());
+        assert!(!content.last_child().unwrap().is_visible());
         assert!(
             find_named(
                 w.surface.upcast_ref(),

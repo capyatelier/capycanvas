@@ -165,7 +165,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .dock-tabs { display: flex; gap: 0; padding: 0; height: var(--tab-bar-height); flex-shrink: 0; align-items: center; background: var(--tabbar); font-size: var(--ui-text-size); cursor: grab; touch-action: none; }
 .tab-list { display: flex; align-items: center; flex: 1; min-width: 0; height: var(--tab-bar-height); overflow: auto hidden; scrollbar-width: none; }
 .tab-list > .dock-tab { flex: none; }
-.dock-tab { position: relative; white-space: nowrap; cursor: grab; height: 36px; min-height: 36px; padding: 4px 8px; border-radius: 6px 6px 0 0; display: flex; align-items: center; touch-action: none; }
+.dock-tab { position: relative; white-space: nowrap; cursor: grab; height: 36px; min-height: 36px; padding: 4px 8px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; touch-action: none; }
 .panel-grip { touch-action: none; }
 .drag-source { opacity: .5; }
 .dock-tab[aria-selected="true"], .dock-tab[aria-selected="true"]:hover { background: var(--panel); z-index: 1; }

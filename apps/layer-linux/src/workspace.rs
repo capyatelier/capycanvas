@@ -1860,6 +1860,12 @@ impl Workspace {
                         );
                         tab.add_css_class("flat");
                         tab.set_valign(gtk::Align::Center);
+                        let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                        content.set_halign(gtk::Align::Center);
+                        content.set_valign(gtk::Align::Center);
+                        content.append(&gtk::Image::new());
+                        content.append(&gtk::Label::new(None));
+                        tab.set_child(Some(&content));
                         self.install_panel_drag(&tab, DockItem::Panel { panel });
                         self.install_context(&tab, ContextTarget::Panel { panel });
                         labels.append(&tab);
@@ -1985,11 +1991,14 @@ impl Workspace {
             }
             for (panel, button) in &view.tabs {
                 let config = layout.panel(*panel).expect("validated panel");
-                if config.tab_style == TabStyle::Name {
-                    button.set_label(config.title());
-                } else {
-                    button.set_icon_name(&format!("layer-{}-symbolic", config.icon()));
-                }
+                let tab = layout.tab_presentation(*panel);
+                let content = button.child().unwrap();
+                let icon = content.first_child().and_downcast::<gtk::Image>().unwrap();
+                let label = content.last_child().and_downcast::<gtk::Label>().unwrap();
+                icon.set_icon_name(Some(&format!("layer-{}-symbolic", config.icon())));
+                icon.set_visible(tab.show_icon);
+                label.set_label(config.title());
+                label.set_visible(tab.show_name);
                 button.set_tooltip_text(Some(config.title()));
                 button.update_property(&[gtk::accessible::Property::Label(config.title())]);
                 selected(button, *panel == group.active);

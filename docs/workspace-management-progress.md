@@ -92,16 +92,27 @@ and will be updated with the implementation. No renderer changes are required.
   only standalone toolbars in horizontal dock bands; style-aware ribbon refits;
   recursive column reclaim/minima; singleton floating toolbar reset; named menu
   entries; and independent Hide tab with a rotated bottom grip/configure action.
-- Hide tab is separate from name/icon style. A single panel hides its tab on
+- Hide tab is separate from group display style. A single panel hides its tab on
   tear-off, restores the original flag on docking alone during that drag, and
   clears it when merging. Multi-tab groups show tabs. See the full contract for
   already-floating moves, undo and explicit visibility changes.
+- Tab display is now group-owned on every platform. The three context choices
+  are icons with the active tab name (default), names only, and icons only.
+  No per-tab display choices remain. Whole-group moves preserve the choice;
+  merges adopt the destination's choice. This supersedes earlier name/icon
+  preservation notes for individual tabs in the historical checks below.
 
 ## Current evidence
 
-- Shared core: 111 tests cover the workspace model, transactional history,
+- Shared core: 125 tests cover the workspace model, transactional history,
   eight-edge geometry, measured sizing, tear-off, snapping and Zen rules. The
   interaction tests run against GTK, web and Android platform configurations.
+- Group-owned tab styles: GTK `native_group_tab_styles`, web `--tab-styles`,
+  and Android `tabGroupStylesFollowSelectionAndHaveNoPanelOverrides` pass all
+  three styles with each tab selected, in both themes. Review captures are in
+  `artifacts/ui/group-tab-styles/`. Core tests additionally cover persistence,
+  history, whole-group style preservation, destination-style merging and new
+  group defaults; per-panel display fields/actions are removed.
 - GTK `native_workspace_management`: passed with dark/light PNGs covering menus,
   duplicate/rename/delete dialogs, tile modes, floating groups and configuration.
 - GTK `native_floating_gestures`: passed for all eight resize targets, permitted

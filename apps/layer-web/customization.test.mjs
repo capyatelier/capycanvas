@@ -1,6 +1,37 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+export async function checkTabStyles({ call, evaluate, settle }) {
+  const dir = 'artifacts/ui/group-tab-styles'; await mkdir(dir, { recursive: true });
+  await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 960, deviceScaleFactor: 1, mobile: false });
+  const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await settle(); };
+  const group = await evaluate("layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('brushes')).id");
+  for (const panel of ['sizes', 'layers']) await send({ type: 'move_panel', panel, target: { kind: 'tab', group } });
+  for (const theme of ['dark', 'light']) {
+    await send({ type: 'set_theme', theme });
+    for (const [style, label] of [['active_name','Icons and active tab name'],['name','Names only'],['icon','Icons only']]) {
+      await evaluate(`(() => { const n=document.querySelector('[data-group="${group}"] .dock-tabs > .panel-grip'),r=n.getBoundingClientRect(); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.x+5,clientY:r.y+5})); })()`);
+      assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu:popover-open button')].slice(0,3).map(n=>n.textContent)"), ['Icons and active tab name','Names only','Icons only']);
+      await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(n=>n.textContent===${JSON.stringify(label)}).click()`);
+      for (const active of ['brushes','sizes','layers']) {
+        await evaluate(`document.querySelector('.dock-tab[data-panel="${active}"]').click()`); await settle();
+        const tabs = await evaluate(`[...document.querySelectorAll('[data-group="${group}"] .dock-tab')].map(n=>({panel:n.dataset.panel,icon:!!n.querySelector('svg'),name:n.textContent.length>0,title:n.title,height:n.getBoundingClientRect().height}))`);
+        assert.equal(tabs.length, 3);
+        for (const tab of tabs) {
+          assert.equal(tab.icon, style !== 'name');
+          assert.equal(tab.name, style === 'name' || (style === 'active_name' && tab.panel === active));
+          assert.ok(tab.title); assert.equal(tab.height, 36);
+        }
+      }
+      await evaluate('new Promise(resolve=>setTimeout(resolve,260))');
+      const shot = await call('Page.captureScreenshot', { format: 'png' });
+      await writeFile(`${dir}/web-${theme}-${style}.png`, Buffer.from(shot.data, 'base64'));
+    }
+  }
+  assert.equal(await evaluate("document.querySelector('#status').textContent"), '');
+  console.log('PASS: group context choices and active/inactive tab contents in all three styles, both themes');
+}
+
 // Real browser pointer sequences exercise capture across DOM reconciliation;
 // direct Rust actions are only used to establish each test's starting layout.
 export async function checkWorkspace({ call, evaluate, settle }) {
@@ -70,14 +101,13 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   };
   for (const theme of ["dark", "light"]) {
     await reset(); await send({ type: "set_theme", theme });
-    for (const style of ["name", "icon"]) {
-      await customize({ type: "set_tab_style", target: { kind: "panel", panel: "sizes" }, style });
+    for (const style of ["active_name", "name", "icon"]) {
+      await customize({ type: "set_tab_style", group: (await group("sizes")).id, style });
       await wait();
       const before = await snapshot();
       for (const hidden of [true, false]) {
         await clickAt(await point(grip("sizes")), 2);
         assert.equal((await config("sizes")).hide_tab, hidden, "First double-click toggles docked header");
-        assert.equal((await config("sizes")).tab_style, style);
         assert.equal((await group("sizes")).floating, false);
         assert.equal((await group("sizes")).tabs_visible, !hidden);
         assert.deepEqual((await snapshot()).layout.bands, before.layout.bands, "Dock dimensions remain unchanged");
@@ -148,8 +178,9 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     await choose("Configure Tools toolbar…");
     await shot(`toolbar-configuration-${theme}`);
     assert.equal(await evaluate("document.querySelectorAll('.panel-configuration .toolbar-options button').length>6"), true);
-    await choose("Tab with icon", ".panel-configuration .toolbar-options");
+    assert.equal(await evaluate("[...document.querySelectorAll('.panel-configuration .toolbar-options button')].some(n=>n.textContent==='Icons only')"), false);
     await customize({ type: "close_expanded" });
+    await context(grip("toolbar")); await choose("Icons only");
     assert.equal(await evaluate(`document.querySelector('${tab("toolbar")} svg').dataset.asset`), await evaluate("layerApp.app.panel_view('toolbar').tiles[0].icon"));
     await reset(); await float("toolbar");
     for (const mode of ["compact", "vertical", "horizontal"]) {
@@ -379,11 +410,10 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await send({ type: "restore_workspace", workspace: initial });
     await send({ type: "set_theme", theme }); await wait();
     await shot(`initial-${theme}`);
-    assert.deepEqual(await context(tab("sizes")), ["Tab with name", "Tab with icon", "Hide tab", "Configure Brush size panel…", "Hide Brush size panel"]);
+    assert.deepEqual(await context(tab("sizes")), ["Hide tab", "Configure Brush size panel…", "Hide Brush size panel"]);
     await shot(`panel-menu-${theme}`);
-    await click('.panel-context-menu button:nth-child(2)');
+    await menuItem('Configure Brush size panel…');
     assert.equal(await evaluate(`!!document.querySelector('${tab("sizes")} svg')`), true);
-    await click(tab("sizes"));
     assert.equal(await expanded(), "sizes");
     assert.equal(await evaluate("document.querySelectorAll('.expanded-panel').length"), 1);
     assert.deepEqual(await evaluate(`(()=>{const root=document.querySelector('.expanded-panel');return [getComputedStyle(root).filter,...['.panel-preview','.panel-configuration'].map(s=>{const c=getComputedStyle(root.querySelector(s));return [c.boxShadow,c.filter]})];})()`),
@@ -415,7 +445,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
       await shot(`expanded-${edge}-${theme}`); await click(tab("sizes"));
     }
     await send({ type: "restore_workspace", workspace: initial }); await wait();
-    assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Tab with name", "Tab with icon", "Hide tab", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
+    assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Icons and active tab name", "Names only", "Icons only", "Hide tab", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
     await shot(`group-menu-${theme}`); await click('.panel-context-menu button:last-child');
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), true);
     await evaluate("{const name=document.querySelector('#toolbar-name');name.value='Layers';name.dispatchEvent(new Event('input',{bubbles:true}));}");

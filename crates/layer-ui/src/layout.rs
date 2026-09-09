@@ -312,6 +312,8 @@ pub enum DockNode {
         id: u32,
         panels: Vec<Panel>,
         active: Panel,
+        #[serde(default)]
+        tab_style: crate::TabStyle,
     },
     Split {
         id: u32,
@@ -324,7 +326,9 @@ pub enum DockNode {
 impl DockNode {
     pub(crate) fn group_for(&self, panel: Panel) -> Option<(u32, Panel)> {
         match self {
-            Self::Tabs { id, panels, active } => panels.contains(&panel).then_some((*id, *active)),
+            Self::Tabs {
+                id, panels, active, ..
+            } => panels.contains(&panel).then_some((*id, *active)),
             Self::Split { first, second, .. } => {
                 first.group_for(panel).or_else(|| second.group_for(panel))
             }
@@ -346,12 +350,22 @@ impl DockNode {
             _ => None,
         }
     }
+    fn find(&self, target: u32) -> Option<&Self> {
+        if self.id() == target {
+            return Some(self);
+        }
+        match self {
+            Self::Split { first, second, .. } => first.find(target).or_else(|| second.find(target)),
+            _ => None,
+        }
+    }
     fn remove(self, panel: Panel) -> Option<Self> {
         match self {
             Self::Tabs {
                 id,
                 mut panels,
                 mut active,
+                tab_style,
             } => {
                 panels.retain(|item| *item != panel);
                 if panels.is_empty() {
@@ -360,7 +374,12 @@ impl DockNode {
                 if active == panel {
                     active = panels[0];
                 }
-                Some(Self::Tabs { id, panels, active })
+                Some(Self::Tabs {
+                    id,
+                    panels,
+                    active,
+                    tab_style,
+                })
             }
             Self::Split {
                 id,
@@ -868,6 +887,7 @@ impl DockLayout {
 impl Default for DockLayout {
     fn default() -> Self {
         let tabs = |id, panel| DockNode::Tabs {
+            tab_style: crate::TabStyle::default(),
             id,
             panels: vec![panel],
             active: panel,
@@ -1035,22 +1055,29 @@ impl DockLayout {
             .ok_or_else(|| "Unknown panel".into())
     }
     pub fn group_panels(&self, id: u32) -> Result<&[Panel], String> {
-        fn find(n: &DockNode, id: u32) -> Option<&[Panel]> {
-            match n {
-                DockNode::Tabs {
-                    id: group, panels, ..
-                } => (*group == id).then_some(panels),
-                DockNode::Split { first, second, .. } => {
-                    find(first, id).or_else(|| find(second, id))
-                }
-            }
+        match self.node(id) {
+            Some(DockNode::Tabs { panels, .. }) => Ok(panels),
+            _ => Err("Unknown tab group".into()),
         }
-        self.bands
-            .iter()
-            .map(|b| &b.root)
-            .chain(self.floating.iter().map(|f| &f.root))
-            .find_map(|root| find(root, id))
-            .ok_or_else(|| "Unknown tab group".into())
+    }
+    pub fn group_tab_style(&self, group: u32) -> Result<crate::TabStyle, String> {
+        match self.node(group) {
+            Some(DockNode::Tabs { tab_style, .. }) => Ok(*tab_style),
+            _ => Err("Unknown tab group".into()),
+        }
+    }
+    pub(crate) fn set_tab_style(
+        &mut self,
+        group: u32,
+        style: crate::TabStyle,
+    ) -> Result<(), String> {
+        match self.node_mut(group) {
+            Some(DockNode::Tabs { tab_style, .. }) => {
+                *tab_style = style;
+                Ok(())
+            }
+            _ => Err("Unknown tab group".into()),
+        }
     }
 
     pub fn add_toolbar(
@@ -1068,7 +1095,6 @@ impl DockLayout {
         let id = Panel::CustomToolbar(next.allocate()?);
         next.panels.push(PanelConfig {
             id,
-            tab_style: crate::TabStyle::Name,
             hide_tab: false,
             tile_style: crate::TileStyle::Small,
             content: PanelContent::Toolbar {
@@ -1169,6 +1195,7 @@ impl DockLayout {
                 232.0
             },
             root: DockNode::Tabs {
+                tab_style: crate::TabStyle::default(),
                 id: group,
                 panels: vec![panel],
                 active: panel,
@@ -1234,7 +1261,6 @@ impl DockLayout {
                 .collect::<Vec<_>>(),
         )?;
         let config = self.panel_mut(id)?;
-        config.tab_style = original.tab_style;
         config.tile_style = original.tile_style;
         Ok(id)
     }
@@ -1377,6 +1403,13 @@ impl DockLayout {
         let id = self.next_id;
         self.next_id = id.checked_add(1).ok_or("Workspace ID space exhausted")?;
         Ok(id)
+    }
+    pub(crate) fn node(&self, id: u32) -> Option<&DockNode> {
+        self.bands
+            .iter()
+            .map(|b| &b.root)
+            .chain(self.floating.iter().map(|f| &f.root))
+            .find_map(|root| root.find(id))
     }
     fn node_mut(&mut self, id: u32) -> Option<&mut DockNode> {
         self.bands
@@ -1525,6 +1558,11 @@ impl DockLayout {
             id: moving_id,
             panels: moving,
             active: selected,
+            tab_style: if whole {
+                self.group_tab_style(source_group)?
+            } else {
+                crate::TabStyle::default()
+            },
         };
         match target {
             DockTarget::Float { position } => {
@@ -2060,7 +2098,10 @@ impl DockLayout {
             offset(&mut divider.parent);
         }
         for floating in &self.floating {
-            let DockNode::Tabs { id, panels, active } = &floating.root else {
+            let DockNode::Tabs {
+                id, panels, active, ..
+            } = &floating.root
+            else {
                 continue;
             };
             let config = self.panel(*active).expect("validated floating panel");
@@ -2976,7 +3017,9 @@ fn resolve_node(
     result: &mut ResolvedLayout,
 ) {
     match node {
-        DockNode::Tabs { id, panels, active } => {
+        DockNode::Tabs {
+            id, panels, active, ..
+        } => {
             let standalone = panels.len() == 1;
             let config = layout.panel(*active).expect("validated panel");
             let tabs_visible =
@@ -3094,6 +3137,7 @@ mod tests {
                 .unwrap();
         }
         let tab = |id, panel| DockNode::Tabs {
+            tab_style: crate::TabStyle::default(),
             id,
             panels: vec![panel],
             active: panel,
@@ -3218,6 +3262,7 @@ mod tests {
             axis: Axis::Vertical,
             fraction: 0.3,
             first: Box::new(DockNode::Tabs {
+                tab_style: crate::TabStyle::default(),
                 id: 111,
                 panels: vec![Panel::Sizes],
                 active: Panel::Sizes,
@@ -3227,11 +3272,13 @@ mod tests {
                 axis: Axis::Horizontal,
                 fraction: 0.45,
                 first: Box::new(DockNode::Tabs {
+                    tab_style: crate::TabStyle::default(),
                     id: 113,
                     panels: vec![panels[1]],
                     active: panels[1],
                 }),
                 second: Box::new(DockNode::Tabs {
+                    tab_style: crate::TabStyle::default(),
                     id: 114,
                     panels: vec![panels[3]],
                     active: panels[3],
@@ -3300,6 +3347,7 @@ mod tests {
         // Mixed content/ribbon minima compose before applying split ratios;
         // max(sum(tab minima), sum(tile minima)) would undercount this case.
         *layout.node_mut(103).unwrap() = DockNode::Tabs {
+            tab_style: crate::TabStyle::default(),
             id: 103,
             panels: vec![Panel::Sizes],
             active: Panel::Sizes,
@@ -4315,6 +4363,7 @@ mod tests {
                 edge,
                 extent: 232.0,
                 root: DockNode::Tabs {
+                    tab_style: crate::TabStyle::default(),
                     id: 5,
                     panels: vec![Panel::Sizes],
                     active: Panel::Sizes,
@@ -4382,6 +4431,7 @@ mod tests {
         );
         layout.bands[0].edge = Edge::Right;
         layout.bands[0].root = DockNode::Tabs {
+            tab_style: crate::TabStyle::default(),
             id: 5,
             panels: vec![Panel::Layers, Panel::Sizes],
             active: Panel::Sizes,
@@ -4401,6 +4451,7 @@ mod tests {
                 edge: Edge::Bottom,
                 extent: 160.0,
                 root: DockNode::Tabs {
+                    tab_style: crate::TabStyle::default(),
                     id: 5,
                     panels: vec![Panel::Layers, Panel::Sizes],
                     active: Panel::Sizes,
@@ -4841,11 +4892,13 @@ mod tests {
                 axis: split_axis,
                 fraction: 0.5,
                 first: Box::new(DockNode::Tabs {
+                    tab_style: crate::TabStyle::default(),
                     id: 2,
                     panels: vec![Panel::Toolbar],
                     active: Panel::Toolbar,
                 }),
                 second: Box::new(DockNode::Tabs {
+                    tab_style: crate::TabStyle::default(),
                     id: 10,
                     panels: vec![Panel::Brushes],
                     active: Panel::Brushes,
@@ -4868,6 +4921,7 @@ mod tests {
         let mut layout = DockLayout::default();
         layout.bands.retain(|b| b.id == 1);
         layout.bands[0].root = DockNode::Tabs {
+            tab_style: crate::TabStyle::default(),
             id: 2,
             panels: vec![Panel::Toolbar, Panel::Brushes],
             active: Panel::Toolbar,

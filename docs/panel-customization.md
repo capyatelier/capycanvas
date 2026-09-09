@@ -16,30 +16,37 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
 - **Workspace** contains Undo/Redo Workspace Change, checkable built-in-panel
   visibility, a separate toolbar-visibility section, and **New Toolbar…**.
   Hiding removes placement, not configuration; checking the item shows it again.
-- A built-in-panel tab or body opens **Tab with name** / **Tab with icon**,
-  **Configure Brushes panel…**, and **Hide Brushes panel** (using its actual
+- A built-in-panel tab or body opens **Configure Brushes panel…** and
+  **Hide Brushes panel** (using its actual
   name). A toolbar tab/body has **Configure Tools toolbar…** and
   **Hide Tools toolbar**, likewise using its actual name; display and management
   options are in its configuration column. A single tap on the selected tab toggles
   configuration; an inactive tab selects it. Inputs retain native behavior.
 - Empty tab-header space and the group grip target the whole tab group:
-  **Tab with name** / **Tab with icon**, **Add built-in panel** / **Add Toolbar** submenus,
+  **Icons and active tab name** (default), **Names only**, **Icons only**,
+  **Add built-in panel** / **Add Toolbar** submenus,
   and **New Toolbar…**. Submenu checks show current group membership; choosing
-  another panel moves it here, never duplicates it. Group style changes apply to
-  every current tab; an individual tab can subsequently override its style.
+  another panel moves it here, never duplicates it. Style is stored once on the
+  group's `DockNode::Tabs`, never on individual panels. The default shows every
+  icon and only the active tab's name. Names-only and icons-only apply to all tabs.
+  Rust resolves `PanelView.tab` into `show_icon` / `show_name`; GTK, web and Android
+  render and measure those contents with a 6px icon/name gap. Whole-group moves
+  retain style; merges adopt the destination style, and splitting out a tab creates
+  a new group with the default style. Per-tab overrides and their menu/API are removed;
+  old per-panel style saves are not migrated.
 - A lone built-in panel also offers **Hide tab**, in a separate section, in
-  both its panel and group menus. This flag is independent of name/icon style.
+  both its panel and group menus. This flag is independent of the group's display style.
   Its content replaces the header with a 20px bottom-center drag strip using
   the horizontal grip glyph. The strip's menu includes that panel's Configure
   and Hide actions; configuration opens the same live two-column drawer.
   Tearing off a single panel hides its tab immediately. During that drag,
   docking alone restores its original hide flag, while merging into a group
-  clears the flag and retains its name/icon style. Dropping on the canvas
+  clears the flag and adopts that group's display style. Dropping on the canvas
   keeps the tab hidden; the menu can show it again. Moving an already-floating
   panel preserves its current choice. Multi-tab groups always show their tabs.
 - A ribbon tile targets that tile: **Remove Tool**, **Insert Tools…**.
   Empty standalone ribbon space and its grip target the toolbar: configuration,
-  append tools, tab style, tile style, rename, duplicate, hide, and delete.
+  append tools, tile style, rename, duplicate, hide, and delete.
   Configure, Rename, Duplicate, Hide and Delete include the actual toolbar
   name; generic creation/addition entries use “toolbar.” Duplicate suggests a
   unique editable name. Names are case-insensitively unique across built-in panels and
@@ -154,7 +161,7 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   activate this behavior. The cycle, size comparison, tab toggle and persistence
   belong to Rust (`DoubleClickPanelHandle`), not host click handlers. On a
   docked lone built-in panel, the same drag areas toggle Hide tab immediately
-  without resizing its dock or changing its name/icon style. A docked lone
+  without resizing its dock or changing its group's display style. A docked lone
   toolbar resets to one row (top/bottom) or column (left/right), adding lanes
   only when needed to fit. Nested resets preserve side-by-side panel widths.
   Docked multi-tab groups do not change.
@@ -230,14 +237,15 @@ no third-party code or assets are imported.
 
 The shared model now implements dynamic panel configuration, stable tile IDs,
 transactional creation/insertion, context menu targeting, picker search/selection,
-per-panel and group tab styles, expanded-control view metadata, tile movement and
-variable-count ribbon allocation. Old workspace JSON receives the original panel
-configuration. Tests cover these policies and native/Wasm type checks pass.
+group-owned tab styles, expanded-control view metadata, tile movement and
+variable-count ribbon allocation. Workspace JSON stores tab display style on each
+group; the retired per-panel display field is not migrated. Tests cover these
+policies and native/Wasm type checks pass.
 
 GTK now renders dynamic toolbars, native contextual menus, the searchable picker
 and in-place two-column configuration. The original group and preview controls
 stay in their parents; closing restores its allocation without changing saved geometry. Native
-checks exercise group/panel/tile/empty-ribbon targets, name/icon choices,
+checks exercise group/panel/tile/empty-ribbon targets, all three tab-group styles,
 creation/insertion, control visibility and editing, a GTK drop signal, restore
 and reset. Dark/light GTK widget captures are inspected in
 `artifacts/ui/customization/` (ignored). Gesture signals test native bindings,
@@ -290,7 +298,7 @@ Regression coverage:
 | Contract | Evidence |
 | --- | --- |
 | Named toolbars, transactional multi-selection, search/cancel/validation | Core customization tests; GTK and web picker controls |
-| Panel/group/tile/empty-ribbon menus and individual/group tab styles | Core context models; GTK gesture/action signals; browser pointer/hold events |
+| Panel/group/tile/empty-ribbon menus and group-owned tab styles | Core context models; GTK gesture/action signals; browser pointer/hold events |
 | Live controls, visibility, selected-tab toggle, different-tab switch, outside/Escape dismissal | Core interaction tests; native expansion test; browser customization test |
 | Same/cross-toolbar moves, stable IDs and insertion previews | Core slot/move tests; native drop signal; browser native-DND and touch movement |
 | Dynamic wrapping, tabbing, clipped overflow and resize | Core allocation tests; GTK ribbon captures; web customization/parity checks |
@@ -306,11 +314,19 @@ duplicate/rename/delete/undo, creation, tile reorder, configuration, all eightee
 theme/layout/tile-style combinations, live tear-off continuation, all eight
 resize/reset directions, hidden tabs, group collapse, narrow-ribbon merging,
 top snap coordinates and Zen hidden-edge/floating-only targets. The complete
-27-test suite also retains drawing, settings, numeric-input and lifecycle checks.
+suite also retains drawing, settings, numeric-input and lifecycle checks.
+
+The group-tab-style tests on GTK, web and Android check all three modes with
+every tab active in turn, in both themes. Shared tests also cover serialization,
+undo/redo, whole-group moves, merging into a differently styled group and
+splitting out a new default-style group. GTK keeps the existing tab widgets and
+changes child visibility; all hosts render the Rust-resolved icon/name flags.
+Review captures are in `artifacts/ui/group-tab-styles/` (ignored).
 
 Run the native tests separately (GTK initialization is thread-affine):
 
 ```sh
+cargo test -p layer-linux native_group_tab_styles -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_customization -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_panel_expansion -- --ignored --test-threads=1
 cargo test --release -p layer-linux native_web_parity_reference -- --ignored --test-threads=1
@@ -318,7 +334,7 @@ cargo test --release -p layer-linux native_web_parity_reference -- --ignored --t
 
 Use isolated `LAYER_SETTINGS_FILE` paths and a Wayland/Vulkan display. After
 building/serving the web client, run `node apps/layer-web/test.mjs --customization`,
-`--workspace` and `--parity` against `LAYER_WEB_URL`, or add `--package` to test
+`--tab-styles`, `--workspace` and `--parity` against `LAYER_WEB_URL`, or add `--package` to test
 the static build. `--workspace --gestures` runs only the pointer/touch subset.
 Web customization/workspace captures are under
 `artifacts/ui/workspace-management/web/`; parity captures remain under

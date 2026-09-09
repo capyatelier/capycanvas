@@ -20,8 +20,8 @@ pub use camera::{Camera, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
 pub use customization::{
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
-    PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabStyle, TileStyle,
-    TileView, ToolChoice, ToolPickerView, ToolbarTile, tool_choice,
+    PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabPresentation,
+    TabStyle, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarTile, tool_choice,
 };
 pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,

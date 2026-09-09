@@ -336,6 +336,10 @@ function place(node, rect) {
     height: `${rect.height}px`,
   });
 }
+function tabLabel(tab, view) {
+  if (view.tab.show_icon) tab.append(icon(view.icon));
+  if (view.tab.show_name) tab.append(element("span", "", view.title));
+}
 function arrange() {
   if (!app) return;
   layout = app.layout(workspace.clientWidth, workspace.clientHeight);
@@ -352,7 +356,7 @@ function arrange() {
       workspace.append(node);
     }
     const key = JSON.stringify([group.panels.map((id) => {
-      const view = customization.view(id); return [id, view.title, view.tab_style, view.icon];
+      const view = customization.view(id); return [id, view.title, view.tab, view.icon];
     }), group.active, group.tabs_visible]);
     if (node.dataset.key !== key) {
       node.dataset.key = key;
@@ -378,8 +382,7 @@ function arrange() {
           tab.dataset.panel = panel;
           const view = customization.view(panel);
           tab.title = view.title; tab.setAttribute("aria-label", view.title);
-          if (view.tab_style === "icon") tab.append(icon(view.icon));
-          else tab.textContent = view.title;
+          tabLabel(tab, view);
           customization.target(tab, { kind: "panel", panel });
           tab.setAttribute("aria-selected", String(panel === group.active));
           labels.append(draggable(tab, { kind: "panel", panel }));
@@ -476,12 +479,12 @@ function queuePanelMeasurements() {
     const measurements = state.workspace.layout.panels.map(config => {
       const view = customization.view(config.id);
       const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
-      const key = JSON.stringify([width, view.title, view.tab_style, view.icon, view.controls, view.tile_style, state.layers.length]);
+      const key = JSON.stringify([width, view.title, view.tab, view.icon, view.controls, view.tile_style, state.layers.length]);
       let cached = panelMeasurements.get(config.id);
       if (cached?.key !== key) {
         const tab = element("button", "dock-tab");
         tab.style.width = "max-content";
-        if (view.tab_style === "icon") tab.append(icon(view.icon)); else tab.textContent = view.title;
+        tabLabel(tab, view);
         measureBox.style.width = `${width}px`; measureBox.replaceChildren(tab);
         const tabWidth = tab.getBoundingClientRect().width;
         const content = panels.get(config.id).cloneNode(true);

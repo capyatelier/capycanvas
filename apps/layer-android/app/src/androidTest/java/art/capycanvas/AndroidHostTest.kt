@@ -278,19 +278,46 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
     }
 
+    @Test fun tabGroupStylesFollowSelectionAndHaveNoPanelOverrides() {
+        val id = group("brushes").getInt("id")
+        for (panel in listOf("sizes", "layers")) action(obj("type" to "move_panel", "panel" to panel,
+            "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
+        for (theme in listOf("dark", "light")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for ((style, label) in listOf("active_name" to "Icons and active tab name", "name" to "Names only", "icon" to "Icons only")) {
+                contextGrip("group-grip-$id")
+                compose.onNodeWithText(label).performClick()
+                for (active in listOf("brushes", "sizes", "layers")) {
+                    compose.onNodeWithTag("tab-$active").performClick()
+                    compose.waitUntil(10_000) { group(active).getString("active") == active }
+                    for (panel in listOf("brushes", "sizes", "layers")) {
+                        val icon = compose.onNodeWithTag("tab-icon-$panel", useUnmergedTree = true)
+                        val name = compose.onNodeWithTag("tab-name-$panel", useUnmergedTree = true)
+                        if (style != "name") icon.assertExists() else icon.assertDoesNotExist()
+                        if (style == "name" || (style == "active_name" && panel == active)) name.assertExists() else name.assertDoesNotExist()
+                    }
+                }
+                capture("group-tabs-$style-$theme")
+            }
+        }
+        compose.onNodeWithTag("tab-layers").performTouchInput { longClick() }
+        compose.onNodeWithText("Icons only").assertDoesNotExist()
+        compose.onNodeWithText("Configure Layers panel…").performClick()
+        customize(obj("type" to "close_expanded"))
+    }
+
     @Test fun dockedPanelHandlesToggleTabsOnFirstDoubleTap() {
         val id = group("sizes").getInt("id")
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for (style in listOf("name", "icon")) {
-                customize(obj("type" to "set_tab_style", "target" to obj("kind" to "panel", "panel" to "sizes"), "style" to style))
+            for (style in listOf("active_name", "name", "icon")) {
+                customize(obj("type" to "set_tab_style", "group" to id, "style" to style))
                 val bands = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("bands").toString()
                 for (hidden in listOf(true, false)) {
                     compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
                     compose.waitUntil(10_000) { group("sizes").getBoolean("tabs_visible") == !hidden }
                     val layout = state().getJSONObject("workspace").getJSONObject("layout")
                     val config = layout.array("panels").objects().first { it.getString("id") == "sizes" }
-                    assertEquals(style, config.getString("tab_style"))
                     assertEquals(hidden, config.getBoolean("hide_tab"))
                     assertFalse(group("sizes").getBoolean("floating"))
                     assertEquals("Dock dimensions remain unchanged", bands, layout.getJSONArray("bands").toString())
@@ -463,7 +490,9 @@ class AndroidHostTest {
         assertEquals(2, tiles.count { it.number("y") == tiles[0].number("y") })
         capture("workspace-toolbar-collapse")
         contextGrip("ribbon-grip-toolbar")
-        compose.onNodeWithText("Tab with icon").performClick()
+        compose.onNodeWithText("Icons only").assertDoesNotExist()
+        compose.onNodeWithText("Configure Tools toolbar…").performClick()
+        customize(obj("type" to "close_expanded"))
         val tabIcon = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("icon")
         assertEquals("brush", tabIcon)
         // Workspace's New Toolbar command opens the same picker as the context menu.

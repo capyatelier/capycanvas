@@ -136,6 +136,11 @@ line in the tab row, clamped before the fixed trailing grip if tabs overflow.
 Tab labels scroll horizontally without moving the grip.
 Tabs have the same 36px button height as tool tiles, in a shared 36px tab bar
 with no outer padding. The active surface joins directly into its panel.
+Tab display is a group-owned choice in the group context menu: icons with only
+the active name (default), names only, or icons only. Rust supplies resolved
+icon/name visibility to each host; individual tabs have no style override.
+Whole-group moves preserve style, merges use the destination's style, and a
+new group split off from an existing group starts with the default.
 UI text uses the Rust `UI_TEXT_PT` base size (11 pt), including panel text,
 tabs, headings, menus and zoom/rotation status labels. GTK and web settings
 row descriptions follow Adwaita's smaller subtitle role (5/6 of the base size,

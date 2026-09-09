@@ -7,8 +7,32 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum TabStyle {
     #[default]
+    ActiveName,
     Name,
     Icon,
+}
+impl TabStyle {
+    pub const ALL: [Self; 3] = [Self::ActiveName, Self::Name, Self::Icon];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ActiveName => "Icons and active tab name",
+            Self::Name => "Names only",
+            Self::Icon => "Icons only",
+        }
+    }
+    fn presentation(self, active: bool) -> TabPresentation {
+        TabPresentation {
+            show_icon: self != Self::Name,
+            show_name: self == Self::Name || (self == Self::ActiveName && active),
+        }
+    }
+}
+
+/// Resolved in Rust from the group's style and selection; hosts only render it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct TabPresentation {
+    pub show_icon: bool,
+    pub show_name: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,8 +145,6 @@ pub enum PanelContent {
 pub struct PanelConfig {
     pub id: Panel,
     #[serde(default)]
-    pub tab_style: TabStyle,
-    #[serde(default)]
     pub hide_tab: bool,
     #[serde(default)]
     pub tile_style: TileStyle,
@@ -172,7 +194,6 @@ impl PanelConfig {
             .into_iter()
             .map(|id| Self {
                 id,
-                tab_style: TabStyle::Name,
                 hide_tab: false,
                 tile_style: TileStyle::Small,
                 content: if id == Panel::Toolbar {
@@ -301,7 +322,7 @@ pub enum CustomizationAction {
     ConfirmToolbar,
     CancelToolbar,
     SetTabStyle {
-        target: ContextTarget,
+        group: u32,
         style: TabStyle,
     },
     SetTabHidden {
@@ -395,21 +416,13 @@ impl DockLayout {
                 let p = self.panel(panel)?;
                 (
                     p.menu_name(),
-                    vec![
-                        if panel.kind() == PanelKind::Content {
-                            self.tab_style_items(target, &[panel])?
-                        } else {
-                            Vec::new()
-                        },
-                        self.hide_tab_items(target)?,
-                        self.panel_actions(p),
-                    ],
+                    vec![self.hide_tab_items(target)?, self.panel_actions(p)],
                 )
             }
             ContextTarget::Group { group } => (
                 "Panel Group".into(),
                 vec![
-                    self.tab_style_items(target, self.group_panels(group)?)?,
+                    self.tab_style_items(group)?,
                     self.hide_tab_items(target)?,
                     if let [panel] = self.group_panels(group)?
                         && let p = self.panel(*panel)?
@@ -539,7 +552,6 @@ impl DockLayout {
                     },
                 ),
             ],
-            self.tab_style_items(ContextTarget::Panel { panel }, &[panel])?,
             [TileStyle::Small, TileStyle::Large, TileStyle::Labeled]
                 .into_iter()
                 .map(|style| {
@@ -570,29 +582,31 @@ impl DockLayout {
             ],
         ])
     }
-    fn tab_style_items(
-        &self,
-        target: ContextTarget,
-        panels: &[Panel],
-    ) -> Result<Vec<ContextMenuItem>, String> {
-        [TabStyle::Name, TabStyle::Icon]
+    fn tab_style_items(&self, group: u32) -> Result<Vec<ContextMenuItem>, String> {
+        let selected = self.group_tab_style(group)?;
+        Ok(TabStyle::ALL
             .into_iter()
             .map(|style| {
-                let mut selected = true;
-                for &panel in panels {
-                    selected &= self.panel(panel)?.tab_style == style;
-                }
                 let mut item = ContextMenuItem::edit(
-                    match style {
-                        TabStyle::Name => "Tab with name",
-                        TabStyle::Icon => "Tab with icon",
-                    },
-                    CustomizationAction::SetTabStyle { target, style },
+                    style.label(),
+                    CustomizationAction::SetTabStyle { group, style },
                 );
-                item.selected = Some(selected);
-                Ok(item)
+                item.selected = Some(selected == style);
+                item
             })
-            .collect()
+            .collect())
+    }
+    pub fn tab_presentation(&self, panel: Panel) -> TabPresentation {
+        let Some(group) = self.panel_group(panel) else {
+            return TabStyle::default().presentation(true);
+        };
+        let DockNode::Tabs {
+            active, tab_style, ..
+        } = self.node(group).unwrap()
+        else {
+            unreachable!()
+        };
+        tab_style.presentation(*active == panel)
     }
     fn hide_tab_items(&self, target: ContextTarget) -> Result<Vec<ContextMenuItem>, String> {
         let group = match target {
@@ -789,7 +803,7 @@ pub struct PanelView {
     pub id: Panel,
     pub title: String,
     pub icon: &'static str,
-    pub tab_style: TabStyle,
+    pub tab: TabPresentation,
     pub tile_style: TileStyle,
     pub toolbar_options: Vec<Vec<ContextMenuItem>>,
     pub expanded: bool,
@@ -842,7 +856,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         id: panel,
         title: config.title().into(),
         icon: config.icon(),
-        tab_style: config.tab_style,
+        tab: state.workspace.layout.tab_presentation(panel),
         tile_style: config.tile_style,
         toolbar_options: if panel.kind() == PanelKind::Tiles {
             let mut options = state.workspace.layout.toolbar_options(panel)?;
@@ -1097,18 +1111,8 @@ impl CustomizationState {
                 }
             }
             CancelToolbar => self.toolbar_prompt = None,
-            SetTabStyle { target, style } => {
-                let panels = match target {
-                    ContextTarget::Panel { panel } => vec![panel],
-                    ContextTarget::Group { group } => layout.group_panels(group)?.to_vec(),
-                    _ => return Err("Choose a tab or tab group".into()),
-                };
-                for &panel in &panels {
-                    layout.panel(panel)?;
-                }
-                for panel in panels {
-                    layout.panel_mut(panel)?.tab_style = style;
-                }
+            SetTabStyle { group, style } => {
+                layout.set_tab_style(group, style)?;
                 changed |= regions::LAYOUT;
             }
             SetTabHidden { panel, hidden } => {
@@ -1280,7 +1284,7 @@ mod tests {
             .layout
             .add_toolbar(Some(8), "Painting", &[PEN, ERASE])
             .unwrap();
-        state.layout.panel_mut(toolbar).unwrap().tab_style = TabStyle::Icon;
+        state.layout.set_tab_style(8, TabStyle::Icon).unwrap();
         state
             .layout
             .move_panel(
@@ -1541,7 +1545,7 @@ mod tests {
     }
 
     #[test]
-    fn context_targets_offer_only_their_actions_and_group_styles_can_be_overridden() {
+    fn tab_style_is_owned_by_the_group_and_not_individual_panels() {
         let mut layout = DockLayout::default();
         let custom = layout.add_toolbar(Some(8), "Paint", &[PEN]).unwrap();
         let mut state = CustomizationState::default();
@@ -1550,23 +1554,28 @@ mod tests {
             .edit(
                 &mut layout,
                 CustomizationAction::SetTabStyle {
-                    target: group,
+                    group: 8,
                     style: TabStyle::Icon,
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
             )
             .unwrap();
-        assert_eq!(
-            layout.panel(Panel::Layers).unwrap().tab_style,
-            TabStyle::Icon
-        );
-        assert_eq!(layout.panel(custom).unwrap().tab_style, TabStyle::Icon);
+        assert_eq!(layout.group_tab_style(8).unwrap(), TabStyle::Icon);
+        for panel in [Panel::Layers, custom] {
+            assert_eq!(
+                layout.tab_presentation(panel),
+                TabPresentation {
+                    show_icon: true,
+                    show_name: false
+                }
+            );
+        }
         state
             .edit(
                 &mut layout,
                 CustomizationAction::SetTabStyle {
-                    target: ContextTarget::Panel { panel: custom },
+                    group: 8,
                     style: TabStyle::Name,
                 },
                 Platform::Gtk,
@@ -1576,14 +1585,33 @@ mod tests {
         assert!(
             layout.context_menu(group).unwrap().sections[0]
                 .iter()
-                .all(|i| i.selected == Some(false))
+                .any(|i| i.label == "Names only" && i.selected == Some(true))
         );
         let panel = layout
             .context_menu(ContextTarget::Panel {
                 panel: Panel::Brushes,
             })
             .unwrap();
-        assert_eq!(panel.sections[2][0].label, "Configure Brushes panel…");
+        assert_eq!(panel.sections[1][0].label, "Configure Brushes panel…");
+        assert!(!panel.sections.iter().flatten().any(|i| matches!(
+            i.action,
+            Some(UiAction::Customize {
+                action: CustomizationAction::SetTabStyle { .. }
+            })
+        )));
+        assert!(
+            !layout
+                .toolbar_options(custom)
+                .unwrap()
+                .iter()
+                .flatten()
+                .any(|i| matches!(
+                    i.action,
+                    Some(UiAction::Customize {
+                        action: CustomizationAction::SetTabStyle { .. }
+                    })
+                ))
+        );
         let tile = layout.panel(custom).unwrap().tiles()[0].id;
         assert_eq!(
             layout
