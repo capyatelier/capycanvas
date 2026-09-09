@@ -333,7 +333,6 @@ pub struct PreferencesState {
     pub search_focus: u64,
     pub shortcut_query: String,
     pub editing_shortcut: Option<String>,
-    pub editing_preference: Option<PreferenceId>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
 }
@@ -348,7 +347,6 @@ pub struct PreferencesView {
     pub search_results: Vec<PreferenceSearchResult>,
     pub shortcut_query: String,
     pub shortcut_editor: Option<ShortcutEditor>,
-    pub detail: Option<PreferenceRow>,
     pub shortcuts: Vec<ShortcutRow>,
     pub capture: Option<ShortcutCapture>,
     pub error: Option<String>,
@@ -373,10 +371,6 @@ pub struct ShortcutEditor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceAction {
-    EditPreference {
-        id: PreferenceId,
-    },
-    ClosePreference,
     Page {
         page: SettingsPage,
     },
@@ -823,14 +817,6 @@ impl PreferencesState {
     pub(crate) fn view(&self, settings: &Settings, platform: Platform) -> PreferencesView {
         let query = self.query.trim().to_lowercase();
         let pages = settings.pages(platform);
-        let detail = self.editing_preference.and_then(|id| {
-            pages
-                .iter()
-                .flat_map(|p| &p.groups)
-                .flat_map(|g| &g.rows)
-                .find(|r| r.id == id)
-                .cloned()
-        });
         let mut search_results = Vec::new();
         for page in &pages {
             for group in &page.groups {
@@ -916,7 +902,6 @@ impl PreferencesState {
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,
-            detail,
             shortcuts,
             capture: self.capture.clone().map(|mut c| {
                 if self.error.is_some() {
@@ -947,27 +932,11 @@ impl PreferencesState {
         platform: Platform,
     ) -> Result<(), String> {
         match action {
-            PreferenceAction::EditPreference { id } => {
-                let row = settings.field(id, platform)?;
-                if !row.enabled
-                    || !matches!(
-                        row.kind,
-                        PreferenceKind::Number { .. } | PreferenceKind::Choice { .. }
-                    )
-                {
-                    return Err("This setting cannot be edited here.".into());
-                }
-                self.editing_preference = Some(id);
-                self.editing_shortcut = None;
-                self.capture = None;
-            }
-            PreferenceAction::ClosePreference => self.editing_preference = None,
             PreferenceAction::Page { page } => {
                 self.page = page;
                 self.query.clear();
                 self.searching = false;
                 self.editing_shortcut = None;
-                self.editing_preference = None;
                 self.capture = None;
             }
             PreferenceAction::Search { query } => {
@@ -1004,7 +973,6 @@ impl PreferencesState {
                 self.query.clear();
                 self.searching = false;
                 self.editing_shortcut = Some(id);
-                self.editing_preference = None;
                 self.capture = None;
             }
             PreferenceAction::CloseShortcutEditor => {

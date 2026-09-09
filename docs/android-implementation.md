@@ -98,7 +98,7 @@ presentation must be measured, not inferred from that setting.
   pinned-wrapper `run.sh headless` build/install/launch flow have been exercised.
 - Four Rust host tests pass: GPU-unavailable UI, malformed input, shared touch
   routing, and unchanged-input snapshot suppression with state/error/resize updates.
-- Twenty-seven emulator tests cover: visible stylus paint and pixel-checked undo/redo;
+- Twenty-eight emulator tests cover: visible stylus paint and pixel-checked undo/redo;
   preferences/search/theme; animated drawer and divider resizing; native context
   menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
   shortcut recording, saving and activity recreation; two-finger navigation,
@@ -112,7 +112,7 @@ presentation must be measured, not inferred from that setting.
   and the filled Done button in both themes; settings slider contrast and
   release-to-apply behavior; catalog-driven labels/descriptions, trailing controls
   and numeric ranges without an Android settings catalog. Workspace tests cover
-  dynamic menus and nested panel/toolbar moves; naming validation and
+  dynamic menus anchored to their actual triggers and nested panel/toolbar moves; naming validation and
   duplicate/rename/delete/undo; compact/vertical/horizontal tile layouts in both
   themes; preset-preserving tile-size changes; live tear-off; eight external
   resize edges and first-double-click reset; hidden tabs/configuration; singleton
@@ -145,12 +145,20 @@ Back control. Rows have name/description on the left and value/control on the
 right. Numeric slider rows put the track below the entire label/value header,
 with minus/plus ends and a 600 dp numeric-content cap; small integers use a
 trailing stepper. See [numeric controls](numeric-controls.md). Category/detail panes adapt to list/page
-navigation below 840 dp. All detail editors, choice lists, recording/conflicts
-and errors stay inline; Back returns within the content pane. Rust owns detail
+navigation below 840 dp. Simple choices use native anchored dropdowns with the
+core's options, selected value and optional preview icons. Detailed editors that
+open a modal on GTK/web stay in the content pane, as do recording/conflicts and
+errors; Back returns within that pane. Rust owns detail
 selection, slider step snapping and per-edit validation/apply/save. Compose owns transitions, native
 text editing and narrow-screen presentation. The still-mounted GPU canvas is
 shielded from touch throughout the overlay's entry/exit. Current captures are in
 `artifacts/android/settings-inline/final/`; see the [settings design](settings-implementation-plan.md#android).
+Dropdown review captures are in `artifacts/android/settings-dropdowns/`.
+Workspace header menus open below their button; panel context menus remain
+beside the initiating grip, including submenus. A floating panel can be covered
+by its menu, so `artifacts/android/workspace-menu-review/` includes a before-menu
+capture. Toolbar confirmation text uses an inline shared SVG for menu-path arrows
+to avoid fallback-font baseline differences while preserving the Rust copy.
 
 These are development APKs, not store-ready releases. Before public binary
 distribution, add release signing and complete the exact Maven/native/toolchain

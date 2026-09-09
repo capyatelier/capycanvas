@@ -81,8 +81,9 @@ beside its main content, not a header spanning two columns. A persistent search
 field replaces the sidebar heading/toggle. The main pane has a centered page title, a filled
 Done button and a Back arrow for details; these controls stay put while detail
 contents animate. Done dismisses; accepted edits auto-apply and persist through
-Rust. There are no nested settings dialogs, dropdowns or recording/conflict
-popups. Narrow screens retain category-to-page navigation.
+Rust. Simple choices use anchored dropdowns; detailed editors remain in the
+content pane without nested dialogs or recording/conflict popups. Narrow screens
+retain category-to-page navigation.
 
 Settings typography uses 16 sp body/sidebar labels, 14 sp descriptions, 18 sp
 group headings and 20 sp pane titles. Done's 16 sp label sits in a 40 dp visible
@@ -100,7 +101,8 @@ defaults, ranges, steps and enabled/visible state. Numeric text is submitted on
 IME Done/focus loss; slider positions use shared Rust mapping and resolution
 before live updates through the ordinary typed preference action.
 No per-setting Android renderer or secondary range/default catalog is required.
-Choice values open the existing in-pane list; numbers edit directly in rows.
+Choice values open native dropdowns with optional previews and a selected
+checkmark; numbers edit directly in rows.
 
 The compact-slider regression test found that the overlay's ancestor input
 barrier cancelled child drags before they crossed touch slop. Moving that barrier
@@ -108,8 +110,8 @@ to a background sibling preserves canvas isolation and lets native controls
 handle slow gestures. A focusable settings surface prevents the persistent
 search field from receiving focus automatically on page changes.
 
-The expanded 17-test device suite checks entry/exit and detail movement with the
-Compose clock, no dialog/popup nodes, adjacent full-height panes, sidebar
+Device tests check entry/exit and detail movement with the Compose clock,
+no nested dialogs, choice-menu selection and dismissal, adjacent full-height panes, sidebar
 alignment and font/glyph dimensions, filled Done pixels in both themes, slider
 contrast/release behavior, catalog-driven labels and numeric ranges, dependencies,
 invalid/valid numeric edits, accepted-value persistence

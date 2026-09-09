@@ -325,10 +325,12 @@ shared input router; the view's transient `search_focus` revision asks each host
 to reveal and focus its search field. Native text editing and shortcut recording
 keep ownership of their input. GTK/web dialogs target 1000 × 620 logical pixels
 and shrink to fit smaller windows.
-`EditPreference`/`ClosePreference` and the shortcut editor state describe inline
-detail pages: Android choice lists and shortcuts slide in from the right, with a pane-local Back
-arrow. Settings never open another Android dialog or popup, including for choices,
-numeric input, shortcut recording, conflicts or validation errors.
+Android renders simple choices as native anchored dropdowns, with options,
+icons and the selected value supplied by Rust. Selection submits `Edit` without
+navigating. Detailed editors that use a modal on GTK/web, such as the shared
+shortcut editor, slide in from the right with a pane-local Back arrow. Numeric
+input, shortcut recording, conflicts and validation errors remain inline;
+settings never open another Android dialog.
 
 The single keymap routes commands, brush/size presets and registered parameterized
 `UiAction`s. Hosts do not resolve shortcuts. Explicit conflict replacement only

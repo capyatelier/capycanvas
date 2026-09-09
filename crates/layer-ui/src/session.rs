@@ -4330,7 +4330,7 @@ mod tests {
         }
     }
     #[test]
-    fn settings_detail_navigation_validation_and_autosave_are_shared() {
+    fn settings_navigation_validation_and_autosave_are_shared() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
             s.set_platform(platform);
@@ -4340,16 +4340,6 @@ mod tests {
                 PreferenceAction::Page {
                     page: SettingsPage::Input,
                 },
-            );
-            preference(
-                &mut s,
-                PreferenceAction::EditPreference {
-                    id: PreferenceId::PredictionHorizon,
-                },
-            );
-            assert_eq!(
-                s.preferences().unwrap().detail.unwrap().id,
-                PreferenceId::PredictionHorizon
             );
             assert!(s.state.requests.is_empty());
             for value in ["abc", "NaN", "65", "-1"] {
@@ -4386,8 +4376,6 @@ mod tests {
                 1,
                 "unchanged values do not write again"
             );
-            preference(&mut s, PreferenceAction::ClosePreference);
-            assert!(s.preferences().unwrap().detail.is_none());
             assert_eq!(s.preferences().unwrap().page, SettingsPage::Input);
             preference(
                 &mut s,
@@ -4395,7 +4383,7 @@ mod tests {
                     id: CommandId::Brush.shortcut_id(),
                 },
             );
-            assert!(s.preferences().unwrap().detail.is_none());
+            assert!(s.preferences().unwrap().shortcut_editor.is_some());
             preference(
                 &mut s,
                 PreferenceAction::Page {

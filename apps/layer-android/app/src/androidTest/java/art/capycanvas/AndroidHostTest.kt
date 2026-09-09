@@ -86,10 +86,30 @@ class AndroidHostTest {
     private fun customize(action: JSONObject) = action(obj("type" to "customize", "action" to action))
     private fun floatPanel(panel: String, x: Float = 500f, y: Float = 340f) = action(obj("type" to "move_panel", "panel" to panel,
         "target" to obj("kind" to "float", "position" to JSONArray(listOf(x, y))), "viewport" to viewport()))
-    private fun workspaceMenu() = compose.onNode(hasText("Workspace") and hasClickAction()).performClick()
+    private fun screenBounds(node: SemanticsNodeInteraction): androidx.compose.ui.geometry.Rect {
+        val semantics = node.fetchSemanticsNode()
+        return androidx.compose.ui.geometry.Rect(semantics.positionOnScreen,
+            androidx.compose.ui.geometry.Size(semantics.size.width.toFloat(), semantics.size.height.toFloat()))
+    }
+    private fun workspaceMenu() {
+        val button = compose.onNode(hasText("Workspace") and hasClickAction())
+        val anchor = screenBounds(button)
+        button.performClick()
+        val menu = screenBounds(compose.onNodeWithTag("workspace-menu"))
+        assertEquals("Workspace menu aligns with its header button", anchor.left, menu.left, 2f)
+        assertEquals("Workspace menu opens below its header button", anchor.bottom, menu.top, 2f)
+    }
+    private fun assertContextBeside(tag: String) {
+        val anchor = screenBounds(compose.onNodeWithTag(tag))
+        val menu = screenBounds(compose.onNodeWithTag("workspace-menu"))
+        assertTrue("Menu $menu must remain beside its trigger $anchor",
+            maxOf(anchor.left - menu.right, menu.left - anchor.right, 0f) <= 2f &&
+                maxOf(anchor.top - menu.bottom, menu.top - anchor.bottom, 0f) <= 2f)
+    }
     private fun contextGrip(tag: String) {
         compose.onNodeWithTag(tag).performTouchInput { longClick() }
         compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
+        assertContextBeside(tag)
     }
     private fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
         .bufferedReader().use { it.readText() }
@@ -185,12 +205,14 @@ class AndroidHostTest {
         val destination = group("layers").getInt("id")
         contextGrip("group-grip-$destination")
         compose.onNodeWithText("Add built-in panel").performClick()
-        capture("workspace-add-panel")
+        assertContextBeside("group-grip-$destination")
+        capture("workspace-panel-grip-add-panel")
         compose.onNodeWithText("Brushes panel").performClick()
         compose.waitUntil(10_000) { group("brushes").getInt("id") == destination }
         contextGrip("group-grip-$destination")
         compose.onNodeWithText("Add Toolbar").performClick()
-        capture("workspace-add-toolbar")
+        assertContextBeside("group-grip-$destination")
+        capture("workspace-panel-grip-add-toolbar")
         compose.onNodeWithText("Tools toolbar").performClick()
         compose.waitUntil(10_000) { group("toolbar").getInt("id") == destination }
         val width = group("toolbar").getJSONObject("bounds").number("width")
@@ -228,6 +250,15 @@ class AndroidHostTest {
         capture("workspace-renamed-menu")
         compose.onNodeWithText("Delete Paint tools toolbar…").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
+        val messageLayout = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag("toolbar-prompt-message").performSemanticsAction(SemanticsActions.GetTextLayoutResult) {
+            assertTrue(it(messageLayout))
+        }
+        val text = messageLayout.single()
+        assertEquals("Copy remains verbatim from Rust", host.snapshot!!.getJSONObject("toolbar_prompt").getString("message"), text.layoutInput.text.text)
+        val arrow = text.placeholderRects.single()!!
+        val preceding = text.getBoundingBox(text.layoutInput.text.text.indexOf('→') - 2)
+        assertEquals("Menu-path arrow is centered beside the text", preceding.center.y, arrow.center.y, 2f)
         capture("workspace-delete-prompt")
         compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
@@ -305,8 +336,9 @@ class AndroidHostTest {
         capture("workspace-floating-shown-tab")
         compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
         compose.waitUntil(10_000) { !group("sizes").getBoolean("tabs_visible") }
+        capture("workspace-floating-hidden-panel-before-menu")
         contextGrip("group-grip-$id")
-        capture("workspace-hidden-panel-menu")
+        capture("workspace-floating-hidden-panel-menu")
         compose.onNodeWithText("Configure Brush size panel…").performClick()
         waitState { it.getJSONObject("customization").optString("expanded") == "sizes" }
         capture("workspace-hidden-panel-configure")
@@ -567,20 +599,26 @@ class AndroidHostTest {
             val settled = compose.onNodeWithTag("preferences-surface").fetchSemanticsNode().positionInRoot.y
             assertTrue("Settings slide down from above ($entering -> $settled)", entering < settled)
 
-            compose.onNodeWithTag("setting-choice-theme").performClick()
-            compose.waitUntil(10_000) { preferences().objectOrNull("detail") != null }
-            compose.mainClock.advanceTimeBy(80)
-            val enteringDetail = compose.onNodeWithTag("settings-content-value:theme").fetchSemanticsNode().positionInRoot.x
+            compose.onNodeWithText("Keyboard Shortcuts").performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == "shortcuts" }
             compose.mainClock.advanceTimeBy(300)
-            val settledDetail = compose.onNodeWithTag("settings-content-value:theme").fetchSemanticsNode().positionInRoot.x
+            val shortcut = preferences().array("shortcuts").objects().first { it.getBoolean("visible") }
+            compose.onNode(hasText(shortcut.getString("label")) and hasClickAction()
+                and hasAnyAncestor(hasTestTag("settings-content-page:shortcuts"))).performScrollTo().performClick()
+            compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
+            compose.mainClock.advanceTimeBy(80)
+            val tag = "settings-content-shortcut:" + shortcut.getString("id")
+            val enteringDetail = compose.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.x
+            compose.mainClock.advanceTimeBy(300)
+            val settledDetail = compose.onNodeWithTag(tag).fetchSemanticsNode().positionInRoot.x
             assertTrue("Detail slides in from the right ($enteringDetail -> $settledDetail)", enteringDetail > settledDetail)
             compose.onAllNodes(isDialog()).assertCountEquals(0)
             compose.onAllNodes(isPopup()).assertCountEquals(0)
 
             compose.onNodeWithContentDescription("Back").performClick()
-            compose.waitUntil(10_000) { preferences().objectOrNull("detail") == null }
+            compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") == null }
             compose.mainClock.advanceTimeBy(400)
-            compose.onNodeWithTag("preference-theme").assertIsDisplayed()
+            compose.onNodeWithTag("settings-content-page:shortcuts").assertIsDisplayed()
             compose.onNodeWithTag("settings-done").performClick()
             compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
             compose.mainClock.advanceTimeBy(80)
@@ -706,7 +744,7 @@ class AndroidHostTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.onNodeWithTag("preference-prediction_horizon").performScrollTo()
-        assertNull("Numbers edit directly in their row", preferences().objectOrNull("detail"))
+        compose.onNodeWithTag("settings-content-page:input").assertIsDisplayed()
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         val slider = compose.onNodeWithTag("setting-slider-pressure").performScrollTo().assertTouchHeightIsEqualTo(48.dp)
@@ -1109,7 +1147,11 @@ class AndroidHostTest {
         compose.onNodeWithTag("setting-choice-${row.getString("id")}").performScrollTo().performClick()
         capture("20-cursor-choices")
         val selection = (kind.getInt("selected") + 1) % kind.array("options").length()
-        compose.onNode(hasText(kind.array("options").getString(selection)) and hasClickAction() and hasAnyAncestor(hasTestTag("preferences-surface"))).performClick()
+        compose.onNodeWithTag("setting-choice-option-${row.getString("id")}-${selection}").performClick()
+        compose.waitUntil(10_000) { preferences().array("pages").objects().first { it.getString("id") == "canvas" }
+            .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == row.getString("id") }
+            .getJSONObject("kind").getInt("selected") == selection }
+        compose.onNodeWithTag("settings-content-page:canvas").assertIsDisplayed()
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onNodeWithText("About").performClick()
@@ -1119,6 +1161,65 @@ class AndroidHostTest {
         capture("21-about")
         compose.onNodeWithTag("settings-done").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+        assertNull(host.actionError)
+    }
+
+    @Test fun settingChoicesStayOnPageAndDismissNatively() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        fun kind(page: String, id: String) = preferences().array("pages").objects().first { it.getString("id") == page }
+            .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == id }.getJSONObject("kind")
+        // The same renderer handles ordinary choices and choices with previews.
+        for ((page, id) in listOf("appearance" to "theme", "canvas" to "cursor")) {
+            action(obj("type" to "preferences", "action" to obj("type" to "page", "page" to page)))
+            for (theme in listOf("light", "dark")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                val before = kind(page, id)
+                val selected = before.getInt("selected")
+                val control = compose.onNodeWithTag("setting-choice-$id")
+                control.performScrollTo().performClick()
+                compose.onAllNodes(isPopup()).assertCountEquals(1)
+                compose.onAllNodes(isDialog()).assertCountEquals(0)
+                compose.onNodeWithTag("settings-content-page:$page").assertIsDisplayed()
+                assertNull(preferences().objectOrNull("shortcut_editor"))
+                compose.onNodeWithTag("setting-choice-option-$id-$selected").assertIsSelected()
+                before.array("options").values().forEachIndexed { index, label ->
+                    compose.onNodeWithTag("setting-choice-option-$id-$index").assertTextContains(label.toString())
+                    if (before.array("icons").optString(index).isNotEmpty()) {
+                        compose.onNodeWithTag("setting-choice-icon-$id-$index", useUnmergedTree = true).assertIsDisplayed()
+                    }
+                }
+                capture("settings-dropdown-$id-$theme")
+
+                // Back dismisses only the menu, not its settings page.
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                compose.onAllNodes(isPopup()).assertCountEquals(0)
+                assertEquals(page, preferences().getString("page"))
+                assertEquals(selected, kind(page, id).getInt("selected"))
+
+                control.performClick()
+                // Tap outside the popup through the native window dispatcher.
+                val outside = compose.onNodeWithTag("settings-page-title").fetchSemanticsNode().boundsInRoot.center
+                val now = SystemClock.uptimeMillis()
+                for (eventAction in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                    val event = MotionEvent.obtain(now, SystemClock.uptimeMillis(), eventAction, outside.x, outside.y, 0)
+                    assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true))
+                    event.recycle()
+                }
+                compose.onAllNodes(isPopup()).assertCountEquals(0)
+                assertEquals(selected, kind(page, id).getInt("selected"))
+
+                control.performClick()
+                val next = (selected + 1) % before.array("options").length()
+                compose.onNodeWithTag("setting-choice-option-$id-$next").performClick()
+                compose.waitUntil(10_000) { kind(page, id).getInt("selected") == next }
+                compose.onAllNodes(isPopup()).assertCountEquals(0)
+                assertEquals(page, preferences().getString("page"))
+                control.assertTextContains(before.array("options").getString(next))
+                control.performClick()
+                compose.onNodeWithTag("setting-choice-option-$id-$next").assertIsSelected()
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+            }
+        }
         assertNull(host.actionError)
     }
 

@@ -3,6 +3,8 @@ package art.capycanvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -12,14 +14,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import org.json.JSONArray
 import org.json.JSONObject
 
 /** Header menus, context menus and configuration options render the same Rust
  * items. They never reconstruct eligibility, naming, defaults or commands. */
 @Composable internal fun WorkspaceMenu(host: CanvasHost, menu: JSONObject, dismiss: () -> Unit) {
-    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp),
+    DropdownMenu(true, dismiss, modifier = Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("workspace-menu"),
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
         WorkspaceMenuItems(host, menu.array("sections"), dismiss, menu.getString("title"))
     }
@@ -66,7 +72,16 @@ import org.json.JSONObject
         title = { Text(view.getString("title"), style = MaterialTheme.typography.titleLarge) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                view.getString("message").takeIf { it.isNotEmpty() }?.let { Text(it) }
+                view.getString("message").takeIf { it.isNotEmpty() }?.let { message ->
+                    // Keep core copy (including the accessible arrow) intact,
+                    // without relying on a fallback font's low arrow glyph.
+                    Text(buildAnnotatedString {
+                        message.forEach { if (it == '→') appendInlineContent("menu-arrow", "→") else append(it) }
+                    }, modifier = Modifier.testTag("toolbar-prompt-message"), inlineContent = mapOf(
+                        "menu-arrow" to InlineTextContent(Placeholder(1.em, 1.em, PlaceholderVerticalAlign.TextCenter)) {
+                            SharedIcon("back", null, Modifier.fillMaxSize().rotate(180f), tint = LocalContentColor.current)
+                        }))
+                }
                 if (!view.isNull("name")) CoreTextField(view.getString("name"), {
                     host.customize(obj("type" to "toolbar_name", "name" to it))
                 }, Modifier.testTag("toolbar-name"), label = { Text(view.getString("name_label")) })

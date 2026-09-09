@@ -197,11 +197,14 @@ number submits through `Edit`. Adding a setting of an existing kind requires onl
 changes, not Android row-specific wiring. A genuinely new control kind still
 requires a renderer in each frontend.
 
-There are no nested dialogs or popups in Android settings. Numeric editors are
-in their rows; choice value buttons open the shared `PreferencesView.detail`.
-Shortcuts use `shortcut_editor`.
-Details slide into the content pane from the right, with a Back arrow at its top
-left. Recording, conflicts and validation errors appear inline. Numeric text is
+Simple choices use native anchored dropdowns, including cursor previews and a
+checkmark for the current value. Selection applies through Rust's `Edit` action
+and dismisses the menu without navigating; Back or an outside tap dismisses it
+without changing the value. Reset context menus also remain native menus.
+Numeric editors stay in their rows. Editors that use a modal on GTK/web, such as
+shortcuts (`shortcut_editor`), slide into the content pane from the right with a
+Back arrow at its top left. There are no nested settings dialogs; recording,
+conflicts and validation errors appear inline. Numeric text is
 validated by Rust on IME Done or focus loss; sliders update live. A full-size
 input barrier protects the still-mounted GPU canvas throughout entry and exit.
 
@@ -296,7 +299,8 @@ remain separate work, not nonfunctional controls in this dialog.
   regression tests. Native-input pacing is rerun separately, without concurrent
   browser/GPU benchmarks.
 - Android device tests cover full-screen geometry, real entry/exit and detail
-  movement, zero settings dialog/popup nodes, numeric rejection/acceptance,
+  movement without nested dialogs, anchored choice menus in both themes,
+  preview icons, current selection, Back/outside-tap dismissal, numeric rejection/acceptance,
   immediate persistence, multiple shortcuts, narrow-screen navigation and stylus
   isolation from the canvas, persistent search, and catalog-driven row/control
   geometry and numeric ranges. Review captures: `artifacts/android/settings-inline/final/`.

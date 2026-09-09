@@ -20,6 +20,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.background
@@ -77,8 +78,8 @@ import org.json.JSONObject
     }
 }
 
-private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "value:" + it.getString("id") }
-    ?: objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") } ?: "page:" + getString("page")
+private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")?.let { "shortcut:" + it.getString("id") }
+    ?: "page:" + getString("page")
 
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
     val colors = LocalPalette.current
@@ -92,7 +93,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding()
         .focusRequester(paneFocus).focusable().testTag("preferences-surface")) {
         val wide = maxWidth >= 840.dp
-        val detail = view.objectOrNull("detail")
         val shortcut = view.objectOrNull("shortcut_editor")
         fun close() { focus.clearFocus(); host.dispatch(obj("type" to "close_settings")) }
         fun back() {
@@ -100,7 +100,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
             when {
                 view.objectOrNull("capture") != null -> host.preference(obj("type" to "cancel_shortcut"))
                 shortcut != null -> host.preference(obj("type" to "close_shortcut_editor"))
-                detail != null -> host.preference(obj("type" to "close_preference"))
                 !wide && showPage -> showPage = false
                 else -> close()
             }
@@ -116,10 +115,10 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                     val page = view.array("pages").objects().find { it.getString("id") == view.getString("page") }
                     // Pane controls stay put while only its contents slide.
                     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)) {
-                        Text(detail?.getString("title") ?: shortcut?.getString("label") ?: page?.getString("title") ?: "",
+                        Text(shortcut?.getString("label") ?: page?.getString("title") ?: "",
                             Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 88.dp).testTag("settings-page-title"),
                             fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-                        if (detail != null || shortcut != null || !wide) {
+                        if (shortcut != null || !wide) {
                             IconButton(::back, Modifier.align(Alignment.CenterStart).size(48.dp)) {
                                 SharedIcon("back", "Back", Modifier.size(20.dp))
                             }
@@ -136,7 +135,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                                     (slideOutHorizontally(tween(220)) { -it * direction / 3 } + fadeOut(tween(120)))
                             }
                         }, label = "settings-detail") { model ->
-                        val row = model.objectOrNull("detail")
                         val editor = model.objectOrNull("shortcut_editor")
                         val page = model.array("pages").objects().find { it.getString("id") == model.getString("page") }
                         Column(Modifier.fillMaxSize().testTag("settings-content-" + model.settingsRoute())
@@ -144,7 +142,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                             horizontalAlignment = Alignment.CenterHorizontally) {
                             Column(Modifier.widthIn(max = 632.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                                 when {
-                                    row != null -> PreferenceDetail(host, row)
                                     editor != null -> ShortcutEditor(host, model, editor)
                                     else -> {
                                         if (model.getString("page") == "shortcuts") Shortcuts(host, model)
@@ -332,19 +329,44 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                     onCommit = { host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it)) })
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
                 "choice" -> {
+                    val id = row.getString("id")
                     val selected = kind.getInt("selected")
-                    Row(Modifier.widthIn(max = controlWidth).heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(8.dp)).background(colors.input)
-                        .clickable(enabled = enabled, role = Role.Button) {
-                            host.preference(obj("type" to "edit_preference", "id" to row.getString("id")))
-                        }.testTag("setting-choice-" + row.getString("id")).padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        kind.array("icons").optString(selected).takeIf { it.isNotEmpty() }?.let {
-                            SharedIcon(it, null, Modifier.size(20.dp))
+                    var open by remember(id, enabled) { mutableStateOf(false) }
+                    val focus = LocalFocusManager.current
+                    Box(Modifier.widthIn(max = controlWidth)) {
+                        Row(Modifier.heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(8.dp)).background(colors.input)
+                            .clickable(enabled = enabled, role = Role.Button) { focus.clearFocus(); open = true }
+                            .testTag("setting-choice-$id").padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            kind.array("icons").optString(selected).takeIf { it.isNotEmpty() }?.let {
+                                SharedIcon(it, null, Modifier.size(20.dp))
+                            }
+                            Text(kind.array("options").getString(selected), Modifier.weight(1f, fill = false),
+                                color = if (enabled) colors.text else colors.settingsSecondary)
+                            SharedIcon("chevron-down", null, Modifier.size(16.dp), tint = colors.settingsSecondary)
                         }
-                        Text(kind.array("options").getString(selected), Modifier.weight(1f, fill = false),
-                            color = if (enabled) colors.text else colors.settingsSecondary)
-                        SharedIcon("chevron-down", null, Modifier.size(16.dp).rotate(-90f), tint = colors.settingsSecondary)
+                        DropdownMenu(open, { open = false }, Modifier.testTag("setting-choice-menu-$id"),
+                            containerColor = colors.settingsCard) {
+                            kind.array("options").values().forEachIndexed { index, name ->
+                                val icon = kind.array("icons").optString(index).takeIf { it.isNotEmpty() }
+                                DropdownMenuItem(
+                                    text = { Text(name.toString()) },
+                                    leadingIcon = icon?.let { { SharedIcon(it, null,
+                                        Modifier.size(20.dp).testTag("setting-choice-icon-$id-$index")) } },
+                                    trailingIcon = { Box(Modifier.size(20.dp)) {
+                                        if (index == selected) SharedIcon("check", null, Modifier.fillMaxSize())
+                                    } },
+                                    colors = MenuDefaults.itemColors(textColor = colors.text,
+                                        leadingIconColor = colors.text, trailingIconColor = colors.text),
+                                    modifier = Modifier.testTag("setting-choice-option-$id-$index")
+                                        .semantics { this.selected = index == selected },
+                                    onClick = {
+                                        open = false
+                                        host.preference(obj("type" to "edit", "id" to id, "value" to index))
+                                    })
+                            }
+                        }
                     }
                 }
                 "info" -> SelectionContainer(Modifier.widthIn(max = controlWidth)) {
@@ -357,31 +379,6 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
             }
         }
     }
-}
-
-@Composable private fun PreferenceDetail(host: CanvasHost, row: JSONObject) {
-    val kind = row.getJSONObject("kind")
-    val colors = LocalPalette.current
-    val enabled = row.optBoolean("enabled", true)
-    fun edit(value: Any) = host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to value))
-    if (kind.getString("type") == "choice") {
-        Text(row.optString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
-        Surface(shape = RoundedCornerShape(12.dp), color = colors.settingsCard) {
-            Column {
-                kind.array("options").values().forEachIndexed { index, name ->
-                    if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                        .selectable(index == kind.getInt("selected"), enabled = enabled, role = Role.RadioButton) { edit(index) }
-                        .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        kind.array("icons").optString(index).takeIf { it.isNotEmpty() }?.let { SharedIcon(it, null, Modifier.size(20.dp)) }
-                        Text(name.toString(), Modifier.weight(1f))
-                        RadioButton(index == kind.getInt("selected"), onClick = null, enabled = enabled)
-                    }
-                }
-            }
-        }
-    } else PreferenceRow(host, row)
 }
 
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
