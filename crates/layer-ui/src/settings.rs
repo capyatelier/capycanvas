@@ -332,6 +332,11 @@ pub enum PreferenceAction {
         id: PreferenceId,
         value: PreferenceValue,
     },
+    /// Native sliders submit their raw position; the core owns step snapping.
+    Slide {
+        id: PreferenceId,
+        value: f32,
+    },
     BeginShortcut {
         id: String,
     },
@@ -618,19 +623,21 @@ impl Settings {
             })
             .collect()
     }
+    fn field(&self, id: PreferenceId, platform: Platform) -> Result<PreferenceRow, String> {
+        self.pages(platform)
+            .into_iter()
+            .flat_map(|p| p.groups)
+            .flat_map(|g| g.rows)
+            .find(|r| r.id == id)
+            .ok_or_else(|| "This setting is unavailable on this platform".into())
+    }
     fn edit(
         &mut self,
         id: PreferenceId,
         value: PreferenceValue,
         platform: Platform,
     ) -> Result<(), String> {
-        let field = self
-            .pages(platform)
-            .into_iter()
-            .flat_map(|p| p.groups)
-            .flat_map(|g| g.rows)
-            .find(|r| r.id == id)
-            .ok_or("This setting is unavailable on this platform")?;
+        let field = self.field(id, platform)?;
         if !field.enabled {
             return Err("Enable instant stroke feedback before editing this setting".into());
         }
@@ -762,7 +769,9 @@ impl PreferencesState {
             pages,
             page: self.page,
             query: self.query.clone(),
-            searching: self.searching,
+            // Android keeps its search field visible; an empty query shows
+            // categories. Desktop/web retain their explicit search toggle.
+            searching: self.searching && (platform != Platform::Android || !query.is_empty()),
             search_results,
             shortcut_query: self.shortcut_query.clone(),
             shortcut_editor,
@@ -793,13 +802,7 @@ impl PreferencesState {
     ) -> Result<(), String> {
         match action {
             PreferenceAction::EditPreference { id } => {
-                let row = settings
-                    .pages(platform)
-                    .into_iter()
-                    .flat_map(|p| p.groups)
-                    .flat_map(|g| g.rows)
-                    .find(|r| r.id == id)
-                    .ok_or("This setting is unavailable on this platform")?;
+                let row = settings.field(id, platform)?;
                 if !row.enabled
                     || !matches!(
                         row.kind,
@@ -841,6 +844,17 @@ impl PreferencesState {
                 self.shortcut_query = query;
             }
             PreferenceAction::Edit { id, value } => settings.edit(id, value, platform)?,
+            PreferenceAction::Slide { id, value } => {
+                let field = settings.field(id, platform)?;
+                let PreferenceKind::Number { control, .. } = field.kind else {
+                    return Err("This setting has no slider".into());
+                };
+                control.validate(value, &field.title)?;
+                let snapped = (control.min
+                    + ((value as f64 - control.min) / control.step).round() * control.step)
+                    .clamp(control.min, control.max) as f32;
+                settings.edit(id, PreferenceValue::Number(snapped), platform)?;
+            }
             PreferenceAction::EditShortcut { id } => {
                 if !crate::shortcuts::definitions(settings, platform)
                     .iter()

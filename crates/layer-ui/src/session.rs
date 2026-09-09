@@ -2806,6 +2806,100 @@ mod tests {
             assert_eq!(s.state.settings.prediction_ms, 64.0);
         }
     }
+    #[test]
+    fn settings_sliders_use_core_ranges_steps_and_dependencies() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::Settings);
+            for row in s
+                .preferences()
+                .unwrap()
+                .pages
+                .into_iter()
+                .flat_map(|p| p.groups)
+                .flat_map(|g| g.rows)
+            {
+                let PreferenceKind::Number { control, .. } = row.kind else {
+                    continue;
+                };
+                let value = (control.min + control.step * 1.4) as f32;
+                preference(&mut s, PreferenceAction::Slide { id: row.id, value });
+                assert!(s.preferences().unwrap().error.is_none());
+                let actual = s
+                    .preferences()
+                    .unwrap()
+                    .pages
+                    .into_iter()
+                    .flat_map(|p| p.groups)
+                    .flat_map(|g| g.rows)
+                    .find(|r| r.id == row.id)
+                    .unwrap();
+                let PreferenceKind::Number { value, .. } = actual.kind else {
+                    unreachable!()
+                };
+                assert!((value as f64 - (control.min + control.step)).abs() < 0.00001);
+                for value in [control.min as f32, control.max as f32] {
+                    preference(&mut s, PreferenceAction::Slide { id: row.id, value });
+                    assert!(s.preferences().unwrap().error.is_none());
+                }
+                let saved = s.state.settings.clone();
+                let requests = s.state.requests.len();
+                for value in [
+                    (control.max + 1.0) as f32,
+                    (control.min - 1.0) as f32,
+                    f32::NAN,
+                ] {
+                    preference(&mut s, PreferenceAction::Slide { id: row.id, value });
+                    assert!(s.preferences().unwrap().error.is_some());
+                    assert_eq!(s.state.settings, saved);
+                    assert_eq!(s.state.requests.len(), requests);
+                }
+            }
+            edit_preference(&mut s, PreferenceId::Feedback, PreferenceValue::Bool(false));
+            let saved = s.state.settings.clone();
+            preference(
+                &mut s,
+                PreferenceAction::Slide {
+                    id: PreferenceId::PredictionHorizon,
+                    value: 20.0,
+                },
+            );
+            assert!(s.preferences().unwrap().error.is_some());
+            assert_eq!(s.state.settings, saved);
+            preference(
+                &mut s,
+                PreferenceAction::Slide {
+                    id: PreferenceId::Theme,
+                    value: 1.0,
+                },
+            );
+            assert!(s.preferences().unwrap().error.is_some());
+        }
+    }
+
+    #[test]
+    fn android_persistent_search_returns_to_categories_when_empty() {
+        let mut s = session();
+        s.set_platform(Platform::Android);
+        invoke(&mut s, CommandId::Settings);
+        for query in ["", "   ", "prediction", ""] {
+            preference(
+                &mut s,
+                PreferenceAction::Search {
+                    query: query.into(),
+                },
+            );
+            assert_eq!(s.preferences().unwrap().searching, !query.trim().is_empty());
+        }
+        s.set_platform(Platform::Gtk);
+        preference(&mut s, PreferenceAction::ToggleSearch { open: true });
+        assert!(
+            s.preferences().unwrap().searching,
+            "Desktop keeps its explicit search view"
+        );
+    }
+
     fn record_shortcut(s: &mut UiSession<Recorder>, id: &str, name: &str, command: bool) {
         preference(s, PreferenceAction::BeginShortcut { id: id.into() });
         assert!(key(s, name, true, command, true).handled);

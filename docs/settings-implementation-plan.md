@@ -105,23 +105,40 @@ There are no toolkit types in the shared model.
 Settings occupies the full available window, slides down from the top on entry
 and slides up on dismissal. There is no full-width header above the panes. At
 840 dp and wider a full-height 260 dp sidebar sits beside the main content.
-Search and Settings share the sidebar's top row. The main pane has its own
+The sidebar starts with a persistently visible search field, without a Settings
+heading or a search-toggle button. An empty query shows categories; Rust supplies
+the filtered results and navigation actions. The main pane has its own
 centered page title and a filled Material Done button at the top right; Back
 appears at its top left for details. Done closes the auto-saving overlay rather
 than committing a form. Narrower windows use list/page navigation with Done in
-the currently visible pane. Content is bounded to 680 dp for readable rows.
+the currently visible pane. Content is bounded to 800 dp for readable rows.
 
-Body/sidebar text retains the shared 11 pt app size; pane headings are 18 sp.
-Navigation glyphs are 20 dp in 48 dp rows, aligned with the search glyph; sidebar
-labels align with Settings. Sidebar insets and button radii are 8 dp, row gaps
-4 dp, and grouped content uses 20 dp spacing. Regular two-line settings rows are
-64 dp minimum; choices and shortcuts are 56 dp. The existing editor slider skin
+Android settings use native-scale 16 sp body/sidebar text, 14 sp descriptions,
+18 sp group headings and 20 sp pane titles. Done has a 16 sp label in a 40 dp
+visible button with a 48 dp touch target. The compact editor retains its shared
+11 pt typography. Navigation glyphs are 20 dp in 48 dp rows, aligned with the
+search glyph. Sidebar insets and button radii are 8 dp, row gaps 4 dp, and groups
+use 24 dp spacing. Setting names appear above descriptions on the left; their
+switch, number editor, choice value, information or link appears on the right.
+Rows have a 72 dp minimum and grow for wrapped descriptions. The existing editor slider skin
 is reused with a 48 dp settings touch height, a contrasting inactive track and
 a release callback, without changing compact editor sliders. Controls retain
 at least 48 dp touch targets.
 
-There are no nested dialogs or popups in Android settings. Choice lists and numeric
-editors use the shared `PreferencesView.detail`; shortcuts use `shortcut_editor`.
+All numeric rows use the same renderer: a compact slider beside an 80 dp numeric
+field. Track length grows logarithmically with `(max - min) / step`, bounded to
+160–224 dp; narrow panes stack the field above the track within the right column.
+This is a generic presentation rule, not a second settings/range catalog.
+Rust owns IDs, text, groups, visibility, enabled state, defaults, choice options,
+ranges, steps, validation and persistence. `PreferenceAction::Slide` snaps raw
+slider values to the core step; text edits submit through `Edit` without native
+parsing or snapping. Adding a setting of an existing kind requires only core
+changes, not Android row-specific wiring. A genuinely new control kind still
+requires a renderer in each frontend.
+
+There are no nested dialogs or popups in Android settings. Numeric editors are
+in their rows; choice value buttons open the shared `PreferencesView.detail`.
+Shortcuts use `shortcut_editor`.
 Details slide into the content pane from the right, with a Back arrow at its top
 left. Recording, conflicts and validation errors appear inline. Numeric text is
 validated by Rust on IME Done or focus loss; sliders submit on release. A full-size
@@ -220,7 +237,8 @@ remain separate work, not nonfunctional controls in this dialog.
 - Android device tests cover full-screen geometry, real entry/exit and detail
   movement, zero settings dialog/popup nodes, numeric rejection/acceptance,
   immediate persistence, multiple shortcuts, narrow-screen navigation and stylus
-  isolation from the canvas. Review captures: `artifacts/android/settings-panes/final/`.
+  isolation from the canvas, persistent search, and catalog-driven row/control
+  geometry and numeric ranges. Review captures: `artifacts/android/settings-inline/final/`.
 - Review PNGs are in `artifacts/ui/preferences/`.
   They are actual GTK/browser captures, not mockups. The web-only platform
   prediction row and native-only window controls are intentional differences.

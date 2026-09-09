@@ -16,6 +16,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
@@ -28,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
@@ -51,13 +56,18 @@ import org.json.JSONObject
     if (view != null) SideEffect { retained = view }
     val model = view ?: retained
     if (visible.currentState || visible.targetState) {
-        Box(Modifier.fillMaxSize().pointerInput(Unit) {
-            awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
-        }) {
+        Box(Modifier.fillMaxSize()) {
+            // A background sibling blocks exposed canvas, not an ancestor
+            // that would cancel a child's drag before it crosses touch slop.
+            Box(Modifier.matchParentSize().pointerInput(Unit) {
+                awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+            })
             AnimatedVisibility(visible,
                 enter = slideInVertically(tween(240, easing = FastOutSlowInEasing)) { -it },
                 exit = slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { -it }) {
-                model?.let { PreferencesScreen(host, it) }
+                ProvideTextStyle(LocalTextStyle.current.copy(fontSize = 16.sp, lineHeight = 22.sp)) {
+                    model?.let { PreferencesScreen(host, it) }
+                }
             }
         }
     }
@@ -69,8 +79,11 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
 @Composable private fun PreferencesScreen(host: CanvasHost, view: JSONObject) {
     val colors = LocalPalette.current
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val paneFocus = remember { FocusRequester() }
+    LaunchedEffect(view.settingsRoute()) { paneFocus.requestFocus() }
     var showPage by rememberSaveable { mutableStateOf(view.getString("page") != "appearance") }
-    BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding().testTag("preferences-surface")) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(colors.settingsBackground).imePadding()
+        .focusRequester(paneFocus).focusable().testTag("preferences-surface")) {
         val wide = maxWidth >= 840.dp
         val detail = view.objectOrNull("detail")
         val shortcut = view.objectOrNull("shortcut_editor")
@@ -98,7 +111,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)) {
                         Text(detail?.getString("title") ?: shortcut?.getString("label") ?: page?.getString("title") ?: "",
                             Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 88.dp).testTag("settings-page-title"),
-                            fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                            fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
                         if (detail != null || shortcut != null || !wide) {
                             IconButton(::back, Modifier.align(Alignment.CenterStart).size(48.dp)) {
                                 SharedIcon("back", "Back", Modifier.size(20.dp))
@@ -122,7 +135,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                         Column(Modifier.fillMaxSize().testTag("settings-content-" + model.settingsRoute())
                             .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
-                            Column(Modifier.widthIn(max = 680.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                            Column(Modifier.widthIn(max = 800.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                                 when {
                                     row != null -> PreferenceDetail(host, row)
                                     editor != null -> ShortcutEditor(host, model, editor)
@@ -130,7 +143,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                                         if (model.getString("page") == "shortcuts") Shortcuts(host, model)
                                         else page?.array("groups")?.objects()?.forEach { group ->
                                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                                Text(group.getString("title"), Modifier.padding(horizontal = 4.dp), fontWeight = FontWeight.SemiBold)
+                                                Text(group.getString("title"), Modifier.padding(horizontal = 4.dp).testTag("settings-group-title-" + group.getString("title")),
+                                                    fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
                                                 Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
                                                     color = colors.settingsCard, shadowElevation = 1.dp) {
                                                     Column {
@@ -158,9 +172,11 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
 }
 
 @Composable private fun SettingsDone(close: () -> Unit, modifier: Modifier = Modifier) {
-    Button(close, modifier.widthIn(min = 80.dp).heightIn(min = 48.dp).testTag("settings-done"),
-        shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
-        Text("Done", fontWeight = FontWeight.SemiBold)
+    Box(modifier.height(48.dp), contentAlignment = Alignment.Center) {
+        Button(close, Modifier.widthIn(min = 80.dp).height(40.dp).testTag("settings-done"),
+            shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)) {
+            Text("Done", fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
@@ -172,23 +188,18 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     Column(modifier.background(if (colors.dark) colors.tabs else colors.panel).testTag("settings-sidebar").padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton({
-                focus.clearFocus(); host.preference(obj("type" to "toggle_search", "open" to !searching))
-            }, Modifier.size(48.dp).background(if (searching) colors.active else Color.Transparent, RoundedCornerShape(8.dp))
-                .testTag("settings-search-button")) {
-                SharedIcon("search", "Search settings", Modifier.size(20.dp))
-            }
-            Text("Settings", Modifier.weight(1f).testTag("settings-sidebar-title"),
-                fontSize = 18.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
-            if (showDone) SettingsDone(close)
+            CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
+                Modifier.weight(1f).testTag("settings-search"), height = 48.dp, placeholder = { Text("Search settings") },
+                leadingIcon = { Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
+                    SharedIcon("search", null, Modifier.size(20.dp).testTag("settings-search-icon"))
+                } },
+                trailingIcon = if (view.optString("query").isEmpty()) null else ({
+                    IconButton({
+                        focus.clearFocus(); host.preference(obj("type" to "search", "query" to ""))
+                    }) { SharedIcon("plus", "Clear search", Modifier.size(20.dp).rotate(45f)) }
+                }))
+            if (showDone) { Spacer(Modifier.width(8.dp)); SettingsDone(close) }
         }
-        if (searching) CoreTextField(view.optString("query"), { host.preference(obj("type" to "search", "query" to it)) },
-            Modifier.fillMaxWidth(), height = 48.dp, placeholder = { Text("Search settings") },
-            trailingIcon = {
-                IconButton({
-                    focus.clearFocus(); host.preference(obj("type" to "toggle_search", "open" to false))
-                }) { SharedIcon("plus", "Close search", Modifier.size(20.dp).rotate(45f)) }
-            })
         Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (searching) {
                 view.array("search_results").objects().forEach { result ->
@@ -196,7 +207,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                         focus.clearFocus(); host.preference(result.getJSONObject("action")); onPage()
                     }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(result.getString("title"), fontWeight = FontWeight.Medium)
-                        Text(result.getString("description"), color = colors.settingsSecondary)
+                        Text(result.getString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
                     }
                 }
                 if (view.optBoolean("empty")) Text("No matching settings", Modifier.padding(12.dp), color = colors.settingsSecondary)
@@ -219,8 +230,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     }
 }
 
-private fun numberLabel(kind: JSONObject): String =
-    "%.${kind.getJSONObject("control").optInt("digits", 0)}f".format(java.util.Locale.ROOT, kind.number("value"))
+private fun numberLabel(kind: JSONObject, value: Float = kind.number("value")): String =
+    "%.${kind.getJSONObject("control").getInt("digits")}f".format(java.util.Locale.ROOT, value)
 
 @Composable private fun PreferenceRow(host: CanvasHost, row: JSONObject) {
     val colors = LocalPalette.current
@@ -228,37 +239,53 @@ private fun numberLabel(kind: JSONObject): String =
     val type = kind.getString("type")
     val context = LocalContext.current
     val enabled = row.optBoolean("enabled", true)
-    val interactive = type in listOf("number", "choice", "link")
-    val action = when {
-        type == "switch" -> Modifier.toggleable(kind.getBoolean("active"), enabled = enabled, role = Role.Switch) {
-            host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))
-        }
-        interactive -> Modifier.clickable(enabled = enabled) {
-            if (type == "link") context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(kind.getString("url"))))
-            else host.preference(obj("type" to "edit_preference", "id" to row.getString("id")))
-        }
-        else -> Modifier
-    }
-    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).then(action).padding(horizontal = 16.dp, vertical = 12.dp)
-        .testTag("preference-" + row.getString("id")),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(row.getString("title"), fontWeight = FontWeight.Medium, color = if (enabled) colors.text else colors.settingsSecondary)
-            val summary = when (type) {
-                "number" -> numberLabel(kind)
-                "choice" -> kind.array("options").optString(kind.optInt("selected"))
-                "link" -> kind.getString("label")
-                "info" -> kind.optString("value")
-                else -> row.optString("description")
+    val action = if (type == "switch") Modifier.toggleable(kind.getBoolean("active"), enabled = enabled, role = Role.Switch) {
+        host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))
+    } else Modifier
+    BoxWithConstraints(Modifier.fillMaxWidth().heightIn(min = 72.dp).then(action)
+        .testTag("preference-" + row.getString("id")).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        val controlWidth = maxWidth * .48f
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Column(Modifier.weight(1f).testTag("preference-label-" + row.getString("id")), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(row.getString("title"), fontWeight = FontWeight.Medium, color = if (enabled) colors.text else colors.settingsSecondary)
+                row.optString("description").takeIf { it.isNotEmpty() }?.let {
+                    Text(it, color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
+                }
             }
-            if (summary.isNotEmpty()) {
-                if (type == "info") SelectionContainer { Text(summary, color = colors.settingsSecondary) }
-                else Text(summary, color = if (type == "link") colors.accent else colors.settingsSecondary)
+            when (type) {
+                "number" -> {
+                    val control = kind.getJSONObject("control")
+                    // Presentation only: more selectable steps get a longer
+                    // track, bounded to keep descriptions readable. No ID rules.
+                    val intervals = (control.number("max") - control.number("min")) / control.number("step")
+                    val trackWidth = (112f + 12f * kotlin.math.log2(intervals.coerceAtLeast(1f))).coerceIn(160f, 224f).dp
+                    PreferenceNumber(host, row, Modifier.width(minOf(controlWidth, trackWidth + 92.dp)))
+                }
+                "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
+                "choice" -> {
+                    val selected = kind.getInt("selected")
+                    Row(Modifier.widthIn(max = controlWidth).heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(8.dp)).background(colors.input)
+                        .clickable(enabled = enabled, role = Role.Button) {
+                            host.preference(obj("type" to "edit_preference", "id" to row.getString("id")))
+                        }.testTag("setting-choice-" + row.getString("id")).padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        kind.array("icons").optString(selected).takeIf { it.isNotEmpty() }?.let {
+                            SharedIcon(it, null, Modifier.size(20.dp))
+                        }
+                        Text(kind.array("options").getString(selected), Modifier.weight(1f, fill = false),
+                            color = if (enabled) colors.text else colors.settingsSecondary)
+                        SharedIcon("chevron-down", null, Modifier.size(16.dp).rotate(-90f), tint = colors.settingsSecondary)
+                    }
+                }
+                "info" -> SelectionContainer(Modifier.widthIn(max = controlWidth)) {
+                    Text(kind.getString("value"), textAlign = TextAlign.End, color = colors.settingsSecondary)
+                }
+                "link" -> TextButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(kind.getString("url")))) },
+                    Modifier.widthIn(max = controlWidth).heightIn(min = 48.dp), enabled = enabled) {
+                    Text(kind.getString("label"), fontSize = 16.sp, lineHeight = 22.sp, textAlign = TextAlign.End)
+                }
             }
-        }
-        when (type) {
-            "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
-            "number", "choice" -> SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(-90f), tint = colors.settingsSecondary)
         }
     }
 }
@@ -268,8 +295,8 @@ private fun numberLabel(kind: JSONObject): String =
     val colors = LocalPalette.current
     val enabled = row.optBoolean("enabled", true)
     fun edit(value: Any) = host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to value))
-    Text(row.optString("description"), color = colors.settingsSecondary)
     if (kind.getString("type") == "choice") {
+        Text(row.optString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
         Surface(shape = RoundedCornerShape(12.dp), color = colors.settingsCard) {
             Column {
                 kind.array("options").values().forEachIndexed { index, name ->
@@ -285,31 +312,53 @@ private fun numberLabel(kind: JSONObject): String =
                 }
             }
         }
-    } else {
-        val focus = androidx.compose.ui.platform.LocalFocusManager.current
-        val control = kind.getJSONObject("control")
-        val value = kind.number("value")
-        var text by rememberSaveable(row.getString("id")) { mutableStateOf(numberLabel(kind)) }
-        var focused by remember { mutableStateOf(false) }
-        var slider by remember(value) { mutableFloatStateOf(value) }
-        LaunchedEffect(value) { if (!focused) text = numberLabel(kind) }
-        DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
-        OutlinedTextField(text, { text = it }, Modifier.fillMaxWidth().onFocusChanged {
-            if (focused && !it.isFocused) edit(text)
+    } else PreferenceRow(host, row)
+}
+
+/** One renderer for every numeric setting. Only unfinished text/drag state is
+ * local; Rust parses, validates, snaps slider steps, applies and persists. */
+@Composable private fun PreferenceNumber(host: CanvasHost, row: JSONObject, modifier: Modifier) {
+    val kind = row.getJSONObject("kind")
+    val control = kind.getJSONObject("control")
+    val id = row.getString("id")
+    val enabled = row.getBoolean("enabled")
+    val colors = LocalPalette.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val value = kind.number("value")
+    var text by rememberSaveable(id) { mutableStateOf(numberLabel(kind)) }
+    var focused by remember { mutableStateOf(false) }
+    var slider by remember(value) { mutableFloatStateOf(value) }
+    LaunchedEffect(value, focused) { if (!focused) text = numberLabel(kind) }
+    DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
+    val field: @Composable () -> Unit = {
+        BasicTextField(text, { text = it }, Modifier.width(80.dp).height(48.dp).onFocusChanged {
+            if (focused && !it.isFocused) host.preference(obj("type" to "edit", "id" to id, "value" to text))
             focused = it.isFocused; host.editingText = focused
-        }.testTag("setting-number"),
-            enabled = enabled, singleLine = true, label = { Text(row.getString("title")) },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
+        }.testTag("setting-number-$id"), enabled = enabled, singleLine = true,
+            textStyle = LocalTextStyle.current.copy(color = if (enabled) colors.text else colors.settingsSecondary, textAlign = TextAlign.End),
+            cursorBrush = SolidColor(colors.accent),
+            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
                 imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { focus.clearFocus() }),
-            shape = RoundedCornerShape(12.dp))
-        EditorSlider(slider, { slider = it }, enabled = enabled, range = control.number("min")..control.number("max"),
-            height = 48.dp, label = row.getString("title"), inactiveTrackColor = colors.divider,
+            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+            decorationBox = { input -> Box(Modifier.fillMaxSize().background(colors.input, RoundedCornerShape(8.dp))
+                .border(1.dp, if (focused) colors.accent else colors.divider, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp),
+                contentAlignment = Alignment.CenterEnd) { input() } })
+    }
+    val track: @Composable (Modifier) -> Unit = { trackModifier ->
+        EditorSlider(slider, { slider = it; text = numberLabel(kind, it) }, trackModifier.testTag("setting-slider-$id"),
+            enabled = enabled, range = control.number("min")..control.number("max"), height = 48.dp,
+            label = row.getString("title"), inactiveTrackColor = colors.divider,
             onValueChangeFinished = {
-                focus.clearFocus()
-                val scale = Math.pow(10.0, control.optInt("digits", 0).toDouble()).toFloat()
-                edit(kotlin.math.round(slider * scale) / scale)
-            }, modifier = Modifier.fillMaxWidth().testTag("setting-slider"))
+                host.preference(obj("type" to "slide", "id" to id, "value" to slider))
+                slider = value
+                text = numberLabel(kind) // accepted value until Rust acknowledges the snapped result
+            })
+    }
+    BoxWithConstraints(modifier) {
+        if (maxWidth < 220.dp) Column(horizontalAlignment = Alignment.End) { field(); track(Modifier.fillMaxWidth()) }
+        else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            track(Modifier.weight(1f)); field()
+        }
     }
 }
 

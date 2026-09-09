@@ -77,35 +77,51 @@ need device validation.
 ## Full-screen settings follow-up
 
 Settings is one full-screen, top-sliding overlay with a full-height sidebar
-beside its main content, not a header spanning two columns. Search sits beside
-Settings at the sidebar's top. The main pane has a centered page title, a filled
+beside its main content, not a header spanning two columns. A persistent search
+field replaces the sidebar heading/toggle. The main pane has a centered page title, a filled
 Done button and a Back arrow for details; these controls stay put while detail
 contents animate. Done dismisses; accepted edits auto-apply and persist through
 Rust. There are no nested settings dialogs, dropdowns or recording/conflict
 popups. Narrow screens retain category-to-page navigation.
 
-Sidebar/body text uses the shared 11 pt size, pane titles 18 sp, and sidebar
-glyphs 20 dp within 48 dp navigation rows. Glyph centers and label starts align
-with the search/Settings row. Sidebar insets are 8 dp, navigation gaps 4 dp and
-content group spacing 20 dp. Choice/shortcut rows use 56 dp minimum height;
-two-line setting rows use 64 dp. The editor slider is reused with a 48 dp touch
-height and a visible neutral inactive track, fixing the light-on-light contrast
-found during review. Compact editor controls and the GPU surface are unchanged.
+Settings typography uses 16 sp body/sidebar labels, 14 sp descriptions, 18 sp
+group headings and 20 sp pane titles. Done's 16 sp label sits in a 40 dp visible
+button with a 48 dp hit target. Sidebar glyphs remain 20 dp in 48 dp rows, with
+8 dp insets and 4 dp gaps. Content groups have 24 dp spacing and an 800 dp width
+cap. Each row has name/description on the left and the value/control on the
+right. Sliders use the existing editor skin, 48 dp touch height and a compact
+160–224 dp track, sized generically from the core range/step count; fields are
+80 dp wide. On narrow layouts the field and slider stack within the right side.
+The editor's shared 11 pt typography, tool geometry and GPU path are unchanged.
 
-The expanded 16-test device suite checks entry/exit and detail movement with the
+Rust supplies every setting's identity, groups, labels, descriptions, choices,
+defaults, ranges, steps and enabled/visible state. Numeric text is submitted on
+IME Done/focus loss; slider release uses `Slide` for core-owned step snapping.
+No per-setting Android renderer or secondary range/default catalog is required.
+Choice values open the existing in-pane list; numbers edit directly in rows.
+
+The compact-slider regression test found that the overlay's ancestor input
+barrier cancelled child drags before they crossed touch slop. Moving that barrier
+to a background sibling preserves canvas isolation and lets native controls
+handle slow gestures. A focusable settings surface prevents the persistent
+search field from receiving focus automatically on page changes.
+
+The expanded 17-test device suite checks entry/exit and detail movement with the
 Compose clock, no dialog/popup nodes, adjacent full-height panes, sidebar
 alignment and font/glyph dimensions, filled Done pixels in both themes, slider
-contrast/release behavior, invalid/valid numeric edits, accepted-value persistence
+contrast/release behavior, catalog-driven labels and numeric ranges, dependencies,
+invalid/valid numeric edits, accepted-value persistence
 and real stylus events not reaching the covered canvas. Review captures are in
-`artifacts/android/settings-panes/final/`: 32–33 cover numeric details/validation,
+`artifacts/android/settings-inline/final/`: 32–33 cover inline numbers/validation,
 34–35 inline shortcut recording/conflicts and 36 the two-pane layout in each
-theme. Settings views were visually checked in light/dark and portrait layouts.
-Final emulator run `1788908967987` passes all 16 tests and produces 37 PNGs.
-Android APK/test builds and lint pass. The slider's native touch bounds are
-explicitly checked: reserving height around its 16 dp thumb preserves the small
-visible knob while giving settings a real 48 dp target.
+theme; 37 shows inline controls in dark mode. Settings views are visually checked
+in light/dark and portrait layouts.
+Final emulator run `1788912118247` passes all 17 tests and produces 38 PNGs.
+Android arm64/x86_64 APK builds, test build and lint pass.
 
 The preceding shared-model milestone also passed 72 core tests, packaged web
 preferences/customization suites and GTK preferences in an isolated headless
-Wayland session. This presentation-only refinement does not change those
-implementations or the drawing/rendering path.
+Wayland session. The current shared-core suite has 74 tests, including generic
+slider snapping, invalid input, dependencies and persistent-search state. GTK
+and web (including wasm32) compile checks pass with the extended action model;
+their settings presentation is unchanged.

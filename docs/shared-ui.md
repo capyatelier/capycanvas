@@ -311,10 +311,13 @@ dependencies, value ranges, shortcut collisions and persisted versions.
 GTK uses libadwaita 1.9's `AdwViewSwitcherSidebar`/`AdwNavigationSplitView` in
 `AdwDialog`; web uses native DOM controls in a matching adaptive modal.
 Android uses a full-screen, top-sliding Settings overlay without a global header.
-A full-height sidebar has search beside Settings; the main pane has its own title
-and filled Done button. These panes adapt to list/page navigation on narrow screens.
+A full-height sidebar starts with a persistent search field; the main pane has
+its own title and filled Done button. Setting rows render the core name and
+description on the left and the value/control on the right. Numeric rows share
+one slider/text renderer; `Slide` delegates step snapping to Rust. These panes
+adapt to list/page navigation on narrow screens.
 `EditPreference`/`ClosePreference` and the shortcut editor state describe inline
-detail pages: Android slides these in from the right, with a pane-local Back
+detail pages: Android choice lists and shortcuts slide in from the right, with a pane-local Back
 arrow. Settings never open another Android dialog or popup, including for choices,
 numeric input, shortcut recording, conflicts or validation errors.
 

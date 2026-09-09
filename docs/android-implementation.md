@@ -97,7 +97,7 @@ presentation must be measured, not inferred from that setting.
   pinned-wrapper `run.sh headless` build/install/launch flow have been exercised.
 - Four Rust host tests pass: GPU-unavailable UI, malformed input, shared touch
   routing, and unchanged-input snapshot suppression with state/error/resize updates.
-- Sixteen emulator tests cover: visible stylus paint and pixel-checked undo/redo;
+- Seventeen emulator tests cover: visible stylus paint and pixel-checked undo/redo;
   preferences/search/theme; animated drawer and divider resizing; native context
   menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
   shortcut recording, saving and activity recreation; two-finger navigation,
@@ -109,8 +109,9 @@ presentation must be measured, not inferred from that setting.
   inline-detail slide animations; atomic numeric edits and settings stylus isolation;
   full-height adjacent settings panes, sidebar alignment, shared text/icon sizes
   and the filled Done button in both themes; settings slider contrast and
-  release-to-apply behavior.
-  All 72 shared Rust
+  release-to-apply behavior; catalog-driven labels/descriptions, trailing controls
+  and numeric ranges without an Android settings catalog.
+  All 74 shared Rust
   UI tests also pass.
 - Android lint completes without errors. Remaining warnings concern pinned
   dependency updates, optional Kotlin/Compose conventions and development
@@ -132,15 +133,16 @@ presentation must be measured, not inferred from that setting.
   dismiss workspace menu windows when opening Preferences.
 
 Settings uses a full-screen top-sliding overlay with automatic persistence, not
-a tablet dialog or a global header above two panes. Search/Settings are at the
+a tablet dialog or a global header above two panes. Persistent search is at the
 sidebar's top; the main pane has its page title, filled Done button and detail
-Back control. Category/detail panes adapt to list/page
+Back control. Rows have name/description on the left and value/control on the
+right, including compact sliders and numeric fields. Category/detail panes adapt to list/page
 navigation below 840 dp. All detail editors, choice lists, recording/conflicts
 and errors stay inline; Back returns within the content pane. Rust owns detail
-selection and per-edit validation/apply/save. Compose owns transitions, native
+selection, slider step snapping and per-edit validation/apply/save. Compose owns transitions, native
 text editing and narrow-screen presentation. The still-mounted GPU canvas is
 shielded from touch throughout the overlay's entry/exit. Current captures are in
-`artifacts/android/settings-panes/final/`; see the [settings design](settings-implementation-plan.md#android).
+`artifacts/android/settings-inline/final/`; see the [settings design](settings-implementation-plan.md#android).
 
 These are development APKs, not store-ready releases. Before public binary
 distribution, add release signing and complete the exact Maven/native/toolchain

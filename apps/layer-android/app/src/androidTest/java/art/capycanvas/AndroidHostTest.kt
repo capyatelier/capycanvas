@@ -14,6 +14,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
@@ -249,11 +250,12 @@ class AndroidHostTest {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
         capture("04-preferences-light")
-        compose.onNodeWithContentDescription("Search settings").performClick()
         compose.onNodeWithText("Search settings").performTextInput("prediction")
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").array("search_results").length() > 0 }
         capture("05-settings-search")
-        compose.onNodeWithContentDescription("Close search").performClick()
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        compose.waitUntil(10_000) { preferences().getString("query").isEmpty() && !preferences().getBoolean("searching") }
+        compose.onNodeWithText("Search settings").assertExists()
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("preferences").getString("page") == "input" }
         capture("06-pen-input")
@@ -277,7 +279,7 @@ class AndroidHostTest {
             val settled = compose.onNodeWithTag("preferences-surface").fetchSemanticsNode().positionInRoot.y
             assertTrue("Settings slide down from above ($entering -> $settled)", entering < settled)
 
-            compose.onNodeWithTag("preference-theme").performClick()
+            compose.onNodeWithTag("setting-choice-theme").performClick()
             compose.waitUntil(10_000) { preferences().objectOrNull("detail") != null }
             compose.mainClock.advanceTimeBy(80)
             val enteringDetail = compose.onNodeWithTag("settings-content-value:theme").fetchSemanticsNode().positionInRoot.x
@@ -315,20 +317,28 @@ class AndroidHostTest {
             assertEquals("Sidebar reaches the bottom", surface.bottom, sidebar.bottom, 1f)
             assertEquals("Panes start at the same height", sidebar.top, main.top, 1f)
             assertEquals("Panes are adjacent", sidebar.right, main.left, 1f)
-            val search = bounds("settings-search-button")
-            val title = bounds("settings-sidebar-title")
-            assertEquals("Search sits beside the sidebar title", title.center.y, search.center.y, 1f)
-            assertEquals("Category labels align with Settings", title.left, bounds("settings-category-label-appearance").left, 1f)
-            assertEquals("Sidebar glyphs share a center line", search.center.x, bounds("settings-category-icon-appearance").center.x, 1f)
+            val search = bounds("settings-search")
+            compose.onNodeWithTag("settings-sidebar-title").assertDoesNotExist()
+            assertEquals("Sidebar glyphs share a center line", bounds("settings-search-icon").center.x,
+                bounds("settings-category-icon-appearance").center.x, 1f)
+            assertTrue("Persistent search occupies the sidebar top", search.top < bounds("settings-category-appearance").top)
             compose.onNodeWithTag("settings-category-appearance").assertHeightIsEqualTo(48.dp)
             compose.onNodeWithTag("settings-category-icon-appearance", useUnmergedTree = true).assertWidthIsEqualTo(20.dp).assertHeightIsEqualTo(20.dp)
-            compose.onNodeWithTag("settings-search-button").assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
-            compose.onNodeWithTag("settings-done").assertHeightIsEqualTo(48.dp)
+            compose.onNodeWithTag("settings-search").assertHeightIsEqualTo(48.dp)
+            compose.onNodeWithTag("settings-done").assertHeightIsEqualTo(40.dp).assertTouchHeightIsEqualTo(48.dp)
             assertTrue("Done belongs to the main pane", bounds("settings-done").left >= main.left)
             val text = mutableListOf<TextLayoutResult>()
             compose.onNodeWithTag("settings-category-label-appearance", useUnmergedTree = true)
                 .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(text) }
-            assertEquals("Sidebar uses shared panel typography", (host.catalog.number("text_size_pt") * 4 / 3), text.single().layoutInput.style.fontSize.value, .01f)
+            assertEquals("Sidebar uses native settings body typography", 16f, text.single().layoutInput.style.fontSize.value, .01f)
+            text.clear()
+            compose.onNodeWithText("Done", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(text) }
+            assertEquals("Done text is proportionate to its 40 dp surface", 16f, text.single().layoutInput.style.fontSize.value, .01f)
+            text.clear()
+            compose.onNodeWithTag("settings-group-title-Interface", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(text) }
+            assertEquals("Group headings are larger than body copy", 18f, text.single().layoutInput.style.fontSize.value, .01f)
             val button = compose.onNodeWithTag("settings-done").captureToImage().toPixelMap()
             val fill = button[button.width / 2, button.height / 4]
             assertTrue("Done has a visible filled surface, not just colored text", fill.blue > fill.red + .2f)
@@ -340,32 +350,34 @@ class AndroidHostTest {
     @Test fun inlineSettingsApplyValidateAndNeverPaintUnderneath() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
-        compose.onNodeWithTag("preference-prediction_horizon").performScrollTo().performClick()
-        compose.waitUntil(10_000) { preferences().objectOrNull("detail") != null }
+        compose.onNodeWithTag("preference-prediction_horizon").performScrollTo()
+        assertNull("Numbers edit directly in their row", preferences().objectOrNull("detail"))
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        val slider = compose.onNodeWithTag("setting-slider").assertTouchHeightIsEqualTo(48.dp)
+        val slider = compose.onNodeWithTag("setting-slider-prediction_horizon").assertTouchHeightIsEqualTo(48.dp)
         val track = slider.captureToImage().toPixelMap()
         val trackX = track.width * 9 / 10
         assertTrue("Inactive slider track remains visible on the light settings surface",
             track[trackX, track.height / 4].red - track[trackX, track.height / 2].red > .05f)
-        capture("32-number-detail")
+        capture("32-inline-numbers")
         val before = state().getJSONObject("settings").number("prediction_ms")
-        compose.onNodeWithTag("setting-number").performTextReplacement("65")
-        compose.onNodeWithTag("setting-number").performImeAction()
+        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("65")
+        compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         compose.waitUntil(10_000) { !preferences().isNull("error") }
         assertEquals(before, state().getJSONObject("settings").number("prediction_ms"))
         capture("33-number-invalid")
         slider.performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(width * .75f, center.y), 300) }
-        waitState { it.getJSONObject("settings").number("prediction_ms") in 40f..56f }
+        compose.waitForIdle()
+        waitState { it.getJSONObject("settings").number("prediction_ms") != before }
+        val dragged = state().getJSONObject("settings").number("prediction_ms")
+        assertTrue("A slider drag changes the value inside its range ($dragged)", dragged in 0f..64f)
+        assertEquals("Core snaps the drag to whole milliseconds", 0f, dragged % 1f)
         assertTrue("Slider release validates and applies through Rust", preferences().isNull("error"))
-        compose.onNodeWithTag("setting-number").performTextReplacement("64")
-        compose.onNodeWithTag("setting-number").performImeAction()
+        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("64")
+        compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
         assertTrue(preferences().isNull("error"))
-        compose.onNodeWithContentDescription("Back").performClick()
-        compose.waitUntil(10_000) { preferences().objectOrNull("detail") == null }
-        compose.onNodeWithTag("preference-prediction_horizon").assert(hasText("64"))
+        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64")
         compose.onNodeWithText("About").performClick()
         val collected = CountDownLatch(1)
         host.measurements(true) { collected.countDown() }
@@ -382,10 +394,57 @@ class AndroidHostTest {
         assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
-        compose.onNodeWithTag("preference-prediction_horizon").assert(hasText("64"))
+        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64")
         // Return this shared preference to its original accepted value.
         compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to before)) }
         waitState { it.getJSONObject("settings").number("prediction_ms") == before }
+        compose.onNodeWithTag("settings-done").performClick()
+    }
+
+    @Test fun allPreferenceRowsRenderCoreMetadataAndTrailingControls() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+        // Iterate the actual core catalog: new rows using existing kinds are
+        // automatically covered, with no duplicated IDs, defaults or ranges.
+        for (page in preferences().array("pages").objects()) {
+            if (page.array("groups").length() == 0) continue
+            compose.onNodeWithTag("settings-category-" + page.getString("id")).performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == page.getString("id") }
+            for (row in page.array("groups").objects().flatMap { it.array("rows").objects() }.filter { it.getBoolean("visible") }) {
+                val id = row.getString("id")
+                val node = compose.onNodeWithTag("preference-$id").performScrollTo()
+                node.assert(hasAnyDescendant(hasText(row.getString("title"))) or hasText(row.getString("title")))
+                row.optString("description").takeIf { it.isNotEmpty() }?.let {
+                    compose.onNode(hasText(it) and hasAnyAncestor(hasTestTag("preference-$id")), useUnmergedTree = true).assertExists()
+                }
+                val kind = row.getJSONObject("kind")
+                if (kind.getString("type") == "number") {
+                    val label = compose.onNodeWithTag("preference-label-$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                    val field = compose.onNodeWithTag("setting-number-$id").assertHeightIsEqualTo(48.dp)
+                    assertTrue("$id input is to the right of its description", field.fetchSemanticsNode().boundsInRoot.left > label.right)
+                    val slider = compose.onNodeWithTag("setting-slider-$id").assertTouchHeightIsEqualTo(48.dp)
+                    val progress = slider.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+                    val control = kind.getJSONObject("control")
+                    assertEquals(control.number("min"), progress.range.start)
+                    assertEquals(control.number("max"), progress.range.endInclusive)
+                    assertEquals(kind.number("value"), progress.current)
+                    val widthDp = slider.fetchSemanticsNode().boundsInRoot.width / compose.activity.resources.displayMetrics.density
+                    assertTrue("$id slider is compact instead of spanning the content pane", widthDp in 150f..224f)
+                }
+            }
+        }
+        compose.onNodeWithTag("settings-category-input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+        compose.onNodeWithTag("preference-feedback").performClick()
+        waitState { !it.getJSONObject("settings").getBoolean("feedback") }
+        compose.onNodeWithTag("setting-number-prediction_horizon").assertIsNotEnabled()
+        compose.onNodeWithTag("setting-slider-prediction_horizon").assertIsNotEnabled()
+        compose.onNodeWithTag("preference-feedback").performClick()
+        waitState { it.getJSONObject("settings").getBoolean("feedback") }
+        compose.onNodeWithTag("setting-number-prediction_horizon").assertIsEnabled()
+        compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
+        waitState { it.getString("theme") == "dark" }
+        capture("37-inline-controls-dark")
         compose.onNodeWithTag("settings-done").performClick()
     }
 
@@ -637,7 +696,7 @@ class AndroidHostTest {
         val row = preferences().array("pages").objects().first { it.getString("id") == "canvas" }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getJSONObject("kind").getString("type") == "choice" }
         val kind = row.getJSONObject("kind")
-        compose.onNodeWithTag("preference-${row.getString("id")}").performScrollTo().performClick()
+        compose.onNodeWithTag("setting-choice-${row.getString("id")}").performScrollTo().performClick()
         capture("20-cursor-choices")
         val selection = (kind.getInt("selected") + 1) % kind.array("options").length()
         compose.onNode(hasText(kind.array("options").getString(selection)) and hasClickAction() and hasAnyAncestor(hasTestTag("preferences-surface"))).performClick()
