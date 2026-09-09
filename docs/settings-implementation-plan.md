@@ -21,13 +21,37 @@ host decides defaults, valid values, shortcut collisions or setting availability
 This is a small settings-specific row model, not a general UI schema/framework.
 It remains synchronous and Wasm-portable; OS objects and I/O live in the hosts.
 
+## Copy guidelines
+
+- Titles are short noun phrases, usually 2–4 words.
+- Descriptions are one natural sentence about the visible behavior, usually
+  8–12 words. Use fewer words when the meaning is already clear.
+- Each title, description, option and authored help message is at most
+  **54 characters**, including spaces and punctuation (Unicode characters,
+  not bytes). Do not shorten copy by cutting it off at runtime.
+- Use familiar terms: pointer, controls, window edge, pen, stroke and canvas.
+  Prefer concrete verbs such as show, hide, move and draw. Avoid internal terms
+  such as modeled geometry, predicted samples, chrome and occupied edges.
+- Stay grammatical; avoid cryptic fragments and redundant explanations.
+  Units belong beside values, not repeated in numeric titles.
+- Omit a description when the title and value already explain the row.
+  Preserve essential licensing qualifications. URLs, license identifiers,
+  user-supplied names and external diagnostic details are data, not copy to trim.
+- Define setting copy in Rust. Shared shortcut notices also come from the
+  core; frontends only display them. Core tests cover every platform's catalog
+  and reject titles/descriptions/options exceeding the limit.
+
+Settings slider labels align with other settings rows, without the extra
+6px inset used by panel sliders. GTK uses its existing page-level width clamp,
+not a second centered clamp inside each numeric row.
+
 | Page | Working controls |
 | --- | --- |
 | Appearance | System/Light/Dark; Zen edge-reveal distance |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
-| Pen & Input | Pressure response; feedback enable, prediction horizon up to 64 ms and tip lock; platform predictions where supplied |
+| Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
-| About | Capy Canvas version, application license, platform renderer, Website and Source Code links |
+| About | Capy Canvas version, application license, platform renderer, Website and Source code links |
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.

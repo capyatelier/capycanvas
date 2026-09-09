@@ -411,7 +411,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
         assertTrue(preferences().isNull("error"))
-        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64")
+        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64 ms")
         compose.onNodeWithText("About").performClick()
         val collected = CountDownLatch(1)
         host.measurements(true) { collected.countDown() }
@@ -428,7 +428,7 @@ class AndroidHostTest {
         assertEquals(64f, state().getJSONObject("settings").number("prediction_ms"))
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Pen & Input").performClick()
-        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64")
+        compose.onNodeWithTag("setting-number-prediction_horizon").assertTextEquals("64 ms")
         // Return this shared preference to its original accepted value.
         compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "prediction_horizon", "value" to before)) }
         waitState { it.getJSONObject("settings").number("prediction_ms") == before }
@@ -730,7 +730,7 @@ class AndroidHostTest {
         capture("17-settings-portrait")
         compose.onNodeWithText("Pen & Input").performClick()
         compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        compose.onNodeWithText("Prediction horizon (ms)").assertExists()
+        compose.onNodeWithText("Prediction time").assertExists()
         capture("29-settings-portrait-detail")
         compose.onNodeWithContentDescription("Back").performClick()
         compose.onNodeWithText("Canvas").assertExists()

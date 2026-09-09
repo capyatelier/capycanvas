@@ -98,6 +98,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
         const labels=row.querySelector('.number-labels').getBoundingClientRect(), value=row.querySelector('.number-value-box').getBoundingClientRect(), title=row.querySelector('.number-title');
         return track.top>=header.bottom && Math.abs(track.width-header.width)<1 && track.width<=600 && slider.getBoundingClientRect().height===32
           && value.height===34 && Math.abs(labels.top+labels.height/2-value.top-value.height/2)<1 && Math.abs(value.right-header.right)<1
+          && labels.left===header.left && getComputedStyle(row.querySelector('.number-labels')).paddingLeft==='0px'
           && getComputedStyle(title).whiteSpace==='nowrap' && getComputedStyle(title).textOverflow==='ellipsis' && title.title===title.textContent;
       }))()`), 'sliders span the capped row; right-aligned values center against the complete label block');
       await capture(`${page}-${theme}`);
@@ -153,6 +154,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await click('[data-settings-page="input"]');
   assert.equal(await evaluate("document.querySelector('#settings-search').value"), "");
   assert.equal(await evaluate("document.querySelector('#setting-platform-prediction').checked"), true);
+  assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value"), '8 ms', 'units appear beside numeric values');
+  await click('#setting-prediction-horizon .number-entry');
+  await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='4*2 ms'");
+  await key('Enter');
+  assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 8, 'expressions accept displayed units');
   await click('#setting-feedback');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon').disabled"), true);
   await click('#setting-feedback');

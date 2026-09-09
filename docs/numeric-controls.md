@@ -33,8 +33,9 @@ GTK, web and Android share the same touch-first numeric controls.
 resolution, digits, display scale/unit and range mapping. Its constructor
 defaults to a spin control for whole numbers with at most 64 step intervals,
 otherwise a slider; definitions can explicitly override the kind. Prediction
-horizon (0–64 ms) is a spin row. Brush size is a logarithmic slider over
-0.5–2048 px. Opacity is displayed as a percentage; pressure response is linear.
+time (0–64 ms) is a spin row, with the unit beside the value. Brush size is a
+logarithmic slider over 0.5–2048 px. Opacity is displayed as a percentage;
+the pressure slider uses a linear range.
 
 `NumericOperation` handles formatting, stepping, native values, normalized
 slider positions and typed expressions. Sliders send positions in 0–1.

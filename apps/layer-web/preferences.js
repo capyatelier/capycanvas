@@ -234,7 +234,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
     if (model.capture) {
       const c = model.capture;
       captureLabel.textContent = c.label; captureKey.textContent = c.shortcut;
-      captureError.textContent = c.error || (c.conflict ? `Already assigned to ${c.conflict}. Replace its shortcut?` : "");
+      captureError.textContent = c.notice;
       confirm.disabled = !c.chord || !!c.error; confirm.textContent = c.conflict ? "Replace Shortcut" : "Set Shortcut";
       if (!capture.open) capture.showModal();
     } else if (capture.open) capture.close();

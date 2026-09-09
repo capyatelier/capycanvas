@@ -3108,7 +3108,7 @@ mod tests {
                 [
                     ("Website", "capycanvas.art", "https://capycanvas.art/"),
                     (
-                        "Source Code",
+                        "Source code",
                         "github.com/capyatelier/capycanvas",
                         "https://github.com/capyatelier/capycanvas"
                     ),
@@ -3132,7 +3132,7 @@ mod tests {
                     .iter()
                     .map(|r| r.title.as_str())
                     .collect::<Vec<_>>(),
-                ["Source Code"]
+                ["Source code"]
             );
         }
     }

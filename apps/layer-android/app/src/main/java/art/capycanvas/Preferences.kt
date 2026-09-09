@@ -355,8 +355,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                 Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Press a key combination on your keyboard")
                     Text(capture.optString("shortcut"), fontSize = 20.sp, fontWeight = FontWeight.Medium)
-                    capture.optString("conflict").takeIf { it.isNotEmpty() && it != "null" }?.let { conflict ->
-                        Text("Already assigned to $conflict")
+                    capture.optString("notice").takeIf { it.isNotEmpty() }?.let { Text(it) }
+                    if (!capture.isNull("conflict")) {
                         TextButton({ host.preference(obj("type" to "confirm_shortcut", "replace" to true)) }) { Text("Replace assignment") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

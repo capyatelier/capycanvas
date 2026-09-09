@@ -413,7 +413,7 @@ impl Settings {
             row(
                 Pressure,
                 "Pressure response",
-                "1 is linear. Lower values reach full pressure sooner.",
+                "Lower values make light pen pressure stronger.",
                 PreferenceKind::Number {
                     control: NumericControl::pressure(),
                     value: self.pressure_gamma,
@@ -421,16 +421,16 @@ impl Settings {
             ),
             row(
                 Feedback,
-                "Instant stroke feedback",
-                "Use a replaceable stroke tip to reduce apparent input lag.",
+                "Live stroke preview",
+                "Reduce the gap between your pen and the stroke.",
                 PreferenceKind::Switch {
                     active: self.feedback,
                 },
             ),
             number(
                 PredictionHorizon,
-                "Prediction horizon (ms)",
-                "Maximum lookahead; lower values reduce overshoot.",
+                "Prediction time",
+                "Lower values keep strokes from running ahead.",
                 self.prediction_ms,
                 0.0,
                 64.0,
@@ -438,8 +438,8 @@ impl Settings {
             ),
             number(
                 TipLock,
-                "Tip lock",
-                "0% preserves modeled geometry; 100% brings coverage to the pen tip.",
+                "Pen tip tracking",
+                "Higher values bring the stroke closer to your pen.",
                 self.tip_lock,
                 0.0,
                 1.0,
@@ -449,8 +449,8 @@ impl Settings {
         if matches!(platform, Platform::Web | Platform::Ios | Platform::Android) {
             input.push(row(
                 PlatformPrediction,
-                "Use platform predictions",
-                "Use native predicted samples when the platform supplies them.",
+                "Device pen prediction",
+                "Use your device's estimate of the next pen position.",
                 PreferenceKind::Switch {
                     active: self.platform_prediction,
                 },
@@ -467,8 +467,8 @@ impl Settings {
                     title: "Interface".into(),
                     rows: vec![row(
                         Theme,
-                        "Appearance",
-                        "Follow the system theme, or choose an override.",
+                        "Color theme",
+                        "Match your system theme, or choose light or dark.",
                         PreferenceKind::Choice {
                             icons: Vec::new(),
                             options: vec!["System".into(), "Light".into(), "Dark".into()],
@@ -499,7 +499,7 @@ impl Settings {
                     rows: vec![row(
                         Cursor,
                         "Canvas cursor",
-                        "Outline follows the brush tip.",
+                        "Choose how the pointer looks over the canvas.",
                         PreferenceKind::Choice {
                             options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
                             icons: [
@@ -524,7 +524,7 @@ impl Settings {
                         number(
                             PanSpeed,
                             "Scroll pan speed",
-                            "Scroll pans; Shift-scroll moves horizontally.",
+                            "Set how far scrolling moves the canvas.",
                             self.pan_speed,
                             0.25,
                             4.0,
@@ -533,7 +533,7 @@ impl Settings {
                         number(
                             ZoomSpeed,
                             "Scroll zoom speed",
-                            "Ctrl-scroll zooms around the pointer.",
+                            "Set how much each scroll changes the zoom.",
                             self.zoom_speed,
                             0.25,
                             4.0,
@@ -553,7 +553,7 @@ impl Settings {
                     row(
                         Version,
                         "Version",
-                        "A lightweight, GPU-powered drawing workspace.",
+                        "",
                         PreferenceKind::Info {
                             value: env!("CARGO_PKG_VERSION").into(),
                         },
@@ -561,7 +561,7 @@ impl Settings {
                     row(
                         License,
                         "Application license",
-                        "Software and non-brand assets. The capybara mark has separate branding terms; dependencies retain their own licenses.",
+                        "Branding and dependencies have separate licenses.",
                         PreferenceKind::Info {
                             value: env!("CARGO_PKG_LICENSE").into(),
                         },
@@ -569,7 +569,7 @@ impl Settings {
                     row(
                         Renderer,
                         "Canvas rendering",
-                        "Hardware GPU raster; no CPU canvas fallback.",
+                        "Your GPU draws and displays the canvas.",
                         PreferenceKind::Info {
                             value: match platform {
                                 Platform::Gtk => "Vulkan · Wayland",
@@ -590,7 +590,7 @@ impl Settings {
                     ),
                     row(
                         SourceCode,
-                        "Source Code",
+                        "Source code",
                         "",
                         PreferenceKind::Link {
                             label: "github.com/capyatelier/capycanvas".into(),
@@ -617,7 +617,7 @@ impl Settings {
             .flat_map(|p| p.groups)
             .flat_map(|g| g.rows)
             .find(|r| r.id == id)
-            .ok_or_else(|| "This setting is unavailable on this platform".into())
+            .ok_or_else(|| "This setting isn't available on this device.".into())
     }
     fn edit(
         &mut self,
@@ -627,7 +627,7 @@ impl Settings {
     ) -> Result<(), String> {
         let field = self.field(id, platform)?;
         if !field.enabled {
-            return Err("Enable instant stroke feedback before editing this setting".into());
+            return Err("Enable live stroke preview to change this setting.".into());
         }
         use PreferenceId::*;
         match (&field.kind, &value) {
@@ -769,6 +769,11 @@ impl PreferencesState {
                 if self.error.is_some() {
                     c.error = self.error.clone();
                 }
+                c.notice = c.error.clone().unwrap_or_else(|| {
+                    c.conflict.as_ref().map_or_else(String::new, |label| {
+                        format!("Replace the shortcut used by {label}?")
+                    })
+                });
                 c
             }),
             error: self.error.clone(),
@@ -797,7 +802,7 @@ impl PreferencesState {
                         PreferenceKind::Number { .. } | PreferenceKind::Choice { .. }
                     )
                 {
-                    return Err("This setting cannot be opened for editing".into());
+                    return Err("This setting cannot be edited here.".into());
                 }
                 self.editing_preference = Some(id);
                 self.editing_shortcut = None;
@@ -876,6 +881,7 @@ impl PreferencesState {
                     shortcut: "Press a new key combination".into(),
                     conflict: None,
                     error: None,
+                    notice: String::new(),
                 });
             }
             PreferenceAction::CancelShortcut => self.capture = None,
@@ -923,10 +929,7 @@ impl PreferencesState {
                 }
                 for chord in crate::shortcuts::defaults(&id) {
                     if let Some(conflict) = settings.conflict(&id, &chord, platform) {
-                        return Err(format!(
-                            "Reset conflicts with {}. Reset all shortcuts or change that binding first.",
-                            conflict.label
-                        ));
+                        return Err(format!("Remove {}'s shortcut first.", conflict.label));
                     }
                 }
                 settings.shortcuts.remove(&id);
@@ -964,6 +967,75 @@ impl PreferencesState {
                 .map(|d| d.label);
             capture.shortcut = chord.label(platform);
             capture.chord = capture.error.is_none().then_some(chord);
+        }
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    fn check(text: &str) {
+        assert!(
+            text.chars().count() <= 54,
+            "Preferences copy exceeds 54 characters: {text}"
+        );
+        assert_eq!(text, text.trim());
+        assert!(!text.contains(['\n', '\r', '\t']));
+    }
+
+    #[test]
+    fn settings_copy_is_short_on_every_platform() {
+        let settings = Settings::default();
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Windows,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Android,
+        ] {
+            for page in settings.pages(platform) {
+                check(&page.title);
+                for group in page.groups {
+                    check(&group.title);
+                    for row in group.rows {
+                        check(&row.title);
+                        check(&row.description);
+                        if !row.description.is_empty() {
+                            assert!(
+                                row.description.ends_with('.'),
+                                "Use a complete sentence: {}",
+                                row.description
+                            );
+                        }
+                        if let PreferenceKind::Choice { options, .. } = row.kind {
+                            for option in options {
+                                check(&option);
+                            }
+                        }
+                    }
+                }
+            }
+            for (definition, group) in crate::shortcuts::definitions(&settings, platform) {
+                check(&definition.label);
+                check(group);
+                let mut state = PreferencesState::default();
+                state.edit(
+                    &mut settings.clone(),
+                    PreferenceAction::BeginShortcut { id: definition.id },
+                    platform,
+                );
+                check(&state.capture.as_ref().unwrap().shortcut);
+                state.capture.as_mut().unwrap().conflict = Some(definition.label);
+                check(&state.view(&settings, platform).capture.unwrap().notice);
+                state.error = Some("Choose another key for this shortcut.".into());
+                assert_eq!(
+                    state.view(&settings, platform).capture.unwrap().notice,
+                    state.error.unwrap()
+                );
+            }
         }
     }
 }

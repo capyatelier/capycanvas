@@ -50,7 +50,7 @@ impl KeyChord {
             || Self::modifier(&self.key)
             || matches!(self.key.as_str(), "escape" | "tab")
         {
-            return Err("Choose a letter, number, symbol, navigation or function key. Escape and Tab are reserved.".into());
+            return Err("Choose another key for this shortcut.".into());
         }
         Ok(())
     }
@@ -148,6 +148,9 @@ pub struct ShortcutCapture {
     pub shortcut: String,
     pub conflict: Option<String>,
     pub error: Option<String>,
+    /// Authored in the core; hosts display this without composing messages.
+    #[serde(default)]
+    pub notice: String,
 }
 
 impl CommandId {
@@ -301,7 +304,7 @@ impl Settings {
                 || action.label.len() > 120
                 || !ids.insert(&action.id)
             {
-                return Err("Custom actions need unique custom.* IDs and a short label".into());
+                return Err("Use a unique custom.* ID and a short action name.".into());
             }
         }
         let all = definitions(self, Platform::Gtk);

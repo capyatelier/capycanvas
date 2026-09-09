@@ -38,11 +38,12 @@ import org.json.JSONObject
     val focus = LocalFocusManager.current
     val requester = remember { FocusRequester() }
     val ranged = control.getString("kind") == "slider"
+    val displayKey = if (ranged) "edit" else "text"
     fun resolve(value: Float, op: JSONObject) = JSONObject(Native.number(obj("control" to control, "value" to value, "operation" to op).toString()))
     var shown by remember(value, control.toString()) { mutableStateOf(resolve(value, obj("type" to "format"))) }
     var editing by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf(TextFieldValue(shown.getString("edit"))) }
+    var text by remember { mutableStateOf(TextFieldValue(shown.getString(displayKey))) }
     var error by remember { mutableStateOf<String?>(null) }
     val height = if (settings) 48.dp else if (ranged) 24.dp else 32.dp
     val valuePadding = if (settings) 12.dp else 6.dp
@@ -56,10 +57,10 @@ import org.json.JSONObject
     fun finish(cancel: Boolean = false): Boolean {
         if (!editing) return true
         if (!cancel && !apply(obj("type" to "expression", "text" to text.text))) return false
-        editing = false; error = null; text = TextFieldValue(shown.getString("edit"))
+        editing = false; error = null; text = TextFieldValue(shown.getString(displayKey))
         return true
     }
-    LaunchedEffect(value, editing) { if (!editing) text = TextFieldValue(shown.getString("edit")) }
+    LaunchedEffect(value, editing) { if (!editing) text = TextFieldValue(shown.getString(displayKey)) }
     LaunchedEffect(editing) { if (editing && ranged) requester.requestFocus() }
     DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
     val step: @Composable (Int, String) -> Unit = { direction, name ->
@@ -70,7 +71,7 @@ import org.json.JSONObject
         }
     }
     val field: @Composable () -> Unit = {
-        BasicTextField(text, { text = it }, Modifier.then(if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(60.dp)).height(height)
+        BasicTextField(text, { text = it }, Modifier.then(if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (control.optString("unit").isEmpty()) 60.dp else 80.dp)).height(height)
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) finish()
                 focused = it.isFocused; host.editingText = focused

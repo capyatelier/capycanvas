@@ -27,7 +27,7 @@ export function createNumberField({ control, label, resolve, onChange, icon }) {
   let value = control.min, display, editing = false, disabled = false;
   function show(next) {
     value = next.value; display = next; valueButton.textContent = next.text;
-    if (!editing) entry.value = next.edit;
+    if (!editing) entry.value = ranged ? next.edit : next.text;
     entry.setAttribute("aria-valuenow", value * control.scale);
     slider.value = next.fill; slider.style.setProperty("--fill", `${next.fill * 100}%`);
     slider.setAttribute("aria-valuetext", next.text);
@@ -50,7 +50,7 @@ export function createNumberField({ control, label, resolve, onChange, icon }) {
     if (!editing) return true;
     if (!cancel && !apply({ type: "expression", text: entry.value })) return false;
     editing = false; root.classList.remove("error"); entry.removeAttribute("aria-invalid"); entry.title = "";
-    entry.value = display.edit;
+    entry.value = ranged ? display.edit : display.text;
     if (ranged) { entry.hidden = true; valueButton.hidden = false; }
     return true;
   }

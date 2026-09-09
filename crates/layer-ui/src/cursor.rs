@@ -17,11 +17,11 @@ pub enum CursorMode {
 }
 impl CursorMode {
     pub const CHOICES: &'static [(Self, &'static str)] = &[
-        (Self::BrushSize, "Brush size"),
-        (Self::BrushSizeCross, "Brush size + cross"),
-        (Self::Cross, "Cross"),
+        (Self::BrushSize, "Brush outline"),
+        (Self::BrushSizeCross, "Outline and crosshair"),
+        (Self::Cross, "Crosshair"),
         (Self::Dot, "Dot"),
-        (Self::None, "None"),
+        (Self::None, "No cursor"),
     ];
 }
 

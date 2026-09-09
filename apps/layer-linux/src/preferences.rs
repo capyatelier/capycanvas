@@ -512,6 +512,14 @@ impl Preferences {
                             spin.set_digits(control.digits);
                             spin.set_numeric(false);
                             spin.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+                            let format = control.clone();
+                            spin.connect_output(move |spin| {
+                                let value = format
+                                    .resolve(spin.value() / format.scale, NumericOperation::Format)
+                                    .unwrap();
+                                spin.set_text(&value.text);
+                                true
+                            });
                             let spec = control.clone();
                             spin.connect_input(move |spin| {
                                 Some(
@@ -550,11 +558,6 @@ impl Preferences {
                                 &row.title,
                                 &row.description,
                             );
-                            let clamp = adw::Clamp::builder()
-                                .maximum_size(600)
-                                .tightening_threshold(480)
-                                .child(&number)
-                                .build();
                             number.set_widget_name(&format!("setting-{}", id.key()));
                             number.connect_value_changed(glib::clone!(
                                 #[weak]
@@ -567,7 +570,7 @@ impl Preferences {
                                     }
                                 )
                             ));
-                            native_row.set_child(Some(&clamp));
+                            native_row.set_child(Some(&number));
                             Field::Number(native_row, number)
                         }
                         PreferenceKind::Switch { .. } => {
@@ -844,17 +847,7 @@ impl Preferences {
             if let Some(capture) = view.capture {
                 self.capture_label.set_text(&capture.label);
                 self.capture_key.set_text(&capture.shortcut);
-                let conflict = capture
-                    .conflict
-                    .as_ref()
-                    .map(|label| format!("Already assigned to {label}. Replace its shortcut?"));
-                self.capture_error.set_text(
-                    capture
-                        .error
-                        .as_deref()
-                        .or(conflict.as_deref())
-                        .unwrap_or(""),
-                );
+                self.capture_error.set_text(&capture.notice);
                 self.capture_error
                     .set_visible(capture.error.is_some() || capture.conflict.is_some());
                 self.confirm

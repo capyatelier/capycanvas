@@ -1205,8 +1205,30 @@ fn native_preferences_and_shortcuts() {
                 page
             );
             if page == SettingsPage::Input {
+                let prediction: adw::SpinRow = find_named(
+                    w.preferences.dialog.upcast_ref(),
+                    "setting-prediction-horizon",
+                )
+                .unwrap()
+                .downcast()
+                .unwrap();
+                assert_eq!(prediction.text(), "8 ms");
                 let field =
                     find_named(w.preferences.dialog.upcast_ref(), "setting-pressure").unwrap();
+                let title = find_css(&field, "number-title").unwrap();
+                let feedback =
+                    find_named(w.preferences.dialog.upcast_ref(), "setting-feedback").unwrap();
+                let native_title = find_css(&feedback, "title").unwrap();
+                assert_eq!(
+                    title.compute_bounds(&w.window).unwrap().x(),
+                    native_title.compute_bounds(&w.window).unwrap().x(),
+                    "slider labels align with native settings rows"
+                );
+                assert_eq!(
+                    title.compute_bounds(&field).unwrap().x(),
+                    0.0,
+                    "only panel slider labels get an extra inset"
+                );
                 let scale = field
                     .last_child()
                     .unwrap()
