@@ -273,6 +273,9 @@ impl WebApp {
     pub fn toolbar_prompt(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.toolbar_prompt())
     }
+    pub fn toolbar_manager(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.toolbar_manager())
+    }
     pub fn workspace_menu(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.workspace_menu())
     }

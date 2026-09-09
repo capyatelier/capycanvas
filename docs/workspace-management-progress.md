@@ -7,7 +7,7 @@ and will be updated with the implementation. No renderer changes are required.
 | # | Required behavior | Core | GTK | Web | Android |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Workspace menu: built-in-panel visibility, separate toolbar visibility section | Verified | Verified | Verified | Verified |
-| 2 | Workspace menu: New Toolbar | Verified | Verified | Verified | Verified |
+| 2 | Workspace menu: New Toolbar, then Manage Toolbars | Verified | Verified | Verified | Verified |
 | 3 | Group menu: Add built-in panel submenu, checked membership, move existing panel | Verified | Verified | Verified | Verified |
 | 4 | Group menu: Add Toolbar submenu, move existing toolbar | Verified | Verified | Verified | Verified |
 | 5 | Configure entries use the actual panel/toolbar name | Verified | Verified | Verified | Verified |
@@ -104,9 +104,14 @@ and will be updated with the implementation. No renderer changes are required.
 
 ## Current evidence
 
-- Shared core: 125 tests cover the workspace model, transactional history,
+- Shared core: 126 tests cover the workspace model, transactional history,
   eight-edge geometry, measured sizing, tear-off, snapping and Zen rules. The
   interaction tests run against GTK, web and Android platform configurations.
+- Toolbar manager: GTK `native_toolbar_manager`, web `--toolbar-manager`, and
+  Android `toolbarManagerSelectsConfirmsDeletesAndRestores` cover visible/hidden
+  selection, cancellation, deletion, empty state, dismissal and workspace undo
+  in both themes. The existing workspace regression flows use the manager too.
+  Review captures are in `artifacts/ui/toolbar-manager/` (ignored).
 - Group-owned tab styles: GTK `native_group_tab_styles`, web `--tab-styles`,
   and Android `tabGroupStylesFollowSelectionAndHaveNoPanelOverrides` pass all
   three styles with each tab selected, in both themes. Review captures are in

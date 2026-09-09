@@ -256,7 +256,10 @@ class AndroidHostTest {
         assertEquals("Paint tools", host.snapshot!!.array("panels").objects().first { it.getString("id") == copy }.getString("title"))
         contextGrip("ribbon-grip-$copy")
         capture("workspace-renamed-menu")
-        compose.onNodeWithText("Delete Paint tools toolbar…").performClick()
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        workspaceMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
+        compose.onNodeWithTag("managed-toolbar-$copy").performClick()
+        compose.onNodeWithTag("delete-managed-toolbar").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
         val messageLayout = mutableListOf<TextLayoutResult>()
         compose.onNodeWithTag("toolbar-prompt-message").performSemanticsAction(SemanticsActions.GetTextLayoutResult) {
@@ -270,12 +273,59 @@ class AndroidHostTest {
         capture("workspace-delete-prompt")
         compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
+        compose.onNodeWithTag("close-toolbar-manager").performClick()
         workspaceMenu(); compose.onNodeWithText("Undo Workspace Change").performClick()
         compose.waitUntil(10_000) { groups().any { copy in it.array("panels").values() } }
         action(obj("type" to "set_theme", "theme" to "dark"))
         workspaceMenu(); capture("workspace-menu-dark")
         compose.onNodeWithText("Redo Workspace Change").performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
+    }
+
+    @Test fun toolbarManagerSelectsConfirmsDeletesAndRestores() {
+        for (theme in listOf("dark", "light")) {
+            action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (name in listOf("Sketching", "Painting")) {
+                customize(obj("type" to "duplicate_toolbar", "panel" to "toolbar"))
+                customize(obj("type" to "toolbar_name", "name" to name))
+                customize(obj("type" to "confirm_toolbar"))
+            }
+            val hidden = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().last().getString("id")
+            customize(obj("type" to "set_panel_visible", "panel" to hidden, "visible" to false))
+            val before = state().getJSONObject("workspace").toString()
+            workspaceMenu(); compose.onNodeWithText("Manage Toolbars…").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_manager") != null }
+            compose.onNodeWithTag("delete-managed-toolbar").assertIsNotEnabled()
+            capture("toolbar-manager-$theme-initial")
+            compose.onNodeWithTag("managed-toolbar-$hidden").performClick()
+            compose.onNodeWithTag("delete-managed-toolbar").assertIsEnabled()
+            capture("toolbar-manager-$theme-selected")
+            compose.onNodeWithTag("delete-managed-toolbar").performClick()
+            capture("toolbar-manager-$theme-confirm")
+            compose.onNodeWithText("Cancel").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
+            assertEquals(before, state().getJSONObject("workspace").toString())
+            compose.onNodeWithTag("delete-managed-toolbar").performClick()
+            compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length() == 2 }
+            compose.onNodeWithTag("delete-managed-toolbar").assertIsNotEnabled()
+            capture("toolbar-manager-$theme-deleted")
+            while (host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").length() > 0) {
+                val panel = host.snapshot!!.getJSONObject("toolbar_manager").array("toolbars").objects().first().getString("panel")
+                compose.onNodeWithTag("managed-toolbar-$panel").performClick()
+                compose.onNodeWithTag("delete-managed-toolbar").performClick()
+                compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
+                compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
+            }
+            compose.onNodeWithTag("delete-managed-toolbar").assertIsNotEnabled()
+            capture("toolbar-manager-$theme-empty")
+            compose.onNodeWithTag("close-toolbar-manager").performClick()
+            compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_manager") == null }
+            action(obj("type" to "invoke", "command" to "undo_workspace"))
+            assertTrue(state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().any { it.getJSONObject("content").getString("kind") == "toolbar" })
+            assertNull(host.actionError)
+        }
     }
 
     @Test fun tabGroupStylesFollowSelectionAndHaveNoPanelOverrides() {

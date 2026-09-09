@@ -355,7 +355,23 @@ dialog footer { display: flex; justify-content: end; align-items: center; gap: 6
 dialog footer .preferences-error { flex: 1; }
 dialog footer button { background: color-mix(in srgb, var(--text) 8%, transparent); }
 dialog .suggested-action { background: var(--accent); color: #fff; }
-dialog.toolbar-prompt { width: 400px; height: auto; padding: 24px; }
+dialog.toolbar-prompt { width: 400px; height: fit-content; padding: 24px; }
+dialog.toolbar-manager { width: 480px; height: 420px; }
+.toolbar-manager[open] { display: flex; flex-direction: column; }
+.toolbar-manager-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 18px; padding: 24px; }
+.toolbar-manager-body p { margin: 0; color: var(--settings-secondary); }
+.toolbar-manager-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.managed-toolbars { background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px #0002; }
+.managed-toolbars button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 8px 12px; border-radius: 0; text-align: left; font-weight: 400; line-height: 18px; }
+.managed-toolbars button + button { border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent); }
+.managed-toolbars button > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.managed-toolbars small { font-size: .83333em; line-height: 15px; color: var(--settings-secondary); }
+#toolbar-manager button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.toolbar-manager-empty { text-align: center; padding: 60px 0; }
+.toolbar-manager-body > button { align-self: end; flex: none; }
+.toolbar-manager .destructive-action { color: #c01c28; }
+#delete-managed-toolbar { background: color-mix(in srgb, currentColor 15%, transparent); }
+body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .toolbar-prompt h2 { font-size: 20px; text-align: center; }
 .toolbar-prompt p { line-height: 1.5; margin: 16px 0; }
 .toolbar-prompt .toolbar-name { margin-top: 20px; }

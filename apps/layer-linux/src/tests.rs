@@ -1997,12 +1997,36 @@ fn native_workspace_management() {
         assert!(state(&w).workspace.layout.panel_group(panel).is_none());
         workspace_menu.popup();
         activate(&workspace_menu, "Painting toolbar");
-        open_context(ContextTarget::Ribbon { panel });
-        activate(&menu, "Delete Painting toolbar…");
+        workspace_menu.popup();
+        activate(&workspace_menu, "Manage Toolbars…");
+        let list = find_named(w.window.upcast_ref(), "managed-toolbars")
+            .unwrap()
+            .downcast::<gtk::ListBox>()
+            .unwrap();
+        let index = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .toolbar_manager()
+            .unwrap()
+            .toolbars
+            .iter()
+            .position(|p| p.panel == panel)
+            .unwrap();
+        list.select_row(list.row_at_index(index as i32).as_ref());
+        click(
+            &find_named(w.window.upcast_ref(), "delete-managed-toolbar")
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap(),
+        );
         assert!(prompt().body().contains("Undo Workspace Change"));
         snapshot(&format!("delete-{theme:?}"));
         confirm_prompt();
         assert!(state(&w).workspace.layout.panel(panel).is_err());
+        send(CustomizationAction::CloseToolbarManager);
         workspace_menu.popup();
         activate(&workspace_menu, "Undo Workspace Change");
         assert_eq!(
@@ -2499,6 +2523,143 @@ fn native_panel_customization() {
     }
     w.window.destroy();
     pump(150);
+}
+
+#[test]
+#[ignore = "toolbar manager: requires a private Wayland/Vulkan display"]
+fn native_toolbar_manager() {
+    let app = native_test_app("art.capycanvas.ToolbarManagerTest");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(500);
+    let initial = state(&w).workspace;
+    let send = |action| w.dispatch(UiAction::Customize { action });
+    let model = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .toolbar_manager()
+            .unwrap()
+    };
+    let dir = "../../artifacts/ui/toolbar-manager";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for name in ["Sketching", "Painting"] {
+            send(CustomizationAction::DuplicateToolbar {
+                panel: Panel::Toolbar,
+            });
+            pump(100);
+            send(CustomizationAction::ToolbarName { name: name.into() });
+            send(CustomizationAction::ConfirmToolbar);
+            pump(200);
+        }
+        let hidden = state(&w).workspace.layout.panels.last().unwrap().id;
+        send(CustomizationAction::SetPanelVisible {
+            panel: hidden,
+            visible: false,
+        });
+        let before = serde_json::to_value(state(&w).workspace).unwrap();
+        let menu = find_named(w.window.upcast_ref(), "workspace-menu")
+            .unwrap()
+            .downcast::<gtk::PopoverMenu>()
+            .unwrap();
+        menu.set_autohide(false);
+        menu.popup();
+        pump(150);
+        capture_popover(
+            menu.upcast_ref(),
+            &format!("{dir}/workspace-menu-{theme:?}.png"),
+        );
+        menu.activate_action(
+            &menu_action(&menu.menu_model().unwrap(), "Manage Toolbars…").unwrap(),
+            None,
+        )
+        .unwrap();
+        pump(300);
+        let dialog = find_named(w.window.upcast_ref(), "toolbar-manager")
+            .unwrap()
+            .downcast::<adw::Dialog>()
+            .unwrap();
+        let list = find_named(dialog.upcast_ref(), "managed-toolbars")
+            .unwrap()
+            .downcast::<gtk::ListBox>()
+            .unwrap();
+        let delete = find_named(dialog.upcast_ref(), "delete-managed-toolbar")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        assert_eq!(model().toolbars.len(), 3);
+        assert!(!delete.is_sensitive());
+        capture_reference(&w, &format!("{dir}/gtk-{theme:?}-initial.png"), 1.0);
+        list.select_row(list.row_at_index(2).as_ref());
+        assert_eq!(model().selected, Some(hidden));
+        assert!(delete.is_sensitive());
+        pump(100);
+        capture_reference(&w, &format!("{dir}/gtk-{theme:?}-selected.png"), 1.0);
+        click(&delete);
+        pump(200);
+        let prompt = find_named(w.window.upcast_ref(), "toolbar-dialog")
+            .unwrap()
+            .downcast::<adw::AlertDialog>()
+            .unwrap();
+        assert_eq!(w.window.visible_dialog(), Some(prompt.clone().upcast()));
+        assert!(prompt.body().contains("Painting"));
+        capture_reference(&w, &format!("{dir}/gtk-{theme:?}-confirm.png"), 1.0);
+        click(&find_button(prompt.upcast_ref(), "Cancel").unwrap());
+        pump(200);
+        assert_eq!(serde_json::to_value(state(&w).workspace).unwrap(), before);
+        assert_eq!(model().selected, Some(hidden));
+        click(&delete);
+        pump(150);
+        click(&find_button(prompt.upcast_ref(), "Delete Toolbar").unwrap());
+        pump(200);
+        assert_eq!(model().toolbars.len(), 2);
+        assert!(model().selected.is_none());
+        assert!(!delete.is_sensitive());
+        capture_reference(&w, &format!("{dir}/gtk-{theme:?}-deleted.png"), 1.0);
+        while !model().toolbars.is_empty() {
+            list.select_row(list.row_at_index(0).as_ref());
+            click(&delete);
+            pump(150);
+            click(&find_button(prompt.upcast_ref(), "Delete Toolbar").unwrap());
+            pump(150);
+        }
+        assert!(!delete.is_sensitive());
+        capture_reference(&w, &format!("{dir}/gtk-{theme:?}-empty.png"), 1.0);
+        dialog.close();
+        pump(300);
+        assert!(
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .toolbar_manager()
+                .is_none()
+        );
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        assert!(
+            state(&w)
+                .workspace
+                .layout
+                .panels
+                .iter()
+                .any(|p| p.id.kind() == PanelKind::Tiles)
+        );
+    }
+    w.window.destroy();
+    pump(100);
 }
 
 #[test]

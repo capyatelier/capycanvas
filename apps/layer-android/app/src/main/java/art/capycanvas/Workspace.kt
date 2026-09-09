@@ -120,6 +120,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     if (snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") != null)
                         ToolPicker(host, snapshot.getJSONObject("picker"))
                     if (snapshot?.objectOrNull("preferences") == null)
+                        snapshot?.objectOrNull("toolbar_manager")?.let { ToolbarManager(host, it) }
+                    if (snapshot?.objectOrNull("preferences") == null)
                         snapshot?.objectOrNull("toolbar_prompt")?.let { ToolbarPrompt(host, it) }
                     state?.getJSONObject("customization")?.optString("control")?.takeIf {
                         snapshot?.objectOrNull("preferences") == null && it.isNotEmpty() && it != "null"
@@ -144,7 +146,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val density = LocalDensity.current.density
     val dock = remember(host) { DockInteraction(host) }
     dock.density = density
-    dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null
+    dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
     val panels = snapshot?.array("panels")?.objects()?.associateBy { it.getString("id") } ?: emptyMap()
     val state = snapshot?.getJSONObject("state")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String

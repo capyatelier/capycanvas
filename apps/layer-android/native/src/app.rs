@@ -252,6 +252,7 @@ impl App {
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
+            "toolbar_manager": self.session.toolbar_manager(),
             "panel_measurements": self.session.state().workspace.layout.measurements,
             "chrome_hidden": self.chrome_hidden, "gpu_ready": self.session.engine().backend().0.is_some(),
             "hide_floating_panels": self.hide_floating_panels, "keep_zen_button": self.keep_zen_button,

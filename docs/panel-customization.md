@@ -14,8 +14,16 @@ trial hides floating panels too and disables all hidden docking targets. Button
 visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and-zen-mode).
 
 - **Workspace** contains Undo/Redo Workspace Change, checkable built-in-panel
-  visibility, a separate toolbar-visibility section, and **New Toolbar…**.
+  visibility, a separate toolbar-visibility section, **New Toolbar…**, then
+  **Manage Toolbars…**.
   Hiding removes placement, not configuration; checking the item shows it again.
+- **Manage Toolbars…** opens a single-selection list of all toolbars, including
+  hidden ones. Select a row, then **Delete Toolbar…** to open the existing
+  confirmation. Cancel returns to the selected row; successful deletion clears
+  selection and keeps the manager open. Delete is disabled without a selection.
+  The empty list shows **No toolbars**. Workspace Undo restores deleted toolbars.
+  Rust owns this list, copy, selection, eligibility and actions; GTK, web and
+  Android only render them. Manager selection is transient, not saved workspace data.
 - A built-in-panel tab or body opens **Configure Brushes panel…** and
   **Hide Brushes panel** (using its actual
   name). A toolbar tab/body has **Configure Tools toolbar…** and
@@ -46,12 +54,13 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   panel preserves its current choice. Multi-tab groups always show their tabs.
 - A ribbon tile targets that tile: **Remove Tool**, **Insert Tools…**.
   Empty standalone ribbon space and its grip target the toolbar: configuration,
-  append tools, tile style, rename, duplicate, hide, and delete.
-  Configure, Rename, Duplicate, Hide and Delete include the actual toolbar
+  append tools, tile style, rename, duplicate, and hide.
+  Configure, Rename, Duplicate and Hide include the actual toolbar
   name; generic creation/addition entries use “toolbar.” Duplicate suggests a
   unique editable name. Names are case-insensitively unique across built-in panels and
-  toolbars. Delete confirms removal of the toolbar and its tools, distinct from
-  hiding, and explains Workspace Undo with the current shortcut. A tabbed
+  toolbars. Delete is absent from toolbar menus and configuration columns;
+  management lives under Workspace. Its confirmation explains Workspace Undo
+  with the current shortcut. A tabbed
   toolbar keeps the group grip; its configuration column contains these options.
 - Mouse/pen secondary click and touch press-and-hold open the same menu.
   Native gesture recognition owns timing/slop; the deepest applicable target
@@ -322,6 +331,12 @@ undo/redo, whole-group moves, merging into a differently styled group and
 splitting out a new default-style group. GTK keeps the existing tab widgets and
 changes child visibility; all hosts render the Rust-resolved icon/name flags.
 Review captures are in `artifacts/ui/group-tab-styles/` (ignored).
+
+Toolbar-manager coverage uses GTK `native_toolbar_manager`, web
+`--toolbar-manager`, and Android `toolbarManagerSelectsConfirmsDeletesAndRestores`.
+These exercise selection, hidden entries, cancellation, confirmed deletion,
+the empty state, dismissal and undo in both themes. Review captures are in
+`artifacts/ui/toolbar-manager/` (ignored).
 
 Run the native tests separately (GTK initialization is thread-affine):
 

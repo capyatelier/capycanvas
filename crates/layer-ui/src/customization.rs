@@ -316,6 +316,11 @@ pub enum CustomizationAction {
     DeleteToolbar {
         panel: Panel,
     },
+    ManageToolbars,
+    SelectManagedToolbar {
+        panel: Option<Panel>,
+    },
+    CloseToolbarManager,
     ToolbarName {
         name: String,
     },
@@ -573,13 +578,7 @@ impl DockLayout {
                     CustomizationAction::DuplicateToolbar { panel },
                 ),
             ],
-            vec![
-                self.hide_item(panel),
-                ContextMenuItem::edit(
-                    format!("Delete {name}…"),
-                    CustomizationAction::DeleteToolbar { panel },
-                ),
-            ],
+            vec![self.hide_item(panel)],
         ])
     }
     fn tab_style_items(&self, group: u32) -> Result<Vec<ContextMenuItem>, String> {
@@ -686,6 +685,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::UndoWorkspace => "Undo the last workspace change",
                 CommandId::RedoWorkspace => "Restore the last undone workspace change",
                 CommandId::NewToolbar => "Create a named toolbar",
+                CommandId::ManageToolbars => "Select and delete toolbars",
                 CommandId::FitCanvas => "Fit the whole drawing in the available space",
                 CommandId::Settings => "Open application preferences",
                 CommandId::ToggleTheme => "Switch between light and dark appearance",
@@ -745,7 +745,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
 fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
     CommandId::ALL
         .into_iter()
-        .filter(|id| *id != CommandId::NewWindow || platform.native_windows())
+        .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain(brush_catalog().map(|b| ToolbarControl::Brush { id: b.id }))
@@ -1017,11 +1017,74 @@ impl ToolbarPrompt {
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
+pub struct ToolbarManager {
+    selected: Option<Panel>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ManagedToolbar {
+    pub panel: Panel,
+    pub title: String,
+    pub subtitle: String,
+    pub icon: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ToolbarManagerView {
+    pub title: &'static str,
+    pub close_label: &'static str,
+    pub description: &'static str,
+    pub empty_label: &'static str,
+    pub toolbars: Vec<ManagedToolbar>,
+    pub selected: Option<Panel>,
+    pub delete_label: &'static str,
+    pub delete_action: Option<CustomizationAction>,
+}
+impl ToolbarManager {
+    pub fn view(&self, layout: &DockLayout) -> ToolbarManagerView {
+        let toolbars: Vec<_> = layout
+            .panels
+            .iter()
+            .filter(|p| p.id.kind() == PanelKind::Tiles)
+            .map(|p| {
+                let count = p.tiles().len();
+                let unit = if count == 1 { "tool" } else { "tools" };
+                let visibility = if layout.panel_group(p.id).is_some() {
+                    "Visible"
+                } else {
+                    "Hidden"
+                };
+                ManagedToolbar {
+                    panel: p.id,
+                    title: p.title().into(),
+                    subtitle: format!("{count} {unit} · {visibility}"),
+                    icon: p.icon(),
+                }
+            })
+            .collect();
+        let selected = self
+            .selected
+            .filter(|id| toolbars.iter().any(|p| p.panel == *id));
+        ToolbarManagerView {
+            title: "Manage Toolbars",
+            close_label: "Close",
+            description: "Select a toolbar to delete.",
+            empty_label: "No toolbars",
+            toolbars,
+            selected,
+            delete_label: "Delete Toolbar…",
+            delete_action: selected.map(|panel| CustomizationAction::DeleteToolbar { panel }),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct CustomizationState {
     pub expanded: Option<Panel>,
     pub picker: Option<ToolPicker>,
     pub control: Option<PanelControl>,
     pub toolbar_prompt: Option<ToolbarPrompt>,
+    pub toolbar_manager: Option<ToolbarManager>,
 }
 impl CustomizationState {
     pub fn is_open(&self) -> bool {
@@ -1029,6 +1092,7 @@ impl CustomizationState {
             || self.picker.is_some()
             || self.control.is_some()
             || self.toolbar_prompt.is_some()
+            || self.toolbar_manager.is_some()
     }
     pub(crate) fn edit(
         &mut self,
@@ -1040,6 +1104,29 @@ impl CustomizationState {
         use CustomizationAction::*;
         let mut changed = regions::CUSTOMIZATION;
         match action {
+            ManageToolbars => {
+                *self = Self {
+                    toolbar_manager: Some(ToolbarManager::default()),
+                    ..Self::default()
+                };
+            }
+            SelectManagedToolbar { panel } => {
+                if let Some(panel) = panel {
+                    layout.panel(panel)?;
+                    if panel.kind() != PanelKind::Tiles {
+                        return Err("Choose a toolbar".into());
+                    }
+                }
+                self.toolbar_manager
+                    .as_mut()
+                    .ok_or("The toolbar manager is closed")?
+                    .selected = panel;
+            }
+            CloseToolbarManager => {
+                if self.toolbar_manager.is_some() {
+                    *self = Self::default();
+                }
+            }
             SetPanelVisible { panel, visible } => {
                 layout.set_panel_visible(panel, visible)?;
                 changed |= regions::LAYOUT;
@@ -1072,6 +1159,9 @@ impl CustomizationState {
                 };
                 self.picker = None;
                 self.control = None;
+                if !matches!(operation, ToolbarOperation::Delete) {
+                    self.toolbar_manager = None;
+                }
                 self.toolbar_prompt = Some(ToolbarPrompt {
                     panel,
                     operation,
@@ -1104,6 +1194,11 @@ impl CustomizationState {
                 });
                 match result {
                     Ok(()) => {
+                        if matches!(draft.operation, ToolbarOperation::Delete)
+                            && let Some(manager) = &mut self.toolbar_manager
+                        {
+                            manager.selected = None;
+                        }
                         self.toolbar_prompt = None;
                         changed |= regions::LAYOUT;
                     }
@@ -1129,6 +1224,7 @@ impl CustomizationState {
                 layout.select_tab(group, panel)?;
                 self.picker = None;
                 self.control = None;
+                self.toolbar_manager = None;
                 self.expanded = Some(panel);
                 changed |= regions::LAYOUT;
             }
@@ -1177,6 +1273,7 @@ impl CustomizationState {
                 };
                 self.expanded = None;
                 self.control = None;
+                self.toolbar_manager = None;
                 self.picker = Some(ToolPicker {
                     destination: ToolDestination::NewToolbar { group, name },
                     query: String::new(),
@@ -1194,6 +1291,7 @@ impl CustomizationState {
                 }
                 self.expanded = None;
                 self.control = None;
+                self.toolbar_manager = None;
                 self.picker = Some(ToolPicker {
                     destination: ToolDestination::Insert { panel, before },
                     query: String::new(),

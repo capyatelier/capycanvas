@@ -21,7 +21,8 @@ pub use cursor::{CanvasCursor, CursorMode};
 pub use customization::{
     ContextMenu, ContextMenuItem, ContextTarget, CustomizationAction, CustomizationState,
     PanelConfig, PanelContent, PanelControl, PanelControlView, PanelView, TabPresentation,
-    TabStyle, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarTile, tool_choice,
+    TabStyle, TileStyle, TileView, ToolChoice, ToolPickerView, ToolbarManagerView, ToolbarTile,
+    tool_choice,
 };
 pub use interaction::{
     ChromeEvent, ChromeFacts, InputReply, Modifiers, PointerButton, PointerKind, UiInput,
@@ -298,6 +299,7 @@ pub enum CommandId {
     UndoWorkspace,
     RedoWorkspace,
     NewToolbar,
+    ManageToolbars,
     FitCanvas,
     Settings,
     ToggleTheme,
@@ -314,6 +316,12 @@ pub enum CommandId {
     About,
 }
 impl CommandId {
+    pub fn available_on(self, platform: Platform) -> bool {
+        match self {
+            Self::NewWindow => platform.native_windows(),
+            _ => true,
+        }
+    }
     /// Retained on/off commands can be presented as checkable menu items.
     pub fn is_toggle(self) -> bool {
         matches!(self, Self::ZenMode | Self::ToggleTheme)
@@ -334,7 +342,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::Brush,
         Self::Eraser,
         Self::Undo,
@@ -342,6 +350,7 @@ impl CommandId {
         Self::UndoWorkspace,
         Self::RedoWorkspace,
         Self::NewToolbar,
+        Self::ManageToolbars,
         Self::FitCanvas,
         Self::ToggleTheme,
         Self::Settings,
@@ -370,6 +379,7 @@ impl CommandId {
             Self::UndoWorkspace => "Undo Workspace Change",
             Self::RedoWorkspace => "Redo Workspace Change",
             Self::NewToolbar => "New Toolbar…",
+            Self::ManageToolbars => "Manage Toolbars…",
             Self::FitCanvas => "Fit canvas",
             Self::Settings => "Preferences",
             Self::ToggleTheme => "Dark Mode",

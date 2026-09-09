@@ -156,7 +156,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .workspace
                     .layout
                     .panel_items(PanelKind::Tiles, None),
-                vec![command(CommandId::NewToolbar)],
+                vec![
+                    command(CommandId::NewToolbar),
+                    command(CommandId::ManageToolbars),
+                ],
             ],
         }
     }
@@ -167,6 +170,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 &self.command(CommandId::UndoWorkspace).shortcut,
             )
         })
+    }
+    pub fn toolbar_manager(&self) -> Option<crate::customization::ToolbarManagerView> {
+        self.state
+            .customization
+            .toolbar_manager
+            .as_ref()
+            .map(|m| m.view(&self.state.workspace.layout))
     }
     pub fn panel_view(&self, panel: Panel) -> Result<PanelView, String> {
         customization::panel_view(&self.state, panel)
@@ -854,6 +864,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
+        if !id.available_on(self.state.platform) {
+            return (false, false);
+        }
         let document = self.engine.document();
         let index = document
             .layers
@@ -886,7 +899,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .is_some_and(|layer| layer.kind == LayerKind::Paint)
             }
             CommandId::FitCanvas => idle,
-            CommandId::NewWindow => self.state.platform.native_windows(),
             _ => true,
         };
         let selected = matches!(
@@ -1695,10 +1707,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
-            CommandId::NewToolbar => {
+            CommandId::NewToolbar | CommandId::ManageToolbars => {
                 let changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
-                    CustomizationAction::NewToolbar { group: None },
+                    if command == CommandId::ManageToolbars {
+                        CustomizationAction::ManageToolbars
+                    } else {
+                        CustomizationAction::NewToolbar { group: None }
+                    },
                     self.state.platform,
                     self.logical_viewport
                         .or(self.interaction.viewport)
@@ -2079,6 +2095,119 @@ mod tests {
             s.dispatch(UiAction::RestoreWorkspace { workspace: saved })
                 .unwrap();
             assert!(!s.command(CommandId::UndoWorkspace).enabled);
+        }
+    }
+
+    #[test]
+    fn toolbar_manager_selects_hidden_toolbars_and_deletes_with_confirmation_and_undo() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let edit = |s: &mut UiSession<Recorder>, action| {
+                s.dispatch(UiAction::Customize { action }).unwrap();
+            };
+            edit(
+                &mut s,
+                CustomizationAction::DuplicateToolbar {
+                    panel: Panel::Toolbar,
+                },
+            );
+            edit(&mut s, CustomizationAction::ConfirmToolbar);
+            let copy = s.state.workspace.layout.panels.last().unwrap().id;
+            edit(
+                &mut s,
+                CustomizationAction::SetPanelVisible {
+                    panel: copy,
+                    visible: false,
+                },
+            );
+            let saved = s.state.workspace.clone();
+            let revision = s.engine.document().revision;
+            invoke(&mut s, CommandId::ManageToolbars);
+            assert!(s.state.customization.is_open());
+            assert_eq!(s.state.workspace, saved);
+            let view = s.toolbar_manager().unwrap();
+            assert_eq!(view.toolbars.len(), 2);
+            assert!(view.delete_action.is_none());
+            assert!(
+                view.toolbars
+                    .iter()
+                    .find(|p| p.panel == copy)
+                    .unwrap()
+                    .subtitle
+                    .ends_with("Hidden")
+            );
+            assert_eq!(
+                s.workspace_menu()
+                    .sections
+                    .last()
+                    .unwrap()
+                    .iter()
+                    .map(|i| i.label.as_str())
+                    .collect::<Vec<_>>(),
+                ["New Toolbar…", "Manage Toolbars…"]
+            );
+            let options = s.panel_view(Panel::Toolbar).unwrap().toolbar_options;
+            assert!(
+                !options
+                    .iter()
+                    .flatten()
+                    .any(|i| i.label.starts_with("Delete "))
+            );
+            let menu = s
+                .context_menu(ContextTarget::Ribbon {
+                    panel: Panel::Toolbar,
+                })
+                .unwrap();
+            assert!(
+                !menu
+                    .sections
+                    .iter()
+                    .flatten()
+                    .any(|i| i.label.starts_with("Delete "))
+            );
+            assert!(
+                s.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SelectManagedToolbar {
+                        panel: Some(Panel::Layers)
+                    }
+                })
+                .is_err()
+            );
+            assert!(s.toolbar_manager().unwrap().selected.is_none());
+            edit(
+                &mut s,
+                CustomizationAction::SelectManagedToolbar { panel: Some(copy) },
+            );
+            let delete = s.toolbar_manager().unwrap().delete_action.unwrap();
+            edit(&mut s, delete.clone());
+            assert!(s.toolbar_prompt().unwrap().destructive);
+            edit(&mut s, CustomizationAction::CancelToolbar);
+            assert_eq!(s.state.workspace, saved);
+            assert_eq!(s.toolbar_manager().unwrap().selected, Some(copy));
+            edit(&mut s, delete);
+            edit(&mut s, CustomizationAction::ConfirmToolbar);
+            assert!(s.state.workspace.layout.panel(copy).is_err());
+            assert_eq!(s.toolbar_manager().unwrap().toolbars.len(), 1);
+            assert!(s.toolbar_manager().unwrap().delete_action.is_none());
+            invoke(&mut s, CommandId::UndoWorkspace);
+            assert_eq!(s.state.workspace, saved);
+            assert!(s.toolbar_manager().is_none());
+            invoke(&mut s, CommandId::ManageToolbars);
+            for panel in [Panel::Toolbar, copy] {
+                edit(
+                    &mut s,
+                    CustomizationAction::SelectManagedToolbar { panel: Some(panel) },
+                );
+                edit(&mut s, CustomizationAction::DeleteToolbar { panel });
+                edit(&mut s, CustomizationAction::ConfirmToolbar);
+            }
+            let empty = s.toolbar_manager().unwrap();
+            assert!(empty.toolbars.is_empty() && empty.delete_action.is_none());
+            edit(&mut s, CustomizationAction::CloseToolbarManager);
+            assert!(!s.state.customization.is_open());
+            assert_eq!(s.engine.document().revision, revision);
+            assert!(!s.command(CommandId::Undo).enabled);
         }
     }
 

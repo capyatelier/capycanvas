@@ -34,6 +34,158 @@ struct ToolbarOptionWidget {
     hint: Option<gtk::Label>,
 }
 
+struct ToolbarManagerUi {
+    dialog: adw::Dialog,
+    description: gtk::Label,
+    empty: gtk::Label,
+    list: gtk::ListBox,
+    delete: gtk::Button,
+    panels: RefCell<Vec<Panel>>,
+    rows_key: RefCell<String>,
+    shown: Cell<bool>,
+}
+impl ToolbarManagerUi {
+    fn new() -> Self {
+        let dialog = adw::Dialog::builder()
+            .content_width(480)
+            .content_height(420)
+            .build();
+        dialog.set_widget_name("toolbar-manager");
+        dialog.add_css_class("layer-preferences");
+        Self {
+            dialog,
+            description: gtk::Label::new(None),
+            empty: gtk::Label::new(None),
+            list: gtk::ListBox::new(),
+            delete: gtk::Button::new(),
+            panels: RefCell::new(Vec::new()),
+            rows_key: RefCell::new(String::new()),
+            shown: Cell::new(false),
+        }
+    }
+    fn bind(&self, w: &Rc<Workspace>) {
+        let view = adw::ToolbarView::new();
+        view.add_top_bar(&adw::HeaderBar::new());
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        margins(&body, 24);
+        self.description.set_xalign(0.0);
+        self.description.set_focusable(true);
+        self.description.set_wrap(true);
+        self.description.add_css_class("dim-label");
+        body.append(&self.description);
+        self.list.set_widget_name("managed-toolbars");
+        self.list.set_selection_mode(gtk::SelectionMode::Single);
+        self.list.add_css_class("boxed-list");
+        self.list.set_valign(gtk::Align::Start);
+        let contents = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        contents.append(&self.list);
+        self.empty.add_css_class("dim-label");
+        self.empty.set_vexpand(true);
+        contents.append(&self.empty);
+        body.append(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .vexpand(true)
+                .child(&contents)
+                .build(),
+        );
+        self.list.connect_row_selected(glib::clone!(
+            #[weak]
+            w,
+            move |_, row| {
+                let panel = row.and_then(|r| {
+                    w.customization
+                        .manager
+                        .panels
+                        .borrow()
+                        .get(r.index() as usize)
+                        .copied()
+                });
+                w.customize(CustomizationAction::SelectManagedToolbar { panel });
+            }
+        ));
+        self.delete.set_widget_name("delete-managed-toolbar");
+        self.delete.add_css_class("destructive-action");
+        self.delete.set_halign(gtk::Align::End);
+        self.delete.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                let action = w
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .and_then(|g| g.session.toolbar_manager())
+                    .and_then(|v| v.delete_action);
+                if let Some(action) = action {
+                    w.customize(action);
+                }
+            }
+        ));
+        body.append(&self.delete);
+        view.set_content(Some(&body));
+        self.dialog.set_child(Some(&view));
+        self.dialog.connect_closed(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                if w.customization.manager.shown.replace(false) {
+                    w.customize(CustomizationAction::CloseToolbarManager);
+                }
+            }
+        ));
+    }
+    fn refresh(&self, w: &Rc<Workspace>, model: Option<ToolbarManagerView>) {
+        let Some(model) = model else {
+            if self.shown.replace(false) {
+                self.dialog.close();
+            }
+            return;
+        };
+        self.dialog.set_title(model.title);
+        self.description.set_label(model.description);
+        self.empty.set_label(model.empty_label);
+        self.empty.set_visible(model.toolbars.is_empty());
+        self.list.set_visible(!model.toolbars.is_empty());
+        self.delete.set_label(model.delete_label);
+        self.delete.set_sensitive(model.delete_action.is_some());
+        let key = serde_json::to_string(&model.toolbars).expect("serializable toolbars");
+        if *self.rows_key.borrow() != key {
+            *self.rows_key.borrow_mut() = key;
+            while let Some(child) = self.list.first_child() {
+                self.list.remove(&child);
+            }
+            *self.panels.borrow_mut() = model.toolbars.iter().map(|p| p.panel).collect();
+            for toolbar in model.toolbars {
+                let row = adw::ActionRow::new();
+                row.set_use_markup(false);
+                row.set_title(&toolbar.title);
+                row.set_subtitle(&toolbar.subtitle);
+                row.set_selectable(true);
+                row.add_prefix(&gtk::Image::from_icon_name(&format!(
+                    "layer-{}-symbolic",
+                    toolbar.icon
+                )));
+                self.list.append(&row);
+            }
+        }
+        let index = self
+            .panels
+            .borrow()
+            .iter()
+            .position(|p| Some(*p) == model.selected);
+        self.list.select_row(
+            index
+                .and_then(|i| self.list.row_at_index(i as i32))
+                .as_ref(),
+        );
+        if !self.shown.replace(true) {
+            self.dialog.set_focus(Some(&self.description));
+            self.dialog.present(Some(&w.window));
+        }
+    }
+}
+
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
     context: gtk::PopoverMenu,
@@ -53,6 +205,7 @@ pub(super) struct Customization {
     toolbar_name: adw::EntryRow,
     toolbar_error: gtk::Label,
     toolbar_shown: Cell<bool>,
+    manager: ToolbarManagerUi,
     updating: Cell<bool>,
     controls: RefCell<Vec<ControlWidget>>,
     expanded: Cell<Option<Panel>>,
@@ -94,6 +247,7 @@ impl Customization {
             toolbar_name: adw::EntryRow::new(),
             toolbar_error: gtk::Label::new(None),
             toolbar_shown: Cell::new(false),
+            manager: ToolbarManagerUi::new(),
             updating: Cell::new(false),
             controls: RefCell::new(Vec::new()),
             expanded: Cell::new(None),
@@ -109,6 +263,7 @@ impl Customization {
     }
 
     pub fn bind(&self, w: &Rc<Workspace>) {
+        self.manager.bind(w);
         self.toolbar_dialog.set_widget_name("toolbar-dialog");
         self.toolbar_dialog.add_response("cancel", "");
         self.toolbar_dialog.add_response("confirm", "");
@@ -649,7 +804,7 @@ impl Customization {
 
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
-        let Some((views, picker, control, prompt)) = w.gpu.borrow().as_ref().map(|g| {
+        let Some((views, picker, control, prompt, manager)) = w.gpu.borrow().as_ref().map(|g| {
             (
                 g.session
                     .state()
@@ -662,6 +817,7 @@ impl Customization {
                 g.session.tool_picker(),
                 g.session.state().customization.control,
                 g.session.toolbar_prompt(),
+                g.session.toolbar_manager(),
             )
         }) else {
             self.updating.set(false);
@@ -813,6 +969,7 @@ impl Customization {
             self.picker.close();
             self.choices_key.borrow_mut().clear();
         }
+        self.manager.refresh(w, manager);
         if let Some(view) = prompt {
             self.toolbar_dialog.set_heading(Some(view.title));
             self.toolbar_dialog.set_body(&view.message);

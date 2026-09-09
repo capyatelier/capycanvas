@@ -1,6 +1,10 @@
 package art.capycanvas
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
@@ -19,6 +23,11 @@ import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.window.Dialog
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -65,6 +74,51 @@ import org.json.JSONObject
     }
 }
 
+@Composable internal fun ToolbarManager(host: CanvasHost, view: JSONObject) {
+    val colors = LocalPalette.current
+    val close = { host.customize(obj("type" to "close_toolbar_manager")) }
+    Dialog(onDismissRequest = close) {
+        Surface(shape = RoundedCornerShape(16.dp), color = colors.settingsBackground, modifier = Modifier.testTag("toolbar-manager")) {
+            Column(Modifier.width(480.dp).heightIn(max = 420.dp).padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(view.getString("title"), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                    IconButton(close, Modifier.size(36.dp).semantics { contentDescription = view.getString("close_label") }.testTag("close-toolbar-manager")) {
+                        Text("×", fontSize = 24.sp)
+                    }
+                }
+                Text(view.getString("description"), color = colors.settingsSecondary)
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    val toolbars = view.array("toolbars").objects()
+                    if (toolbars.isEmpty()) Box(Modifier.fillMaxWidth().padding(vertical = 60.dp), contentAlignment = Alignment.Center) {
+                        Text(view.getString("empty_label"), color = colors.settingsSecondary)
+                    }
+                    Column(Modifier.clip(RoundedCornerShape(12.dp)).background(colors.settingsCard)) {
+                        toolbars.forEachIndexed { index, toolbar ->
+                            if (index > 0) HorizontalDivider(color = colors.divider)
+                            val id = toolbar.getString("panel")
+                            val selected = view.optString("selected") == id
+                            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).background(if (selected) colors.active else colors.settingsCard)
+                                .testTag("managed-toolbar-$id").selectable(selected, role = Role.RadioButton) {
+                                    host.customize(obj("type" to "select_managed_toolbar", "panel" to id))
+                                }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                SharedIcon(toolbar.getString("icon"), null)
+                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(toolbar.getString("title"))
+                                    Text(toolbar.getString("subtitle"), color = colors.settingsSecondary, fontSize = LocalTextStyle.current.fontSize * .83333f)
+                                }
+                            }
+                        }
+                    }
+                }
+                val delete = view.objectOrNull("delete_action")
+                Button({ delete?.let(host::customize) }, enabled = delete != null, modifier = Modifier.align(Alignment.End).testTag("delete-managed-toolbar"),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError)) { Text(view.getString("delete_label")) }
+            }
+        }
+    }
+}
+
 @Composable internal fun ToolbarPrompt(host: CanvasHost, view: JSONObject) {
     fun send(type: String) = host.customize(obj("type" to type))
     AlertDialog(onDismissRequest = { send("cancel_toolbar") },
@@ -91,7 +145,8 @@ import org.json.JSONObject
         dismissButton = { TextButton({ send("cancel_toolbar") }) { Text(view.getString("cancel_label")) } },
         confirmButton = {
             Button({ send("confirm_toolbar") }, enabled = view.getBoolean("can_confirm"),
-                colors = if (view.getBoolean("destructive")) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                colors = if (view.getBoolean("destructive")) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError)
                     else ButtonDefaults.buttonColors()) { Text(view.getString("confirm_label")) }
         })
 }

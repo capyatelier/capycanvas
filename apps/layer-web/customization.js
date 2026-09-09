@@ -277,6 +277,43 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (!picker.open) { picker.showModal(); (model.name == null ? search : name).focus(); }
   }
 
+  const manager = element("dialog", "toolbar-manager"); manager.id = "toolbar-manager";
+  const managerHeader = element("header", "dialog-header"), managerTitle = element("h2");
+  const closeManager = () => send({ type: "close_toolbar_manager" });
+  const managerClose = button("×", closeManager, "dialog-close");
+  managerHeader.append(managerTitle, managerClose);
+  const managerBody = element("div", "toolbar-manager-body"), managerDescription = element("p");
+  const managerScroll = element("div", "toolbar-manager-scroll"), managerList = element("div", "managed-toolbars"), managerEmpty = element("p", "toolbar-manager-empty");
+  const managerDelete = button("", () => { const action = app.toolbar_manager()?.delete_action; if (action) send(action); }, "destructive-action");
+  managerDelete.id = "delete-managed-toolbar";
+  managerScroll.append(managerList, managerEmpty);
+  managerBody.append(managerDescription, managerScroll, managerDelete);
+  manager.append(managerHeader, managerBody); workspace.append(manager);
+  manager.addEventListener("cancel", e => { e.preventDefault(); closeManager(); });
+  manager.addEventListener("close", () => { if (app.toolbar_manager()) closeManager(); });
+  function refreshManager() {
+    const model = app.toolbar_manager();
+    if (!model) { if (manager.open) manager.close(); return; }
+    managerTitle.textContent = model.title; manager.setAttribute("aria-label", model.title);
+    managerClose.setAttribute("aria-label", model.close_label);
+    managerDescription.textContent = model.description;
+    managerEmpty.textContent = model.empty_label; managerEmpty.hidden = model.toolbars.length > 0;
+    managerList.hidden = !model.toolbars.length;
+    managerDelete.textContent = model.delete_label; managerDelete.disabled = !model.delete_action;
+    const key = JSON.stringify(model.toolbars);
+    if (managerList.dataset.key !== key) {
+      managerList.dataset.key = key;
+      managerList.replaceChildren(...model.toolbars.map(toolbar => {
+        const row = button("", () => send({ type: "select_managed_toolbar", panel: toolbar.panel }));
+        row.dataset.panel = toolbar.panel;
+        const text = element("span"); text.append(element("span", "", toolbar.title), element("small", "", toolbar.subtitle));
+        row.append(icon(toolbar.icon), text); return row;
+      }));
+    }
+    for (const row of managerList.children) row.setAttribute("aria-pressed", String(row.dataset.panel === model.selected));
+    if (!manager.open) { manager.showModal(); managerClose.focus(); }
+  }
+
   const prompt = element("dialog", "toolbar-prompt"), promptTitle = element("h2"), promptMessage = element("p");
   prompt.id = "toolbar-prompt";
   const promptNameRow = element("label", "toolbar-name"), promptNameLabel = element("span"), promptName = element("input");
@@ -399,7 +436,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) => place(tile, geometry.tiles[i]));
   }
   function refresh() {
-    refreshPanels(); refreshPicker(); refreshPrompt();
+    refreshPanels(); refreshPicker(); refreshManager(); refreshPrompt();
     for (const update of fields.values()) update();
     if (expanded) for (const check of expanded.body.querySelectorAll("[data-visible]")) {
       check.checked = views.get(expanded.panel)?.controls.find((c) => c.control === check.dataset.visible)?.visible_in_panel || false;

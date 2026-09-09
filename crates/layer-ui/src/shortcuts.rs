@@ -200,7 +200,7 @@ pub(crate) fn definitions(
 ) -> Vec<(ShortcutDefinition, &'static str)> {
     let mut rows: Vec<_> = CommandId::ALL
         .into_iter()
-        .filter(|c| *c != CommandId::NewWindow || platform.native_windows())
+        .filter(|c| c.available_on(platform))
         .map(|command| {
             (
                 ShortcutDefinition {
