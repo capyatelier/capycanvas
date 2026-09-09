@@ -251,7 +251,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut reply = InputReply {
             chrome_hidden: self.button_zen(),
             hide_floating_panels: self.button_zen(),
-            keep_zen_button: self.keep_zen_button(),
+            keep_zen_button: self.state.settings.zen_show_button,
             ..Default::default()
         };
         let mut contact = None;
@@ -507,19 +507,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         reply.chrome_hidden = self.interaction.hidden;
         reply.hide_floating_panels = self.button_zen();
-        reply.keep_zen_button = self.keep_zen_button();
+        reply.keep_zen_button = self.state.settings.zen_show_button;
         reply.pan_cursor = self.interaction.pan_key.is_some();
         Ok(reply)
     }
 
     fn button_zen(&self) -> bool {
         self.state.workspace.zen_mode
-            && self.state.platform == Platform::Gtk
             && self.state.settings.zen_reveal_mode == ZenRevealMode::Button
-    }
-
-    fn keep_zen_button(&self) -> bool {
-        self.state.platform == Platform::Gtk && self.state.settings.zen_show_button
     }
 
     fn refresh_chrome(&mut self) {
@@ -852,7 +847,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
-        if id == CommandId::ZenMode && self.state.platform == Platform::Gtk {
+        if id == CommandId::ZenMode {
             Some(self.state.settings.zen_icon.icon())
         } else {
             id.icon()
@@ -2313,7 +2308,7 @@ mod tests {
     }
 
     #[test]
-    fn button_only_zen_rollout_does_not_change_other_hosts() {
+    fn button_only_zen_has_the_same_policy_on_all_hosts() {
         for platform in [
             Platform::Generic,
             Platform::Gtk,
@@ -2351,8 +2346,8 @@ mod tests {
                 },
                 facts,
             );
-            assert_eq!(reply.chrome_hidden, platform == Platform::Gtk);
-            assert_eq!(reply.hide_floating_panels, platform == Platform::Gtk);
+            assert!(reply.chrome_hidden);
+            assert!(reply.hide_floating_panels);
         }
     }
 
@@ -2422,7 +2417,10 @@ mod tests {
         assert!(!change.canvas_wake && !s.state.workspace.zen_mode);
         for platform in [Platform::Web, Platform::Android] {
             s.set_platform(platform);
-            assert!(s.context_menu(target).is_err());
+            assert_eq!(
+                serde_json::to_value(s.context_menu(target).unwrap()).unwrap(),
+                serde_json::to_value(&menu).unwrap()
+            );
         }
     }
 
@@ -2495,10 +2493,17 @@ mod tests {
         );
         for platform in [Platform::Web, Platform::Android] {
             s.set_platform(platform);
-            assert!(field(&s.state.settings, platform).is_none());
+            assert!(field(&s.state.settings, platform).is_some());
+            preference(
+                &mut s,
+                PreferenceAction::Edit {
+                    id,
+                    value: PreferenceValue::Choice(3),
+                },
+            );
             assert_eq!(
                 s.command(CommandId::ZenMode).icon,
-                Some(ZenIcon::LookingUp.icon())
+                Some(ZenIcon::Sleeping.icon())
             );
         }
     }
@@ -2534,41 +2539,43 @@ mod tests {
 
     #[test]
     fn zen_reveal_and_button_visibility_are_independent() {
-        for mode in [ZenRevealMode::Edges, ZenRevealMode::Button] {
-            for show_button in [true, false] {
-                let mut s = session();
-                s.set_platform(Platform::Gtk);
-                s.dispatch(UiAction::RestoreSettings {
-                    settings: Settings {
-                        zen_reveal_mode: mode,
-                        zen_show_button: show_button,
-                        ..Settings::default()
-                    },
-                })
-                .unwrap();
-                invoke(&mut s, CommandId::ZenMode);
-                let reply = chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [600.0, 450.0],
-                    },
-                    ChromeFacts::default(),
-                );
-                assert!(reply.chrome_hidden);
-                assert_eq!(reply.keep_zen_button, show_button);
-                assert_eq!(reply.hide_floating_panels, mode == ZenRevealMode::Button);
-                let reply = chrome(
-                    &mut s,
-                    ChromeEvent::Motion {
-                        position: [6.0, 6.0],
-                    },
-                    ChromeFacts::default(),
-                );
-                assert_eq!(reply.chrome_hidden, mode == ZenRevealMode::Button);
-                assert_eq!(reply.keep_zen_button, show_button);
-                let exit = key(&mut s, "Tab", true, false, false);
-                assert!(exit.handled && !exit.chrome_hidden && !exit.hide_floating_panels);
-                assert!(!s.state.workspace.zen_mode);
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for mode in [ZenRevealMode::Edges, ZenRevealMode::Button] {
+                for show_button in [true, false] {
+                    let mut s = session();
+                    s.set_platform(platform);
+                    s.dispatch(UiAction::RestoreSettings {
+                        settings: Settings {
+                            zen_reveal_mode: mode,
+                            zen_show_button: show_button,
+                            ..Settings::default()
+                        },
+                    })
+                    .unwrap();
+                    invoke(&mut s, CommandId::ZenMode);
+                    let reply = chrome(
+                        &mut s,
+                        ChromeEvent::Motion {
+                            position: [600.0, 450.0],
+                        },
+                        ChromeFacts::default(),
+                    );
+                    assert!(reply.chrome_hidden);
+                    assert_eq!(reply.keep_zen_button, show_button);
+                    assert_eq!(reply.hide_floating_panels, mode == ZenRevealMode::Button);
+                    let reply = chrome(
+                        &mut s,
+                        ChromeEvent::Motion {
+                            position: [6.0, 6.0],
+                        },
+                        ChromeFacts::default(),
+                    );
+                    assert_eq!(reply.chrome_hidden, mode == ZenRevealMode::Button);
+                    assert_eq!(reply.keep_zen_button, show_button);
+                    let exit = key(&mut s, "Tab", true, false, false);
+                    assert!(exit.handled && !exit.chrome_hidden && !exit.hide_floating_panels);
+                    assert!(!s.state.workspace.zen_mode);
+                }
             }
         }
     }

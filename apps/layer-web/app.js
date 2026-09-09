@@ -654,7 +654,14 @@ function update(regions) {
         node.title = command.label;
         node.setAttribute("aria-label", command.label);
         node.setAttribute("aria-pressed", String(command.selected));
-        if (node.dataset.icon !== "true") {
+        if (node.dataset.icon === "true") {
+          const glyph = node.querySelector("svg");
+          if (glyph?.dataset.asset !== command.icon) {
+            const next = icon(command.icon);
+            next.style.cssText = glyph?.style.cssText || "";
+            node.replaceChildren(next);
+          }
+        } else {
           if (node.querySelector(".command-label")) {
             node.querySelector(".command-label").textContent = command.label;
             node.querySelector(".shortcut-hint").textContent = command.shortcut;
@@ -760,6 +767,8 @@ function input(event) {
   try {
     const reply = app.input(event);
     workspace.classList.toggle("zen-hidden", reply.chrome_hidden);
+    workspace.classList.toggle("zen-hide-floating", reply.hide_floating_panels);
+    workspace.classList.toggle("zen-keep-button", reply.keep_zen_button);
     canvas.style.cursor = reply.pan_cursor ? "grab" : "";
     if (reply.dismiss_popups) {
       for (const popup of document.querySelectorAll(
@@ -829,7 +838,12 @@ function buildHeader() {
     details.addEventListener("toggle", updateZen);
     return details;
   }
-  $("header-start").append(iconButton("zen_mode"));
+  // Keep one button outside the fading header, with a matching layout spacer.
+  const zen = iconButton("zen_mode");
+  zen.id = "zen-button"; zen.classList.add("chrome");
+  zen.dataset.context = JSON.stringify({ kind: "zen_mode" });
+  workspace.prepend(zen);
+  $("header-start").append(element("span", "zen-spacer"));
   for (const spec of catalog.menus)
     $("header-start").append(menu(spec.label, spec.sections));
   $("header-end").append(fullscreenButton(), iconButton("settings"));

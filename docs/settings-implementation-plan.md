@@ -52,7 +52,7 @@ validation and palette generation are shared Rust behavior. See the
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; dark/light base hex colors; separate Zen mode section: Show controls (At edges / With button), Keep Zen button visible (GTK trial) |
+| Appearance | System/Light/Dark; dark/light base hex colors; separate Zen mode section: Show controls (Screen edges / Zen button), Keep Zen button visible, Button icon (four centered image tiles) |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
@@ -60,15 +60,14 @@ validation and palette generation are shared Rust behavior. See the
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
-Defaults preserve the previous drawing behavior: System theme, At edges Zen,
+Defaults: System theme, Screen edges Zen,
 fixed 80px reveal/keep-visible distances, linear pressure, normal scroll speeds,
-8ms prediction. GTK now keeps the Zen button visible by default when controls
-hide, with an independent switch to hide it too. With button disables edge
-reveal; without a visible button, use the Zen shortcut to exit. Both settings
-are persisted, validated and resettable through the Rust row model. Other hosts
-keep their existing edge-reveal/hidden-button behavior until the GTK trial is approved.
-GTK's Zen button also exposes these choices on right-click or touch-hold, with
-a divider before the visibility toggle. Rust generates the menu from the rows, using
+8ms prediction. All hosts keep the Zen button visible by default when controls
+hide, with an independent switch to hide it too. Zen button disables edge
+reveal; without a visible button, use Tab (the default Zen shortcut) to exit.
+All three Zen settings are persisted, validated and resettable through the Rust row model.
+The Zen button also exposes reveal/visibility choices on right-click or touch-hold, with
+dividers before the visibility toggle and Change icon… settings link. Rust generates the menu from the rows, using
 the same validated, persisted edit action as the settings page. Individual
 preference edits/resets can execute without a settings dialog; navigation and
 shortcut recording still require it to be open.
@@ -160,7 +159,7 @@ Header text buttons retain libadwaita's 17px horizontal padding.
 
 Web uses a gear opening Preferences directly, with the same sidebar/page flow,
 native input behavior, original shared SVGs, copyable information values and
-pen-oriented focus appearance. Desktop dialogs target 1000 × 620 logical pixels,
+pen-oriented focus appearance. Desktop dialogs target 1000 × 744 logical pixels,
 constrained to the available window. The web sidebar title is centered in the
 whole sidebar, independently of the search button.
 There are no toolkit types in the shared model.
@@ -355,12 +354,14 @@ No simulation of physical tablet delivery or display scanout is implied by
 these UI tests. Native event/presentation measurements remain documented in
 `artifacts/benchmarks/gtk-wayland.md`.
 
-Browser validation on this machine also has an environment caveat: Chrome's
-Wayland DMA-BUF import currently fails inside ANGLE. The optional `--headless`
-test mode uses hardware Vulkan/WebGPU without that window-system path, following
-[Chromium's GPU testing guidance](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/docs/gpu/using-gpu-hardware-in-headless-chrome.md).
-All preferences interaction, typography, persistence and cursor-preview assertions
-pass there, but the suite's strict empty-log check reports a rendering warning
-during GPU startup (`A valid external Instance reference no longer exists`).
-It is not filtered out. Headless captures validate the DOM controls only: their
-canvas is black, so they do not validate composed GPU ink or display delivery.
+The cross-platform Zen rollout passes the packaged preferences and PWA suites
+in Chrome on an isolated Mutter Wayland display, including real touch toggles,
+context menus, all four icon choices, live icons, GPU ink and offline upgrades.
+GTK's two native Zen regression tests and six Android Zen/settings emulator
+tests pass. Both themes were visually reviewed; Android retains its full-screen
+settings layout. Builds include the static PWA and ARM64/x86_64 Android APK.
+
+The optional headless Chrome mode still reports
+`A valid external Instance reference no longer exists` on this machine despite
+passing DOM assertions. That warning is not filtered out, and its black-canvas
+captures are not used as evidence of GPU rendering or display delivery.

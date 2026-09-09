@@ -8,6 +8,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -177,8 +182,11 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         if (snapshot != null && state != null) {
             val hidden = snapshot.optBoolean("chrome_hidden")
             if (!hidden && snapshot.objectOrNull("preferences") == null) Header(host, state, dock)
+            if (snapshot.objectOrNull("preferences") == null && (!hidden || snapshot.optBoolean("keep_zen_button"))) {
+                ZenButton(host, state, dock, hidden)
+            }
             val layout = snapshot.getJSONObject("layout")
-            layout.array("groups").objects().filter { !hidden || it.optBoolean("floating") }
+            layout.array("groups").objects().filter { !hidden || (it.optBoolean("floating") && !snapshot.optBoolean("hide_floating_panels")) }
                 .sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEachIndexed { index, group ->
                 key(group.getInt("id")) {
                   CompositionLocalProvider(LocalWorkspaceZ provides index) {
@@ -253,6 +261,26 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     lineTo(left, radius); quadraticTo(left, 0f, left + radius, 0f); close()
 }
 
+@Composable private fun ZenButton(host: CanvasHost, state: JSONObject, dock: DockInteraction, hidden: Boolean) {
+    val colors = LocalPalette.current
+    val command = state.array("commands").objects().first { it.getString("id") == "zen_mode" }
+    val target = remember { obj("kind" to "zen_mode") }
+    val anchor = dock.anchorKey(target)
+    DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor) } }
+    IconTile(command.getString("icon"), command.getString("label"), command.getBoolean("selected") && !hidden,
+        modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button")
+            .background(colors.surround, RoundedCornerShape(6.dp))
+            .onGloballyPositioned { dock.anchors[anchor] = it.boundsInRoot().translate(-dock.origin) }
+            .pointerInput(dock) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(target) }
+                }
+            },
+        onLongClick = { dock.context(target) }, iconSize = host.catalog.getInt("zen_icon_size").dp,
+        selectedColor = colors.text.copy(alpha = .08f)) { host.invoke("zen_mode") }
+}
+
 @Composable private fun Header(host: CanvasHost, state: JSONObject, dock: DockInteraction) {
     val colors = LocalPalette.current
     BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).padding(6.dp)) {
@@ -262,10 +290,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        val zen = state.array("commands").objects().first { it.getString("id") == "zen_mode" }
-        IconTile(zen.getString("icon"), zen.getString("label"), zen.getBoolean("selected"),
-            iconSize = host.catalog.getInt("zen_icon_size").dp,
-            selectedColor = colors.text.copy(alpha = .08f)) { host.invoke("zen_mode") }
+        Spacer(Modifier.size(36.dp))
         host.catalog.array("menus").objects().forEach { menu ->
             var open by remember { mutableStateOf(false) }
             DisposableEffect(open) {

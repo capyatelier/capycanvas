@@ -220,13 +220,13 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     assert.equal(await evaluate("document.querySelector('.header-menu').open"), false);
     await tap(zen);
     assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true", "Touch preserves intentional toggle selection");
-    assert.notEqual(await background(zen), idle);
+    assert.equal(await background(zen), idle, "The persistent Zen button stays neutral while other controls are hidden");
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
-    // The first new contact reveals hidden chrome without activating it.
+    // The persistent button exits Zen directly; it is not a hidden control's
+    // reveal-only first contact.
     await tap(zen);
     assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
-    assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true");
-    await tap(zen);
+    assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "false");
     assert.equal(await background(zen), idle, "Zen returns to its idle color when toggled off by touch");
   }
   await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 650, y: 450 });

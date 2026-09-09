@@ -10,6 +10,8 @@ struct SnapshotKey {
     revision: u64,
     logical: [f32; 2],
     chrome_hidden: bool,
+    hide_floating_panels: bool,
+    keep_zen_button: bool,
     gpu_ready: bool,
     error: Option<String>,
 }
@@ -19,6 +21,8 @@ pub(crate) struct App {
     pub logical: [f32; 2],
     pub dirty: bool,
     pub chrome_hidden: bool,
+    hide_floating_panels: bool,
+    keep_zen_button: bool,
     pub error: Option<String>,
     pub sequence: u64,
     #[cfg(target_os = "android")]
@@ -46,6 +50,8 @@ impl App {
             logical: [1.0, 1.0],
             dirty: true,
             chrome_hidden: false,
+            hide_floating_panels: false,
+            keep_zen_button: true,
             error: None,
             sequence: 0,
             #[cfg(target_os = "android")]
@@ -80,6 +86,8 @@ impl App {
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
+        self.hide_floating_panels = reply.hide_floating_panels;
+        self.keep_zen_button = reply.keep_zen_button;
         self.dirty |= reply.change.canvas_wake;
         if reply.cancel_paint {
             self.cancel_pen()?;
@@ -222,6 +230,8 @@ impl App {
             revision: self.session.state().revision,
             logical: self.logical,
             chrome_hidden: self.chrome_hidden,
+            hide_floating_panels: self.hide_floating_panels,
+            keep_zen_button: self.keep_zen_button,
             gpu_ready: self.session.engine().backend().0.is_some(),
             error: self.error.clone(),
         };
@@ -244,6 +254,7 @@ impl App {
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
             "panel_measurements": self.session.state().workspace.layout.measurements,
             "chrome_hidden": self.chrome_hidden, "gpu_ready": self.session.engine().backend().0.is_some(),
+            "hide_floating_panels": self.hide_floating_panels, "keep_zen_button": self.keep_zen_button,
             "error": self.error})
     }
     pub fn query(&self, query: Value) -> Result<Value, String> {
@@ -407,6 +418,11 @@ mod tests {
         assert!(app.take_snapshot().is_none());
         app.chrome_hidden = true;
         assert_eq!(app.take_snapshot().unwrap()["chrome_hidden"], true);
+        app.hide_floating_panels = true;
+        assert_eq!(app.take_snapshot().unwrap()["hide_floating_panels"], true);
+        app.keep_zen_button = false;
+        assert_eq!(app.take_snapshot().unwrap()["keep_zen_button"], false);
+        assert!(app.take_snapshot().is_none());
         app.error = Some("test surface error".into());
         assert_eq!(app.take_snapshot().unwrap()["error"], "test surface error");
         assert!(app.take_snapshot().is_none());

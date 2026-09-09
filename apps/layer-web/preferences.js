@@ -98,6 +98,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   const back = button("‹", () => root.classList.remove("show-content"), "preferences-back");
   back.setAttribute("aria-label", "Preferences categories");
   const exit = button("×", close, "dialog-close"); exit.setAttribute("aria-label", "Close preferences");
+  exit.id = "close-settings";
   header.append(back, title, exit);
   const search = element("input", "preferences-search");
   search.type = "search"; search.placeholder = "Search preferences"; search.id = "settings-search";
@@ -108,11 +109,9 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   const empty = element("p", "preferences-empty", "No matching preferences");
   sidebar.append(sidebarHeader, search, navigation, searchResults, empty);
   const pages = element("div", "preferences-pages");
-  content.append(header, panelFrame(pages));
-  const footer = element("footer");
   const error = element("span", "preferences-error"); error.setAttribute("role", "status");
-  const done = button("Done", close); done.id = "close-settings";
-  footer.append(error, done); content.append(footer); root.append(sidebar, content); dialog.append(root);
+  content.append(header, error, panelFrame(pages));
+  root.append(sidebar, content); dialog.append(root);
   dialog.addEventListener("close", () => { if (!dialog.open && view()) close(); });
   dialog.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
 
@@ -135,7 +134,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   editor.addEventListener("cancel", e => { e.preventDefault(); closeEditor(); });
   editor.addEventListener("close", () => { if (!editor.open && view()?.shortcut_editor) closeEditor(); });
   document.body.append(editor);
-  let editorSignature = "", searchSignature = "", searchFocus = 0;
+  let editorSignature = "", searchSignature = "", searchFocus = 0, revealed = null;
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
   const shortcuts = new Map();
@@ -176,7 +175,19 @@ export function createPreferences({ element, button, icon, numberField, panelFra
               });
               widget = input; break;
             case "choice":
-              if (row.kind.icons.length) {
+              if (row.kind.presentation.type === "image_tiles") {
+                input = element("input"); input.type = "hidden";
+                widget = element("div", "preference-image-tiles");
+                widget.setAttribute("role", "group"); widget.setAttribute("aria-label", row.title);
+                widget.style.setProperty("--columns", row.kind.presentation.columns);
+                line.classList.add("image-preference");
+                row.kind.options.forEach((name, index) => {
+                  const choice = button("", () => { input.value = index; input.dispatchEvent(new Event("input")); });
+                  choice.dataset.choice = index; choice.title = name; choice.setAttribute("aria-label", name);
+                  choice.append(icon(row.kind.icons[index])); widget.append(choice);
+                });
+                widget.append(input);
+              } else if (row.kind.icons.length) {
                 input = element("input"); input.type = "hidden";
                 widget = element("details", "preference-choice");
                 const summary = element("summary"); summary.setAttribute("aria-label", row.title);
@@ -235,6 +246,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
     if (!model) {
       dismissContext(); cancelHold();
       searchFocus = 0;
+      revealed = null;
       if (capture.open) capture.close();
       if (editor.open) editor.close();
       if (dialog.open) dialog.close();
@@ -282,7 +294,9 @@ export function createPreferences({ element, button, icon, numberField, panelFra
       if (row.kind.type === "number") { input.setDisabled(!row.enabled); input.update(row.kind.value); }
       else if (row.kind.type === "choice") {
         input.value = row.kind.selected;
-        if (row.kind.icons.length) {
+        if (row.kind.presentation.type === "image_tiles") {
+          for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-pressed", String(Number(choice.dataset.choice) === row.kind.selected));
+        } else if (row.kind.icons.length) {
           widget.querySelector("summary").replaceChildren(icon(row.kind.icons[row.kind.selected]), element("span", "", row.kind.options[row.kind.selected]));
           for (const choice of widget.querySelectorAll("[data-choice]")) choice.setAttribute("aria-selected", String(Number(choice.dataset.choice) === row.kind.selected));
         }
@@ -309,6 +323,15 @@ export function createPreferences({ element, button, icon, numberField, panelFra
     }
     error.textContent = model.error || "";
     if (!dialog.open) { dialog.showModal(); root.classList.add("show-content"); }
+    if (revealed !== model.reveal) {
+      revealed = model.reveal;
+      const field = fields.get(revealed);
+      if (field) {
+        root.classList.add("show-content");
+        field.line.scrollIntoView({ block: "nearest" });
+        (field.widget.querySelector("button") || field.input).focus({ preventScroll: true });
+      }
+    }
     if (model.shortcut_editor) {
       const spec = model.shortcut_editor, signature = JSON.stringify([spec, model.error]);
       if (editorSignature !== signature) {

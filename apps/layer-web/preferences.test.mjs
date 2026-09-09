@@ -38,8 +38,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(metrics.step, 16);
     assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 28);
   }
-  assert.equal(await evaluate("document.querySelector('#header-start [data-command=zen_mode] svg').getBoundingClientRect().width"), await evaluate("layerApp.app.catalog().zen_icon_size"));
-  assert.equal(await evaluate("document.querySelector('#header-start [data-command=zen_mode] svg').dataset.asset"), 'zen-looking-up');
+  assert.equal(await evaluate("document.querySelector('#zen-button svg').getBoundingClientRect().width"), await evaluate("layerApp.app.catalog().zen_icon_size"));
+  assert.equal(await evaluate("document.querySelector('#zen-button svg').dataset.asset"), 'zen-looking-up');
   assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='zen_mode').shortcut"), 'Tab');
   await evaluate("document.activeElement?.blur()");
   await key('Tab');
@@ -55,13 +55,86 @@ export async function checkPreferences({ call, evaluate, settle }) {
   // Real host events: activation hides immediately, even while the pointer
   // remains over the Zen button, and the fixed corner guard survives refresh.
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
-  await click('#header-start [data-command="zen_mode"]');
+  await click('#zen-button');
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:299,clientY:24,pointerType:'mouse',bubbles:true}))");
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,pointerType:'mouse',bubbles:true})); window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
-  await click('#header-start [data-command="zen_mode"]');
+  await click('#zen-button');
+  // Both reveal modes, independent button visibility, generic image choices
+  // and deep linking use real DOM controls backed by the shared preference API.
+  const zenVisible = () => evaluate("(async () => { const n=document.querySelector('#zen-button'); await Promise.all(n.getAnimations().map(a=>a.finished)); return getComputedStyle(n).pointerEvents === 'auto' && getComputedStyle(n).opacity === '1'; })()");
+  const zenMenu = () => evaluate(`(() => { const n=document.querySelector('#zen-button'); n.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:24,clientY:36})); })()`);
+  const chooseMenu = async text => {
+    await evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].find(n=>n.textContent===${JSON.stringify(text)}).click()`); await settle();
+  };
+  const originalWorkspace = await evaluate('layerApp.state().workspace');
+  await action({ type: 'move_panel', panel: 'sizes', target: { kind: 'float', position: [500, 340] } });
+  for (const theme of ['dark', 'light']) {
+    await action({ type: 'set_theme', theme });
+    await zenMenu(); await chooseMenu('Change icon…');
+    assert.equal(await evaluate('layerApp.app.preferences().reveal'), 'zen_icon');
+    assert.equal(await evaluate("document.querySelector('#settings').getBoundingClientRect().height"), 744);
+    assert.equal(await evaluate("document.querySelector('.preferences-content > footer')"), null);
+    assert.ok(await evaluate(`(() => {
+      const n=document.querySelector('.preference-image-tiles'), r=n.getBoundingClientRect();
+      const tiles=[...n.querySelectorAll('button')].map(n=>n.getBoundingClientRect());
+      return tiles.length===4 && tiles.every(t=>t.width===64&&t.height===64&&t.top>=0&&t.bottom<innerHeight)
+        && Math.abs((tiles[0].left+tiles[3].right)/2-(r.left+r.right)/2)<1
+        && [...n.querySelectorAll('svg')].every(n=>n.getBoundingClientRect().width===48);
+    })()`), 'centered four-tile selector is revealed in the taller dialog');
+    for (const [index, name] of ['looking-up','facing-forward','bathing','sleeping'].entries()) {
+      await click(`.preference-image-tiles [data-choice="${index}"]`);
+      assert.equal(await evaluate("document.querySelector('#zen-button svg').dataset.asset"), `zen-${name}`);
+      assert.equal(await evaluate("document.querySelector('.preference-image-tiles [aria-pressed=true]').dataset.choice"), String(index));
+      await capture(`zen-icons-${theme}-${index}`);
+    }
+    await click('#close-settings');
+    await zenMenu(); await chooseMenu('Reveal with Zen button');
+    await click('#zen-button');
+    assert.ok(await zenVisible());
+    await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
+    assert.ok(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"));
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.floating-panel')).pointerEvents"), 'none');
+    // A touch hold must open settings, not trigger the button's exit click.
+    await call('Input.setIgnoreInputEvents', { ignore: false });
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 24, y: 24 }] });
+    await evaluate('new Promise(resolve=>setTimeout(resolve,700))');
+    await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await call('Input.setIgnoreInputEvents', { ignore: true });
+    await settle();
+    assert.ok(await evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')"));
+    assert.ok(await evaluate('layerApp.state().workspace.zen_mode'));
+    await capture(`zen-menu-${theme}`);
+    await chooseMenu('Change icon…');
+    await click('#close-settings');
+    await capture(`zen-button-only-${theme}`);
+    for (const show of [false, true]) {
+      await preference({ type: 'edit', id: 'zen_show_button', value: show });
+      assert.equal(await zenVisible(), show);
+    }
+    await click('#zen-button');
+    await preference({ type: 'edit', id: 'zen_reveal_mode', value: 0 });
+    await click('#zen-button');
+    await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
+    await settle();
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+    await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:100,clientY:24,bubbles:true}))");
+    await capture(`zen-active-${theme}`);
+    await click('#zen-button');
+  }
+  await preference({ type: 'reset', id: 'zen_icon' });
+  await action({ type: 'restore_workspace', workspace: originalWorkspace });
+  assert.ok(await evaluate("document.elementFromPoint(24,24).closest('#zen-button') !== null"), 'the visible header must not intercept the persistent button');
+  await call('Input.setIgnoreInputEvents', { ignore: false });
+  for (const enabled of [true, false]) {
+    await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 24, y: 24 }] });
+    await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await settle();
+    assert.equal(await evaluate('layerApp.state().workspace.zen_mode'), enabled, 'touch toggles the same button with the header visible or hidden');
+  }
+  await call('Input.setIgnoreInputEvents', { ignore: true });
   // Values are plain editing buttons. The slider uses the
   // exact Rust mapping and stepping keeps using display units.
   await click('#size-number .number-value');

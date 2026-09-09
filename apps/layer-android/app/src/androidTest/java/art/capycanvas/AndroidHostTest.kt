@@ -616,6 +616,75 @@ class AndroidHostTest {
         resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
         capture("11-high-rate-stylus")
     }
+    @Test fun zenModesIconsAndContextMenuUseSharedSettings() {
+        val saved = JSONObject(state().getJSONObject("settings").toString())
+        fun edit(id: String, value: Any) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
+        try {
+            edit("zen_show_button", true)
+            floatPanel("sizes")
+            val floating = group("sizes").getInt("id")
+            for (theme in listOf("dark", "light")) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                contextGrip("zen-button")
+                capture("zen-menu-$theme")
+                compose.onNodeWithText("Change icon…").performClick()
+                compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences")?.optString("reveal") == "zen_icon" }
+                compose.onNodeWithTag("image-choice-0").assertIsDisplayed()
+                compose.onNodeWithTag("zen-button").assertDoesNotExist()
+                val first = compose.onNodeWithTag("image-choice-0").fetchSemanticsNode().boundsInRoot
+                val last = compose.onNodeWithTag("image-choice-3").fetchSemanticsNode().boundsInRoot
+                val row = compose.onNodeWithTag("preference-zen_icon").fetchSemanticsNode().boundsInRoot
+                val density = compose.activity.resources.displayMetrics.density
+                assertEquals(64 * density, first.width, 1f)
+                assertEquals(first.top, last.top, 1f)
+                assertEquals((row.left + row.right) / 2, (first.left + last.right) / 2, 1f)
+                for ((index, name) in listOf("looking-up", "facing-forward", "bathing", "sleeping").withIndex()) {
+                    compose.onNodeWithTag("image-choice-$index").performClick()
+                    waitState { it.array("commands").objects().first { it.getString("id") == "zen_mode" }.getString("icon") == "zen-$name" }
+                    compose.onNodeWithTag("image-choice-$index").assertIsSelected()
+                    capture("zen-icons-$theme-$index")
+                }
+                compose.onNodeWithTag("settings-done").performClick()
+                compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+                edit("zen_reveal_mode", 1)
+                compose.onNodeWithTag("zen-button").performTouchInput { click() }
+                compose.waitUntil(10_000) { host.snapshot!!.optBoolean("hide_floating_panels") }
+                compose.onNodeWithTag("zen-button").assertIsDisplayed()
+                compose.onNodeWithTag("group-$floating").assertDoesNotExist()
+                compose.onNodeWithContentDescription("Settings").assertDoesNotExist()
+                capture("zen-button-only-$theme")
+                contextGrip("zen-button")
+                assertTrue(state().getJSONObject("workspace").getBoolean("zen_mode"))
+                compose.onNodeWithText("Change icon…").performClick()
+                compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }
+                compose.onNodeWithTag("image-choice-3").assertIsDisplayed()
+                compose.onNodeWithTag("settings-done").performClick()
+                compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+                edit("zen_show_button", false)
+                compose.onNodeWithTag("zen-button").assertDoesNotExist()
+                edit("zen_show_button", true)
+                compose.onNodeWithTag("zen-button").performTouchInput { click() }
+                compose.waitUntil(10_000) { !host.snapshot!!.optBoolean("chrome_hidden") }
+                compose.onNodeWithTag("group-$floating").assertIsDisplayed()
+                edit("zen_reveal_mode", 0)
+                compose.onNodeWithTag("zen-button").performTouchInput { click() }
+                compose.waitUntil(10_000) { host.snapshot!!.optBoolean("chrome_hidden") }
+                compose.onNodeWithTag("group-$floating").assertIsDisplayed()
+                compose.runOnIdle {
+                    host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(600, 450))))
+                    host.chrome(obj("kind" to "motion", "position" to JSONArray(listOf(24, 24))))
+                }
+                compose.waitUntil(10_000) { !host.snapshot!!.optBoolean("chrome_hidden") }
+                capture("zen-active-$theme")
+                compose.onNodeWithTag("zen-button").performTouchInput { click() }
+                waitState { !it.getJSONObject("workspace").getBoolean("zen_mode") }
+            }
+        } finally {
+            action(obj("type" to "close_settings"))
+            action(obj("type" to "restore_settings", "settings" to saved))
+        }
+    }
+
     @Test fun preferencesSearchAndThemeAreCoreDriven() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }

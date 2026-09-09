@@ -10,6 +10,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
@@ -45,6 +47,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -205,5 +208,30 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
     Box(modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, RoundedCornerShape(6.dp))
         .combinedClickable(enabled = enabled, role = Role.Button, onClickLabel = label, onLongClick = onLongClick, onClick = onClick), contentAlignment = Alignment.Center) {
         SharedIcon(name, label, modifier = Modifier.size(iconSize), fill = fill)
+    }
+}
+
+/** A centered, reusable choice grid. Content and selection come from the core. */
+@Composable internal fun ImageSelector(options: List<String>, icons: List<String>, columns: Int,
+    selected: Int, enabled: Boolean, modifier: Modifier = Modifier, onSelect: (Int) -> Unit) {
+    val colors = LocalPalette.current
+    Column(modifier.fillMaxWidth().selectableGroup().padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.indices.toList().chunked(columns).forEach { indices ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                indices.forEach { index ->
+                    val active = index == selected
+                    val shape = RoundedCornerShape(6.dp)
+                    Box(Modifier.size(64.dp).testTag("image-choice-$index").clip(shape)
+                        .background(if (active) colors.accent.copy(alpha = .18f) else colors.text.copy(alpha = .05f))
+                        .then(if (active) Modifier.border(2.dp, colors.accent, shape) else Modifier)
+                        .alpha(if (enabled) 1f else .4f)
+                        .selectable(active, enabled = enabled, role = Role.RadioButton) { onSelect(index) },
+                        contentAlignment = Alignment.Center) {
+                        SharedIcon(icons[index], options[index], Modifier.size(48.dp))
+                    }
+                }
+            }
+        }
     }
 }

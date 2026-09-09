@@ -228,7 +228,7 @@ On touch, the last contact keeps revealed controls available after finger lift;
 another contact away from controls can hide them. The reveal contact cannot
 also activate a newly exposed button.
 
-GTK previews these settings in Preferences → Appearance → Zen mode:
+GTK, web and Android expose Preferences → Appearance → Zen mode:
 **Show controls** selects **Screen edges** (default) or **Zen button**. Zen button
 hides all editor controls, including floats; edge proximity, contact and
 drag/menu pins cannot reveal them. **Keep Zen button visible** defaults on and
@@ -241,26 +241,28 @@ remain usable. The button never disappears while Zen is off.
 **Button icon** offers Looking up (default), Facing forward, Bathing and Sleeping.
 Rust stores `Settings.zen_icon` and supplies each command's icon. The generic
 `ChoicePresentation::ImageTiles { columns: 4 }` uses the same choice validation,
-persistence and Reset to Default as dropdowns. GTK renders four native toggle
-64px tiles with centered 48px previews and labels as tooltips. There is no import control
+persistence and Reset to Default as dropdowns. Hosts render four selectable
+64px tiles with centered 48px previews and accessible labels (tooltips on desktop). There is no import control
 yet, and no Zen-specific selection logic. The context menu's **Change icon…**
 opens the selector via a generic `PreferenceAction::Reveal { id }`: Rust resolves
-the page and GTK scrolls/focuses the named row. All four canonical, theme-tinted SVGs live in the shared
+the page and the host reveals the named row. All four canonical, theme-tinted SVGs live in the shared
 icon bank; app/launcher/PWA icons derive from Looking up at build time.
 The main Zen icon is 28px inside its unchanged 36px button. SVG artwork retains
 roughly 5% padding along its longest dimension without stretching its proportions.
-The GTK Preferences dialog defaults to 1000×744 logical pixels, constrained by
-the window. It has no footer/Done button; × or Escape close it, following native
+GTK/web Preferences dialogs default to 1000×744 logical pixels, constrained by
+the window. Neither has a footer/Done button; × or Escape close them, following
 libadwaita behavior without custom outside-click dismissal. Errors appear below
 the header only while present. Detailed shortcut dialogs retain their own actions.
+Android retains its full-screen settings overlay and pane-level Done button.
 
 Rust owns these decisions through `Settings.zen_reveal_mode`, `zen_show_button`
 and `InputReply`'s `chrome_hidden`, `hide_floating_panels`, `keep_zen_button` flags.
-GTK only applies visibility, hit-testing and styling. The button is a sibling of
-the native header with a same-sized spacer, preserving its 36×36px size and 6px
-inset. Web/Android retain their previous edge-reveal/hidden-button behavior and
-do not expose these settings until the GTK trial is approved.
-Right-clicking or touch-holding GTK's Zen button opens the two reveal choices,
+Hosts only apply visibility, hit-testing and styling. Android carries all three
+flags in its change-detected snapshot, including updates without a document revision.
+The button is a sibling of the header with a same-sized spacer, preserving its
+36×36px size and 6px inset. Its active background is subtle grey while the full UI
+is visible, but neutral when only the button remains.
+Right-clicking or touch-holding the Zen button opens the two reveal choices,
 a divider, the button visibility toggle, then a separate **Change icon…** entry.
 Current reveal/visibility values are checked.
 Rust generates the menu from the same preference rows and applies their normal
@@ -363,11 +365,12 @@ adapt to list/page navigation on narrow screens.
 Printable keys outside editable controls start preferences search through the
 shared input router; the view's transient `search_focus` revision asks each host
 to reveal and focus its search field. Native text editing and shortcut recording
-keep ownership of their input. GTK/web dialogs target 1000 × 620 logical pixels
+keep ownership of their input. GTK/web dialogs target 1000 × 744 logical pixels
 and shrink to fit smaller windows.
 Android renders simple choices as native anchored dropdowns, with options,
 icons and the selected value supplied by Rust. Selection submits `Edit` without
-navigating. Detailed editors that use a modal on GTK/web, such as the shared
+navigating. `ImageTiles` renders centered selectable previews instead; both
+presentations share the same choice editing/reset actions. Detailed editors that use a modal on GTK/web, such as the shared
 shortcut editor, slide in from the right with a pane-local Back arrow. Numeric
 input, shortcut recording, conflicts and validation errors remain inline;
 settings never open another Android dialog.

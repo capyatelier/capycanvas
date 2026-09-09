@@ -781,57 +781,53 @@ impl Settings {
                 ],
             }],
         ];
-        // GTK preview rollout: other hosts retain edge reveal until they render
-        // the persistent exit button. Availability is core policy, not UI logic.
-        if platform == Platform::Gtk {
-            groups[0].push(PreferenceGroup {
-                title: CommandId::ZenMode.label().into(),
-                rows: vec![
-                    row(
-                        PreferenceId::ZenRevealMode,
-                        "Show controls",
-                        "Choose how to bring controls back into view.",
-                        PreferenceKind::Choice {
-                            presentation: ChoicePresentation::Dropdown,
-                            icons: Vec::new(),
-                            options: crate::ZenRevealMode::CHOICES
-                                .iter()
-                                .map(|c| c.1.into())
-                                .collect(),
-                            selected: crate::ZenRevealMode::CHOICES
-                                .iter()
-                                .position(|c| c.0 == self.zen_reveal_mode)
-                                .unwrap() as u32,
-                        },
-                    ),
-                    row(
-                        ZenShowButton,
-                        "Keep Zen button visible",
-                        "Keep the button visible while controls are hidden.",
-                        PreferenceKind::Switch {
-                            active: self.zen_show_button,
-                        },
-                    ),
-                    row(
-                        PreferenceId::ZenIcon,
-                        "Button icon",
-                        "Choose the icon on the Zen button.",
-                        PreferenceKind::Choice {
-                            presentation: ChoicePresentation::ImageTiles { columns: 4 },
-                            options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
-                            icons: crate::ZenIcon::CHOICES
-                                .iter()
-                                .map(|c| c.0.icon().into())
-                                .collect(),
-                            selected: crate::ZenIcon::CHOICES
-                                .iter()
-                                .position(|c| c.0 == self.zen_icon)
-                                .unwrap() as u32,
-                        },
-                    ),
-                ],
-            });
-        }
+        groups[0].push(PreferenceGroup {
+            title: CommandId::ZenMode.label().into(),
+            rows: vec![
+                row(
+                    PreferenceId::ZenRevealMode,
+                    "Show controls",
+                    "Choose how to bring controls back into view.",
+                    PreferenceKind::Choice {
+                        presentation: ChoicePresentation::Dropdown,
+                        icons: Vec::new(),
+                        options: crate::ZenRevealMode::CHOICES
+                            .iter()
+                            .map(|c| c.1.into())
+                            .collect(),
+                        selected: crate::ZenRevealMode::CHOICES
+                            .iter()
+                            .position(|c| c.0 == self.zen_reveal_mode)
+                            .unwrap() as u32,
+                    },
+                ),
+                row(
+                    ZenShowButton,
+                    "Keep Zen button visible",
+                    "Keep the button visible while controls are hidden.",
+                    PreferenceKind::Switch {
+                        active: self.zen_show_button,
+                    },
+                ),
+                row(
+                    PreferenceId::ZenIcon,
+                    "Button icon",
+                    "Choose the icon on the Zen button.",
+                    PreferenceKind::Choice {
+                        presentation: ChoicePresentation::ImageTiles { columns: 4 },
+                        options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
+                        icons: crate::ZenIcon::CHOICES
+                            .iter()
+                            .map(|c| c.0.icon().into())
+                            .collect(),
+                        selected: crate::ZenIcon::CHOICES
+                            .iter()
+                            .position(|c| c.0 == self.zen_icon)
+                            .unwrap() as u32,
+                    },
+                ),
+            ],
+        });
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
@@ -1309,7 +1305,7 @@ mod copy_tests {
     use super::*;
 
     #[test]
-    fn zen_preferences_are_persistent_resettable_and_gtk_only_for_now() {
+    fn zen_preferences_are_persistent_resettable_on_all_platforms() {
         let mut settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Edges);
         assert!(settings.zen_show_button);
@@ -1364,11 +1360,11 @@ mod copy_tests {
             Platform::Ios,
             Platform::Windows,
         ] {
-            assert!(settings.field(id, platform).is_err());
+            assert!(settings.field(id, platform).is_ok());
             assert!(
                 settings
-                    .edit(id, PreferenceValue::Choice(0), platform)
-                    .is_err()
+                    .edit(id, PreferenceValue::Choice(1), platform)
+                    .is_ok()
             );
         }
         let mut state = PreferencesState::default();

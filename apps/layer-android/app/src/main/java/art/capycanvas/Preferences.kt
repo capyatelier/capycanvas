@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -87,6 +89,8 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     val paneFocus = remember { FocusRequester() }
     LaunchedEffect(view.settingsRoute()) { paneFocus.requestFocus() }
     var showPage by rememberSaveable { mutableStateOf(view.getString("page") != "appearance") }
+    val reveal = view.optString("reveal").takeUnless { it.isEmpty() || it == "null" }
+    LaunchedEffect(reveal) { if (reveal != null) showPage = true }
     LaunchedEffect(view.optLong("search_focus")) {
         if (view.optLong("search_focus") != 0L) showPage = false
     }
@@ -154,7 +158,16 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
                                                     Column {
                                                         group.array("rows").objects().filter { it.optBoolean("visible", true) }.forEachIndexed { index, setting ->
                                                             if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                                                            key(setting.getString("id")) { PreferenceRow(host, setting) }
+                                                            key(setting.getString("id")) {
+                                                                val bringIntoView = remember { BringIntoViewRequester() }
+                                                                LaunchedEffect(reveal) {
+                                                                    if (reveal == setting.getString("id")) {
+                                                                        withFrameNanos { }
+                                                                        bringIntoView.bringIntoView()
+                                                                    }
+                                                                }
+                                                                Box(Modifier.bringIntoViewRequester(bringIntoView)) { PreferenceRow(host, setting) }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -297,6 +310,18 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
     val type = kind.getString("type")
     val context = LocalContext.current
     val enabled = row.optBoolean("enabled", true)
+    if (type == "choice" && kind.objectOrNull("presentation")?.optString("type") == "image_tiles") {
+        Column(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id"))
+            .padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(row.getString("title"), fontWeight = FontWeight.Medium)
+            Text(row.getString("description"), color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
+            ImageSelector(kind.array("options").values().map { it.toString() }, kind.array("icons").values().map { it.toString() },
+                kind.getJSONObject("presentation").getInt("columns"), kind.getInt("selected"), enabled) {
+                host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))
+            }
+        }
+        return
+    }
     if (type == "number") {
         Box(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id")).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.TopCenter) {
             NumericSetting(row.getString("title"), kind.number("value"), kind.getJSONObject("control"),
