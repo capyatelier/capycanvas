@@ -400,6 +400,34 @@ pub struct FloatingGroup {
     pub default_width: Option<f32>,
     /// None sizes to the active content; resizing supplies an explicit height.
     pub height: Option<f32>,
+    /// Default-size cycle and flow direction for a standalone floating toolbar.
+    #[serde(default)]
+    pub toolbar_layout: FloatingToolbarLayout,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FloatingToolbarLayout {
+    #[default]
+    Compact,
+    Vertical,
+    Horizontal,
+}
+impl FloatingToolbarLayout {
+    fn next(self) -> Self {
+        match self {
+            Self::Compact => Self::Vertical,
+            Self::Vertical => Self::Horizontal,
+            Self::Horizontal => Self::Compact,
+        }
+    }
+    fn width(self, style: TileStyle, count: usize) -> f32 {
+        match self {
+            Self::Compact => style.floating_width(),
+            Self::Vertical => style.size()[0],
+            Self::Horizontal => count.max(1) as f32 * (style.size()[0] + 2.0) + 20.0,
+        }
+    }
 }
 
 /// Native measurements only. Rust owns sizing rules and resulting geometry.
@@ -1100,6 +1128,7 @@ impl DockLayout {
                     floating.width = width;
                     floating.default_width = Some(width);
                     floating.height = None;
+                    floating.toolbar_layout = FloatingToolbarLayout::Compact;
                 }
                 Some(floating)
             })
@@ -1379,7 +1408,8 @@ impl DockLayout {
         self.group_panels(group)
             .map(|panels| {
                 if let [panel] = panels
-                    && self.panel(*panel).is_ok_and(|p| p.hide_tab)
+                    && (panel.kind() == PanelKind::Tiles
+                        || self.panel(*panel).is_ok_and(|p| p.hide_tab))
                 {
                     return 0.0;
                 }
@@ -1523,6 +1553,9 @@ impl DockLayout {
                 next.floating.push(FloatingGroup {
                     root: moving,
                     width,
+                    toolbar_layout: previous_float
+                        .as_ref()
+                        .map_or(FloatingToolbarLayout::Compact, |f| f.toolbar_layout),
                     default_width: previous_float
                         .as_ref()
                         .and_then(|f| f.default_width)
@@ -2043,14 +2076,34 @@ impl DockLayout {
             };
             let config = self.panel(*active).expect("validated floating panel");
             let toolbar = panels.len() == 1 && active.kind() == PanelKind::Tiles;
+            let axis = if toolbar && floating.toolbar_layout == FloatingToolbarLayout::Horizontal {
+                Axis::Horizontal
+            } else {
+                Axis::Vertical
+            };
             let max_width = (width - WORKSPACE_SPACING * 2.0).max(1.0);
             let max_height = (height - top - WORKSPACE_SPACING).max(1.0);
-            let width = floating.width.max(self.tab_width(*id)).min(max_width);
+            let mut width = floating.width.max(self.tab_width(*id)).min(max_width);
             let natural = if toolbar {
                 let [tile_width, tile_height] = config.tile_style.size();
-                let columns = ((width + 2.0) / (tile_width + 2.0)).floor().max(1.0) as usize;
-                config.tiles().len().max(1).div_ceil(columns) as f32 * (tile_height + 2.0) - 2.0
-                    + 22.0
+                let count = config.tiles().len().max(1);
+                if axis == Axis::Horizontal {
+                    ribbon_lanes(width, count, tile_width) as f32 * (tile_height + 2.0) - 2.0
+                } else {
+                    // Long vertical defaults wrap only when the viewport cannot
+                    // contain one column. Compact grids use the same allocator.
+                    if floating.height.is_none() {
+                        width = width
+                            .max(
+                                ribbon_lanes(max_height, count, tile_height) as f32
+                                    * (tile_width + 2.0)
+                                    - 2.0,
+                            )
+                            .min(max_width);
+                    }
+                    let columns = ((width + 2.0) / (tile_width + 2.0)).floor().max(1.0) as usize;
+                    count.div_ceil(columns) as f32 * (tile_height + 2.0) + 20.0
+                }
             } else if active.kind() == PanelKind::Tiles {
                 let [w, h] = config.tile_style.size();
                 let columns = ((width - 8.0 + 2.0) / (w + 2.0)).floor().max(1.0) as usize;
@@ -2082,7 +2135,7 @@ impl DockLayout {
                 width,
                 height,
             };
-            resolve_node(&floating.root, bounds, Axis::Vertical, self, &mut result);
+            resolve_node(&floating.root, bounds, axis, self, &mut result);
             let group = result.groups.last_mut().unwrap();
             group.floating = true;
             group.resize_handles = ResizeEdge::handles(bounds);
@@ -2246,7 +2299,13 @@ impl DockLayout {
             return Ok(());
         };
         if group.floating {
-            return self.reset_floating_size(group.id);
+            let mode = self
+                .floating
+                .iter()
+                .find(|f| f.root.id() == group.id)
+                .expect("resolved floating group")
+                .toolbar_layout;
+            return self.set_floating_default(group.id, mode);
         }
         let axis = if group.axis == Axis::Horizontal {
             Axis::Vertical
@@ -2292,6 +2351,12 @@ impl DockLayout {
     }
 
     pub fn reset_floating_size(&mut self, group: u32) -> Result<(), String> {
+        self.set_floating_default(group, FloatingToolbarLayout::Compact)
+    }
+
+    /// Drag-area double-click first restores a custom size. At default size,
+    /// a lone toolbar cycles layouts and a lone built-in panel toggles its tab.
+    pub fn cycle_floating_size(&mut self, group: u32, viewport: [f32; 2]) -> Result<(), String> {
         let floating = self
             .floating
             .iter()
@@ -2300,8 +2365,65 @@ impl DockLayout {
         let DockNode::Tabs { panels, active, .. } = &floating.root else {
             return Err("Invalid floating group".into());
         };
-        let width = if panels.len() == 1 && active.kind() == PanelKind::Tiles {
-            self.panel(*active)?.tile_style.floating_width()
+        let panel = *active;
+        let lone = panels.len() == 1;
+        let current = floating.toolbar_layout;
+        let mut default = self.clone();
+        default.set_floating_default(group, current)?;
+        let size = |layout: &Self| {
+            let g = layout
+                .workspace(
+                    viewport[0],
+                    viewport[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                )
+                .groups
+                .into_iter()
+                .find(|g| g.id == group)
+                .unwrap();
+            [g.bounds.width, g.bounds.height]
+        };
+        let at_default = size(self)
+            .into_iter()
+            .zip(size(&default))
+            .all(|(a, b)| (a - b).abs() < 0.5);
+        if lone && panel.kind() == PanelKind::Tiles {
+            self.set_floating_default(
+                group,
+                if at_default {
+                    current.next()
+                } else {
+                    FloatingToolbarLayout::Compact
+                },
+            )
+        } else {
+            self.reset_floating_size(group)?;
+            if lone && at_default {
+                let config = self.panel_mut(panel)?;
+                config.hide_tab = !config.hide_tab;
+            }
+            Ok(())
+        }
+    }
+
+    fn set_floating_default(
+        &mut self,
+        group: u32,
+        layout: FloatingToolbarLayout,
+    ) -> Result<(), String> {
+        let floating = self
+            .floating
+            .iter()
+            .find(|f| f.root.id() == group)
+            .ok_or("Unknown floating group")?;
+        let DockNode::Tabs { panels, active, .. } = &floating.root else {
+            return Err("Invalid floating group".into());
+        };
+        let toolbar = panels.len() == 1 && active.kind() == PanelKind::Tiles;
+        let width = if toolbar {
+            let config = self.panel(*active)?;
+            layout.width(config.tile_style, config.tiles().len())
         } else {
             floating.default_width.unwrap_or(floating.width)
         };
@@ -2312,7 +2434,16 @@ impl DockLayout {
             .unwrap();
         floating.width = width;
         floating.height = None;
-        self.fit_tabs(group);
+        floating.toolbar_layout = if toolbar {
+            layout
+        } else {
+            FloatingToolbarLayout::Compact
+        };
+        if toolbar {
+            self.fit_tab_groups.retain(|id| *id != group);
+        } else {
+            self.fit_tabs(group);
+        }
         Ok(())
     }
 }
@@ -2352,7 +2483,14 @@ impl ResolvedLayout {
     }
     /// Measured native tab rectangles take priority over split zones. Body
     /// centers append tabs; the top/bottom 20% of the body split vertically.
-    pub fn drop_hint(&self, x: f32, y: f32, tabs: &[TabHit]) -> Option<DropHint> {
+    /// Hidden docks have no targets, including the otherwise bare screen edges.
+    pub fn drop_hint(
+        &self,
+        x: f32,
+        y: f32,
+        tabs: &[TabHit],
+        docks_visible: bool,
+    ) -> Option<DropHint> {
         let screen = Bounds {
             width: self.viewport[0],
             height: self.viewport[1],
@@ -2362,6 +2500,9 @@ impl ResolvedLayout {
             return None;
         }
         for group in self.groups.iter().rev() {
+            if !docks_visible && !group.floating {
+                continue;
+            }
             let b = group.bounds;
             if !b.contains(x, y) {
                 continue;
@@ -2455,11 +2596,16 @@ impl ResolvedLayout {
             height: (screen.height - crate::HEADER_HEIGHT).max(0.0),
             ..screen
         };
-        let (screen_distance, screen_edge) = nearest_edge(dock_screen, x, y);
+        let (mut screen_distance, screen_edge) = nearest_edge(dock_screen, x, y);
+        if !docks_visible {
+            // A hidden screen edge must not steal a nearby floating tab target.
+            screen_distance = f32::INFINITY;
+        }
         let nearest = self
             .groups
             .iter()
             .rev()
+            .filter(|g| docks_visible || g.floating)
             .map(|g| (g.bounds.distance_to([x, y]), g))
             .filter(|(distance, group)| {
                 *distance
@@ -2490,6 +2636,9 @@ impl ResolvedLayout {
                 },
                 bounds: edge_line(group.bounds, edge),
             });
+        }
+        if !docks_visible {
+            return None;
         }
         // Beyond an individual panel's 40px reach, the next 40px selects the
         // whole sidebar. Its complete inner divider is the insertion line.
@@ -3182,7 +3331,7 @@ mod tests {
                 };
                 for distance in [1.0, 20.0, 40.0] {
                     assert_eq!(
-                        r.drop_hint(boundary + sign * distance, y, &[])
+                        r.drop_hint(boundary + sign * distance, y, &[], true)
                             .unwrap()
                             .target,
                         DockTarget::Split {
@@ -3191,7 +3340,7 @@ mod tests {
                         }
                     );
                 }
-                let hint = r.drop_hint(boundary + sign * 60.0, y, &[]).unwrap();
+                let hint = r.drop_hint(boundary + sign * 60.0, y, &[], true).unwrap();
                 assert_eq!(hint.target, DockTarget::BesideBand { band: band_id });
                 assert_eq!(hint.bounds.height, divider.bounds.height);
                 let mut moved = layout.clone();
@@ -3218,7 +3367,7 @@ mod tests {
                     moved.bands.iter().find(|b| b.id == band_id).unwrap().root,
                     layout.bands.iter().find(|b| b.id == band_id).unwrap().root
                 );
-                assert!(r.drop_hint(boundary + sign * 90.0, y, &[]).is_none());
+                assert!(r.drop_hint(boundary + sign * 90.0, y, &[], true).is_none());
             }
         }
         let empty = DockLayout {
@@ -3226,7 +3375,7 @@ mod tests {
             ..Default::default()
         }
         .workspace(1200.0, 900.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
-        let top = empty.drop_hint(600.0, 0.0, &[]).unwrap();
+        let top = empty.drop_hint(600.0, 0.0, &[], true).unwrap();
         assert_eq!(
             top.target,
             DockTarget::Edge {
@@ -3245,7 +3394,7 @@ mod tests {
                 } else {
                     900.0 - distance
                 };
-                let hint = r.drop_hint(600.0, y, &[]).unwrap();
+                let hint = r.drop_hint(600.0, y, &[], true).unwrap();
                 assert_eq!(hint.target, DockTarget::Edge { edge, outer });
                 assert_eq!(
                     hint.bounds.width,
@@ -3258,7 +3407,114 @@ mod tests {
             } else {
                 819.0
             };
-            assert!(r.drop_hint(600.0, y, &[]).is_none());
+            assert!(r.drop_hint(600.0, y, &[], true).is_none());
+        }
+    }
+
+    #[test]
+    fn floating_toolbar_cycles_orient_grip_and_fit_all_tiles() {
+        for viewport in [[1600.0, 1200.0], [420.0, 300.0]] {
+            for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+                let mut layout = DockLayout::default();
+                layout.panel_mut(Panel::Toolbar).unwrap().tile_style = style;
+                layout
+                    .move_panel(
+                        viewport,
+                        Panel::Toolbar,
+                        DockTarget::Float {
+                            position: [200.0, 150.0],
+                        },
+                    )
+                    .unwrap();
+                let group = layout.panel_group(Panel::Toolbar).unwrap();
+                for mode in [
+                    FloatingToolbarLayout::Vertical,
+                    FloatingToolbarLayout::Horizontal,
+                    FloatingToolbarLayout::Compact,
+                ] {
+                    layout.cycle_floating_size(group, viewport).unwrap();
+                    assert_eq!(layout.floating[0].toolbar_layout, mode);
+                    let g = layout
+                        .workspace(
+                            viewport[0],
+                            viewport[1],
+                            crate::HEADER_HEIGHT,
+                            crate::STATUS_HEIGHT,
+                        )
+                        .groups
+                        .into_iter()
+                        .find(|g| g.id == group)
+                        .unwrap();
+                    let horizontal = mode == FloatingToolbarLayout::Horizontal;
+                    assert_eq!(
+                        g.axis,
+                        if horizontal {
+                            Axis::Horizontal
+                        } else {
+                            Axis::Vertical
+                        }
+                    );
+                    let tiles = g.tiles.unwrap();
+                    let grip = tiles.grip.unwrap();
+                    if horizontal {
+                        assert_eq!(
+                            [grip.x, grip.y, grip.width, grip.height],
+                            [g.bounds.width - 20.0, 0.0, 20.0, g.bounds.height]
+                        );
+                    } else {
+                        assert_eq!(
+                            [grip.x, grip.y, grip.width, grip.height],
+                            [0.0, g.bounds.height - 20.0, g.bounds.width, 20.0]
+                        );
+                    }
+                    for b in &tiles.tiles {
+                        assert!(b.x >= 0.0 && b.y >= 0.0);
+                        assert!(
+                            b.x + b.width <= g.bounds.width && b.y + b.height <= g.bounds.height,
+                            "{viewport:?} {style:?} {mode:?}: {b:?} outside {:?}",
+                            g.bounds
+                        );
+                        assert!(b.intersection(grip).is_none());
+                    }
+                    if viewport[0] == 1600.0 {
+                        if mode == FloatingToolbarLayout::Vertical {
+                            assert!(tiles.tiles.iter().all(|b| b.x == 0.0));
+                        } else if horizontal {
+                            assert!(tiles.tiles.iter().all(|b| b.y == 0.0));
+                        }
+                    }
+                    layout.validate().unwrap();
+                    for new_style in [
+                        TileStyle::Large,
+                        TileStyle::Labeled,
+                        TileStyle::Small,
+                        style,
+                    ] {
+                        layout
+                            .set_tile_style(Panel::Toolbar, new_style, viewport)
+                            .unwrap();
+                        assert_eq!(layout.floating[0].toolbar_layout, mode);
+                        assert_eq!(
+                            layout.floating[0].width,
+                            mode.width(
+                                new_style,
+                                layout.panel(Panel::Toolbar).unwrap().tiles().len()
+                            )
+                        );
+                        assert!(layout.floating[0].height.is_none());
+                    }
+                }
+                // Older saved floats retain the compact default without a migration.
+                let mut json = serde_json::to_value(&layout).unwrap();
+                json["floating"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("toolbar_layout");
+                assert_eq!(
+                    serde_json::from_value::<DockLayout>(json).unwrap().floating[0].toolbar_layout,
+                    FloatingToolbarLayout::Compact
+                );
+            }
         }
     }
 
@@ -3782,7 +4038,7 @@ mod tests {
             initial.work_area.x + initial.work_area.width / 2.0,
             initial.work_area.y + initial.work_area.height / 2.0,
         ];
-        assert!(initial.drop_hint(center[0], center[1], &[]).is_none());
+        assert!(initial.drop_hint(center[0], center[1], &[], true).is_none());
         layout
             .move_panel(
                 viewport,
@@ -3818,7 +4074,7 @@ mod tests {
             ],
         ] {
             assert!(
-                matches!(current.drop_hint(x, y, &[]).unwrap().target, DockTarget::Tab { group: id, .. } if id == group)
+                matches!(current.drop_hint(x, y, &[], true).unwrap().target, DockTarget::Tab { group: id, .. } if id == group)
             );
         }
         layout
@@ -3938,7 +4194,7 @@ mod tests {
             .unwrap();
         assert_eq!(ribbon.bounds.width, 36.0);
         let hint = resolved
-            .drop_hint(ribbon.bounds.x + 18.0, ribbon.bounds.y + 100.0, &[])
+            .drop_hint(ribbon.bounds.x + 18.0, ribbon.bounds.y + 100.0, &[], true)
             .unwrap();
         assert!(matches!(hint.target, DockTarget::Tab { .. }));
         layout.measurements = vec![
@@ -4635,6 +4891,7 @@ mod tests {
                     b.x + b.width * 0.5,
                     b.y + TAB_BAR_HEIGHT + (b.height - TAB_BAR_HEIGHT) * fraction,
                     &[],
+                    true,
                 )
                 .unwrap();
             assert_eq!(
@@ -4650,7 +4907,7 @@ mod tests {
         }
         assert!(matches!(
             layout
-                .drop_hint(b.x + 40.0, b.y + 10.0, &[])
+                .drop_hint(b.x + 40.0, b.y + 10.0, &[], true)
                 .unwrap()
                 .target,
             DockTarget::Tab { .. }
@@ -4672,7 +4929,7 @@ mod tests {
                 },
             }];
             let hint = layout
-                .drop_hint(b.x + b.width * 0.5, b.y + b.height * 0.5, &tabs)
+                .drop_hint(b.x + b.width * 0.5, b.y + b.height * 0.5, &tabs, true)
                 .unwrap();
             assert_eq!(
                 hint.target,
@@ -4686,7 +4943,7 @@ mod tests {
             assert_eq!(hint.bounds.y, b.y);
             assert_eq!(hint.bounds.x, (b.x + width - 1.5).min(b.x + b.width - 23.0));
             let over_grip = layout
-                .drop_hint(b.x + b.width - 10.0, b.y + 10.0, &tabs)
+                .drop_hint(b.x + b.width - 10.0, b.y + 10.0, &tabs, true)
                 .unwrap();
             assert_eq!(
                 over_grip.target,
@@ -4734,7 +4991,7 @@ mod tests {
                 },
             },
         ];
-        let hint = r.drop_hint(b.x + 10.0, b.y + 5.0, &tabs).unwrap();
+        let hint = r.drop_hint(b.x + 10.0, b.y + 5.0, &tabs, true).unwrap();
         assert_eq!(
             hint.target,
             DockTarget::Tab {
@@ -4763,7 +5020,7 @@ mod tests {
             matches!(layout.node_mut(8).unwrap(), DockNode::Tabs {panels, ..} if *panels == [Panel::Layers, Panel::Brushes])
         );
         assert_eq!(
-            r.drop_hint(b.x + 100.0, b.y + b.height - 2.0, &tabs)
+            r.drop_hint(b.x + 100.0, b.y + b.height - 2.0, &tabs, true)
                 .unwrap()
                 .target,
             DockTarget::Split {

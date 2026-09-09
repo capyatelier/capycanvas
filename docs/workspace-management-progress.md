@@ -57,12 +57,16 @@ and will be updated with the implementation. No renderer changes are required.
   sidebar. Top/bottom screen targets use 40px for outside the sidebars and the
   next 40px for inside. No center rectangle. Empty title space and the complete
   trailing grip strip move groups; singleton tabs move whole groups.
-- All eight floating resize hit regions sit outside the border. Double-clicking
-  empty floating title space resets intrinsic size with a brief animation.
+- All eight floating resize hit regions sit outside the border. Drag-area
+  double-click first restores a custom size. At default size it toggles Hide tab
+  for lone panels, or cycles compact/vertical/horizontal layouts for toolbars.
+  Tile-size changes refit the active toolbar preset. Multi-tab groups only reset.
 - One Rust 80px constant governs tear-off, snap reach, Zen edge reveal and the
   keep-visible margin. Float dragging does not reveal hidden docks until an
   occupied screen edge is reached; revelation lasts through that drag. Every
-  drop returns to ordinary cursor proximity, with no post-drop pin.
+  drop returns to ordinary cursor proximity, with no post-drop pin. While hidden,
+  docks and screen edges cannot capture a drop; only other floating tab groups
+  remain targets. Floating groups never accept side-by-side split drops.
 - The user-approved GTK behavior is now the reference for both ports. The
   current contract supersedes the original goal wherever later feedback differs:
   no central float rectangle; 80/40px snapping; top targets below the app header;
@@ -76,7 +80,7 @@ and will be updated with the implementation. No renderer changes are required.
 
 ## Current evidence
 
-- Shared core: 108 tests cover the workspace model, transactional history,
+- Shared core: 111 tests cover the workspace model, transactional history,
   eight-edge geometry, measured sizing, tear-off, snapping and Zen rules. The
   interaction tests run against GTK, web and Android platform configurations.
 - GTK `native_workspace_management`: passed with dark/light PNGs covering menus,
@@ -98,10 +102,20 @@ and will be updated with the implementation. No renderer changes are required.
   independently. Both the standalone ribbon and multi-tab tear-off pass real
   pointer delivery. Temporary logging is removed; regressions remain in
   `bench/native-input.js --workspace-drag` (`LAYER_NATIVE_DRAG_TAB=1` for a tab).
+- `bench/native-input.js --workspace-clicks` reproduces the missed first
+  double-click after a real resize. Resetting source click recognizers at drag
+  start fixes the stale denied sequence (the stable controller consumes its
+  release). Real pointer resize → first-double-click reset → panel tab toggles
+  and all three toolbar layouts now pass, without temporary logging.
+- GTK `native_zen_floating_targets` verifies no hidden bottom/top/sidebar snap,
+  while a nearby float still accepts a tab merge even beside an inactive edge.
+  `native_toolbar_sizing` captures all three layouts in all tile styles/themes
+  and checks that changing tile size preserves the active preset.
 - Review PNGs: `artifacts/ui/workspace-management/gtk/` (ignored). Inspected
   top-edge line below the app header, size-reset animation, dark/light labeled
   toolbars, configuration drawers, hidden-tab menus/grips, column collapse and
   the three default floating grids after another tab is removed.
 - Web/Android presentation has not yet been ported to these new models. Do not
-  treat shared-core coverage as frontend validation. GTK milestone is ready;
-  web is next, followed by Android, with commit/push at each platform gate.
+  treat shared-core coverage as frontend validation. Initial GTK milestone
+  `a7e0f9a` is pushed; subsequent feedback above is part of the reference behavior.
+  Web is next, followed by Android, with commit/push at each platform gate.

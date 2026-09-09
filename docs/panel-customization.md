@@ -138,10 +138,17 @@ The rollout and per-platform evidence are tracked in
   A click without motion never merges a float with a panel underneath.
   A singleton tab moves its whole group; a tab in a multi-tab group tears off
   only that tab. All eight resize hit regions sit 6px outside the border;
-  inside the title bar is for moving, not resizing. Double-clicking empty
-  floating title-bar space or a standalone toolbar's trailing grip strip resets
-  default width and natural height with a brief animation, without moving the
-  group. Tabs do not trigger this reset.
+  inside the title bar is for moving, not resizing. Double-clicking the drag
+  area of a custom-sized float first restores its default size. At default size,
+  a lone built-in panel toggles Hide tab; both the entire bottom grip strip and
+  non-tab title-bar space activate this. Multi-tab groups only reset size.
+  Standalone toolbars cycle compact grid → vertical column → horizontal row →
+  compact grid; the horizontal grip is on the right. Additional lanes are used
+  only when a single column/row cannot fit the viewport. Changing tile size
+  refits the current preset without changing orientation. All changes animate
+  briefly and preserve the anchor where viewport bounds allow. Tab labels never
+  activate this behavior. The cycle, size comparison, tab toggle and persistence
+  belong to Rust (`CycleFloatingSize`), not host click handlers.
 - All durable workspace edits have independent undo/redo, including panel/tab
   moves, tile ordering, names, visibility, style, and floating geometry. Resize
   and live-move gestures coalesce into one entry; cancel restores the start.
@@ -149,7 +156,9 @@ The rollout and per-platform evidence are tracked in
   Workspace history never changes drawing undo or stores document pixels.
 - Dragging a floating panel in Zen does not reveal hidden docks. Reaching an
   occupied screen edge reveals them normally and latches that visibility only
-  until the drag ends. After any drop or cancellation, visibility uses normal
+  until the drag ends. While docks are hidden, neither screen edges nor docked
+  panels are targets; only tab merging into other visible floats is allowed,
+  never side-by-side floating splits. After any drop or cancellation, visibility uses normal
   cursor proximity; neither floating nor docked drops force docks to stay open.
   Floating panels remain visible independently. Native tool-tile DND keeps
   chrome visible for its active grab. Loss of focus cancels ordinary captured

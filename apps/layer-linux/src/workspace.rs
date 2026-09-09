@@ -1328,7 +1328,7 @@ impl Workspace {
         if self.refreshing.get() {
             return;
         }
-        let animate = if let UiAction::ResetFloatingSize { group } = action {
+        let animate = if let UiAction::CycleFloatingSize { group, .. } = action {
             self.groups
                 .borrow()
                 .iter()
@@ -2210,8 +2210,9 @@ impl Workspace {
             if !recognized {
                 return false;
             }
-            // Cancel the source button's click/hold once this is a drag. The
-            // root event controller, unlike child gestures, survives tear-off.
+            // Reset click/hold recognizers once this is a drag. Merely denying
+            // them leaves stale sequence state: this stable controller consumes
+            // the release, so their next click would only clear that old drag.
             let mut picked = self.surface.pick(
                 drag.origin[0] as f64,
                 drag.origin[1] as f64,
@@ -2221,7 +2222,7 @@ impl Workspace {
                 let controllers = widget.observe_controllers();
                 for i in 0..controllers.n_items() {
                     if let Some(gesture) = controllers.item(i).and_downcast::<gtk::Gesture>() {
-                        gesture.set_state(gtk::EventSequenceState::Denied);
+                        gesture.reset();
                     }
                 }
                 if &widget == self.surface.upcast_ref::<gtk::Widget>() {
@@ -2259,7 +2260,10 @@ impl Workspace {
                     }
                 {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
-                    w.dispatch(UiAction::ResetFloatingSize { group });
+                    w.dispatch(UiAction::CycleFloatingSize {
+                        group,
+                        viewport: [w.surface.width() as f32, w.surface.height() as f32],
+                    });
                 }
             }
         ));

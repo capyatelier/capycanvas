@@ -4,6 +4,7 @@
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
 fn pump(ms: u64) {
@@ -240,6 +241,72 @@ fn native_toolbar_sizing() {
                 &format!("{dir}/toolbar-grip-reset-{style:?}-{theme:?}.png"),
                 1.0,
             );
+            for mode in [
+                FloatingToolbarLayout::Vertical,
+                FloatingToolbarLayout::Horizontal,
+                FloatingToolbarLayout::Compact,
+            ] {
+                let g = placement();
+                let grip = g.tiles.unwrap().grip.unwrap();
+                let point = [g.bounds.x + grip.x + 3.0, g.bounds.y + grip.y + 3.0];
+                double_click.emit_by_name::<()>(
+                    "pressed",
+                    &[&2i32, &(point[0] as f64), &(point[1] as f64)],
+                );
+                pump(250);
+                assert_eq!(state(&w).workspace.layout.floating[0].toolbar_layout, mode);
+                let g = placement();
+                let horizontal = mode == FloatingToolbarLayout::Horizontal;
+                assert_eq!(
+                    g.axis,
+                    if horizontal {
+                        Axis::Horizontal
+                    } else {
+                        Axis::Vertical
+                    }
+                );
+                let strip = w.panel_widget(Panel::Toolbar);
+                let handle = find_css(&strip, "panel-grip").unwrap();
+                let actual = handle.compute_bounds(&strip).unwrap();
+                if horizontal {
+                    assert_eq!(actual.x() + actual.width(), strip.width() as f32);
+                } else {
+                    assert_eq!(actual.y() + actual.height(), strip.height() as f32);
+                }
+                capture_reference(
+                    &w,
+                    &format!("{dir}/toolbar-cycle-{mode:?}-{style:?}-{theme:?}.png"),
+                    1.0,
+                );
+                let before_style = state(&w).workspace;
+                w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTileStyle {
+                        panel: Panel::Toolbar,
+                        style: if style == TileStyle::Large {
+                            TileStyle::Small
+                        } else {
+                            TileStyle::Large
+                        },
+                    },
+                });
+                pump(80);
+                assert_eq!(state(&w).workspace.layout.floating[0].toolbar_layout, mode);
+                assert_eq!(placement().axis, g.axis);
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::UndoWorkspace,
+                });
+                assert_eq!(
+                    serde_json::to_value(state(&w).workspace).unwrap(),
+                    serde_json::to_value(before_style).unwrap()
+                );
+                pump(80);
+            }
+            assert_eq!(placement().bounds, natural.bounds);
+            for _ in 0..3 {
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::UndoWorkspace,
+                });
+            }
             w.dispatch(UiAction::Invoke {
                 command: CommandId::UndoWorkspace,
             });
@@ -276,7 +343,10 @@ fn native_toolbar_sizing() {
                 serde_json::to_value(&resized).unwrap(),
                 "style and refit share one undo entry"
             );
-            w.dispatch(UiAction::ResetFloatingSize { group: natural.id });
+            w.dispatch(UiAction::CycleFloatingSize {
+                group: natural.id,
+                viewport,
+            });
             w.dispatch(UiAction::MovePanel {
                 panel: Panel::Layers,
                 viewport,
@@ -367,6 +437,106 @@ fn native_toolbar_sizing() {
         }
     }
     w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
+fn native_zen_floating_targets() {
+    let app = native_test_app("dev.layer.ZenFloatingTargetsTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Toolbar,
+        viewport,
+        target: DockTarget::Float {
+            position: [600.0, 400.0],
+        },
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
+    assert!(
+        w.chrome_event(ChromeEvent::Motion {
+            position: [600.0, 450.0]
+        })
+        .chrome_hidden
+    );
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    let begin = || {
+        pump(100);
+        let strip = w.panel_widget(Panel::Toolbar);
+        let grip = find_css(&strip, "panel-grip").unwrap();
+        let origin = grip
+            .compute_point(&w.surface, &gtk::graphene::Point::new(3.0, 3.0))
+            .unwrap();
+        (begin_workspace_drag(&w, &grip, 3.0, 3.0), origin)
+    };
+    for (name, point) in [
+        ("bottom", [viewport[0] * 0.5, viewport[1] - 1.0]),
+        ("top", [viewport[0] * 0.5, HEADER_HEIGHT + 50.0]),
+        ("hidden-sidebar", [100.0, 450.0]),
+    ] {
+        let (drag, origin) = begin();
+        drag.update([
+            (point[0] - origin.x()) as f64,
+            (point[1] - origin.y()) as f64,
+        ]);
+        pump(150);
+        assert!(w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
+        assert!(
+            w.drop_hint.borrow().is_none(),
+            "{name} must not offer a hidden dock"
+        );
+        capture_reference(&w, &format!("{dir}/zen-no-snap-{name}.png"), 1.0);
+        drag.end();
+        assert_eq!(state(&w).workspace.layout.floating.len(), 1);
+    }
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Sizes,
+        viewport,
+        target: DockTarget::Float {
+            position: [950.0, 650.0],
+        },
+    });
+    let mut workspace = state(&w).workspace;
+    let target = workspace.layout.panel_group(Panel::Sizes).unwrap();
+    let f = workspace
+        .layout
+        .floating
+        .iter_mut()
+        .find(|f| f.root.id() == target)
+        .unwrap();
+    f.position = [850.0, viewport[1] - 160.0];
+    f.width = 200.0;
+    f.height = Some(100.0);
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    let (drag, origin) = begin();
+    let point = [950.0, viewport[1] - 10.0];
+    drag.update([
+        (point[0] - origin.x()) as f64,
+        (point[1] - origin.y()) as f64,
+    ]);
+    pump(150);
+    assert!(w.chrome_event(ChromeEvent::Refresh).chrome_hidden);
+    assert_eq!(
+        w.drop_hint.borrow().as_ref().unwrap().target,
+        DockTarget::Tab {
+            group: target,
+            index: None
+        }
+    );
+    capture_reference(&w, &format!("{dir}/zen-floating-only-merge.png"), 1.0);
+    drag.end();
+    assert_eq!(
+        state(&w).workspace.layout.panel_group(Panel::Toolbar),
+        Some(target)
+    );
+    assert_eq!(state(&w).workspace.layout.floating.len(), 1);
+    w.window.close();
     pump(100);
 }
 
@@ -576,6 +746,50 @@ fn native_floating_gestures() {
         command: CommandId::UndoWorkspace,
     });
     assert_eq!(bounds(), before);
+    restore();
+    // At natural size, empty title space toggles the lone panel's header.
+    // The entire footer strip toggles it back, including outside the dots.
+    click.emit_by_name::<()>(
+        "pressed",
+        &[
+            &2i32,
+            &((initial.x + initial.width - 28.0) as f64),
+            &((initial.y + 10.0) as f64),
+        ],
+    );
+    pump(250);
+    assert!(
+        state(&w)
+            .workspace
+            .layout
+            .panel(Panel::Sizes)
+            .unwrap()
+            .hide_tab
+    );
+    let g = w
+        .resolved()
+        .groups
+        .into_iter()
+        .find(|g| g.id == group)
+        .unwrap();
+    let footer = g.footer_grip.unwrap();
+    let point = [g.bounds.x + footer.x + 3.0, g.bounds.y + footer.y + 10.0];
+    assert!(
+        matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
+    );
+    capture_reference(&w, &format!("{dir}/panel-cycle-tab-hidden.png"), 1.0);
+    click.emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
+    pump(250);
+    assert!(
+        !state(&w)
+            .workspace
+            .layout
+            .panel(Panel::Sizes)
+            .unwrap()
+            .hide_tab
+    );
+    assert_eq!(bounds(), initial);
+    capture_reference(&w, &format!("{dir}/panel-cycle-tab-shown.png"), 1.0);
     restore();
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
@@ -3530,6 +3744,107 @@ fn native_frame_pacing() {
         crate::capture(&w, &path);
     }
     w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_floating_click_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("dev.layer.FloatingClickInputTest");
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let initial = state(&w).workspace;
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native pointer timed out"
+        );
+        step += 1;
+        pump(250);
+    };
+    for panel in [Panel::Sizes, Panel::Toolbar] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::MovePanel {
+            panel,
+            viewport,
+            target: DockTarget::Float {
+                position: [600.0, 250.0],
+            },
+        });
+        pump(250);
+        let placement = || {
+            w.resolved()
+                .groups
+                .into_iter()
+                .find(|g| g.panels.contains(&panel))
+                .unwrap()
+        };
+        let natural = placement().bounds;
+        let corner = [
+            natural.x + natural.width + 2.0,
+            natural.y + natural.height + 2.0,
+        ];
+        perform(serde_json::json!([
+            {"point": corner}, {"down": true},
+            {"point": [corner[0] + 60.0, corner[1] + 40.0]},
+            {"point": [corner[0] + 120.0, corner[1] + 80.0]}, {"down": false}
+        ]));
+        assert_ne!(placement().bounds, natural, "native resize");
+        for cycle in 0..4 {
+            let g = placement();
+            let grip = g.tiles.as_ref().and_then(|t| t.grip).or(g.footer_grip);
+            let point = grip.map_or(
+                [g.bounds.x + g.bounds.width - 28.0, g.bounds.y + 12.0],
+                |b| [g.bounds.x + b.x + 3.0, g.bounds.y + b.y + 3.0],
+            );
+            perform(serde_json::json!([
+                {"point": point}, {"down": true}, {"down": false}, {"down": true}, {"down": false}
+            ]));
+            let actual = placement();
+            capture_reference(
+                &w,
+                &dir.join(format!("{panel:?}-{cycle}.png")).to_string_lossy(),
+                1.0,
+            );
+            if cycle == 0 {
+                assert_eq!(
+                    actual.bounds, natural,
+                    "first double-click must reset {panel:?}"
+                );
+            } else if panel == Panel::Toolbar {
+                assert_eq!(
+                    state(&w).workspace.layout.floating[0].toolbar_layout,
+                    [
+                        FloatingToolbarLayout::Vertical,
+                        FloatingToolbarLayout::Horizontal,
+                        FloatingToolbarLayout::Compact
+                    ][cycle - 1]
+                );
+            } else {
+                assert_eq!(actual.tabs_visible, cycle % 2 == 1, "panel toggle {cycle}");
+            }
+        }
+    }
+    std::fs::write(dir.join("finished"), "done").unwrap();
+    pump(100);
+    w.window.close();
     pump(100);
 }
 

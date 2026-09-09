@@ -718,11 +718,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             return None;
         }
         let mut resolved = self.layout(viewport);
-        if self.state.workspace.zen_mode
+        let docks_hidden = self.state.workspace.zen_mode
             && self
                 .workspace_drag
-                .map_or(self.interaction.hidden, |drag| !drag.chrome_revealed)
-        {
+                .map_or(self.interaction.hidden, |drag| !drag.chrome_revealed);
+        if docks_hidden {
             resolved.groups.retain(|g| g.floating);
             resolved.dividers.clear();
         }
@@ -790,7 +790,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let hint = if matches!(item, DockItem::Tile { .. }) {
             resolved.tile_drop_hint(position, &self.state.workspace.layout)?
         } else {
-            resolved.drop_hint(position[0], position[1], tabs)?
+            resolved.drop_hint(position[0], position[1], tabs, !docks_hidden)?
         };
         let mut probe = self.state.workspace.layout.clone();
         probe.move_item(viewport, item, hint.target.clone()).ok()?;
@@ -876,7 +876,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::MoveTile { .. }
                 | UiAction::SelectPanelTab { .. }
                 | UiAction::ResizeDock { .. }
-                | UiAction::ResetFloatingSize { .. }
+                | UiAction::CycleFloatingSize { .. }
                 | UiAction::NudgeDivider { .. }
                 | UiAction::PrioritizeBand { .. }
                 | UiAction::Invoke {
@@ -984,8 +984,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 (LAYOUT, false)
             }
-            UiAction::ResetFloatingSize { group } => {
-                self.state.workspace.layout.reset_floating_size(group)?;
+            UiAction::CycleFloatingSize { group, viewport } => {
+                valid_viewport(viewport)?;
+                self.state
+                    .workspace
+                    .layout
+                    .cycle_floating_size(group, viewport)?;
                 (LAYOUT, false)
             }
             UiAction::Customize { action } => {
@@ -3063,6 +3067,218 @@ mod tests {
             );
             drag(&mut app, ContactPhase::Cancel, [0.0; 2]);
             assert_eq!(app.state.workspace, multi);
+        }
+    }
+
+    #[test]
+    fn floating_drag_area_cycles_defaults_and_panel_headers_on_every_platform() {
+        let viewport = [1600.0, 1200.0];
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for panel in [Panel::Toolbar, Panel::Sizes] {
+                let mut app = session();
+                app.set_platform(platform);
+                app.dispatch(UiAction::MovePanel {
+                    panel,
+                    viewport,
+                    target: DockTarget::Float {
+                        position: [500.0, 200.0],
+                    },
+                })
+                .unwrap();
+                let group = app.state.workspace.layout.panel_group(panel).unwrap();
+                app.state
+                    .workspace
+                    .layout
+                    .reset_floating_size(group)
+                    .unwrap();
+                let initial = app.state.workspace.clone();
+                let count = if panel.kind() == PanelKind::Tiles {
+                    3
+                } else {
+                    2
+                };
+                for step in 0..count {
+                    let before = app.state.workspace.clone();
+                    let change = app
+                        .dispatch(UiAction::CycleFloatingSize { group, viewport })
+                        .unwrap();
+                    assert!(!change.canvas_wake);
+                    if panel.kind() == PanelKind::Tiles {
+                        assert_eq!(
+                            app.state.workspace.layout.floating[0].toolbar_layout,
+                            [
+                                FloatingToolbarLayout::Vertical,
+                                FloatingToolbarLayout::Horizontal,
+                                FloatingToolbarLayout::Compact
+                            ][step]
+                        );
+                    } else {
+                        assert_eq!(
+                            app.state.workspace.layout.panel(panel).unwrap().hide_tab,
+                            step == 1
+                        );
+                    }
+                    let after = app.state.workspace.clone();
+                    assert_ne!(before, after);
+                    invoke(&mut app, CommandId::UndoWorkspace);
+                    assert_eq!(app.state.workspace, before);
+                    invoke(&mut app, CommandId::RedoWorkspace);
+                    assert_eq!(app.state.workspace, after);
+                    let json = serde_json::to_string(&after).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<WorkspaceState>(&json).unwrap(),
+                        after
+                    );
+                }
+                assert_eq!(app.state.workspace, initial);
+                // Custom size gets one reset before cycling/toggling. Geometry,
+                // not the presence of an explicit size, determines "default".
+                let floating = &mut app.state.workspace.layout.floating[0];
+                floating.width = 480.0;
+                floating.height = Some(500.0);
+                app.dispatch(UiAction::CycleFloatingSize { group, viewport })
+                    .unwrap();
+                assert_eq!(app.state.workspace, initial);
+                let bounds = app
+                    .layout(viewport)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == group)
+                    .unwrap()
+                    .bounds;
+                let floating = &mut app.state.workspace.layout.floating[0];
+                floating.width = bounds.width;
+                floating.height = Some(bounds.height);
+                app.dispatch(UiAction::CycleFloatingSize { group, viewport })
+                    .unwrap();
+                assert_ne!(app.state.workspace, initial);
+                if panel.kind() == PanelKind::Content {
+                    app.dispatch(UiAction::MovePanel {
+                        panel: Panel::Brushes,
+                        viewport,
+                        target: DockTarget::Tab { group, index: None },
+                    })
+                    .unwrap();
+                    let before = app.state.workspace.clone();
+                    app.dispatch(UiAction::CycleFloatingSize { group, viewport })
+                        .unwrap();
+                    assert_eq!(
+                        app.state.workspace, before,
+                        "Multi-tab groups do not hide their header"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zen_hidden_docks_only_allow_floating_tab_targets() {
+        let viewport = [1200.0, 900.0];
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut app = session();
+            app.set_platform(platform);
+            let panel = Panel::Toolbar;
+            let item = DockItem::Panel { panel };
+            app.dispatch(UiAction::MovePanel {
+                panel,
+                viewport,
+                target: DockTarget::Float {
+                    position: [600.0, 400.0],
+                },
+            })
+            .unwrap();
+            invoke(&mut app, CommandId::ZenMode);
+            assert!(
+                chrome(
+                    &mut app,
+                    ChromeEvent::Motion {
+                        position: [600.0, 450.0]
+                    },
+                    ChromeFacts::default()
+                )
+                .chrome_hidden
+            );
+            let drag = |app: &mut UiSession<_>, phase, position| {
+                app.dispatch(UiAction::DragWorkspace {
+                    item,
+                    phase,
+                    position,
+                    viewport,
+                    tabs: vec![],
+                })
+                .unwrap();
+                chrome(app, ChromeEvent::Refresh, ChromeFacts::default())
+            };
+            // Bottom has no dock/reveal zone; top snapping reaches below the
+            // header, beyond the 80px reveal zone. Neither may dock invisibly.
+            // The other points lie on the hidden sidebars, outside reveal zones.
+            for point in [
+                [600.0, 899.0],
+                [600.0, crate::HEADER_HEIGHT + 50.0],
+                [100.0, 450.0],
+                [1100.0, 450.0],
+            ] {
+                assert!(drag(&mut app, ContactPhase::Down, [600.0, 450.0]).chrome_hidden);
+                assert!(drag(&mut app, ContactPhase::Move, point).chrome_hidden);
+                assert!(
+                    app.drop_hint(viewport, point, &[], item, None).is_none(),
+                    "{point:?}"
+                );
+                assert!(drag(&mut app, ContactPhase::Up, point).chrome_hidden);
+                assert_eq!(app.state.workspace.layout.floating.len(), 1);
+            }
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Sizes,
+                viewport,
+                target: DockTarget::Float {
+                    position: [950.0, 750.0],
+                },
+            })
+            .unwrap();
+            let target = app
+                .state
+                .workspace
+                .layout
+                .panel_group(Panel::Sizes)
+                .unwrap();
+            let floating = app
+                .state
+                .workspace
+                .layout
+                .floating
+                .iter_mut()
+                .find(|f| f.root.id() == target)
+                .unwrap();
+            floating.position = [850.0, 730.0];
+            floating.width = 200.0;
+            floating.height = Some(100.0);
+            assert!(drag(&mut app, ContactPhase::Down, [600.0, 450.0]).chrome_hidden);
+            // Including near the bottom edge: a closer hidden screen edge must
+            // not steal the float's merge target. Floats never split side by side.
+            for point in [
+                [851.0, 780.0],
+                [1049.0, 780.0],
+                [950.0, 829.0],
+                [950.0, 880.0],
+            ] {
+                assert!(drag(&mut app, ContactPhase::Move, point).chrome_hidden);
+                assert_eq!(
+                    app.drop_hint(viewport, point, &[], item, None)
+                        .unwrap()
+                        .target,
+                    DockTarget::Tab {
+                        group: target,
+                        index: None
+                    }
+                );
+            }
+            assert!(drag(&mut app, ContactPhase::Up, [950.0, 880.0]).chrome_hidden);
+            assert_eq!(app.state.workspace.layout.panel_group(panel), Some(target));
+            assert_eq!(app.state.workspace.layout.floating.len(), 1);
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace.layout.floating.len(), 2);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace.layout.panel_group(panel), Some(target));
         }
     }
 

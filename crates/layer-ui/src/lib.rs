@@ -28,8 +28,9 @@ pub use interaction::{
 };
 pub use layout::{
     Axis, Bounds, Divider, DockBand, DockItem, DockLayout, DockNode, DockTarget, Edge,
-    FloatingGroup, FloatingResizeHandle, GroupPlacement, PANEL_CONFIGURATION_WIDTH,
-    PANEL_EXPANSION_MS, Panel, PanelExpansion, PanelMeasurement, ResizeEdge, ResolvedLayout,
+    FloatingGroup, FloatingResizeHandle, FloatingToolbarLayout, GroupPlacement,
+    PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel, PanelExpansion, PanelMeasurement,
+    ResizeEdge, ResolvedLayout,
 };
 pub use layout::{DropHint, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout, tile_layout};
 pub use numeric::{
@@ -471,8 +472,11 @@ pub enum UiAction {
         position: [f32; 2],
         viewport: [f32; 2],
     },
-    ResetFloatingSize {
+    /// Double-click a float's drag area: reset size, then cycle toolbar layouts
+    /// or toggle the header of a lone built-in panel already at default size.
+    CycleFloatingSize {
         group: u32,
+        viewport: [f32; 2],
     },
     Customize {
         action: CustomizationAction,
