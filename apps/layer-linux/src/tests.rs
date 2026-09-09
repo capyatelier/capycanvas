@@ -442,6 +442,157 @@ fn native_toolbar_sizing() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_zen_behaviors() {
+    let app = native_test_app("dev.layer.ZenBehaviorsTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let dir = "../../artifacts/ui/zen";
+    std::fs::create_dir_all(dir).unwrap();
+    let zen = command(&w, CommandId::ZenMode);
+    let bounds = zen.compute_bounds(&w.surface).unwrap();
+    assert_eq!(
+        [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
+        [WORKSPACE_SPACING, WORKSPACE_SPACING, TILE_SIZE, TILE_SIZE]
+    );
+    // The independent button leaves a same-sized spacer in the native header.
+    let edit: gtk::MenuButton = find_css(w.header.upcast_ref(), "chrome-control")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    assert_eq!(edit.label().as_deref(), Some("Edit"));
+    assert_eq!(
+        edit.compute_bounds(&w.surface).unwrap().x(),
+        bounds.x() + bounds.width() + WORKSPACE_SPACING
+    );
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Sizes,
+        viewport,
+        target: DockTarget::Float {
+            position: [600.0, 400.0],
+        },
+    });
+    pump(250);
+    let layout = state(&w).workspace.layout;
+    let choose = |selected| {
+        w.dispatch(UiAction::OpenSettings {
+            page: SettingsPage::Appearance,
+        });
+        pump(250);
+        let row: adw::ComboRow =
+            find_named(w.preferences.dialog.upcast_ref(), "setting-zen-behavior")
+                .unwrap()
+                .downcast()
+                .unwrap();
+        row.set_selected(selected);
+        pump(100);
+        assert_eq!(
+            state(&w).settings.zen_behavior,
+            if selected == 0 {
+                layer_ui::ZenBehavior::RevealAtEdges
+            } else {
+                layer_ui::ZenBehavior::ButtonOnly
+            }
+        );
+    };
+    choose(1);
+    capture_reference(&w, &format!("{dir}/gtk-preference.png"), 1.0);
+    click(
+        &find_named(w.preferences.dialog.upcast_ref(), "close-settings")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    pump(300);
+    for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        capture_reference(&w, &format!("{dir}/gtk-normal-{name}.png"), 1.0);
+        click(&zen);
+        pump(250);
+        assert!(state(&w).workspace.zen_mode);
+        assert!(zen.has_css_class("zen-button-only"));
+        for (slot, widget) in w.surface.imp().children.borrow().iter() {
+            let visible = matches!(slot, Slot::Canvas | Slot::ZenButton);
+            assert_eq!(
+                !widget.has_css_class("zen-hidden"),
+                visible,
+                "{}",
+                widget.widget_name()
+            );
+            assert_eq!(widget.can_target(), visible, "{}", widget.widget_name());
+        }
+        assert_eq!(
+            w.surface
+                .pick(24.0, 24.0, gtk::PickFlags::DEFAULT)
+                .unwrap()
+                .ancestor(gtk::Button::static_type())
+                .unwrap(),
+            zen.clone().upcast::<gtk::Widget>()
+        );
+        for position in [
+            [6.0, 6.0],
+            [600.0, 1.0],
+            [1.0, 400.0],
+            [viewport[0] - 1.0, 400.0],
+            [600.0, viewport[1] - 1.0],
+        ] {
+            let reply = w.chrome_event(ChromeEvent::Motion { position });
+            assert!(reply.chrome_hidden && reply.zen_button_only);
+            assert!(!w.reveal_chrome_at(position[0], position[1]));
+        }
+        capture_reference(&w, &format!("{dir}/gtk-button-only-{name}.png"), 1.0);
+        // It remains a working button, not a disabled control or a duplicate.
+        click(&zen);
+        pump(250);
+        assert!(!state(&w).workspace.zen_mode);
+        assert!(!zen.has_css_class("zen-button-only"));
+        assert!(!zen.has_css_class("selected-tool"));
+        assert!(
+            w.surface
+                .imp()
+                .children
+                .borrow()
+                .iter()
+                .all(|(_, widget)| !widget.has_css_class("zen-hidden") && widget.can_target())
+        );
+        assert_eq!(zen.compute_bounds(&w.surface).unwrap(), bounds);
+        assert_eq!(state(&w).workspace.layout, layout);
+    }
+    choose(0);
+    w.dispatch(UiAction::CloseSettings);
+    pump(300);
+    click(&zen);
+    assert!(
+        w.chrome_event(ChromeEvent::Motion {
+            position: [600.0, 450.0]
+        })
+        .chrome_hidden
+    );
+    pump(250);
+    assert!(zen.has_css_class("zen-hidden") && !zen.can_target());
+    let floating = w
+        .groups
+        .borrow()
+        .iter()
+        .find(|g| g.root.has_css_class("floating-panel"))
+        .unwrap()
+        .root
+        .clone();
+    assert!(floating.can_target() && !floating.has_css_class("zen-hidden"));
+    let reply = w.chrome_event(ChromeEvent::Motion {
+        position: [6.0, 6.0],
+    });
+    assert!(!reply.chrome_hidden && !reply.zen_button_only);
+    assert!(zen.can_target() && zen.has_css_class("selected-tool"));
+    click(&zen);
+    w.window.close();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_floating_targets() {
     let app = native_test_app("dev.layer.ZenFloatingTargetsTest");
     let w = Workspace::new(&app);

@@ -167,7 +167,7 @@ compositor, full-window drag gesture, or backdrop blur is required.
 
 An icon-only Zen toggle (a shared, centered SVG trace of the supplied seated,
 right-facing capybara reference) occupies the
-top-left, followed by caret-free Edit and View menus. Enabled Zen uses the normal
+top-left, followed by caret-free Edit and View menus. Edge-reveal Zen uses the normal
 active-tool highlight. Header controls use the standard button radius; only the
 close control is circular, with unchanged shared header-control colors. Its
 circle uses libadwaita's native 16px icon plus 4px padding (24px circle), within
@@ -202,7 +202,8 @@ GTK observes the default `AdwStyleManager` and applies overrides to the display
 manager; web observes `prefers-color-scheme`. OS changes never overwrite a user
 override. Returning to System uses the latest OS value.
 
-`ZenMode` toggles shared `UiState.workspace.zen_mode`. The shared `near_chrome` rule reveals
+`ZenMode` toggles shared `UiState.workspace.zen_mode`. In the default **Reveal at edges**
+mode, the shared `near_chrome` rule reveals
 hidden controls only within a fixed 80 logical pixels of an occupied window edge,
 not by approaching a hidden toolbar/panel. The top always reveals the header;
 left/right/bottom reveal only when a visible dock band occupies that edge. The
@@ -225,6 +226,17 @@ uses the platform animation setting.
 On touch, the last contact keeps revealed controls available after finger lift;
 another contact away from controls can hide them. The reveal contact cannot
 also activate a newly exposed button.
+
+GTK also previews **Button only**, selected in Preferences → Appearance → Zen mode.
+While active, all editor controls, including floating panels, fade out except the
+same top-left Zen button. It uses its inactive appearance but remains clickable;
+clicking it disables Zen. Edge proximity, contact, Tab and drag/menu pins cannot
+reveal the hidden editor. Explicit settings dialogs still work. Rust owns this
+policy through `Settings.zen_behavior` and `InputReply.zen_button_only`; GTK only
+applies visibility, hit-testing and styling. The button is a sibling of the native
+header with a same-sized header spacer, preserving its 36×36px size and 6px inset.
+Web/Android retain edge-reveal behavior and do not expose the choice during this
+GTK-first trial, even when loading settings saved with Button only selected.
 
 Zen's hidden/visible state, last hover/contact, keyboard pin, and first-contact
 consumption live in Rust, not frontend booleans. Hosts send `UiInput::Chrome`

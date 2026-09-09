@@ -9,6 +9,10 @@ This feature does not add another canvas/rendering path.
 The rollout and per-platform evidence are tracked in
 [workspace-management-progress.md](workspace-management-progress.md).
 
+Zen interactions below describe the default **Reveal at edges** mode. GTK's
+**Button only** trial hides floating panels too, disables all hidden docking
+targets and leaves only the Zen exit button. See [Zen modes](shared-ui.md#window-chrome-and-zen-mode).
+
 - **Workspace** contains Undo/Redo Workspace Change, checkable built-in-panel
   visibility, a separate toolbar-visibility section, and **New Toolbar…**.
   Hiding removes placement, not configuration; checking the item shows it again.

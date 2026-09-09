@@ -41,7 +41,7 @@ pub use settings::{
     HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
     PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow, PreferenceSearchResult,
     PreferenceValue, PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor,
-    TextConstraint,
+    TextConstraint, ZenBehavior,
 };
 pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
 pub use theme::{HexColor, Theme, ThemePalette};

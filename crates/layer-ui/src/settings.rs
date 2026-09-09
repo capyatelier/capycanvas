@@ -25,6 +25,20 @@ impl Platform {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZenBehavior {
+    #[default]
+    RevealAtEdges,
+    ButtonOnly,
+}
+impl ZenBehavior {
+    const CHOICES: [(Self, &'static str); 2] = [
+        (Self::RevealAtEdges, "Reveal at edges"),
+        (Self::ButtonOnly, "Button only"),
+    ];
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -32,6 +46,7 @@ pub struct Settings {
     pub theme: Option<Theme>,
     pub dark_base: HexColor,
     pub light_base: HexColor,
+    pub zen_behavior: ZenBehavior,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub pan_speed: f32,
@@ -52,6 +67,7 @@ impl Default for Settings {
             theme: None,
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
+            zen_behavior: ZenBehavior::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             pan_speed: 1.0,
@@ -159,6 +175,7 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
+    ZenBehavior,
     DarkBase,
     LightBase,
     Cursor,
@@ -179,6 +196,7 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::ZenBehavior => "zen-behavior",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
             Self::Cursor => "cursor",
@@ -555,7 +573,7 @@ impl Settings {
                 r.enabled = self.feedback;
             }
         }
-        let groups = [
+        let mut groups = [
             vec![PreferenceGroup {
                 title: "Interface".into(),
                 rows: vec![
@@ -704,6 +722,26 @@ impl Settings {
                 ],
             }],
         ];
+        // GTK preview rollout: other hosts retain edge reveal until they render
+        // the persistent exit button. Availability is core policy, not UI logic.
+        if platform == Platform::Gtk {
+            groups[0][0].rows.push(row(
+                PreferenceId::ZenBehavior,
+                "Zen mode",
+                "Choose how to show controls while in Zen mode.",
+                PreferenceKind::Choice {
+                    icons: Vec::new(),
+                    options: crate::ZenBehavior::CHOICES
+                        .iter()
+                        .map(|c| c.1.into())
+                        .collect(),
+                    selected: crate::ZenBehavior::CHOICES
+                        .iter()
+                        .position(|c| c.0 == self.zen_behavior)
+                        .unwrap() as u32,
+                },
+            ));
+        }
         SettingsPage::ALL
             .into_iter()
             .zip(groups)
@@ -771,6 +809,9 @@ impl Settings {
                 }
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
+            ZenBehavior => {
+                self.zen_behavior = crate::ZenBehavior::CHOICES[value.choice().unwrap() as usize].0
+            }
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
@@ -1107,6 +1148,54 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    #[test]
+    fn zen_behavior_is_persistent_resettable_and_gtk_only_for_now() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.zen_behavior, ZenBehavior::RevealAtEdges);
+        let id = PreferenceId::ZenBehavior;
+        let row = settings.field(id, Platform::Gtk).unwrap();
+        assert!(
+            matches!(row.kind, PreferenceKind::Choice { selected: 0, options, .. }
+            if options == ["Reveal at edges", "Button only"])
+        );
+        assert!(!row.reset.unwrap().enabled);
+        settings
+            .edit(id, PreferenceValue::Choice(1), Platform::Gtk)
+            .unwrap();
+        assert_eq!(settings.zen_behavior, ZenBehavior::ButtonOnly);
+        let reset = settings.field(id, Platform::Gtk).unwrap().reset.unwrap();
+        assert!(reset.enabled);
+        assert_eq!(reset.value, "Reveal at edges");
+        assert!(
+            settings
+                .edit(id, PreferenceValue::Choice(2), Platform::Gtk)
+                .is_err()
+        );
+        assert_eq!(settings.zen_behavior, ZenBehavior::ButtonOnly);
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
+        assert!(serde_json::from_str::<Settings>(r#"{"zen_behavior":"unknown"}"#).is_err());
+        for platform in [
+            Platform::Generic,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
+            assert!(settings.field(id, platform).is_err());
+            assert!(
+                settings
+                    .edit(id, PreferenceValue::Choice(0), platform)
+                    .is_err()
+            );
+        }
+        let mut state = PreferencesState::default();
+        state.edit(&mut settings, PreferenceAction::Reset { id }, Platform::Gtk);
+        assert!(state.error.is_none());
+        assert_eq!(settings, Settings::default());
+    }
 
     #[test]
     fn reset_metadata_and_empty_commits_share_schema_defaults() {

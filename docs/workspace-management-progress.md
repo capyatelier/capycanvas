@@ -69,11 +69,14 @@ and will be updated with the implementation. No renderer changes are required.
   Rust owns handle eligibility and the double-click action for every
   host; tab labels keep their separate activation behavior.
 - One Rust 80px constant governs tear-off, snap reach, Zen edge reveal and the
-  keep-visible margin. Float dragging does not reveal hidden docks until an
+  keep-visible margin. In the default Reveal at edges mode, float dragging does not reveal hidden docks until an
   occupied screen edge is reached; revelation lasts through that drag. Every
   drop returns to ordinary cursor proximity, with no post-drop pin. While hidden,
   docks and screen edges cannot capture a drop; only other floating tab groups
   remain targets. Floating groups never accept side-by-side split drops.
+- GTK additionally previews Button only Zen: all editor controls, including
+  floats, hide except the inactive-styled Zen exit button. Rust owns this policy
+  and the settings choice; other hosts retain Reveal at edges until approved.
 - The user-approved GTK behavior is now the reference for both ports. The
   current contract supersedes the original goal wherever later feedback differs:
   no central float rectangle; 80/40px snapping; top targets below the app header;

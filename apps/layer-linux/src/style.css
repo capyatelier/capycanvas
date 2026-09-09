@@ -17,6 +17,11 @@ window, label, text { font-size: var(--ui-text-size); }
 .workspace-header windowcontrols button.close:hover image { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
 .workspace-header windowcontrols button.close:active image { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
 .workspace-header button.chrome-control.selected-tool { background: alpha(var(--accent-bg-color), .22); }
+/* The same Zen button can remain visible independently of the header. */
+button.workspace-zen { min-width: 24px; min-height: 24px; padding: 6px; border-radius: 6px; background: var(--window-bg-color); }
+button.workspace-zen:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
+button.workspace-zen:active { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
+button.workspace-zen.selected-tool:not(.zen-button-only) { background: alpha(var(--accent-bg-color), .22); }
 .document-title { font-weight: 600; padding: 4px 8px; }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
@@ -73,7 +78,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .expanded-panel.configuration-flush.configuration-left .panel-preview { border-top-left-radius: 0; }
 .panel-column-join { color: var(--panel-bg); }
 .toolbar-controls image { -gtk-icon-size: 16px; }
-.workspace-header, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
+.workspace-header, .workspace-zen, .workspace-status, .dock-panel { transition: opacity 180ms ease-out; }
 .zen-hidden { opacity: 0; }
 /* Preferences are a native surface, not the canvas surround (especially light). */
 .layer-preferences { --window-bg-color: var(--capy-settings); --headerbar-bg-color: var(--capy-settings); --headerbar-backdrop-color: var(--capy-settings); }

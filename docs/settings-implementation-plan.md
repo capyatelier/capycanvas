@@ -52,7 +52,7 @@ validation and palette generation are shared Rust behavior. See the
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; dark/light base hex colors |
+| Appearance | System/Light/Dark; dark/light base hex colors; Zen mode: Reveal at edges / Button only (GTK trial) |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
@@ -60,8 +60,12 @@ validation and palette generation are shared Rust behavior. See the
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
-Defaults preserve the previous drawing behavior: System theme, fixed 80px edge reveal,
-fixed 40px keep-visible margin, linear pressure, normal scroll speeds, 8ms prediction.
+Defaults preserve the previous drawing behavior: System theme, Reveal at edges Zen,
+fixed 80px reveal/keep-visible distances, linear pressure, normal scroll speeds,
+8ms prediction. GTK's Button only option hides all editor controls except an
+inactive-styled, clickable Zen button; clicking it exits Zen. This choice is
+persisted, validated and resettable through the same Rust row model. Other hosts
+keep edge-reveal behavior and do not expose the choice until the GTK trial is approved.
 All UI text uses the shared Rust `UI_TEXT_PT` constant (11 pt), including panels,
 tabs, menus, preference descriptions and zoom/rotation status text. There is no
 font-size setting. Text controls and inline step symbols use font-relative sizes;

@@ -245,7 +245,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Small event/reply boundary shared by native and Wasm hosts. Pen samples
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
-        let mut reply = InputReply::default();
+        let mut reply = InputReply {
+            chrome_hidden: self.button_only_zen(),
+            zen_button_only: self.button_only_zen(),
+            ..Default::default()
+        };
         let mut contact = None;
         let mut released_chrome_pin = false;
         match input {
@@ -282,6 +286,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
+                    && !self.button_only_zen()
                     && !facts.popup_open
                     && !facts.expanded_panel.is_some_and(|e| {
                         // Tabs activate on release. Leave the press available
@@ -355,7 +360,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                         reply.change = self.changed(regions::SETTINGS, false);
                         reply.handled = true;
-                        reply.chrome_hidden = false;
+                        reply.chrome_hidden = reply.zen_button_only;
                         return Ok(reply);
                     }
                     if matches!(key.as_str(), "tab" | "escape") {
@@ -497,11 +502,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
+        reply.zen_button_only = self.button_only_zen();
         reply.pan_cursor = self.interaction.pan_key.is_some();
         Ok(reply)
     }
 
+    fn button_only_zen(&self) -> bool {
+        self.state.workspace.zen_mode
+            && self.state.platform == Platform::Gtk
+            && self.state.settings.zen_behavior == ZenBehavior::ButtonOnly
+    }
+
     fn refresh_chrome(&mut self) {
+        // Explicit exit only: proximity, first contact, keyboard chrome hints
+        // and drag/popup pins must not reveal the editor in this mode.
+        if self.button_only_zen() {
+            self.interaction.hidden = true;
+            self.interaction.zen_entry_guard = false;
+            self.interaction.keep_chrome_until_contact = false;
+            self.interaction.keyboard_chrome = false;
+            return;
+        }
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
             self.interaction.zen_entry_guard = false;
@@ -715,6 +736,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .contains(position[0], position[1])
         {
+            return None;
+        }
+        if self.button_only_zen() {
             return None;
         }
         let mut resolved = self.layout(viewport);
@@ -2127,6 +2151,197 @@ mod tests {
         })
         .unwrap()
     }
+    #[test]
+    fn button_only_zen_never_reveals_on_proximity_or_consumes_drawing() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::Settings);
+        edit_preference(
+            &mut s,
+            PreferenceId::ZenBehavior,
+            PreferenceValue::Choice(1),
+        );
+        assert!(matches!(s.state.requests.last().unwrap().kind,
+            HostRequestKind::SaveSettings { ref settings }
+                if settings.zen_behavior == ZenBehavior::ButtonOnly));
+        s.dispatch(UiAction::CloseSettings).unwrap();
+        let viewport = [1200.0, 900.0];
+        s.dispatch(UiAction::MovePanel {
+            panel: Panel::Sizes,
+            viewport,
+            target: DockTarget::Float {
+                position: [600.0, 450.0],
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ShowAllControls {
+                panel: Panel::Sizes,
+            },
+        })
+        .unwrap();
+        assert!(s.state.customization.expanded.is_some());
+        let camera = s.state.camera.clone();
+        let layout = s.state.workspace.layout.clone();
+        invoke(&mut s, CommandId::ZenMode);
+        let assert_hidden = |reply: InputReply| {
+            assert!(reply.chrome_hidden && reply.zen_button_only);
+            reply
+        };
+        let facts = ChromeFacts::default();
+        for position in [
+            [6.0, 6.0],
+            [600.0, 450.0],
+            [1199.0, 450.0],
+            [600.0, 899.0],
+            [1.0, 450.0],
+            [600.0, 1.0],
+        ] {
+            assert_hidden(chrome(&mut s, ChromeEvent::Motion { position }, facts));
+            let reply = assert_hidden(chrome(
+                &mut s,
+                ChromeEvent::Contact {
+                    position,
+                    canvas: true,
+                },
+                facts,
+            ));
+            assert!(
+                !reply.handled,
+                "hidden panels/drawers must not eat the first contact"
+            );
+            assert!(
+                s.drop_hint(
+                    viewport,
+                    position,
+                    &[],
+                    DockItem::Panel {
+                        panel: Panel::Brushes,
+                    },
+                    None
+                )
+                .is_none(),
+                "all docking targets are hidden in Button only mode"
+            );
+        }
+        for facts in [
+            ChromeFacts {
+                held: true,
+                ..facts
+            },
+            ChromeFacts {
+                dragging: true,
+                ..facts
+            },
+            ChromeFacts {
+                popup_open: true,
+                ..facts
+            },
+        ] {
+            assert_hidden(chrome(&mut s, ChromeEvent::Refresh, facts));
+        }
+        assert_hidden(chrome(&mut s, ChromeEvent::Leave { touch: false }, facts));
+        assert_hidden(s.input(UiInput::Blur).unwrap());
+        for name in ["Tab", "Escape"] {
+            assert_hidden(key(&mut s, name, true, false, false));
+            assert_hidden(key(&mut s, name, false, false, false));
+        }
+        assert!(
+            assert_hidden(pointer(
+                &mut s,
+                1,
+                ContactPhase::Down,
+                [1.0, 450.0],
+                PointerButton::Primary
+            ))
+            .paint
+        );
+        assert!(
+            assert_hidden(pointer(
+                &mut s,
+                1,
+                ContactPhase::Move,
+                [600.0, 450.0],
+                PointerButton::Primary
+            ))
+            .paint
+        );
+        assert!(
+            assert_hidden(pointer(
+                &mut s,
+                1,
+                ContactPhase::Up,
+                [600.0, 450.0],
+                PointerButton::Primary
+            ))
+            .paint
+        );
+        // Explicit modal shortcuts remain usable, without revealing the editor
+        // behind them, including the early search/shortcut-capture replies.
+        invoke(&mut s, CommandId::Settings);
+        assert_hidden(key(&mut s, "p", true, false, false));
+        assert_eq!(s.preferences().unwrap().query, "p");
+        preference(
+            &mut s,
+            PreferenceAction::BeginShortcut {
+                id: CommandId::Brush.shortcut_id(),
+            },
+        );
+        assert_hidden(key(&mut s, "w", true, false, false));
+        assert!(s.preferences().unwrap().capture.unwrap().chord.is_some());
+        s.dispatch(UiAction::CloseSettings).unwrap();
+        invoke(&mut s, CommandId::ZenMode);
+        let reply = chrome(&mut s, ChromeEvent::Refresh, facts);
+        assert!(!reply.chrome_hidden && !reply.zen_button_only);
+        assert!(!s.state.workspace.zen_mode);
+        assert_eq!(s.state.workspace.layout, layout);
+        assert_eq!(s.state.camera, camera);
+    }
+
+    #[test]
+    fn button_only_zen_rollout_does_not_change_other_hosts() {
+        for platform in [
+            Platform::Generic,
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.dispatch(UiAction::RestoreSettings {
+                settings: Settings {
+                    zen_behavior: ZenBehavior::ButtonOnly,
+                    ..Settings::default()
+                },
+            })
+            .unwrap();
+            invoke(&mut s, CommandId::ZenMode);
+            let facts = ChromeFacts::default();
+            assert!(
+                chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [600.0, 450.0]
+                    },
+                    facts
+                )
+                .chrome_hidden
+            );
+            let reply = chrome(
+                &mut s,
+                ChromeEvent::Motion {
+                    position: [6.0, 6.0],
+                },
+                facts,
+            );
+            assert_eq!(reply.chrome_hidden, platform == Platform::Gtk);
+            assert_eq!(reply.zen_button_only, platform == Platform::Gtk);
+        }
+    }
+
     #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
         let mut s = session();

@@ -199,6 +199,12 @@ mod allocation {
                         width: width as f32,
                         height: HEADER_HEIGHT,
                     }),
+                    Slot::ZenButton => Some(Bounds {
+                        x: WORKSPACE_SPACING,
+                        y: WORKSPACE_SPACING,
+                        width: TILE_SIZE,
+                        height: TILE_SIZE,
+                    }),
                     Slot::Status => Some(resolved.status),
                     Slot::Group(id) => {
                         let expanded = expansion.filter(|e| e.group == *id);
@@ -346,6 +352,7 @@ impl PanelColumns {
 enum Slot {
     Canvas,
     Header,
+    ZenButton,
     Status,
     Group(u32),
     Divider(u32),
@@ -380,7 +387,12 @@ impl DockSurface {
             .push((slot, child.clone().upcast()));
     }
     fn clear_docks(&self) {
-        self.remove_slots(|slot| !matches!(slot, Slot::Canvas | Slot::Header | Slot::Status));
+        self.remove_slots(|slot| {
+            !matches!(
+                slot,
+                Slot::Canvas | Slot::Header | Slot::ZenButton | Slot::Status
+            )
+        });
     }
     fn remove_slots(&self, remove: impl Fn(Slot) -> bool) {
         if !self
@@ -1017,7 +1029,13 @@ impl Workspace {
             image.set_pixel_size(ZEN_ICON_SIZE as i32);
         }
         zen.add_css_class("chrome-control");
-        self.header.pack_start(&zen);
+        zen.add_css_class("workspace-zen");
+        // Keep one button outside the fading header, at the same 6px inset.
+        // Its spacer preserves the native menu and title allocation in both modes.
+        let zen_space = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        zen_space.set_size_request(TILE_SIZE as i32, TILE_SIZE as i32);
+        self.header.pack_start(&zen_space);
+        self.surface.add(Slot::ZenButton, &zen);
         for menu in MENUS {
             self.header
                 .pack_start(&self.chrome_menu(menu.label, menu.sections));
@@ -1261,7 +1279,7 @@ impl Workspace {
     }
 
     fn present_interaction(&self, reply: InputReply) {
-        self.set_chrome_hidden(reply.chrome_hidden);
+        self.set_chrome_hidden(reply.chrome_hidden, reply.zen_button_only);
         let cursor = Some(if reply.pan_cursor { "grab" } else { "none" });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
             self.area.set_cursor_from_name(cursor);
@@ -1308,10 +1326,19 @@ impl Workspace {
         .handled
     }
 
-    fn set_chrome_hidden(&self, hidden: bool) {
+    fn set_chrome_hidden(&self, hidden: bool, zen_button_only: bool) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
             if !matches!(slot, Slot::Canvas) {
-                let hidden = hidden && !widget.has_css_class("floating-panel");
+                let hidden = if *slot == Slot::ZenButton {
+                    if zen_button_only {
+                        widget.add_css_class("zen-button-only");
+                    } else {
+                        widget.remove_css_class("zen-button-only");
+                    }
+                    hidden && !zen_button_only
+                } else {
+                    hidden && (zen_button_only || !widget.has_css_class("floating-panel"))
+                };
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() != hidden {
                     continue;
                 }
