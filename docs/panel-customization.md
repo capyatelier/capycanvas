@@ -256,6 +256,24 @@ animation frame; interpolation and placement stay in Rust. Switching tabs uses
 the currently displayed bounds as the animation origin. Docking into an expanded
 group keeps its configuration synchronized with the group's active tab.
 
+Android renders the same workspace/context menu trees and toolbar prompts in
+Compose. `WorkspaceMenus.kt` presents shared items and actions, including nested
+menu pages, validation, hints and disabled states. `WorkspaceInput.kt` holds only
+native hit geometry, pointer capture and asynchronous reply guards. The stable
+workspace captures panel/group/divider/resize gestures; child reparenting cannot
+cancel a live tear-off. Tile reordering uses the same validated drop query.
+Touch long-press and mouse secondary click open the shared context model.
+
+Floating groups remain composed when Zen hides docked groups. Core bounds drive
+their layout, external handles and compact/vertical/horizontal presets; Compose
+animates size changes but follows drag coordinates immediately. Native text and
+intrinsic content measurements return to Rust as one complete measurement set,
+separate from saved workspace JSON. Content is measured before viewport stretching
+so resizing cannot redefine its natural height. The shared accepted measurements
+also prevent repeated UI measurement dispatches. Both drawer columns share one
+outline/shadow, including the flat join when the tab is hidden. Floating panels
+draw above the status display. No canvas/GPU integration changes are needed.
+
 Regression coverage:
 
 | Contract | Evidence |
@@ -270,6 +288,14 @@ Regression coverage:
 | Zen drag/dismiss lifecycle and no accidental ink | Core input tests; native expansion test; browser customization/parity tests |
 | Workspace menus, naming/duplicate/delete prompts, visibility and independent history | GTK workspace-management test; browser workspace menu/button/shortcut tests |
 | Live tear-off, external resize, first double-click reset, layout/style cycles, floating-only Zen merges | Shared core tests; GTK native input tests; browser mouse/touch workspace regressions |
+
+Android's `AndroidHostTest` covers every row above with native Compose input and
+the actual JNI/Vulkan host: workspace menus, nested moves, naming validation,
+duplicate/rename/delete/undo, creation, tile reorder, configuration, all eighteen
+theme/layout/tile-style combinations, live tear-off continuation, all eight
+resize/reset directions, hidden tabs, group collapse, narrow-ribbon merging,
+top snap coordinates and Zen hidden-edge/floating-only targets. The complete
+27-test suite also retains drawing, settings, numeric-input and lifecycle checks.
 
 Run the native tests separately (GTK initialization is thread-affine):
 
@@ -288,6 +314,10 @@ Web customization/workspace captures are under
 `artifacts/ui/parity/`. These directories are ignored. The browser
 harness uses a temporary profile; its software Canvas2D context only inspects
 captured PNGs, never renders the application's canvas.
+
+Run Android's emulator suite with `apps/layer-android/run.sh test`. Review PNGs
+are in `artifacts/ui/workspace-management/android/` after pulling the run from
+`Pictures/CapyCanvasValidation` on the emulator. These are ignored build artifacts.
 
 These tests exercise native bindings and browser-injected input, not physical
 tablet delivery or an iPad device. They do not claim a new latency benchmark;

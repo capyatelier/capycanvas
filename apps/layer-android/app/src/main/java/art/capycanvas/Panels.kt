@@ -26,6 +26,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -33,6 +34,7 @@ import kotlin.math.roundToInt
 @Composable internal fun ToolRibbon(host: CanvasHost, panel: JSONObject, geometry: JSONObject, dock: DockInteraction, modifier: Modifier, vertical: Boolean = false) {
     val density = LocalDensity.current.density
     Box(modifier) {
+        val style = panel.getString("tile_style")
         val tiles = panel.array("tiles").objects()
         geometry.array("tiles").objects().forEachIndexed { index, bounds ->
             tiles.getOrNull(index)?.let { tile ->
@@ -40,55 +42,70 @@ import kotlin.math.roundToInt
                 val kind = control.getString("kind")
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
                     ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
-                val modifier = dragSource(Modifier.placed(bounds, density).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}"), dock,
+                val modifier = Modifier.placed(bounds, density).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
                     obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
-                IconTile(icon, tile.getString("label"), tile.optBoolean("selected"), tile.getBoolean("enabled"), modifier,
-                    fill = if (kind == "color") host.snapshot?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
+                val fill = if (kind == "color") host.snapshot?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
                         Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
-                    } else null,
-                    onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }) {
-                    host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
+                    } else null
+                val colors = LocalPalette.current
+                Row(modifier.clip(RoundedCornerShape(6.dp)).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
+                    .background(if (tile.optBoolean("selected")) colors.active else Color.Transparent)
+                    .combinedClickable(enabled = tile.getBoolean("enabled"),
+                        onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
+                        onClick = { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Box(if (style == "labeled") Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
+                        SharedIcon(icon, tile.getString("label"), Modifier.size(if (style == "large") 32.dp else 16.dp), fill = fill)
+                    }
+                    if (style == "labeled") Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp),
+                        fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
         geometry.objectOrNull("grip")?.let { grip ->
-            Box(dragSource(Modifier.placed(grip, density), dock, obj("kind" to "panel", "panel" to panel.getString("id")))
-                .combinedClickable(onClick = {}, onLongClick = { dock.context(obj("kind" to "ribbon", "panel" to panel.getString("id"))) }), contentAlignment = Alignment.Center) {
+            val item = obj("kind" to "panel", "panel" to panel.getString("id"))
+            Box(Modifier.placed(grip, density).testTag("ribbon-grip-${panel.getString("id")}").dragSource(dock, item,
+                context = obj("kind" to "ribbon", "panel" to panel.getString("id")))
+                .combinedClickable(onClick = {}, onDoubleClick = { dock.cycle(item) },
+                    onLongClick = { dock.context(obj("kind" to "ribbon", "panel" to panel.getString("id"))) }), contentAlignment = Alignment.Center) {
                 PanelGrip("Move toolbar", vertical)
             }
         }
     }
 }
 
-@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier) {
+@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, onHeight: (Float) -> Unit = {}) {
     val layers = panel.getString("id") == "layers"
-    Column(modifier.verticalScroll(rememberScrollState()).padding(if (layers) 12.dp else 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
-            when (item.getString("control")) {
-                "brushes" -> BrushList(host, state.getJSONObject("brush"))
-                "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
-                    host.dispatch(obj("type" to "set_brush_size", "value" to it))
-                }
-                "size_presets" -> SizePresets(host, state.getJSONObject("brush").number("diameter"))
-                "brush_opacity" -> NumericSetting("Brush opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
-                    host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
-                }
-                "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
-                "layers" -> LayerList(host, state)
-                "layer_actions" -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    host.catalog.array("layer_commands").values().forEach { id ->
-                        state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
-                            Box(Modifier.size(40.dp, 28.dp).alpha(if (command.getBoolean("enabled")) 1f else .36f)
-                                .clip(RoundedCornerShape(6.dp)).clickable(enabled = command.getBoolean("enabled")) { host.invoke(id.toString()) }, contentAlignment = Alignment.Center) {
-                                SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(14.dp))
+    val density = LocalDensity.current.density
+    Box(modifier) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(if (layers) 12.dp else 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
+                when (item.getString("control")) {
+                    "brushes" -> BrushList(host, state.getJSONObject("brush"))
+                    "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
+                        host.dispatch(obj("type" to "set_brush_size", "value" to it))
+                    }
+                    "size_presets" -> SizePresets(host, state.getJSONObject("brush").number("diameter"))
+                    "brush_opacity" -> NumericSetting("Brush opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
+                        host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
+                    }
+                    "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
+                    "layers" -> LayerList(host, state)
+                    "layer_actions" -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        host.catalog.array("layer_commands").values().forEach { id ->
+                            state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
+                                Box(Modifier.size(40.dp, 28.dp).alpha(if (command.getBoolean("enabled")) 1f else .36f)
+                                    .clip(RoundedCornerShape(6.dp)).clickable(enabled = command.getBoolean("enabled")) { host.invoke(id.toString()) }, contentAlignment = Alignment.Center) {
+                                    SharedIcon(command.getString("icon"), command.getString("label"), Modifier.size(14.dp))
+                                }
                             }
                         }
                     }
-                }
-                "layer_opacity" -> state.array("layers").objects().find { it.getBoolean("selected") }?.let { layer ->
-                    NumericSetting("Layer opacity", layer.number("opacity"), host.catalog.getJSONObject("opacity")) {
-                        host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it))
+                    "layer_opacity" -> state.array("layers").objects().find { it.getBoolean("selected") }?.let { layer ->
+                        NumericSetting("Layer opacity", layer.number("opacity"), host.catalog.getJSONObject("opacity")) {
+                            host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it))
+                        }
                     }
                 }
             }
@@ -183,15 +200,7 @@ import kotlin.math.roundToInt
             host.snapshot?.getJSONObject("state")?.let { state -> ConfigurationControl(host, state, control.getString("control"), control.getString("label")) }
           }
         }
-        if (panel.getString("id").startsWith("toolbar")) {
-            panel.array("tiles").objects().forEach { tile ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(tile.getString("label"), Modifier.weight(1f))
-                    IconTile("minus", "Remove ${tile.getString("label")}") { host.customize(obj("type" to "remove_tool", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }
-                }
-            }
-            Button({ host.customize(obj("type" to "insert_tools", "panel" to panel.getString("id"), "before" to null)) }) { Text("Add tools") }
-        }
+        Column { WorkspaceMenuItems(host, panel.array("toolbar_options")) }
     }
 }
 

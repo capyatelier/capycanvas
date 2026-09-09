@@ -15,8 +15,9 @@ Physical-tablet latency and stylus feel are not yet validated.
   touch pan/zoom/rotation and lifecycle recovery.
 - Brushes, size, opacity, colors, layers, undo/redo, menus, Zen mode, native
   adaptive settings/search/shortcuts, persistent settings and workspace.
-- Shared drag targets and previews for panels, tab groups, tabs and toolbar
-  tiles; dividers; live two-column customization and tool picker.
+- Shared live tear-off, floating panels/toolbars, external resizing and snap
+  targets; independent workspace undo/redo; native workspace/context menus,
+  naming prompts, tile styles, two-column configuration and tool picker.
 - Emulator interaction tests and visual inspection in both themes, settings,
   customization, drawing and orientation changes. Fix defects before acceptance.
 - Measure input delivery, input queue age, frame rendering and actual presentation
@@ -97,7 +98,7 @@ presentation must be measured, not inferred from that setting.
   pinned-wrapper `run.sh headless` build/install/launch flow have been exercised.
 - Four Rust host tests pass: GPU-unavailable UI, malformed input, shared touch
   routing, and unchanged-input snapshot suppression with state/error/resize updates.
-- Seventeen emulator tests cover: visible stylus paint and pixel-checked undo/redo;
+- Twenty-seven emulator tests cover: visible stylus paint and pixel-checked undo/redo;
   preferences/search/theme; animated drawer and divider resizing; native context
   menus and toolbar creation/tile reordering; tab and whole-group moves; multiple
   shortcut recording, saving and activity recreation; two-finger navigation,
@@ -110,9 +111,14 @@ presentation must be measured, not inferred from that setting.
   full-height adjacent settings panes, sidebar alignment, shared text/icon sizes
   and the filled Done button in both themes; settings slider contrast and
   release-to-apply behavior; catalog-driven labels/descriptions, trailing controls
-  and numeric ranges without an Android settings catalog.
-  All 74 shared Rust
-  UI tests also pass.
+  and numeric ranges without an Android settings catalog. Workspace tests cover
+  dynamic menus and nested panel/toolbar moves; naming validation and
+  duplicate/rename/delete/undo; compact/vertical/horizontal tile layouts in both
+  themes; preset-preserving tile-size changes; live tear-off; eight external
+  resize edges and first-double-click reset; hidden tabs/configuration; singleton
+  toolbar collapse; narrow-ribbon merges; top-edge coordinates; and Zen's
+  floating-only targets and edge-reveal lifecycle. The five Rust adapter tests
+  and 111 shared Rust UI tests also pass.
 - Android lint completes without errors. Remaining warnings concern pinned
   dependency updates, optional Kotlin/Compose conventions and development
   manifest/tooling choices; they are not suppressed with a blanket baseline.

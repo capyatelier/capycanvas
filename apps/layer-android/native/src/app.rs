@@ -241,6 +241,8 @@ impl App {
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
+            "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
+            "panel_measurements": self.session.state().workspace.layout.measurements,
             "chrome_hidden": self.chrome_hidden, "gpu_ready": self.session.engine().backend().0.is_some(),
             "error": self.error})
     }
@@ -251,6 +253,9 @@ impl App {
             Catalog,
             Context {
                 target: layer_ui::ContextTarget,
+            },
+            FloatingSizeTarget {
+                item: layer_ui::DockItem,
             },
             Drop {
                 position: [f32; 2],
@@ -272,6 +277,15 @@ impl App {
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::Context { target } => json!(self.session.context_menu(target)?),
+            Query::FloatingSizeTarget { item } => {
+                json!(
+                    self.session
+                        .state()
+                        .workspace
+                        .layout
+                        .floating_reset_target(item)
+                )
+            }
             Query::Drop {
                 position,
                 tabs,
@@ -310,6 +324,46 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_views_expose_shared_actions_and_transient_measurements() {
+        let mut app = App::new().unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        app.dispatch(UiAction::MeasurePanels {
+            measurements: vec![layer_ui::PanelMeasurement {
+                panel: layer_ui::Panel::Brushes,
+                tab_width: 76.0,
+                content_height: 480.0,
+            }],
+        })
+        .unwrap();
+        let snapshot = app.snapshot();
+        assert_eq!(snapshot["panel_measurements"][0]["tab_width"], 76.0);
+        assert!(
+            snapshot["state"]["workspace"]["layout"]
+                .get("measurements")
+                .is_none()
+        );
+        assert_eq!(
+            snapshot["workspace_menu"]["sections"][0][0]["action"]["type"],
+            "invoke"
+        );
+        app.dispatch(
+            serde_json::from_value(json!({
+                "type": "move_panel", "panel": "toolbar", "viewport": [1280, 800],
+                "target": {"kind": "float", "position": [500, 300]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let target = app.query(json!({"type": "floating_size_target", "item": {"kind": "panel", "panel": "toolbar"}})).unwrap();
+        assert!(target.is_u64());
+        app.dispatch(serde_json::from_value(json!({"type": "customize", "action": {"type": "duplicate_toolbar", "panel": "toolbar"}})).unwrap()).unwrap();
+        assert_eq!(
+            app.snapshot()["toolbar_prompt"]["title"],
+            "Duplicate Toolbar"
+        );
+    }
+
     #[test]
     fn ui_is_available_without_a_gpu() {
         let mut app = App::new().unwrap();

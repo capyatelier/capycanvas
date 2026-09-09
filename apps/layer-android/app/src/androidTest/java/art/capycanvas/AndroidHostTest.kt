@@ -25,6 +25,7 @@ import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -68,6 +69,28 @@ class AndroidHostTest {
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
+    private fun groups() = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+    private fun group(panel: String) = groups().first { panel in it.array("panels").values() }
+    private fun viewport(): JSONArray {
+        val bounds = compose.onNodeWithTag("workspace").fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        return JSONArray(listOf(bounds.width / density, bounds.height / density))
+    }
+    private fun action(action: JSONObject) {
+        val done = CountDownLatch(1)
+        compose.runOnIdle { host.dispatch(action); host.query(obj("type" to "catalog")) { done.countDown() } }
+        assertTrue(done.await(10, TimeUnit.SECONDS))
+        compose.waitForIdle()
+        assertNull(host.actionError)
+    }
+    private fun customize(action: JSONObject) = action(obj("type" to "customize", "action" to action))
+    private fun floatPanel(panel: String, x: Float = 500f, y: Float = 340f) = action(obj("type" to "move_panel", "panel" to panel,
+        "target" to obj("kind" to "float", "position" to JSONArray(listOf(x, y))), "viewport" to viewport()))
+    private fun workspaceMenu() = compose.onNode(hasText("Workspace") and hasClickAction()).performClick()
+    private fun contextGrip(tag: String) {
+        compose.onNodeWithTag(tag).performTouchInput { longClick() }
+        compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
+    }
     private fun shell(command: String) = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
         .bufferedReader().use { it.readText() }
     private fun waitState(test: (JSONObject) -> Boolean) = compose.waitUntil(10_000) { test(state()) }
@@ -152,6 +175,270 @@ class AndroidHostTest {
         }
         return dark
     }
+    @Test fun workspaceMenusManageVisibilityNamesAndHistory() {
+        workspaceMenu()
+        capture("workspace-menu-light")
+        compose.onNodeWithText("Brushes panel").performClick()
+        compose.waitUntil(10_000) { groups().none { "brushes" in it.array("panels").values() } }
+        workspaceMenu(); compose.onNodeWithText("Brushes panel").performClick()
+        compose.waitUntil(10_000) { groups().any { "brushes" in it.array("panels").values() } }
+        val destination = group("layers").getInt("id")
+        contextGrip("group-grip-$destination")
+        compose.onNodeWithText("Add built-in panel").performClick()
+        capture("workspace-add-panel")
+        compose.onNodeWithText("Brushes panel").performClick()
+        compose.waitUntil(10_000) { group("brushes").getInt("id") == destination }
+        contextGrip("group-grip-$destination")
+        compose.onNodeWithText("Add Toolbar").performClick()
+        capture("workspace-add-toolbar")
+        compose.onNodeWithText("Tools toolbar").performClick()
+        compose.waitUntil(10_000) { group("toolbar").getInt("id") == destination }
+        val width = group("toolbar").getJSONObject("bounds").number("width")
+        val tabWidths = listOf("layers", "brushes", "toolbar").sumOf {
+            compose.onNodeWithTag("tab-$it").fetchSemanticsNode().boundsInRoot.width.toDouble() / compose.activity.resources.displayMetrics.density
+        }
+        assertTrue("Tabs grow the group", width >= tabWidths + 19)
+        // Undoing workspace edits is independent of canvas undo and restores the toolbar.
+        workspaceMenu(); compose.onNodeWithText("Undo Workspace Change").performClick()
+        compose.waitUntil(10_000) { group("toolbar").getInt("id") != destination }
+        compose.onNodeWithTag("ribbon-grip-toolbar").performMouseInput { click(button = MouseButton.Secondary) }
+        compose.waitUntil(10_000) { compose.onAllNodes(isPopup()).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Duplicate Tools toolbar…").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
+        val nameField = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("toolbar-name")))
+        nameField.performTextReplacement("Brushes")
+        compose.waitUntil(10_000) { !host.snapshot!!.getJSONObject("toolbar_prompt").getBoolean("can_confirm") }
+        compose.onNodeWithText("Duplicate", substring = false).assertIsNotEnabled()
+        nameField.performTextReplacement("Quick tools")
+        nameField.performImeAction()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("toolbar_prompt").getBoolean("can_confirm") }
+        capture("workspace-duplicate-prompt")
+        compose.onNodeWithText("Duplicate", substring = false).performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
+        val copy = host.snapshot!!.array("panels").objects().first { it.getString("title") == "Quick tools" }.getString("id")
+        floatPanel(copy)
+        contextGrip("ribbon-grip-$copy")
+        compose.onNodeWithText("Rename Quick tools toolbar…").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
+        compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("toolbar-name"))).performTextReplacement("Paint tools")
+        compose.onNodeWithText("Rename", substring = false).performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") == null }
+        assertEquals("Paint tools", host.snapshot!!.array("panels").objects().first { it.getString("id") == copy }.getString("title"))
+        contextGrip("ribbon-grip-$copy")
+        capture("workspace-renamed-menu")
+        compose.onNodeWithText("Delete Paint tools toolbar…").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("toolbar_prompt") != null }
+        capture("workspace-delete-prompt")
+        compose.onNodeWithText("Delete Toolbar", substring = false).performClick()
+        compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
+        workspaceMenu(); compose.onNodeWithText("Undo Workspace Change").performClick()
+        compose.waitUntil(10_000) { groups().any { copy in it.array("panels").values() } }
+        action(obj("type" to "set_theme", "theme" to "dark"))
+        workspaceMenu(); capture("workspace-menu-dark")
+        compose.onNodeWithText("Redo Workspace Change").performClick()
+        compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
+    }
+
+    @Test fun floatingToolbarPresetsRefitTileSizesAndResetOnFirstDoubleClick() {
+        floatPanel("toolbar")
+        fun preset() = state().getJSONObject("workspace").getJSONObject("layout").array("floating").objects().first().getString("toolbar_layout")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (layout in listOf("compact", "vertical", "horizontal")) {
+                assertEquals(layout, preset())
+                for (style in listOf("small", "large", "labeled")) {
+                    customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
+                    assertEquals("Changing tile size keeps $layout", layout, preset())
+                    val resolved = group("toolbar")
+                    val tile = resolved.getJSONObject("tiles").array("tiles").getJSONObject(0)
+                    assertEquals(if (style == "small") 36f else if (style == "large") 72f else 108f, tile.number("width"), .01f)
+                    assertEquals(if (style == "small") 36f else 72f, tile.number("height"), .01f)
+                    val grip = resolved.getJSONObject("tiles").getJSONObject("grip")
+                    assertEquals(layout == "horizontal", grip.number("height") > grip.number("width"))
+                    capture("workspace-$theme-$layout-$style")
+                }
+                compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
+                compose.waitUntil(10_000) { preset() != layout }
+            }
+        }
+        val id = group("toolbar").getInt("id")
+        val before = group("toolbar").getJSONObject("bounds").number("width")
+        compose.onNodeWithTag("resize-$id-right").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(60f, 0f), 400) }
+        compose.waitUntil(10_000) { group("toolbar").getJSONObject("bounds").number("width") > before + 10 }
+        compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { kotlin.math.abs(group("toolbar").getJSONObject("bounds").number("width") - before) < .5f }
+        assertEquals("First double-click resets instead of cycling", "compact", preset())
+        compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { preset() == "vertical" }
+        capture("workspace-toolbar-first-reset")
+    }
+
+    @Test fun floatingPanelsTearOffResizeFromEverySideAndToggleHiddenTabs() {
+        customize(obj("type" to "set_control_visible", "panel" to "sizes", "control" to "size_presets", "visible" to false))
+        val root = compose.onNodeWithTag("workspace").fetchSemanticsNode().boundsInRoot
+        val target = root.center - root.topLeft
+        val source = compose.onNodeWithTag("tab-sizes")
+        val start = source.fetchSemanticsNode().boundsInRoot.center - root.topLeft
+        compose.onNodeWithTag("workspace").performTouchInput { down(start); moveTo(target, 16) }
+        compose.waitUntil(10_000) { group("sizes").getBoolean("floating") }
+        val first = JSONObject(group("sizes").getJSONObject("bounds").toString())
+        compose.onNodeWithTag("workspace").performTouchInput { moveTo(target + androidx.compose.ui.geometry.Offset(60f, -30f), 300); up() }
+        compose.waitUntil(10_000) { group("sizes").getJSONObject("bounds").number("x") > first.number("x") + 20 }
+        assertTrue("Continued drag: $first -> ${group("sizes")}", group("sizes").getJSONObject("bounds").number("x") > first.number("x") + 20)
+        val id = group("sizes").getInt("id")
+        assertFalse(group("sizes").getBoolean("tabs_visible"))
+        capture("workspace-live-tearoff")
+        val density = compose.activity.resources.displayMetrics.density
+        for (edge in listOf("left", "right", "top", "bottom", "top_left", "top_right", "bottom_left", "bottom_right")) {
+            val before = JSONObject(group("sizes").getJSONObject("bounds").toString())
+            val dx = if (edge.contains("left")) -20f else if (edge.contains("right")) 20f else 0f
+            val dy = if (edge.contains("top")) -20f else if (edge.contains("bottom")) 20f else 0f
+            compose.onNodeWithTag("resize-$id-$edge").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(dx, dy) * density, 350) }
+            compose.waitUntil(10_000) { group("sizes").getJSONObject("bounds").toString() != before.toString() }
+            compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+            compose.waitUntil(10_000) { kotlin.math.abs(group("sizes").getJSONObject("bounds").number("width") - first.number("width")) < .5f &&
+                kotlin.math.abs(group("sizes").getJSONObject("bounds").number("height") - first.number("height")) < .5f }
+            assertFalse("First double-click resets $edge, not the tab", group("sizes").getBoolean("tabs_visible"))
+        }
+        compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { group("sizes").getBoolean("tabs_visible") }
+        capture("workspace-floating-shown-tab")
+        compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+        compose.waitUntil(10_000) { !group("sizes").getBoolean("tabs_visible") }
+        contextGrip("group-grip-$id")
+        capture("workspace-hidden-panel-menu")
+        compose.onNodeWithText("Configure Brush size panel…").performClick()
+        waitState { it.getJSONObject("customization").optString("expanded") == "sizes" }
+        capture("workspace-hidden-panel-configure")
+    }
+
+    @Test fun zenFloatingDragOnlyMergesFloatsUntilOccupiedEdgeRevealsDocks() {
+        customize(obj("type" to "set_control_visible", "panel" to "sizes", "control" to "size_presets", "visible" to false))
+        floatPanel("sizes", 480f, 300f)
+        floatPanel("layers", 750f, 360f)
+        action(obj("type" to "invoke", "command" to "zen_mode"))
+        compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
+        compose.onNodeWithTag("group-${group("sizes").getInt("id")}").assertIsDisplayed()
+        val workspace = compose.onNodeWithTag("workspace")
+        val root = workspace.fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        fun grip(panel: String) = compose.onNodeWithTag("group-grip-${group(panel).getInt("id")}").fetchSemanticsNode().boundsInRoot.center - root.topLeft
+        val bottom = androidx.compose.ui.geometry.Offset(root.width / 2, root.height - 10 * density)
+        workspace.performTouchInput { down(grip("sizes")); moveTo(bottom, 16) }
+        compose.waitForIdle()
+        assertTrue("An unoccupied bottom edge cannot reveal docks", host.snapshot!!.getBoolean("chrome_hidden"))
+        compose.onNodeWithTag("workspace-drop-hint").assertDoesNotExist()
+        capture("workspace-zen-hidden-edge")
+        workspace.performTouchInput { up() }
+        compose.waitForIdle()
+        assertTrue(group("sizes").getBoolean("floating"))
+        val target = group("layers").getJSONObject("bounds")
+        val merge = androidx.compose.ui.geometry.Offset(target.number("x") + 2, target.number("y") + target.number("height") / 2) * density
+        val source = grip("sizes")
+        workspace.performTouchInput { down(source); moveTo(merge, 16) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("workspace-drop-hint").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue("Floating merge does not reveal docks", host.snapshot!!.getBoolean("chrome_hidden"))
+        capture("workspace-zen-floating-merge")
+        workspace.performTouchInput { up() }
+        compose.waitUntil(10_000) { group("sizes").getInt("id") == group("layers").getInt("id") }
+        assertEquals(2, group("layers").array("panels").length())
+        assertTrue(group("layers").getBoolean("tabs_visible"))
+        val start = grip("layers")
+        val left = androidx.compose.ui.geometry.Offset(10 * density, root.height / 2)
+        workspace.performTouchInput { down(start); moveTo(left, 16) }
+        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        workspace.performTouchInput { moveTo(root.center - root.topLeft, 16) }
+        compose.waitForIdle()
+        assertFalse("Edge reveal lasts through the drag", host.snapshot!!.getBoolean("chrome_hidden"))
+        capture("workspace-zen-revealed-drag")
+        workspace.performTouchInput { up() }
+        compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
+        assertTrue("Dropping in the center stays floating", group("layers").getBoolean("floating"))
+        assertNull(host.actionError)
+        action(obj("type" to "invoke", "command" to "zen_mode"))
+    }
+
+    @Test fun toolbarConfigurationAndGroupCollapseUseTheSharedDefault() {
+        floatPanel("toolbar")
+        compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
+        customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to "large"))
+        val id = group("toolbar").getInt("id")
+        action(obj("type" to "move_panel", "panel" to "layers", "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
+        assertTrue(group("toolbar").getBoolean("tabs_visible"))
+        compose.onNodeWithTag("tab-toolbar").performClick()
+        compose.onNodeWithTag("tab-toolbar").performClick()
+        waitState { it.getJSONObject("customization").optString("expanded") == "toolbar" }
+        capture("workspace-toolbar-configure")
+        compose.onNodeWithText("Labeled Tiles").performScrollTo().performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("tile_style") == "labeled" }
+        capture("workspace-toolbar-configure-labeled")
+        customize(obj("type" to "close_expanded"))
+        customize(obj("type" to "set_panel_visible", "panel" to "layers", "visible" to false))
+        val toolbar = group("toolbar")
+        assertFalse(toolbar.getBoolean("tabs_visible"))
+        assertEquals("compact", state().getJSONObject("workspace").getJSONObject("layout").array("floating").objects().first().getString("toolbar_layout"))
+        val tiles = toolbar.getJSONObject("tiles").array("tiles").objects()
+        assertEquals(2, tiles.count { it.number("y") == tiles[0].number("y") })
+        capture("workspace-toolbar-collapse")
+        contextGrip("ribbon-grip-toolbar")
+        compose.onNodeWithText("Tab with icon").performClick()
+        val tabIcon = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("icon")
+        assertEquals("brush", tabIcon)
+        // Workspace's New Toolbar command opens the same picker as the context menu.
+        workspaceMenu(); compose.onNodeWithText("New Toolbar…").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") != null }
+        capture("workspace-new-toolbar")
+        compose.onNodeWithText("Cancel").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") == null }
+        assertNull(host.actionError)
+    }
+
+    @Test fun narrowRibbonMergesTabsAndTopDockHintIsBelowTheAppHeader() {
+        val view = viewport()
+        action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "edge", "edge" to "left", "outer" to true), "viewport" to view))
+        val ribbon = group("toolbar").getJSONObject("bounds")
+        assertTrue("One-column dock", ribbon.number("width") < 72)
+        val workspace = compose.onNodeWithTag("workspace")
+        val root = workspace.fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        val start = compose.onNodeWithTag("tab-sizes").fetchSemanticsNode().boundsInRoot.center - root.topLeft
+        val target = androidx.compose.ui.geometry.Offset(ribbon.number("x") + ribbon.number("width") / 2, ribbon.number("y") + ribbon.number("height") / 2) * density
+        workspace.performTouchInput { down(start); moveTo(target, 16) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("workspace-drop-hint").fetchSemanticsNodes().isNotEmpty() }
+        capture("workspace-narrow-ribbon-merge")
+        workspace.performTouchInput { up() }
+        compose.waitUntil(10_000) { group("sizes").getInt("id") == group("toolbar").getInt("id") }
+        assertTrue(group("toolbar").getBoolean("tabs_visible"))
+        floatPanel("toolbar")
+        val grip = compose.onNodeWithTag("ribbon-grip-toolbar").fetchSemanticsNode().boundsInRoot.center - root.topLeft
+        val top = androidx.compose.ui.geometry.Offset(500 * density, 49 * density)
+        workspace.performTouchInput { down(grip); moveTo(top, 16) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("workspace-drop-hint").fetchSemanticsNodes().isNotEmpty() }
+        val hint = compose.onNodeWithTag("workspace-drop-hint").fetchSemanticsNode().boundsInRoot
+        assertEquals("Snap line is below the app header", 48f, (hint.top - root.top) / density, .6f)
+        capture("workspace-top-edge-hint")
+        workspace.performTouchInput { up() }
+        compose.waitUntil(10_000) { !group("toolbar").getBoolean("floating") }
+        assertEquals("horizontal", group("toolbar").getString("axis"))
+        assertNull(host.actionError)
+    }
+
+    @Test fun zenMouseCanMoveFromCanvasOntoRevealedPanel() {
+        action(obj("type" to "invoke", "command" to "zen_mode"))
+        val workspace = compose.onNodeWithTag("workspace")
+        workspace.performMouseInput { moveTo(center) }
+        compose.waitUntil(10_000) { host.snapshot!!.getBoolean("chrome_hidden") }
+        workspace.performMouseInput { moveTo(androidx.compose.ui.geometry.Offset(1f, center.y)) }
+        compose.waitUntil(10_000) { !host.snapshot!!.getBoolean("chrome_hidden") }
+        val root = workspace.fetchSemanticsNode().boundsInRoot
+        val tab = compose.onNodeWithTag("tab-brushes").fetchSemanticsNode().boundsInRoot.center - root.topLeft
+        workspace.performMouseInput { moveTo(tab) }
+        compose.waitForIdle()
+        assertFalse("Hovering a revealed tab keeps its panel visible", host.snapshot!!.getBoolean("chrome_hidden"))
+        capture("workspace-zen-mouse-on-panel")
+        action(obj("type" to "invoke", "command" to "zen_mode"))
+    }
+
     @Test fun stylusDrawsAndUndoRedoChangePixels() {
         penStroke()
         waitState { it.array("commands").objects().any { c -> c.getString("id") == "undo" && c.getBoolean("enabled") } }
@@ -491,6 +778,7 @@ class AndroidHostTest {
         text.performImeAction()
         waitState { it.getJSONObject("settings").getString("dark_base") == "#333333" }
         compose.onNodeWithText("Pen & Input").performClick()
+        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
         val number = compose.onNodeWithTag("setting-number-prediction_horizon").performScrollTo()
         number.performTextReplacement("32"); number.performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 32f }
