@@ -34,7 +34,6 @@ pub struct Settings {
     pub light_base: HexColor,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
-    pub zen_reveal: f32,
     pub pan_speed: f32,
     pub zoom_speed: f32,
     pub feedback: bool,
@@ -55,7 +54,6 @@ impl Default for Settings {
             light_base: Theme::Light.default_base(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
-            zen_reveal: 80.0,
             pan_speed: 1.0,
             zoom_speed: 1.0,
             feedback: true,
@@ -77,6 +75,7 @@ impl Settings {
         if let Some(fields) = value.as_object_mut() {
             fields.remove("panel_text_pt");
             fields.remove("zen_hide");
+            fields.remove("zen_reveal");
         }
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
@@ -162,7 +161,6 @@ pub enum PreferenceId {
     Theme,
     DarkBase,
     LightBase,
-    ZenReveal,
     Cursor,
     PanSpeed,
     ZoomSpeed,
@@ -183,7 +181,6 @@ impl PreferenceId {
             Self::Theme => "theme",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
-            Self::ZenReveal => "zen-reveal",
             Self::Cursor => "cursor",
             Self::PanSpeed => "pan-speed",
             Self::ZoomSpeed => "zoom-speed",
@@ -257,6 +254,42 @@ pub enum PreferenceKind {
     },
 }
 
+impl PreferenceKind {
+    fn value(&self) -> Option<PreferenceValue> {
+        Some(match self {
+            Self::Number { value, .. } => PreferenceValue::Number(*value),
+            Self::Text { value, .. } => PreferenceValue::Text(value.clone()),
+            Self::Choice { selected, .. } => PreferenceValue::Choice(*selected),
+            Self::Switch { active } => PreferenceValue::Bool(*active),
+            Self::Info { .. } | Self::Link { .. } => return None,
+        })
+    }
+
+    fn display_value(&self) -> String {
+        match self {
+            Self::Number { value, control } => {
+                control
+                    .resolve(*value as f64, NumericOperation::Format)
+                    .expect("valid setting default")
+                    .text
+            }
+            Self::Text { value, .. } => value.clone(),
+            Self::Choice {
+                options, selected, ..
+            } => options[*selected as usize].clone(),
+            Self::Switch { active } => if *active { "On" } else { "Off" }.into(),
+            Self::Info { .. } | Self::Link { .. } => String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PreferenceReset {
+    pub label: String,
+    pub value: String,
+    pub enabled: bool,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextConstraint {
@@ -277,6 +310,7 @@ pub struct PreferenceRow {
     pub kind: PreferenceKind,
     pub enabled: bool,
     pub visible: bool,
+    pub reset: Option<PreferenceReset>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferenceGroup {
@@ -359,6 +393,9 @@ pub enum PreferenceAction {
         id: PreferenceId,
         value: PreferenceValue,
     },
+    Reset {
+        id: PreferenceId,
+    },
     BeginShortcut {
         id: String,
     },
@@ -403,6 +440,7 @@ fn row(id: PreferenceId, title: &str, description: &str, kind: PreferenceKind) -
         kind,
         enabled: true,
         visible: true,
+        reset: None,
     }
 }
 fn number(
@@ -425,7 +463,6 @@ fn number(
                 PreferenceId::PredictionHorizon => {
                     NumericControl::number(min, max, step, 0).unit("ms")
                 }
-                PreferenceId::ZenReveal => NumericControl::number(min, max, step, 0).unit("px"),
                 _ => {
                     NumericControl::number(min, max, step, if step < 1.0 { 2 } else { 0 }).unit("×")
                 }
@@ -435,6 +472,42 @@ fn number(
 }
 impl Settings {
     pub(crate) fn pages(&self, platform: Platform) -> Vec<PreferencePage> {
+        let mut pages = self.raw_pages(platform);
+        let defaults = Self::default().raw_pages(platform);
+        let rows = |pages: Vec<PreferencePage>| {
+            pages
+                .into_iter()
+                .flat_map(|p| p.groups)
+                .flat_map(|g| g.rows)
+        };
+        for (row, default) in pages
+            .iter_mut()
+            .flat_map(|p| &mut p.groups)
+            .flat_map(|g| &mut g.rows)
+            .zip(rows(defaults))
+        {
+            let Some(default_value) = default.kind.value() else {
+                continue;
+            };
+            row.reset = Some(PreferenceReset {
+                label: "Reset to Default".into(),
+                value: default.kind.display_value(),
+                enabled: row.enabled && row.kind.value().as_ref() != Some(&default_value),
+            });
+            match (&mut row.kind, default_value) {
+                (PreferenceKind::Number { control, .. }, PreferenceValue::Number(value)) => {
+                    control.default_value = Some(value as f64);
+                }
+                (PreferenceKind::Text { placeholder, .. }, PreferenceValue::Text(value)) => {
+                    *placeholder = value;
+                }
+                _ => {}
+            }
+        }
+        pages
+    }
+
+    fn raw_pages(&self, platform: Platform) -> Vec<PreferencePage> {
         use PreferenceId::*;
         let mut input = vec![
             row(
@@ -489,61 +562,47 @@ impl Settings {
             }
         }
         let groups = [
-            vec![
-                PreferenceGroup {
-                    title: "Interface".into(),
-                    rows: vec![
-                        row(
-                            Theme,
-                            "Color theme",
-                            "Match your system theme, or choose light or dark.",
-                            PreferenceKind::Choice {
-                                icons: Vec::new(),
-                                options: vec!["System".into(), "Light".into(), "Dark".into()],
-                                selected: match self.theme {
-                                    None => 0,
-                                    Some(crate::Theme::Light) => 1,
-                                    Some(crate::Theme::Dark) => 2,
-                                },
+            vec![PreferenceGroup {
+                title: "Interface".into(),
+                rows: vec![
+                    row(
+                        Theme,
+                        "Color theme",
+                        "Match your system theme, or choose light or dark.",
+                        PreferenceKind::Choice {
+                            icons: Vec::new(),
+                            options: vec!["System".into(), "Light".into(), "Dark".into()],
+                            selected: match self.theme {
+                                None => 0,
+                                Some(crate::Theme::Light) => 1,
+                                Some(crate::Theme::Dark) => 2,
                             },
-                        ),
-                        row(
-                            DarkBase,
-                            "Dark base color",
-                            "Set the dark theme's base color with #RRGGBB.",
-                            PreferenceKind::Text {
-                                value: self.dark_base.to_string(),
-                                constraint: TextConstraint::HexColor,
-                                max_length: 7,
-                                placeholder: crate::Theme::Dark.default_base().to_string(),
-                            },
-                        ),
-                        row(
-                            LightBase,
-                            "Light base color",
-                            "Set the light theme's base color with #RRGGBB.",
-                            PreferenceKind::Text {
-                                value: self.light_base.to_string(),
-                                constraint: TextConstraint::HexColor,
-                                max_length: 7,
-                                placeholder: crate::Theme::Light.default_base().to_string(),
-                            },
-                        ),
-                    ],
-                },
-                PreferenceGroup {
-                    title: "Zen mode".into(),
-                    rows: vec![number(
-                        ZenReveal,
-                        "Edge reveal distance",
-                        "Show controls when the pointer nears a window edge.",
-                        self.zen_reveal,
-                        20.0,
-                        200.0,
-                        1.0,
-                    )],
-                },
-            ],
+                        },
+                    ),
+                    row(
+                        DarkBase,
+                        "Dark base color",
+                        "Set the dark theme's base color with #RRGGBB.",
+                        PreferenceKind::Text {
+                            value: self.dark_base.to_string(),
+                            constraint: TextConstraint::HexColor,
+                            max_length: 7,
+                            placeholder: crate::Theme::Dark.default_base().to_string(),
+                        },
+                    ),
+                    row(
+                        LightBase,
+                        "Light base color",
+                        "Set the light theme's base color with #RRGGBB.",
+                        PreferenceKind::Text {
+                            value: self.light_base.to_string(),
+                            constraint: TextConstraint::HexColor,
+                            max_length: 7,
+                            placeholder: crate::Theme::Light.default_base().to_string(),
+                        },
+                    ),
+                ],
+            }],
             vec![
                 PreferenceGroup {
                     title: "Pointer".into(),
@@ -680,6 +739,21 @@ impl Settings {
         if !field.enabled {
             return Err("Enable live stroke preview to change this setting.".into());
         }
+        let value = match (&field.kind, value) {
+            (PreferenceKind::Number { .. }, PreferenceValue::Text(text))
+                if text.trim().is_empty() =>
+            {
+                self.default_value(id, platform)?
+            }
+            (
+                PreferenceKind::Text {
+                    constraint: TextConstraint::HexColor,
+                    ..
+                },
+                PreferenceValue::Text(text),
+            ) if text.trim().is_empty() => self.default_value(id, platform)?,
+            (_, value) => value,
+        };
         use PreferenceId::*;
         match (&field.kind, &value) {
             (PreferenceKind::Number { control, .. }, _) => {
@@ -715,7 +789,6 @@ impl Settings {
                 }
             }
             Pressure => self.pressure_gamma = n,
-            ZenReveal => self.zen_reveal = n,
             PanSpeed => self.pan_speed = n,
             ZoomSpeed => self.zoom_speed = n,
             PredictionHorizon => self.prediction_ms = n,
@@ -729,6 +802,21 @@ impl Settings {
             }
         }
         Ok(())
+    }
+
+    fn default_value(
+        &self,
+        id: PreferenceId,
+        platform: Platform,
+    ) -> Result<PreferenceValue, String> {
+        Self::default()
+            .raw_pages(platform)
+            .into_iter()
+            .flat_map(|p| p.groups)
+            .flat_map(|g| g.rows)
+            .find(|r| r.id == id)
+            .and_then(|r| r.kind.value())
+            .ok_or_else(|| "This setting cannot be reset.".into())
     }
 }
 impl PreferencesState {
@@ -902,6 +990,9 @@ impl PreferencesState {
                 self.shortcut_query = query;
             }
             PreferenceAction::Edit { id, value } => settings.edit(id, value, platform)?,
+            PreferenceAction::Reset { id } => {
+                settings.edit(id, settings.default_value(id, platform)?, platform)?;
+            }
             PreferenceAction::EditShortcut { id } => {
                 if !crate::shortcuts::definitions(settings, platform)
                     .iter()
@@ -1039,6 +1130,93 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    #[test]
+    fn reset_metadata_and_empty_commits_share_schema_defaults() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut settings = Settings::default();
+            for row in settings
+                .pages(platform)
+                .into_iter()
+                .flat_map(|p| p.groups)
+                .flat_map(|g| g.rows)
+            {
+                assert_eq!(row.reset.is_some(), row.kind.value().is_some());
+                if let Some(reset) = row.reset {
+                    assert!(!reset.enabled);
+                    assert!(!reset.value.is_empty());
+                }
+            }
+            for (id, value) in [
+                (
+                    PreferenceId::DarkBase,
+                    PreferenceValue::Text("#ABCDEF".into()),
+                ),
+                (PreferenceId::Pressure, PreferenceValue::Number(2.0)),
+                (
+                    PreferenceId::PredictionHorizon,
+                    PreferenceValue::Number(32.0),
+                ),
+                (PreferenceId::TipLock, PreferenceValue::Number(0.5)),
+            ] {
+                settings.edit(id, value.clone(), platform).unwrap();
+                assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
+                settings
+                    .edit(id, PreferenceValue::Text(String::new()), platform)
+                    .unwrap();
+                assert!(!settings.field(id, platform).unwrap().reset.unwrap().enabled);
+                settings.edit(id, value, platform).unwrap();
+                let mut state = PreferencesState::default();
+                state.edit(&mut settings, PreferenceAction::Reset { id }, platform);
+                assert!(state.error.is_none());
+                assert!(!settings.field(id, platform).unwrap().reset.unwrap().enabled);
+            }
+            let mut state = PreferencesState::default();
+            for (id, value) in [
+                (PreferenceId::Theme, PreferenceValue::Choice(2)),
+                (PreferenceId::Feedback, PreferenceValue::Bool(false)),
+            ] {
+                settings.edit(id, value, platform).unwrap();
+                state.edit(&mut settings, PreferenceAction::Reset { id }, platform);
+                assert!(state.error.is_none());
+            }
+            assert_eq!(settings, Settings::default());
+            state.edit(
+                &mut settings,
+                PreferenceAction::Reset {
+                    id: PreferenceId::Version,
+                },
+                platform,
+            );
+            assert!(state.error.is_some());
+            settings
+                .edit(
+                    PreferenceId::Feedback,
+                    PreferenceValue::Bool(false),
+                    platform,
+                )
+                .unwrap();
+            assert!(
+                settings
+                    .edit(
+                        PreferenceId::PredictionHorizon,
+                        PreferenceValue::Text(String::new()),
+                        platform
+                    )
+                    .is_err()
+            );
+            assert!(
+                settings
+                    .edit(
+                        PreferenceId::DarkBase,
+                        PreferenceValue::Text("#invalid".into()),
+                        platform
+                    )
+                    .is_err()
+            );
+            settings.validate().unwrap();
+        }
+    }
 
     fn check(text: &str) {
         assert!(

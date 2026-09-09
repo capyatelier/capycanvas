@@ -1213,6 +1213,18 @@ fn native_preferences_and_shortcuts() {
                 .downcast()
                 .unwrap();
                 assert_eq!(prediction.text(), "8 ms");
+                prediction.set_text("32");
+                prediction.update();
+                assert_eq!(state(&w).settings.prediction_ms, 32.0);
+                prediction.set_text("");
+                assert_eq!(
+                    state(&w).settings.prediction_ms,
+                    32.0,
+                    "empty spin draft does not reset"
+                );
+                prediction.update();
+                assert_eq!(state(&w).settings.prediction_ms, 8.0);
+                assert_eq!(prediction.text(), "8 ms");
                 let field =
                     find_named(w.preferences.dialog.upcast_ref(), "setting-pressure").unwrap();
                 let title = find_css(&field, "number-title").unwrap();
@@ -1322,6 +1334,66 @@ fn native_preferences_and_shortcuts() {
             "light"
         };
         capture_reference(&w, &format!("{dir}/gtk-custom-base-{suffix}.png"), 1.0);
+        let row = find_named(
+            w.preferences.dialog.upcast_ref(),
+            &format!("setting-{}", id.key()),
+        )
+        .unwrap();
+        let controllers = row.observe_controllers();
+        let hold = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
+            .find(|c| c.name().as_deref() == Some("preference-context-hold"))
+            .unwrap();
+        hold.emit_by_name::<()>("pressed", &[&20.0f64, &20.0f64]);
+        pump(100);
+        let popup: gtk::PopoverMenu =
+            find_named(w.preferences.dialog.upcast_ref(), "preference-context-menu")
+                .unwrap()
+                .downcast()
+                .unwrap();
+        assert!(
+            popup.is_visible(),
+            "reset menu must survive the editor losing focus"
+        );
+        let reset: gtk::Button = find_named(popup.upcast_ref(), "preference-reset")
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert!(reset.is_sensitive());
+        let labels = reset.child().unwrap();
+        assert_eq!(
+            labels
+                .last_child()
+                .and_downcast::<gtk::Label>()
+                .unwrap()
+                .text(),
+            theme.default_base().to_string()
+        );
+        capture_popover(popup.upcast_ref(), &format!("{dir}/gtk-reset-{suffix}.png"));
+        click(&reset);
+        assert_eq!(state(&w).palette.bg, theme.default_base());
+        hold.emit_by_name::<()>("pressed", &[&20.0f64, &20.0f64]);
+        pump(100);
+        let reset: gtk::Button = find_named(popup.upcast_ref(), "preference-reset")
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert!(!reset.is_sensitive());
+        popup.popdown();
+        entry.grab_focus();
+        entry.set_text(color);
+        entry.emit_activate();
+        entry.set_text("");
+        assert_eq!(
+            state(&w).palette.bg.to_string(),
+            color.to_lowercase(),
+            "empty draft does not reset yet"
+        );
+        entry.emit_activate();
+        assert_eq!(entry.text(), theme.default_base().to_string());
+        assert_eq!(state(&w).palette.bg, theme.default_base());
+        entry.set_text(color);
+        entry.emit_activate();
         w.dispatch(UiAction::CloseSettings);
         pump(300);
         capture_reference(&w, &format!("{dir}/gtk-custom-workspace-{suffix}.png"), 1.0);

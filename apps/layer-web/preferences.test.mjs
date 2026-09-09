@@ -6,7 +6,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await mkdir(dir, { recursive: true });
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
   const preference = (value) => action({ type: "preferences", action: value });
-  const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); await settle(); };
+  const click = async (selector) => { await evaluate(`(() => {const node=document.querySelector(${JSON.stringify(selector)});if(node.matches('input:not([type=hidden]),textarea,select'))node.focus();node.click()})()`); await settle(); };
   const key = async (name, modifiers = {}) => {
     await evaluate(`(() => {for(const type of ['keydown','keyup']) (document.querySelector('#shortcut-capture').open ? document.querySelector('#shortcut-capture') : document.activeElement).dispatchEvent(new KeyboardEvent(type,{key:${JSON.stringify(name)},bubbles:true,cancelable:true,...${JSON.stringify(modifiers)}}))})()`);
     await settle();
@@ -49,7 +49,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
   await click('#header-start [data-command="zen_mode"]');
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
-  await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:180,clientY:24,pointerType:'mouse',bubbles:true}))");
+  await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:299,clientY:24,pointerType:'mouse',bubbles:true}))");
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
   await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,pointerType:'mouse',bubbles:true})); window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
   assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
@@ -143,6 +143,33 @@ export async function checkPreferences({ call, evaluate, settle }) {
         .every(([selector,key])=>getComputedStyle(document.querySelector(selector)).backgroundColor===rgb(palette[key]));
     })()`), 'all surfaces bind the core palette');
     await capture(`custom-base-${theme}`);
+    const defaultColor = theme === 'dark' ? '#333333' : '#b8b8b8';
+    const openReset = () => evaluate(`(() => { const row=document.querySelector('${selector}').closest('[data-preference]'), r=row.getBoundingClientRect(); row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.left+30,clientY:r.top+20})); })()`);
+    if (theme === 'dark') {
+      const point = await evaluate(`(() => { const r=document.querySelector('${selector}').closest('[data-preference]').getBoundingClientRect(); return {x:r.left+30,y:r.top+20}; })()`);
+      await call('Input.setIgnoreInputEvents', { ignore: false });
+      await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+      await evaluate('new Promise(resolve=>setTimeout(resolve,650))');
+      await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await call('Input.setIgnoreInputEvents', { ignore: true });
+      assert.equal(await evaluate("document.querySelector('#preference-context-menu').matches(':popover-open')"), true, 'long press opens the reset menu without activating the row');
+    } else await openReset();
+    assert.equal(await evaluate("document.querySelector('#preference-context-menu [data-reset]').disabled"), false);
+    assert.equal(await evaluate("document.querySelector('#preference-context-menu .shortcut-hint').textContent"), defaultColor);
+    assert.ok(await evaluate(`(() => { const a=document.querySelector('#preference-context-menu .command-label'), b=document.querySelector('#preference-context-menu .shortcut-hint'); return b.getBoundingClientRect().left>a.getBoundingClientRect().right && getComputedStyle(b).opacity==='0.55'; })()`));
+    await capture(`reset-${theme}`);
+    await click('#preference-context-menu [data-reset]');
+    assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), defaultColor);
+    await openReset();
+    assert.equal(await evaluate("document.querySelector('#preference-context-menu [data-reset]').disabled"), true);
+    await key('Escape');
+    assert.equal(await evaluate("document.querySelector('#settings').open"), true, 'Escape only closes the context menu');
+    await click(selector); await evaluate(`document.querySelector('${selector}').focus();document.querySelector('${selector}').value='${color}'`); await key('Enter');
+    await evaluate(`document.querySelector('${selector}').value=''`);
+    assert.equal(await evaluate(`layerApp.state().settings.${theme}_base`), color.toLowerCase());
+    await key('Enter');
+    assert.equal(await evaluate(`document.querySelector('${selector}').value`), defaultColor);
+    await evaluate(`document.querySelector('${selector}').value='${color}'`); await key('Enter');
     await action({ type: 'close_settings' });
     await capture(`custom-workspace-${theme}`);
   }
@@ -183,6 +210,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='4*2 ms'");
   await key('Enter');
   assert.equal(await evaluate("layerApp.state().settings.prediction_ms"), 8, 'expressions accept displayed units');
+  await click('#setting-prediction-horizon .number-entry');
+  await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value='32'"); await key('Enter');
+  await click('#setting-prediction-horizon .number-entry');
+  await evaluate("document.querySelector('#setting-prediction-horizon .number-entry').value=''");
+  assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 32);
+  await key('Enter');
+  assert.equal(await evaluate('layerApp.state().settings.prediction_ms'), 8);
   await click('#setting-feedback');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon').disabled"), true);
   await click('#setting-feedback');
@@ -241,7 +275,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   const saved = await evaluate("JSON.parse(localStorage.getItem('layer.preferences.v1'))");
   assert.deepEqual(saved.shortcuts["command.Brush"].map(c => c.key), ["b", "e"]);
   await call("Page.reload");
-  await evaluate("new Promise((resolve,reject)=>{const start=performance.now();function ready(){if(window.layerApp)resolve();else if(performance.now()-start>20000)reject(new Error('reload failed'));else setTimeout(ready,50)}ready()})");
+  await evaluate("new Promise((resolve,reject)=>{const start=performance.now();function ready(){if(window.layerApp&&document.body.dataset.gpu==='ready')resolve();else if(performance.now()-start>20000)reject(new Error('reload failed'));else setTimeout(ready,50)}ready()})");
   assert.deepEqual(await evaluate("layerApp.state().settings"), saved);
   await evaluate("layerApp.canvas.focus()"); await key("j", { ctrlKey: true });
   assert.equal(await evaluate("document.querySelector('#settings').open"), true, "restored shortcuts execute");

@@ -73,6 +73,7 @@ export function createNumberField({ control, label, resolve, onChange, icon }) {
   root.setDisabled = next => { disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
   root.setDescription = text => { const p = node("p", "number-description"); p.textContent = text; labels.append(p); };
   root.entry = entry;
+  root.cancelEditing = () => finish(true);
   entry.hidden = ranged; valueButton.hidden = !ranged;
   if (!ranged) { entry.setAttribute("role", "spinbutton"); entry.setAttribute("aria-valuemin", control.min * control.scale); entry.setAttribute("aria-valuemax", control.max * control.scale); }
   root.update(value);

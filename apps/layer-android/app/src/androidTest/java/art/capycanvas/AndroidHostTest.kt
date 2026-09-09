@@ -467,6 +467,42 @@ class AndroidHostTest {
         compose.onNodeWithTag("settings-done").performClick()
     }
 
+    @Test fun settingDefaultsResetFromContextAndEmptyCommits() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithTag("settings-category-appearance").performClick()
+        compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "dark_base", "value" to "#224466")) }
+        waitState { it.getJSONObject("settings").getString("dark_base") == "#224466" }
+        val label = compose.onNodeWithTag("preference-label-dark_base", useUnmergedTree = true).performScrollTo()
+        label.performTouchInput { longClick() }
+        compose.onNodeWithTag("preference-reset").assertIsEnabled()
+        compose.onNodeWithText("#333333").assertExists()
+        capture("36-setting-reset")
+        compose.onNodeWithTag("preference-reset").performClick()
+        waitState { it.getJSONObject("settings").getString("dark_base") == "#333333" }
+        label.performTouchInput { longClick() }
+        compose.onNodeWithTag("preference-reset").assertIsNotEnabled()
+        instrumentation.sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        val text = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("setting-text-dark_base")))
+        text.performTextReplacement("#335577")
+        text.performImeAction()
+        waitState { it.getJSONObject("settings").getString("dark_base") == "#335577" }
+        text.performTextReplacement("")
+        assertEquals("#335577", state().getJSONObject("settings").getString("dark_base"))
+        text.performImeAction()
+        waitState { it.getJSONObject("settings").getString("dark_base") == "#333333" }
+        compose.onNodeWithText("Pen & Input").performClick()
+        val number = compose.onNodeWithTag("setting-number-prediction_horizon").performScrollTo()
+        number.performTextReplacement("32"); number.performImeAction()
+        waitState { it.getJSONObject("settings").number("prediction_ms") == 32f }
+        number.performTextReplacement("")
+        assertEquals(32f, state().getJSONObject("settings").number("prediction_ms"))
+        number.performImeAction()
+        waitState { it.getJSONObject("settings").number("prediction_ms") == 8f }
+        compose.onNodeWithTag("settings-done").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
+        assertNull(host.actionError)
+    }
+
     @Test fun allPreferenceRowsRenderCoreMetadataAndTrailingControls() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") != null }

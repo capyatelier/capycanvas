@@ -82,3 +82,5 @@ window, label, text { font-size: var(--ui-text-size); }
 .layer-preferences.touch-input .navigation-sidebar row:hover:not(:selected):not(:active) { background: transparent; }
 .layer-preferences.touch-input .navigation-sidebar row:selected:hover:not(:active) { background: alpha(currentColor, .10); }
 .shortcut-hint { font-weight: 400; }
+/* Reset is a normal menu action, with a dim trailing default value. */
+.preference-reset { font-weight: 400; }

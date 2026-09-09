@@ -1565,15 +1565,7 @@ impl ResolvedLayout {
     /// Hidden chrome reveals only at the window edge; visible chrome remains
     /// available near its controls. Hosts may also pin it for focus/popovers.
     pub fn near_chrome(&self, point: [f32; 2], viewport: [f32; 2], hidden: bool) -> bool {
-        self.near_chrome_with_reveal_distance(point, viewport, hidden, 80.0)
-    }
-    pub fn near_chrome_with_reveal_distance(
-        &self,
-        point: [f32; 2],
-        viewport: [f32; 2],
-        hidden: bool,
-        reveal: f32,
-    ) -> bool {
+        const EDGE_REVEAL_DISTANCE: f32 = 80.0;
         const KEEP_VISIBLE_MARGIN: f32 = 40.0;
         let [x, y] = point;
         let [width, height] = viewport;
@@ -1591,10 +1583,10 @@ impl ResolvedLayout {
         // the HUD alone must not activate an otherwise empty bottom edge.
         // Keep enabled reveal zones visible too, preserving hysteresis.
         let edge = self.reveal_edges.iter().any(|edge| match edge {
-            Edge::Top => y <= reveal,
-            Edge::Bottom => height - y <= reveal,
-            Edge::Left => x <= reveal,
-            Edge::Right => width - x <= reveal,
+            Edge::Top => y <= EDGE_REVEAL_DISTANCE,
+            Edge::Bottom => height - y <= EDGE_REVEAL_DISTANCE,
+            Edge::Left => x <= EDGE_REVEAL_DISTANCE,
+            Edge::Right => width - x <= EDGE_REVEAL_DISTANCE,
         });
         if hidden || edge {
             return edge;
@@ -2571,28 +2563,16 @@ mod tests {
         }
         // An empty bottom edge does not reveal, even directly over the HUD.
         assert!(!resolved.near_chrome([600.0, 899.0], VIEWPORT, true));
-        // Reveal sensitivity never changes the fixed 40px margin around panels.
+        // Visible controls retain their fixed 40px margin.
         let panel = resolved
             .groups
             .iter()
             .find(|g| g.active == Panel::Brushes)
             .unwrap()
             .bounds;
-        for reveal in [20.0, 80.0, 200.0] {
-            let right = panel.x + panel.width;
-            assert!(resolved.near_chrome_with_reveal_distance(
-                [right + 40.0, 450.0],
-                VIEWPORT,
-                false,
-                reveal
-            ));
-            assert!(!resolved.near_chrome_with_reveal_distance(
-                [right + 41.0, 450.0],
-                VIEWPORT,
-                false,
-                reveal
-            ));
-        }
+        let right = panel.x + panel.width;
+        assert!(resolved.near_chrome([right + 40.0, 450.0], VIEWPORT, false));
+        assert!(!resolved.near_chrome([right + 41.0, 450.0], VIEWPORT, false));
     }
     #[test]
     fn zen_reveal_edges_follow_docking_and_panel_visibility() {

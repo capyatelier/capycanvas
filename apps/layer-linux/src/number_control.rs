@@ -261,6 +261,9 @@ impl NumberControl {
             glib::closure_local!(move |s: Self| f(&s)),
         );
     }
+    pub fn cancel_edit(&self) {
+        self.finish(true);
+    }
     fn apply(&self, op: NumericOperation) -> bool {
         match self.spec().resolve(self.value(), op) {
             Ok(v) => {

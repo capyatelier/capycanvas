@@ -52,7 +52,7 @@ validation and palette generation are shared Rust behavior. See the
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; dark/light base hex colors; Zen edge-reveal distance |
+| Appearance | System/Light/Dark; dark/light base hex colors |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
@@ -60,14 +60,34 @@ validation and palette generation are shared Rust behavior. See the
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
-Defaults preserve the previous drawing behavior: System theme, 80px edge reveal,
+Defaults preserve the previous drawing behavior: System theme, fixed 80px edge reveal,
 fixed 40px keep-visible margin, linear pressure, normal scroll speeds, 8ms prediction.
 All UI text uses the shared Rust `UI_TEXT_PT` constant (11 pt), including panels,
 tabs, menus, preference descriptions and zoom/rotation status text. There is no
 font-size setting. Text controls and inline step symbols use font-relative sizes;
 tool icons, brush previews, sliders and checkboxes retain their dimensions.
-The core ignores the retired `panel_text_pt` and `zen_hide` fields when loading saved settings,
+The core ignores the retired `panel_text_pt`, `zen_hide` and `zen_reveal` fields when loading saved settings,
 without dropping other preferences or relaxing validation of unknown fields.
+
+### Restoring defaults
+
+Every editable preference exposes a context menu with **Reset to Default** on
+the left and its formatted default in dim text on the right. It is disabled
+when already at the default or when the setting itself is unavailable. There
+is no permanent modified badge. Right-click, touch long press on the row and
+keyboard context-menu activation open it. Active mobile text editors retain
+their native selection menu; the setting's label provides the reset menu.
+
+`Settings::default()` remains the sole source of defaults. Rust projects
+`PreferenceRow.reset` (label, formatted value, enabled) and handles
+`PreferenceAction::Reset`; frontends do not compare values or invent defaults.
+Numbers carry an optional default in their shared `NumericControl`, so an empty
+committed expression resets using the same resolver on every host. Hex fields
+also reset on an empty commit. Clearing a draft does not immediately change the
+setting; invalid nonempty text remains invalid. Ordinary panel number fields
+have no implicit default and retain their existing empty-input validation.
+Resets use the normal immediate-apply, validation and persistence path and do
+not alter unrelated preferences, artwork or shortcut customizations.
 
 ## Native presentation and research
 

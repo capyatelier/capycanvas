@@ -38,8 +38,9 @@ pub use numeric::{
 pub use session::UiSession;
 pub use settings::{
     HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
-    PreferenceKind, PreferencePage, PreferenceRow, PreferenceSearchResult, PreferenceValue,
-    PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor, TextConstraint,
+    PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow, PreferenceSearchResult,
+    PreferenceValue, PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor,
+    TextConstraint,
 };
 pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
 pub use theme::{HexColor, Theme, ThemePalette};

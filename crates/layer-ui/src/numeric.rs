@@ -38,6 +38,10 @@ pub struct NumericControl {
     /// Displayed value = stored value * scale. E.g. opacity uses 100 and "%".
     pub scale: f64,
     pub unit: String,
+    /// Settings may reset an empty committed expression; ordinary fields may
+    /// not. The default is supplied by the settings schema, not by the host.
+    #[serde(default)]
+    pub default_value: Option<f64>,
 }
 impl NumericControl {
     pub fn number(min: f64, max: f64, step: f64, digits: u32) -> Self {
@@ -57,6 +61,7 @@ impl NumericControl {
             digits,
             scale: 1.0,
             unit: String::new(),
+            default_value: None,
         }
     }
     pub fn unit(mut self, unit: &str) -> Self {
@@ -171,6 +176,10 @@ impl NumericControl {
                             * (self.mapped(self.soft_max) - self.mapped(self.soft_min)),
                 )
             }
+            NumericOperation::Expression { text } if text.trim().is_empty() => {
+                self.default_value
+                    .ok_or("Enter a mathematical expression")?
+            }
             NumericOperation::Expression { text } => self.expression(&text)? / self.scale,
         };
         if !resolved.is_finite() {
@@ -273,6 +282,27 @@ impl NumericRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_settings_accept_empty_expressions_as_reset() {
+        let mut control = NumericControl::percent();
+        let empty = || NumericOperation::Expression { text: " ".into() };
+        assert!(control.resolve(0.5, empty()).is_err());
+        control.default_value = Some(1.0);
+        let result = control.resolve(0.5, empty()).unwrap();
+        assert_eq!(result.value, 1.0);
+        assert_eq!(result.text, "100.0 %");
+        assert!(
+            control
+                .resolve(
+                    0.5,
+                    NumericOperation::Expression {
+                        text: "nonsense".into()
+                    }
+                )
+                .is_err()
+        );
+    }
     fn expr(spec: &NumericControl, text: &str) -> Result<NumericValue, String> {
         spec.resolve(1.0, NumericOperation::Expression { text: text.into() })
     }

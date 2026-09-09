@@ -76,8 +76,10 @@ References: [GTK Scale](https://docs.gtk.org/gtk4/class.Scale.html),
 ## Entering Zen
 
 Enabling Zen immediately hides editor chrome. The core suppresses hover reveal
-inside a fixed 200 × 200 logical-pixel top-left guard until the pointer leaves
+inside a fixed 300 × 300 logical-pixel top-left guard until the pointer leaves
 it; this prevents the activating button from revealing itself again. This is
 not configurable. A fresh deliberate contact re-enables normal edge reveal for
 touch users. Subsequent docking, drawer and drag visibility use the existing
-shared interaction rules.
+shared interaction rules. Edge reveal is fixed at 80px and the control-relative
+keep-visible margin at 40px. Neither is exposed as a preference; older saved
+distance preferences are discarded on load.

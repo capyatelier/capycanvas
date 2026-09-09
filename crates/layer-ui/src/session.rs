@@ -5,6 +5,8 @@ use layer_core::{Document, LayerId, LayerKind, StrokeTool, default_brush};
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurve, input_queue};
 use layer_render::CanvasRenderer;
 
+const ZEN_CORNER_GUARD: f32 = 300.0;
+
 /// A host-owned session: call inline or put the entire owner behind a host
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
@@ -204,7 +206,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if matches!(event, ChromeEvent::Contact { .. })
                     || matches!(event, ChromeEvent::Leave { touch: false })
                     || position.is_some_and(|[x, y]| {
-                        !(0.0..200.0).contains(&x) || !(0.0..200.0).contains(&y)
+                        !(0.0..ZEN_CORNER_GUARD).contains(&x)
+                            || !(0.0..ZEN_CORNER_GUARD).contains(&y)
                     })
                 {
                     self.interaction.zen_entry_guard = false;
@@ -465,12 +468,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .viewport
                 .zip(self.interaction.hover)
                 .is_some_and(|(viewport, position)| {
-                    self.layout(viewport).near_chrome_with_reveal_distance(
-                        position,
-                        viewport,
-                        self.interaction.hidden,
-                        self.state.settings.zen_reveal,
-                    )
+                    self.layout(viewport)
+                        .near_chrome(position, viewport, self.interaction.hidden)
                 });
             self.interaction.hidden = !near;
         }
@@ -1259,7 +1258,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.workspace.zen_mode = !self.state.workspace.zen_mode;
                 self.interaction.zen_entry_guard = self.state.workspace.zen_mode
                     && self.interaction.hover.is_some_and(|[x, y]| {
-                        (0.0..200.0).contains(&x) && (0.0..200.0).contains(&y)
+                        (0.0..ZEN_CORNER_GUARD).contains(&x) && (0.0..ZEN_CORNER_GUARD).contains(&y)
                     });
                 self.interaction.hidden = self.state.workspace.zen_mode;
                 self.interaction.keep_chrome_until_contact = false;
@@ -1593,10 +1592,10 @@ mod tests {
                     position: [24.0, 24.0],
                 },
                 ChromeEvent::Motion {
-                    position: [199.0, 79.0],
+                    position: [299.0, 79.0],
                 },
                 ChromeEvent::Motion {
-                    position: [79.0, 199.0],
+                    position: [79.0, 299.0],
                 },
             ] {
                 assert!(chrome(&mut s, event, facts).chrome_hidden);
@@ -2843,7 +2842,7 @@ mod tests {
             s.set_platform(platform);
             invoke(&mut s, CommandId::Settings);
             let before = s.state.palette;
-            for invalid in ["", "red", "#12345g", "#123", "#12345678"] {
+            for invalid in ["red", "#12345g", "#123", "#12345678"] {
                 edit_preference(
                     &mut s,
                     PreferenceId::DarkBase,
@@ -2922,7 +2921,7 @@ mod tests {
                 PreferenceId::PredictionHorizon
             );
             assert!(s.state.requests.is_empty());
-            for value in ["", "abc", "NaN", "65", "-1"] {
+            for value in ["abc", "NaN", "65", "-1"] {
                 edit_preference(
                     &mut s,
                     PreferenceId::PredictionHorizon,
@@ -3298,7 +3297,6 @@ mod tests {
         let old: Settings =
             serde_json::from_str(r#"{"theme":null,"pressure_gamma":1.5,"cursor":"brush_size"}"#)
                 .unwrap();
-        assert_eq!(old.zen_reveal, 80.0);
         assert_eq!(old.pressure_gamma, 1.5);
         let mut s = session();
         s.dispatch(UiAction::RestoreSettings {
@@ -3499,10 +3497,10 @@ mod tests {
                 s.dispatch(action).unwrap();
                 assert_eq!(s.state.settings, native);
                 assert_eq!(native.pressure_gamma, 1.5);
-                assert_eq!(native.zen_reveal, 120.0);
                 let saved = serde_json::to_value(native).unwrap();
                 assert!(saved.get("panel_text_pt").is_none());
                 assert!(saved.get("zen_hide").is_none());
+                assert!(saved.get("zen_reveal").is_none());
             }
             invoke(&mut s, CommandId::Settings);
             assert!(
@@ -3512,9 +3510,10 @@ mod tests {
                     .iter()
                     .flat_map(|p| &p.groups)
                     .flat_map(|g| &g.rows)
-                    .any(
-                        |r| r.title == "Panel text size" || r.title == "Keep-visible distance (px)"
-                    )
+                    .any(|r| matches!(
+                        r.title.as_str(),
+                        "Panel text size" | "Keep-visible distance (px)" | "Edge reveal distance"
+                    ))
             );
         }
         assert!(

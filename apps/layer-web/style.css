@@ -116,6 +116,8 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; border: 0; border-radius: 12px; background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
 .panel-context-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; text-align: left; font-weight: 400; }
 .panel-context-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
+.preference-context-menu .command-label { flex: 1; }
+.preference-context-menu button { gap: 24px; }
 .context-radio { width: 14px; height: 14px; border: 2px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 50%; }
 [aria-checked="true"] > .context-radio { border: 4px solid var(--accent); background: white; }
 .tool-picker { width: 480px; height: 560px; }

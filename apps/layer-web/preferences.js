@@ -4,6 +4,85 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   const dialog = document.getElementById("settings");
   const send = (action) => dispatch({ type: "preferences", action });
   const close = () => dispatch({ type: "close_settings" });
+  const context = element("div", "panel-context-menu preference-context-menu");
+  context.id = "preference-context-menu"; context.popover = "manual";
+  context.setAttribute("role", "menu"); dialog.append(context);
+  let contextId = null, hold = null, heldPointer = null;
+  const dismissContext = () => { context.hidePopover(); contextId = null; };
+  const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
+  const modelRow = id => view()?.pages.flatMap(p => p.groups.flatMap(g => g.rows)).find(r => r.id === id);
+  function showContext(line, x, y, target) {
+    const row = modelRow(line.dataset.preference);
+    if (!row?.reset) return;
+    contextId = row.id; context.replaceChildren(); context.setAttribute("aria-label", row.title);
+    // Preserve text operations when opening over an editor. Clipboard access
+    // remains a host operation; settings/reset policy stays in Rust.
+    const input = target.closest('input[type="text"]');
+    if (input) {
+      const start = input.selectionStart, end = input.selectionEnd, original = input.value;
+      for (const [label, operation] of [["Cut", "cut"], ["Copy", "copy"], ["Paste", "paste"], ["Select All", "select"]]) {
+        const item = button(label, async () => {
+          dismissContext(); input.focus(); input.setSelectionRange(start, end);
+          try {
+            if (operation === "select") { input.select(); return; }
+            if (operation === "copy" || operation === "cut") await navigator.clipboard.writeText(original.slice(start, end));
+            const replacement = operation === "paste" ? await navigator.clipboard.readText() : "";
+            if (operation !== "copy" && input.value === original) {
+              input.setRangeText(replacement, start, end, "end");
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          } catch { error.textContent = "Clipboard access was denied by your browser."; }
+        });
+        item.setAttribute("role", "menuitem");
+        item.disabled = ["cut", "copy"].includes(operation) ? start === end : operation === "select" && !original;
+        context.append(item);
+      }
+      context.append(element("hr"));
+    }
+    const reset = button("", () => {
+      dismissContext(); send({ type: "reset", id: row.id });
+      const field = fields.get(row.id), next = modelRow(row.id);
+      if (next.kind.type === "text") field.input.value = next.kind.value;
+      if (next.kind.type === "number") field.input.cancelEditing();
+    });
+    reset.dataset.reset = row.id; reset.setAttribute("role", "menuitem");
+    reset.disabled = !row.reset.enabled;
+    reset.append(element("span", "command-label", row.reset.label), element("span", "shortcut-hint", row.reset.value));
+    context.append(reset); context.showPopover();
+    const rect = context.getBoundingClientRect();
+    context.style.left = `${Math.max(6, Math.min(x, innerWidth - rect.width - 6))}px`;
+    context.style.top = `${Math.max(6, Math.min(y, innerHeight - rect.height - 6))}px`;
+    if (!input) reset.focus();
+  }
+  // Keep the focused text editor's selection/draft while using its menu.
+  context.addEventListener("pointerdown", e => e.preventDefault());
+  dialog.addEventListener("contextmenu", e => {
+    const line = e.target.closest("[data-preference]");
+    if (!line) return;
+    e.preventDefault(); cancelHold(); showContext(line, e.clientX, e.clientY, e.target);
+  });
+  dialog.addEventListener("pointerdown", e => {
+    cancelHold(); heldPointer = null;
+    if (!context.contains(e.target)) dismissContext();
+    const line = e.target.closest("[data-preference]");
+    // Native text selection owns long press while an input is being edited.
+    if (e.pointerType !== "touch" || !line || e.target.closest("input,select,textarea")) return;
+    hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
+      heldPointer = e.pointerId; cancelHold(); showContext(line, e.clientX, e.clientY, e.target);
+    }, 500) };
+  });
+  dialog.addEventListener("pointermove", e => { if (hold && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) cancelHold(); });
+  for (const event of ["pointerup", "pointercancel", "scroll"]) dialog.addEventListener(event, cancelHold, { capture: true });
+  dialog.addEventListener("click", e => {
+    if (heldPointer !== null && (e.pointerId == null || heldPointer === e.pointerId)) { heldPointer = null; e.preventDefault(); e.stopImmediatePropagation(); }
+  }, { capture: true });
+  dialog.addEventListener("keydown", e => {
+    if (e.key === "Escape" && context.matches(":popover-open")) { dismissContext(); e.preventDefault(); e.stopImmediatePropagation(); }
+    else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+      const line = e.target.closest("[data-preference]");
+      if (line) { const rect = line.getBoundingClientRect(); e.preventDefault(); e.stopImmediatePropagation(); showContext(line, rect.left, rect.bottom, e.target); }
+    }
+  }, { capture: true });
   const root = element("div", "preferences-layout");
   const sidebar = element("aside", "preferences-sidebar");
   const sidebarHeader = element("header", "dialog-header");
@@ -76,6 +155,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
         groups.push([group.rows.map((r) => r.id), section]);
         for (const row of group.rows) {
           const line = element("div", "preference-row"), text = element("div", "preference-text");
+          if (row.reset) line.dataset.preference = row.id;
           const label = element("label", "", row.title); text.append(label, element("p", "", row.description)); line.append(text);
           const id = `setting-${row.id.replaceAll("_", "-")}`;
           label.htmlFor = id;
@@ -86,9 +166,13 @@ export function createPreferences({ element, button, icon, numberField, panelFra
               input.maxLength = row.kind.max_length; input.placeholder = row.kind.placeholder;
               input.spellcheck = false; input.autocomplete = "off"; input.setAttribute("autocapitalize", "off");
               input.value = row.kind.value;
-              input.addEventListener("change", () => send({ type: "edit", id: row.id, value: input.value }));
+              const commit = () => {
+                send({ type: "edit", id: row.id, value: input.value });
+                if (!view()?.error) input.value = modelRow(row.id).kind.value;
+              };
+              input.addEventListener("change", commit);
               input.addEventListener("keydown", e => {
-                if (e.key === "Enter") { e.preventDefault(); send({ type: "edit", id: row.id, value: input.value }); }
+                if (e.key === "Enter") { e.preventDefault(); commit(); }
               });
               widget = input; break;
             case "choice":
@@ -149,6 +233,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
   }
   return function refresh(model) {
     if (!model) {
+      dismissContext(); cancelHold();
       searchFocus = 0;
       if (capture.open) capture.close();
       if (editor.open) editor.close();
@@ -156,6 +241,11 @@ export function createPreferences({ element, button, icon, numberField, panelFra
       return;
     }
     if (!fields.size) build(model);
+    if (contextId) {
+      const row = model.pages.find(p => p.id === model.page)?.groups.flatMap(g => g.rows).find(r => r.id === contextId);
+      if (!row?.visible) dismissContext();
+      else context.querySelector("[data-reset]").disabled = !row.reset.enabled;
+    }
     empty.hidden = !model.empty;
     title.textContent = model.pages.find((p) => p.id === model.page).title;
     if (search.value !== model.query) search.value = model.query;

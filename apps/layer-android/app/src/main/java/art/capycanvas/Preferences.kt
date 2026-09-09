@@ -12,6 +12,16 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -229,6 +239,62 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
 }
 
 @Composable private fun PreferenceRow(host: CanvasHost, row: JSONObject) {
+    val reset = row.objectOrNull("reset")
+    if (reset == null) { PreferenceContent(host, row); return }
+    var open by remember(row.getString("id")) { mutableStateOf(false) }
+    val focus = LocalFocusManager.current
+    val colors = LocalPalette.current
+    val currentReset by rememberUpdatedState(reset)
+    fun show() { focus.clearFocus(); open = true }
+    Box(Modifier.fillMaxWidth()
+        .semantics { customActions = listOf(CustomAccessibilityAction(currentReset.getString("label")) { show(); true }) }
+        .onPreviewKeyEvent {
+            if (it.type == KeyEventType.KeyDown && (it.key == Key.Menu || (it.key == Key.F10 && it.isShiftPressed))) { show(); true } else false
+        }
+        .pointerInput(row.getString("id")) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                // Leave native selection/clipboard gestures alone inside an
+                // active editor. Its row label still exposes the setting menu.
+                if ((row.getJSONObject("kind").getString("type") == "text" || host.editingText)
+                    && down.position.x > size.width / 2) return@awaitEachGesture
+                if (currentEvent.buttons.isSecondaryPressed) { down.consume(); show(); return@awaitEachGesture }
+                if (down.type != PointerType.Touch) return@awaitEachGesture
+                val released = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                        if (change == null || !change.pressed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                            || event.changes.count { it.pressed } > 1) return@withTimeoutOrNull true
+                    }
+                }
+                if (released == null) {
+                    currentEvent.changes.forEach { it.consume() }
+                    show()
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        event.changes.forEach { it.consume() }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
+        }) {
+        PreferenceContent(host, row)
+        DropdownMenu(open, { open = false }, containerColor = colors.settingsCard) {
+            val enabled = currentReset.getBoolean("enabled")
+            DropdownMenuItem(text = {
+                Row(Modifier.widthIn(min = 240.dp, max = 380.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(currentReset.getString("label"), Modifier.weight(1f), color = colors.text.copy(alpha = if (enabled) 1f else .38f))
+                    Text(currentReset.getString("value"), color = colors.settingsSecondary.copy(alpha = if (enabled) 1f else .38f))
+                }
+            }, enabled = enabled, modifier = Modifier.testTag("preference-reset"), onClick = {
+                open = false
+                host.preference(obj("type" to "reset", "id" to row.getString("id")))
+            })
+        }
+    }
+}
+
+@Composable private fun PreferenceContent(host: CanvasHost, row: JSONObject) {
     val colors = LocalPalette.current
     val kind = row.getJSONObject("kind")
     val type = kind.getString("type")
