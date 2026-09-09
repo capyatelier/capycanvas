@@ -2255,20 +2255,22 @@ impl DockLayout {
         Ok(())
     }
 
-    /// Empty group headers and standalone toolbar grips share reset semantics;
-    /// a tab label never resets the size, even in a singleton content group.
-    pub fn floating_reset_target(&self, item: DockItem) -> Option<u32> {
-        self.floating.iter().find_map(|f| {
-            let eligible = match item {
-                DockItem::Group { group } => f.root.id() == group,
-                DockItem::Panel { panel } => {
-                    panel.kind() == PanelKind::Tiles
-                        && matches!(&f.root, DockNode::Tabs { panels, .. } if panels == &[panel])
-                }
-                DockItem::Tile { .. } => false,
-            };
-            eligible.then_some(f.root.id())
-        })
+    /// Empty headers and grips accept double-clicks, but tab labels do not.
+    /// Lone docked handles toggle built-in panel tabs or refit toolbars;
+    /// floating handles also restore sizes and cycle toolbar layouts.
+    pub fn panel_handle_target(&self, item: DockItem) -> Option<u32> {
+        let group = match item {
+            DockItem::Group { group } => group,
+            DockItem::Panel { panel } if panel.kind() == PanelKind::Tiles => {
+                self.panel_group(panel)?
+            }
+            _ => return None,
+        };
+        let lone = self.group_panels(group).ok()?.len() == 1;
+        (lone
+            || (matches!(item, DockItem::Group { .. })
+                && self.floating.iter().any(|f| f.root.id() == group)))
+        .then_some(group)
     }
 
     pub fn set_tile_style(
@@ -2323,10 +2325,32 @@ impl DockLayout {
         if cross + 2.0 >= (old.size()[dimension] + 2.0) * 2.0 {
             return Ok(());
         }
+        self.resize_docked_group_cross(&before, group, style.size()[dimension]);
+        Ok(())
+    }
+
+    /// Change the target ribbon's thickness without stretching side-by-side
+    /// neighbors. The resolver supplies any extra lanes needed for overflow.
+    fn resize_docked_group_cross(
+        &mut self,
+        before: &ResolvedLayout,
+        group: &GroupPlacement,
+        size: f32,
+    ) {
+        let axis = if group.axis == Axis::Horizontal {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        };
+        let cross = if axis == Axis::Horizontal {
+            group.bounds.width
+        } else {
+            group.bounds.height
+        };
         let band = self
             .bands
             .iter_mut()
-            .find(|b| b.root.group_for(panel).is_some())
+            .find(|b| b.root.group_for(group.active).is_some())
             .unwrap();
         let divider = before
             .dividers
@@ -2344,24 +2368,44 @@ impl DockLayout {
         } else {
             divider.bounds.y - divider.parent.y
         };
-        let delta = style.size()[dimension] - cross;
+        let delta = size - cross;
         resize_node_extent(&mut band.root, group.id, axis, extent, delta);
         band.extent = extent + delta + WORKSPACE_SPACING;
-        Ok(())
     }
 
     pub fn reset_floating_size(&mut self, group: u32) -> Result<(), String> {
         self.set_floating_default(group, FloatingToolbarLayout::Compact)
     }
 
-    /// Drag-area double-click first restores a custom size. At default size,
-    /// a lone toolbar cycles layouts and a lone built-in panel toggles its tab.
-    pub fn cycle_floating_size(&mut self, group: u32, viewport: [f32; 2]) -> Result<(), String> {
-        let floating = self
-            .floating
-            .iter()
-            .find(|f| f.root.id() == group)
-            .ok_or("Unknown floating group")?;
+    /// Docked lone panels toggle their tab; lone toolbars refit to their dock.
+    /// Floating groups first restore a custom size. At default size, a lone
+    /// toolbar cycles layouts and a lone built-in panel toggles its tab.
+    pub fn double_click_panel_handle(
+        &mut self,
+        group: u32,
+        viewport: [f32; 2],
+    ) -> Result<(), String> {
+        let Some(floating) = self.floating.iter().find(|f| f.root.id() == group) else {
+            if let [panel] = self.group_panels(group)? {
+                if panel.kind() == PanelKind::Content {
+                    let config = self.panel_mut(*panel)?;
+                    config.hide_tab = !config.hide_tab;
+                } else {
+                    let before = self.workspace(
+                        viewport[0],
+                        viewport[1],
+                        crate::HEADER_HEIGHT,
+                        crate::STATUS_HEIGHT,
+                    );
+                    if let Some(g) = before.groups.iter().find(|g| g.id == group) {
+                        let size = self.panel(*panel)?.tile_style.size()
+                            [usize::from(g.axis == Axis::Horizontal)];
+                        self.resize_docked_group_cross(&before, g, size);
+                    }
+                }
+            }
+            return Ok(());
+        };
         let DockNode::Tabs { panels, active, .. } = &floating.root else {
             return Err("Invalid floating group".into());
         };
@@ -3432,7 +3476,7 @@ mod tests {
                     FloatingToolbarLayout::Horizontal,
                     FloatingToolbarLayout::Compact,
                 ] {
-                    layout.cycle_floating_size(group, viewport).unwrap();
+                    layout.double_click_panel_handle(group, viewport).unwrap();
                     assert_eq!(layout.floating[0].toolbar_layout, mode);
                     let g = layout
                         .workspace(
@@ -3594,7 +3638,7 @@ mod tests {
             .unwrap();
         let group = layout.panel_group(Panel::Toolbar).unwrap();
         assert_eq!(
-            layout.floating_reset_target(DockItem::Panel {
+            layout.panel_handle_target(DockItem::Panel {
                 panel: Panel::Toolbar
             }),
             Some(group)
@@ -3625,19 +3669,19 @@ mod tests {
         assert_eq!(layout.floating[0].width, 390.0);
         assert_eq!(layout.floating[0].height, Some(310.0));
         assert_eq!(
-            layout.floating_reset_target(DockItem::Panel {
+            layout.panel_handle_target(DockItem::Panel {
                 panel: Panel::Toolbar
             }),
             None
         );
         assert_eq!(
-            layout.floating_reset_target(DockItem::Panel {
+            layout.panel_handle_target(DockItem::Panel {
                 panel: Panel::Sizes
             }),
             None
         );
         assert_eq!(
-            layout.floating_reset_target(DockItem::Group { group }),
+            layout.panel_handle_target(DockItem::Group { group }),
             Some(group)
         );
     }
@@ -3696,6 +3740,36 @@ mod tests {
                         .unwrap()
                         .bounds
                         .width;
+                    layout.resize_docked_group_cross(&before, toolbar, style.size()[0] + 120.0);
+                    layout
+                        .double_click_panel_handle(toolbar.id, viewport)
+                        .unwrap();
+                    let restored = resolve(&layout);
+                    assert!(
+                        (restored
+                            .groups
+                            .iter()
+                            .find(|g| g.id == toolbar.id)
+                            .unwrap()
+                            .bounds
+                            .width
+                            - toolbar.bounds.width)
+                            .abs()
+                            < 0.01
+                    );
+                    assert!(
+                        (restored
+                            .groups
+                            .iter()
+                            .find(|g| g.id == sizes)
+                            .unwrap()
+                            .bounds
+                            .width
+                            - other)
+                            .abs()
+                            < 0.01,
+                        "Refitting a nested toolbar preserves the adjacent content width"
+                    );
                     let next = if style == TileStyle::Small {
                         TileStyle::Large
                     } else {

@@ -304,7 +304,8 @@ export function createPreferences({ element, button, icon, numberField, panelFra
         row.append(choose); shortcutList.append(row); shortcuts.set(spec.id, { row, text, binding });
       }
       const { row, binding } = shortcuts.get(spec.id);
-      row.hidden = !spec.visible; binding.textContent = spec.shortcut || "Disabled";
+      row.hidden = !spec.visible; binding.textContent = spec.shortcut;
+      row.classList.toggle("modified", spec.modified);
     }
     error.textContent = model.error || "";
     if (!dialog.open) { dialog.showModal(); root.classList.add("show-content"); }

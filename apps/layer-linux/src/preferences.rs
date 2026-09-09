@@ -1050,11 +1050,12 @@ impl Preferences {
             for ((_, row, binding), spec) in self.shortcut_rows.borrow().iter().zip(&view.shortcuts)
             {
                 row.set_visible(spec.visible);
-                binding.set_text(if spec.shortcut.is_empty() {
-                    "Disabled"
+                binding.set_text(&spec.shortcut);
+                if spec.modified {
+                    binding.add_css_class("heading");
                 } else {
-                    &spec.shortcut
-                });
+                    binding.remove_css_class("heading");
+                }
             }
             // A closing dialog remains rooted during its animation. Present
             // on the model's closed -> open transition, even while rooted.

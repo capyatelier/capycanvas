@@ -240,6 +240,12 @@ the supplied Procreate reference, not an Android requirement.
   table. Up to four alternatives are supported in all hosts. Duplicates and
   limits are validated in Rust. Menu hints update from applied core state,
   immediately after each accepted edit; GTK's native hint shows the first alternative.
+- Shortcut search includes current binding labels, in both the shortcut list
+  and global preferences search: `z` also finds `Ctrl+Z` and `Ctrl+Shift+Z`.
+  Rust marks rows whose binding set differs from its defaults (alternative order
+  is irrelevant). GTK, web and Android bold the binding text, including Disabled,
+  following [GNOME Settings' shortcut rows](https://github.com/GNOME/gnome-control-center/blob/main/panels/keyboard/cc-keyboard-shortcut-row.c).
+  Reset remains in the editor, not a separate button in each list row.
 - The browser cannot own browser/OS-reserved combinations. The core rejects
   common reserved browser chords rather than claiming they will work.
 - Pan stores the actually pressed key. Releasing it clears the momentary mode

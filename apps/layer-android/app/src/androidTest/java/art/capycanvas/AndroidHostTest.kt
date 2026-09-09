@@ -169,6 +169,14 @@ class AndroidHostTest {
     }
     private fun capture(name: String): Bitmap {
         compose.waitForIdle()
+        // Compose can be idle before SurfaceFlinger presents its last frame.
+        // Allow two vsyncs for theme/visibility changes to reach the compositor.
+        val presented = CountDownLatch(1)
+        compose.runOnIdle {
+            val view = compose.activity.window.decorView
+            view.postOnAnimation { view.postOnAnimation { presented.countDown() } }
+        }
+        assertTrue(presented.await(5, TimeUnit.SECONDS))
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         val directory = File(compose.activity.getExternalFilesDir(null), "validation").apply { mkdirs() }
         File(directory, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -268,6 +276,48 @@ class AndroidHostTest {
         workspaceMenu(); capture("workspace-menu-dark")
         compose.onNodeWithText("Redo Workspace Change").performClick()
         compose.waitUntil(10_000) { groups().none { copy in it.array("panels").values() } }
+    }
+
+    @Test fun dockedPanelHandlesToggleTabsOnFirstDoubleTap() {
+        val id = group("sizes").getInt("id")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for (style in listOf("name", "icon")) {
+                customize(obj("type" to "set_tab_style", "target" to obj("kind" to "panel", "panel" to "sizes"), "style" to style))
+                val bands = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("bands").toString()
+                for (hidden in listOf(true, false)) {
+                    compose.onNodeWithTag("group-grip-$id").performTouchInput { doubleClick() }
+                    compose.waitUntil(10_000) { group("sizes").getBoolean("tabs_visible") == !hidden }
+                    val layout = state().getJSONObject("workspace").getJSONObject("layout")
+                    val config = layout.array("panels").objects().first { it.getString("id") == "sizes" }
+                    assertEquals(style, config.getString("tab_style"))
+                    assertEquals(hidden, config.getBoolean("hide_tab"))
+                    assertFalse(group("sizes").getBoolean("floating"))
+                    assertEquals("Dock dimensions remain unchanged", bands, layout.getJSONArray("bands").toString())
+                    capture("workspace-docked-handle-$style-$hidden-$theme")
+                }
+            }
+        }
+    }
+
+    @Test fun dockedToolbarHandlesRestoreSingleLanesOrNecessaryWrap() {
+        for (edge in listOf("left", "right", "top", "bottom")) {
+            for (style in listOf("small", "large", "labeled")) {
+                action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
+                customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
+                action(obj("type" to "move_panel", "panel" to "toolbar", "viewport" to viewport(), "target" to obj("kind" to "edge", "edge" to edge, "outer" to true)))
+                val natural = JSONObject(group("toolbar").toString())
+                val oversized = JSONObject(state().getJSONObject("workspace").toString())
+                val band = oversized.getJSONObject("layout").array("bands").objects().first { it.getJSONObject("root").getInt("id") == natural.getInt("id") }
+                band.put("extent", band.number("extent") + 120f)
+                action(obj("type" to "restore_workspace", "workspace" to oversized))
+                compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
+                compose.waitUntil(10_000) { group("toolbar").getJSONObject("bounds").toString() == natural.getJSONObject("bounds").toString() }
+                assertFalse(group("toolbar").getBoolean("tabs_visible"))
+                assertFalse(group("toolbar").getBoolean("floating"))
+                capture("workspace-docked-toolbar-reset-$edge-$style")
+            }
+        }
     }
 
     @Test fun floatingToolbarPresetsRefitTileSizesAndResetOnFirstDoubleClick() {
@@ -1019,6 +1069,49 @@ class AndroidHostTest {
         } }
         assertNull(host.actionError)
         capture("13-tab-group-drag")
+    }
+
+    @Test fun shortcutSearchFindsModifiedKeysAndMarksChangedBindings() {
+        compose.onNodeWithContentDescription("Settings").performClick()
+        compose.onNodeWithText("Keyboard Shortcuts").performClick()
+        val search = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("shortcuts-search")))
+        search.performTextInput("z")
+        compose.waitUntil(10_000) { preferences().getString("shortcut_query") == "z" }
+        compose.waitForIdle()
+        for (id in listOf("ZenMode", "Undo", "Redo", "UndoWorkspace", "RedoWorkspace")) {
+            compose.onNodeWithTag("shortcut-command.$id").performScrollTo().assertIsDisplayed()
+        }
+        search.performTextReplacement("Ctrl+Z")
+        compose.waitUntil(10_000) { preferences().getString("shortcut_query") == "Ctrl+Z" }
+        compose.waitForIdle()
+        compose.onNodeWithTag("shortcut-command.Undo").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("shortcut-command.ZenMode").assertDoesNotExist()
+        search.performTextReplacement("Zen mode")
+        compose.waitUntil(10_000) { preferences().getString("shortcut_query") == "Zen mode" }
+        val id = "command.ZenMode"
+        fun preference(type: String) = action(obj("type" to "preferences", "action" to obj("type" to type, "id" to id)))
+        preference("reset_shortcut")
+        fun weight() : Int {
+            val results = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithTag("shortcut-binding-$id", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(results)) }
+            return results.single().layoutInput.style.fontWeight!!.weight
+        }
+        assertEquals(400, weight())
+        compose.onNodeWithTag("shortcut-$id").performScrollTo().performClick()
+        compose.waitUntil(10_000) { preferences().objectOrNull("shortcut_editor") != null }
+        compose.onNodeWithContentDescription("Remove shortcut").performClick()
+        compose.waitUntil(10_000) { preferences().getJSONObject("shortcut_editor").array("bindings").length() == 0 }
+        action(obj("type" to "preferences", "action" to obj("type" to "close_shortcut_editor")))
+        assertEquals(700, weight())
+        compose.onNodeWithTag("shortcut-binding-$id", useUnmergedTree = true).assertTextEquals("Disabled")
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            capture("shortcuts-modified-$theme")
+        }
+        preference("reset_shortcut")
+        assertEquals(400, weight())
+        compose.onNodeWithText("Done").performClick()
     }
 
     @Test fun shortcutPageRecordsMultipleBindingsAndPersists() {

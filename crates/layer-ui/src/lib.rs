@@ -472,9 +472,9 @@ pub enum UiAction {
         position: [f32; 2],
         viewport: [f32; 2],
     },
-    /// Double-click a float's drag area: reset size, then cycle toolbar layouts
-    /// or toggle the header of a lone built-in panel already at default size.
-    CycleFloatingSize {
+    /// Double-click a drag handle: toggle a docked panel's tab / refit its
+    /// toolbar, or restore a float before cycling its layout / panel header.
+    DoubleClickPanelHandle {
         group: u32,
         viewport: [f32; 2],
     },

@@ -383,18 +383,20 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
 
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {
     CoreTextField(view.optString("shortcut_query"), { host.preference(obj("type" to "search_shortcuts", "query" to it)) },
-        modifier = Modifier.fillMaxWidth(), height = 48.dp,
+        modifier = Modifier.fillMaxWidth().testTag("shortcuts-search"), height = 48.dp,
         placeholder = { Text("Search keyboard shortcuts") }, leadingIcon = { SharedIcon("search", null, Modifier.size(20.dp)) })
     val colors = LocalPalette.current
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = colors.settingsCard, shadowElevation = 1.dp) {
         Column {
             view.array("shortcuts").objects().filter { it.getBoolean("visible") }.forEachIndexed { index, shortcut ->
                 if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 16.dp), color = colors.divider)
-                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("shortcut-" + shortcut.getString("id"))
                     .clickable { host.preference(obj("type" to "edit_shortcut", "id" to shortcut.getString("id"))) }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(shortcut.getString("label"), Modifier.weight(1f))
-                    Text(shortcut.getString("shortcut"), color = colors.settingsSecondary)
+                    Text(shortcut.getString("shortcut"), color = colors.settingsSecondary,
+                        modifier = Modifier.testTag("shortcut-binding-" + shortcut.getString("id")),
+                        fontWeight = if (shortcut.getBoolean("modified")) FontWeight.Bold else FontWeight.Normal)
                     SharedIcon("chevron-down", null, Modifier.size(20.dp).rotate(-90f), tint = colors.settingsSecondary)
                 }
             }

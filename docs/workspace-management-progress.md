@@ -61,6 +61,13 @@ and will be updated with the implementation. No renderer changes are required.
   double-click first restores a custom size. At default size it toggles Hide tab
   for lone panels, or cycles compact/vertical/horizontal layouts for toolbars.
   Tile-size changes refit the active toolbar preset. Multi-tab groups only reset.
+  For docked lone built-in panels, double-clicking the header's empty/grip area
+  or the hidden tab's bottom grip toggles Hide tab immediately, preserving dock
+  dimensions and name/icon style. Docked lone toolbars reset to a single row
+  or column for their dock edge, wrapping only when space requires it, without
+  stretching side-by-side neighbors. Docked multi-tab groups are unchanged.
+  Rust owns handle eligibility and the double-click action for every
+  host; tab labels keep their separate activation behavior.
 - One Rust 80px constant governs tear-off, snap reach, Zen edge reveal and the
   keep-visible margin. Float dragging does not reveal hidden docks until an
   occupied screen edge is reached; revelation lasts through that drag. Every
@@ -173,3 +180,24 @@ and will be updated with the implementation. No renderer changes are required.
   and eight-edge resize tests also pass using that dual-ABI package. Physical
   tablet input/latency remains a separate device-validation task; this rollout
   does not change the GPU raster or SurfaceView integration.
+
+### Docked handle and shortcut follow-up (2026-09-09)
+
+- `DoubleClickPanelHandle` and `panel_handle_target` now own the docked and
+  floating rules together. GTK, web and Android only forward native gestures.
+  Lone docked panels toggle Hide tab; lone docked toolbars restore the minimum
+  row/column layout for their position, with overflow wrapping. Existing
+  floating reset/cycle behavior and name/icon choices are preserved.
+- 115 shared UI tests and five Android Rust adapter tests pass. Native GTK
+  docked-handle and preferences tests, the browser workspace/shortcut suites,
+  and all 31 Android emulator tests pass. Builds cover WASM, GTK and both Android
+  ABIs; formatting, Rust clippy and Android lint pass.
+- The older `native_floating_gestures` GTK test is not green in this environment:
+  transient measurement assertions and synthetic resize/drop hit tests fail.
+  A clean archive of the preceding commit (`be4fe6a`) also fails its synthetic
+  resize-hit assertion. This is not claimed as passing; shared floating rules
+  and the real web/Android gesture regressions remain green.
+- Review captures are in the ignored `artifacts/ui/workspace-management/gtk/`,
+  `artifacts/ui/workspace-management/web/`, `artifacts/ui/preferences/` and
+  `artifacts/android/shortcuts-docked-handles/` directories. No new assets or
+  dependencies were added.

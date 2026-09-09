@@ -1328,7 +1328,7 @@ impl Workspace {
         if self.refreshing.get() {
             return;
         }
-        let animate = if let UiAction::CycleFloatingSize { group, .. } = action {
+        let animate = if let UiAction::DoubleClickPanelHandle { group, .. } = action {
             self.groups
                 .borrow()
                 .iter()
@@ -2246,7 +2246,7 @@ impl Workspace {
 
     fn install_workspace_drag(self: &Rc<Self>) {
         let click = gtk::GestureClick::new();
-        click.set_name(Some("floating-title-reset"));
+        click.set_name(Some("panel-handle-double-click"));
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
         click.connect_pressed(glib::clone!(
             #[weak(rename_to = w)]
@@ -2256,11 +2256,11 @@ impl Workspace {
                     && let Some(DragTarget::Dock(item)) = w.drag_target_at([x as f32, y as f32])
                     && let Some(group) = {
                         let layout = w.surface.imp().layout.borrow();
-                        layout.floating_reset_target(item)
+                        layout.panel_handle_target(item)
                     }
                 {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
-                    w.dispatch(UiAction::CycleFloatingSize {
+                    w.dispatch(UiAction::DoubleClickPanelHandle {
                         group,
                         viewport: [w.surface.width() as f32, w.surface.height() as f32],
                     });

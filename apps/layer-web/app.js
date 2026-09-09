@@ -240,12 +240,12 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if (["move_panel", "move_group", "move_tile", "cycle_floating_size"].includes(action.type))
+    if (["move_panel", "move_group", "move_tile", "double_click_panel_handle"].includes(action.type))
       action = {
         ...action,
         viewport: [workspace.clientWidth, workspace.clientHeight],
       };
-    const animated = ["cycle_floating_size", "select_panel_tab"].includes(action.type) ? groups.get(action.group) : null;
+    const animated = ["double_click_panel_handle", "select_panel_tab"].includes(action.type) ? groups.get(action.group) : null;
     const before = animated?.getBoundingClientRect();
     applyChange(app.dispatch(action));
     if (before && animated?.classList.contains("floating-panel") && !animated.classList.contains("expanded-panel")
@@ -750,10 +750,10 @@ workspace.addEventListener("dblclick", e => {
   if (!node) return;
   const action = JSON.parse(node.dataset.workspaceDrag);
   if (action.type !== "drag_workspace") return;
-  const group = app.floating_size_target(action.item);
+  const group = app.panel_handle_target(action.item);
   if (group == null) return;
   e.preventDefault(); e.stopPropagation();
-  dispatch({ type: "cycle_floating_size", group });
+  dispatch({ type: "double_click_panel_handle", group });
 });
 function input(event) {
   if (!app) return {};

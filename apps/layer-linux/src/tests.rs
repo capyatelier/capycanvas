@@ -230,7 +230,7 @@ fn native_toolbar_sizing() {
             let controllers = w.surface.observe_controllers();
             let double_click = (0..controllers.n_items())
                 .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
-                .find(|g| g.name().as_deref() == Some("floating-title-reset"))
+                .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
                 .unwrap();
             double_click
                 .emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
@@ -343,7 +343,7 @@ fn native_toolbar_sizing() {
                 serde_json::to_value(&resized).unwrap(),
                 "style and refit share one undo entry"
             );
-            w.dispatch(UiAction::CycleFloatingSize {
+            w.dispatch(UiAction::DoubleClickPanelHandle {
                 group: natural.id,
                 viewport,
             });
@@ -623,7 +623,12 @@ fn native_floating_gestures() {
         w.dispatch(UiAction::Invoke {
             command: CommandId::UndoWorkspace,
         });
-        assert_eq!(state(&w).workspace, baseline);
+        // Undo restores durable state; native text measurements may still be
+        // settling after the resize and are intentionally not history entries.
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(&baseline).unwrap()
+        );
     }
     // Releasing into each screen edge rebuilds the docking widgets while the
     // workspace gesture remains alive. This caught the RefCell teardown panic.
@@ -671,7 +676,10 @@ fn native_floating_gestures() {
         w.dispatch(UiAction::Invoke {
             command: CommandId::UndoWorkspace,
         });
-        assert_eq!(state(&w).workspace, baseline);
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(&baseline).unwrap()
+        );
     }
     restore();
     // Create space in the title bar and verify inside-top is move, not resize.
@@ -706,7 +714,7 @@ fn native_floating_gestures() {
     let controllers = w.surface.observe_controllers();
     let click = (0..controllers.n_items())
         .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
-        .find(|g| g.name().as_deref() == Some("floating-title-reset"))
+        .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
         .unwrap();
     // Tabs are excluded from double-click reset.
     click.emit_by_name::<()>(
@@ -2310,6 +2318,152 @@ fn native_column_removal() {
 }
 
 #[test]
+#[ignore = "docked handle double-click: requires a Wayland/Vulkan display"]
+fn native_docked_handles() {
+    let app = native_test_app("art.capycanvas.DockedHandleTest");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let panel = Panel::Sizes;
+    let group = state(&w).workspace.layout.panel_group(panel).unwrap();
+    let controllers = w.surface.observe_controllers();
+    let click = (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+        .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
+        .unwrap();
+    let dir = "../../artifacts/ui/workspace-management/gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for style in [TabStyle::Name, TabStyle::Icon] {
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTabStyle {
+                    target: ContextTarget::Panel { panel },
+                    style,
+                },
+            });
+            pump(200);
+            let initial = state(&w).workspace;
+            for hidden in [true, false] {
+                let root = w
+                    .groups
+                    .borrow()
+                    .iter()
+                    .find(|g| g.id == group)
+                    .unwrap()
+                    .root
+                    .clone();
+                let grip = find_css(root.upcast_ref(), "panel-grip").unwrap();
+                let b = grip.compute_bounds(&w.surface).unwrap();
+                let point = [b.x() + b.width() / 2.0, b.y() + b.height() / 2.0];
+                assert!(
+                    matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
+                );
+                click.emit_by_name::<()>(
+                    "pressed",
+                    &[&2i32, &(point[0] as f64), &(point[1] as f64)],
+                );
+                pump(300);
+                let mut expected = initial.clone();
+                expected
+                    .layout
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.id == panel)
+                    .unwrap()
+                    .hide_tab = hidden;
+                // Hiding a header changes host text measurements, not dock sizes.
+                expected.layout.measurements = state(&w).workspace.layout.measurements;
+                assert_eq!(
+                    state(&w).workspace,
+                    expected,
+                    "First double-click toggles only tab visibility"
+                );
+                let resolved = w
+                    .resolved()
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == group)
+                    .unwrap();
+                assert!(!resolved.floating);
+                assert_eq!(resolved.tabs_visible, !hidden);
+                capture_reference(
+                    &w,
+                    &format!("{dir}/docked-handle-{style:?}-{hidden}-{theme:?}.png"),
+                    1.0,
+                );
+            }
+        }
+    }
+    let initial = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+        for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: initial.clone(),
+            });
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::SetTileStyle {
+                    panel: Panel::Toolbar,
+                    style,
+                },
+            });
+            w.dispatch(UiAction::MovePanel {
+                panel: Panel::Toolbar,
+                viewport,
+                target: DockTarget::Edge { edge, outer: true },
+            });
+            pump(200);
+            let natural = w
+                .resolved()
+                .groups
+                .into_iter()
+                .find(|g| g.active == Panel::Toolbar)
+                .unwrap();
+            let mut oversized = state(&w).workspace;
+            oversized
+                .layout
+                .bands
+                .iter_mut()
+                .find(|b| b.root.id() == natural.id)
+                .unwrap()
+                .extent += 120.0;
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: oversized,
+            });
+            pump(200);
+            let root = w.panel_widget(Panel::Toolbar);
+            let grip = find_css(&root, "panel-grip").unwrap();
+            let b = grip.compute_bounds(&w.surface).unwrap();
+            click.emit_by_name::<()>(
+                "pressed",
+                &[
+                    &2i32,
+                    &((b.x() + b.width() / 2.0) as f64),
+                    &((b.y() + b.height() / 2.0) as f64),
+                ],
+            );
+            pump(300);
+            let fitted = w
+                .resolved()
+                .groups
+                .into_iter()
+                .find(|g| g.id == natural.id)
+                .unwrap();
+            assert_eq!(fitted.bounds, natural.bounds, "{edge:?} {style:?}");
+            assert!(!fitted.tabs_visible && !fitted.floating);
+            capture_reference(
+                &w,
+                &format!("{dir}/docked-toolbar-reset-{edge:?}-{style:?}.png"),
+                1.0,
+            );
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
 #[ignore = "tab visibility and bottom grips: requires a private Wayland/Vulkan display"]
 fn native_hidden_tabs() {
     let app = native_test_app("art.capycanvas.HiddenTabsTest");
@@ -2997,13 +3151,47 @@ fn native_preferences_and_shortcuts() {
     w.dispatch(UiAction::OpenSettings {
         page: SettingsPage::Shortcuts,
     });
+    let search: gtk::SearchEntry =
+        find_named(w.preferences.dialog.upcast_ref(), "shortcuts-search")
+            .unwrap()
+            .downcast()
+            .unwrap();
+    search.set_text("z");
+    pump(300);
+    for command in ["ZenMode", "Undo", "Redo", "UndoWorkspace", "RedoWorkspace"] {
+        assert!(
+            find_named(
+                w.preferences.dialog.upcast_ref(),
+                &format!("shortcut-command.{command}")
+            )
+            .unwrap()
+            .is_visible()
+        );
+    }
+    search.set_text("");
+    pump(300);
     let row: adw::ActionRow =
         find_named(w.preferences.dialog.upcast_ref(), "shortcut-command.Brush")
             .unwrap()
             .downcast()
             .unwrap();
+    let binding = find_css(row.upcast_ref(), "dim-label").unwrap();
+    assert!(!binding.has_css_class("heading"));
     row.emit_by_name::<()>("activated", &[]);
     pump(200);
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::RemoveShortcut {
+            id: CommandId::Brush.shortcut_id(),
+            index: 0,
+        },
+    });
+    assert!(binding.has_css_class("heading"));
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::ResetShortcut {
+            id: CommandId::Brush.shortcut_id(),
+        },
+    });
+    assert!(!binding.has_css_class("heading"));
     click(
         &find_named(w.window.upcast_ref(), "add-shortcut")
             .unwrap()
@@ -3041,10 +3229,40 @@ fn native_preferences_and_shortcuts() {
     click(&confirm);
     assert!(state(&w).preferences.capture.is_none());
     assert_eq!(state(&w).settings.shortcuts["command.Brush"][1].key, "e");
+    assert!(binding.has_css_class("heading"));
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::CloseShortcutEditor,
     });
     pump(250);
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(400);
+        assert_eq!(
+            adw::StyleManager::for_display(&w.area.display()).is_dark(),
+            theme == Theme::Dark
+        );
+        assert_eq!(
+            binding
+                .clone()
+                .downcast::<gtk::Label>()
+                .unwrap()
+                .layout()
+                .iter()
+                .run_readonly()
+                .unwrap()
+                .item()
+                .analysis()
+                .font()
+                .describe()
+                .weight(),
+            gtk::pango::Weight::Bold
+        );
+        capture_reference(
+            &w,
+            &format!("{dir}/gtk-shortcut-modified-{theme:?}.png"),
+            1.0,
+        );
+    }
     click(&find_button(w.preferences.dialog.upcast_ref(), "Done").unwrap());
     assert!(
         state(&w).requests.is_empty(),

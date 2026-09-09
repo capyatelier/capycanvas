@@ -327,7 +327,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
         Column {
             if (tabsVisible) Row(Modifier.fillMaxWidth().height(36.dp).background(colors.tabs).dragSource(dock, groupItem)
                 .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                    onDoubleClick = { dock.cycle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
+                    onDoubleClick = { dock.doubleClickHandle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
                     group.array("panels").values().forEachIndexed { index, id ->
                         val p = panels[id.toString()] ?: return@forEachIndexed
@@ -359,7 +359,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                 }
                 Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                        onDoubleClick = { dock.cycle(groupItem) },
+                        onDoubleClick = { dock.doubleClickHandle(groupItem) },
                         onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
             }
             Box(Modifier.weight(1f)) {
@@ -368,7 +368,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
             group.objectOrNull("footer_grip")?.let { grip ->
                 Box(Modifier.fillMaxWidth().height(grip.number("height").dp).testTag("group-grip-${group.getInt("id")}").dragSource(dock, groupItem)
-                    .combinedClickable(onClick = {}, onDoubleClick = { dock.cycle(groupItem) },
+                    .combinedClickable(onClick = {}, onDoubleClick = { dock.doubleClickHandle(groupItem) },
                         onLongClick = { dock.context(groupItem) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group", vertical = true) }
             }
         }

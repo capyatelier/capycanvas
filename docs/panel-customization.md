@@ -148,7 +148,12 @@ The rollout and per-platform evidence are tracked in
   refits the current preset without changing orientation. All changes animate
   briefly and preserve the anchor where viewport bounds allow. Tab labels never
   activate this behavior. The cycle, size comparison, tab toggle and persistence
-  belong to Rust (`CycleFloatingSize`), not host click handlers.
+  belong to Rust (`DoubleClickPanelHandle`), not host click handlers. On a
+  docked lone built-in panel, the same drag areas toggle Hide tab immediately
+  without resizing its dock or changing its name/icon style. A docked lone
+  toolbar resets to one row (top/bottom) or column (left/right), adding lanes
+  only when needed to fit. Nested resets preserve side-by-side panel widths.
+  Docked multi-tab groups do not change.
 - All durable workspace edits have independent undo/redo, including panel/tab
   moves, tile ordering, names, visibility, style, and floating geometry. Resize
   and live-move gestures coalesce into one entry; cancel restores the start.
@@ -193,8 +198,10 @@ no third-party code or assets are imported.
   saved settings or undo entries. Hosts do not decide widths, heights, targets,
   naming rules or menu availability. `DragWorkspace` owns tear-off, live movement,
   snapping, singleton/group semantics and Zen reveal state. `ResizeFloating`
-  owns eight-edge resizing; `CycleFloatingSize` restores intrinsic dimensions
-  and cycles the applicable default layout or tab visibility.
+  owns eight-edge resizing; `DoubleClickPanelHandle` toggles a docked lone
+  panel's tab or refits a docked toolbar, or restores floating dimensions and cycles the applicable
+  default layout or tab visibility. `panel_handle_target` determines handle
+  eligibility; hosts do not replicate the singleton/content/floating rules.
   Both continuous gestures use Down/Move/Up/Cancel and coalesced history. Native
   hosts retain their gesture on the workspace container, not a replaceable tab
   widget. `ChromeFacts.dragging` is reserved for native tool-tile DND, not shared

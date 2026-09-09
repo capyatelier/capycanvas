@@ -234,16 +234,27 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
   await action({ type: "open_settings", page: "shortcuts" });
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5, "deep link preserves accepted settings");
+  await evaluate("document.querySelector('#shortcuts-search').value='z';document.querySelector('#shortcuts-search').dispatchEvent(new Event('input'))");
+  for (const id of ["ZenMode", "Undo", "Redo", "UndoWorkspace", "RedoWorkspace"]) {
+    assert.equal(await evaluate(`document.querySelector('[data-shortcut="command.${id}"]').hidden`), false, `Z finds ${id}`);
+  }
+  await preference({ type: "search_shortcuts", query: "ctrl+z" });
+  assert.equal(await evaluate("document.querySelector('[data-shortcut=\"command.Undo\"]').hidden"), false);
+  assert.equal(await evaluate("document.querySelector('[data-shortcut=\"command.ZenMode\"]').hidden"), true);
   await evaluate("const shortcutsSearch=document.querySelector('#shortcuts-search');shortcutsSearch.value='eraser';shortcutsSearch.dispatchEvent(new Event('input'))");
   assert.ok(await evaluate("[...document.querySelectorAll('[data-shortcut]:not([hidden])')].every(row=>row.textContent.toLowerCase().includes('eraser'))"));
   await preference({ type: "search_shortcuts", query: "" });
   await click('[data-shortcut="command.Brush"] .shortcut-choose');
+  const bindingWeight = () => evaluate("getComputedStyle(document.querySelector('[data-shortcut=\"command.Brush\"] .shortcut-hint')).fontWeight");
+  assert.equal(await bindingWeight(), "400");
   assert.equal(await evaluate("document.querySelector('#shortcut-editor').open"), true);
   assert.equal(await evaluate("document.querySelector('#shortcut-capture').open"), false);
   await click('#shortcut-editor .preference-row button');
   assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), []);
+  assert.equal(await bindingWeight(), "700", "Disabled overrides are visibly customized too");
   await click('#shortcut-editor footer button:first-child');
   assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), ["B"]);
+  assert.equal(await bindingWeight(), "400", "Reset removes the customized emphasis");
   await click('#add-shortcut');
   await key("Control", { ctrlKey: true });
   assert.equal(await evaluate("layerApp.app.preferences().capture.chord ?? null"), null);
@@ -260,6 +271,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
   assert.deepEqual(await evaluate("layerApp.app.preferences().shortcut_editor.bindings"), ["B", "E"]);
   await capture("shortcut-editor");
   await click('#close-shortcut-editor');
+  assert.equal(await bindingWeight(), "700");
+  for (const theme of ["light", "dark"]) {
+    await action({ type: "set_theme", theme });
+    await capture(`shortcut-modified-${theme}`);
+  }
   await click('[data-shortcut="command.Settings"] .shortcut-choose');
   await click('#add-shortcut');
   await key("j", { ctrlKey: true });

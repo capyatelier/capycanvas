@@ -276,7 +276,7 @@ impl WebApp {
     pub fn workspace_menu(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.workspace_menu())
     }
-    pub fn floating_size_target(&self, item: JsValue) -> Result<JsValue, JsValue> {
+    pub fn panel_handle_target(&self, item: JsValue) -> Result<JsValue, JsValue> {
         let item = serde_wasm_bindgen::from_value(item).map_err(js)?;
         serialize(
             &self
@@ -284,7 +284,7 @@ impl WebApp {
                 .state()
                 .workspace
                 .layout
-                .floating_reset_target(item),
+                .panel_handle_target(item),
         )
     }
     pub fn context_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {

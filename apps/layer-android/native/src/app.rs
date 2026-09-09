@@ -254,7 +254,7 @@ impl App {
             Context {
                 target: layer_ui::ContextTarget,
             },
-            FloatingSizeTarget {
+            PanelHandleTarget {
                 item: layer_ui::DockItem,
             },
             Drop {
@@ -277,13 +277,13 @@ impl App {
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::Context { target } => json!(self.session.context_menu(target)?),
-            Query::FloatingSizeTarget { item } => {
+            Query::PanelHandleTarget { item } => {
                 json!(
                     self.session
                         .state()
                         .workspace
                         .layout
-                        .floating_reset_target(item)
+                        .panel_handle_target(item)
                 )
             }
             Query::Drop {
@@ -355,7 +355,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let target = app.query(json!({"type": "floating_size_target", "item": {"kind": "panel", "panel": "toolbar"}})).unwrap();
+        let target = app.query(json!({"type": "panel_handle_target", "item": {"kind": "panel", "panel": "toolbar"}})).unwrap();
         assert!(target.is_u64());
         app.dispatch(serde_json::from_value(json!({"type": "customize", "action": {"type": "duplicate_toolbar", "panel": "toolbar"}})).unwrap()).unwrap();
         assert_eq!(

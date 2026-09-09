@@ -846,22 +846,31 @@ impl PreferencesState {
         let shortcut_query = self.shortcut_query.trim().to_lowercase();
         let shortcuts: Vec<_> = crate::shortcuts::definitions(settings, platform)
             .into_iter()
-            .map(|(definition, group)| ShortcutRow {
-                shortcut: settings.shortcut_label(&definition.id, platform),
-                modified: settings.shortcuts.contains_key(&definition.id),
-                visible: format!("{group} {}", definition.label)
-                    .to_lowercase()
-                    .contains(&shortcut_query),
-                id: definition.id,
-                label: definition.label,
-                group: group.into(),
+            .map(|(definition, group)| {
+                let mut shortcut = settings.shortcut_label(&definition.id, platform);
+                if shortcut.is_empty() {
+                    shortcut = "Disabled".into();
+                }
+                ShortcutRow {
+                    visible: format!("{group} {} {shortcut}", definition.label)
+                        .to_lowercase()
+                        .contains(&shortcut_query),
+                    modified: settings.shortcut_modified(&definition.id),
+                    shortcut,
+                    id: definition.id,
+                    label: definition.label,
+                    group: group.into(),
+                }
             })
             .collect();
         for row in &shortcuts {
             if !query.is_empty()
-                && format!("keyboard shortcuts {} {}", row.group, row.label)
-                    .to_lowercase()
-                    .contains(&query)
+                && format!(
+                    "keyboard shortcuts {} {} {}",
+                    row.group, row.label, row.shortcut
+                )
+                .to_lowercase()
+                .contains(&query)
             {
                 search_results.push(PreferenceSearchResult {
                     title: row.label.clone(),

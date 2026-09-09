@@ -137,6 +137,8 @@ pub struct ShortcutRow {
     pub label: String,
     pub group: String,
     pub shortcut: String,
+    /// Whether the current binding set differs from the defaults, not merely
+    /// whether a saved override exists. The order of alternatives is immaterial.
     pub modified: bool,
     pub visible: bool,
 }
@@ -270,6 +272,13 @@ impl Settings {
             .map(|c| c.label(platform))
             .collect::<Vec<_>>()
             .join(" / ")
+    }
+    pub(crate) fn shortcut_modified(&self, id: &str) -> bool {
+        let Some(keys) = self.shortcuts.get(id) else {
+            return false;
+        };
+        let defaults = defaults(id);
+        keys.len() != defaults.len() || keys.iter().any(|key| !defaults.contains(key))
     }
     pub(crate) fn shortcut_match(
         &self,

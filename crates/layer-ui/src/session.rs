@@ -876,7 +876,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::MoveTile { .. }
                 | UiAction::SelectPanelTab { .. }
                 | UiAction::ResizeDock { .. }
-                | UiAction::CycleFloatingSize { .. }
+                | UiAction::DoubleClickPanelHandle { .. }
                 | UiAction::NudgeDivider { .. }
                 | UiAction::PrioritizeBand { .. }
                 | UiAction::Invoke {
@@ -984,12 +984,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 (LAYOUT, false)
             }
-            UiAction::CycleFloatingSize { group, viewport } => {
+            UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
                 self.state
                     .workspace
                     .layout
-                    .cycle_floating_size(group, viewport)?;
+                    .double_click_panel_handle(group, viewport)?;
                 (LAYOUT, false)
             }
             UiAction::Customize { action } => {
@@ -3071,6 +3071,195 @@ mod tests {
     }
 
     #[test]
+    fn docked_panel_handle_toggles_tabs_without_resizing_on_every_platform() {
+        let viewport = [1200.0, 900.0];
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut app = session();
+            app.set_platform(platform);
+            let panel = Panel::Sizes;
+            let group = app.state.workspace.layout.panel_group(panel).unwrap();
+            for style in [TabStyle::Name, TabStyle::Icon] {
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetTabStyle {
+                        target: ContextTarget::Panel { panel },
+                        style,
+                    },
+                })
+                .unwrap();
+                let initial = app.state.workspace.clone();
+                assert_eq!(
+                    initial
+                        .layout
+                        .panel_handle_target(DockItem::Group { group }),
+                    Some(group)
+                );
+                assert_eq!(
+                    initial
+                        .layout
+                        .panel_handle_target(DockItem::Panel { panel }),
+                    None,
+                    "Tab labels retain their own activation behavior"
+                );
+                for hidden in [true, false] {
+                    let before = app.state.workspace.clone();
+                    let change = app
+                        .dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                        .unwrap();
+                    assert!(!change.canvas_wake);
+                    let after = app.state.workspace.clone();
+                    let mut expected = before.clone();
+                    expected.layout.panel_mut(panel).unwrap().hide_tab = hidden;
+                    assert_eq!(
+                        after, expected,
+                        "Only tab visibility changes, not dock dimensions or tab style"
+                    );
+                    let resolved = app
+                        .layout(viewport)
+                        .groups
+                        .into_iter()
+                        .find(|g| g.id == group)
+                        .unwrap();
+                    assert_eq!(resolved.tabs_visible, !hidden);
+                    assert!(!resolved.floating);
+                    invoke(&mut app, CommandId::UndoWorkspace);
+                    assert_eq!(app.state.workspace, before);
+                    invoke(&mut app, CommandId::RedoWorkspace);
+                    assert_eq!(app.state.workspace, after);
+                    let json = serde_json::to_string(&after).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<WorkspaceState>(&json).unwrap(),
+                        after
+                    );
+                }
+                assert_eq!(app.state.workspace, initial);
+            }
+            // A docked toolbar accepts the handle but never toggles its tab.
+            let toolbar = app
+                .state
+                .workspace
+                .layout
+                .panel_group(Panel::Toolbar)
+                .unwrap();
+            assert_eq!(
+                app.state
+                    .workspace
+                    .layout
+                    .panel_handle_target(DockItem::Group { group: toolbar }),
+                Some(toolbar)
+            );
+            assert_eq!(
+                app.state
+                    .workspace
+                    .layout
+                    .panel_handle_target(DockItem::Panel {
+                        panel: Panel::Toolbar
+                    }),
+                Some(toolbar)
+            );
+            let before = app.state.workspace.clone();
+            app.dispatch(UiAction::DoubleClickPanelHandle {
+                group: toolbar,
+                viewport,
+            })
+            .unwrap();
+            assert_eq!(app.state.workspace, before);
+            app.dispatch(UiAction::MovePanel {
+                panel: Panel::Brushes,
+                viewport,
+                target: DockTarget::Tab { group, index: None },
+            })
+            .unwrap();
+            assert_eq!(
+                app.state
+                    .workspace
+                    .layout
+                    .panel_handle_target(DockItem::Group { group }),
+                None
+            );
+            let before = app.state.workspace.clone();
+            app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap();
+            assert_eq!(app.state.workspace, before);
+        }
+    }
+
+    #[test]
+    fn docked_toolbar_handles_restore_minimum_lanes_on_every_platform() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for viewport in [[1600.0, 1200.0], [640.0, 480.0]] {
+                for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+                    for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+                        let mut app = session();
+                        app.set_platform(platform);
+                        app.dispatch(UiAction::Customize {
+                            action: CustomizationAction::SetTileStyle {
+                                panel: Panel::Toolbar,
+                                style,
+                            },
+                        })
+                        .unwrap();
+                        app.dispatch(UiAction::MovePanel {
+                            panel: Panel::Toolbar,
+                            viewport,
+                            target: DockTarget::Edge { edge, outer: true },
+                        })
+                        .unwrap();
+                        let group = app
+                            .state
+                            .workspace
+                            .layout
+                            .panel_group(Panel::Toolbar)
+                            .unwrap();
+                        let natural = app
+                            .layout(viewport)
+                            .groups
+                            .into_iter()
+                            .find(|g| g.id == group)
+                            .unwrap();
+                        app.state
+                            .workspace
+                            .layout
+                            .bands
+                            .iter_mut()
+                            .find(|b| b.root.id() == group)
+                            .unwrap()
+                            .extent += 120.0;
+                        let before = app.state.workspace.clone();
+                        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                            .unwrap();
+                        let fitted = app
+                            .layout(viewport)
+                            .groups
+                            .into_iter()
+                            .find(|g| g.id == group)
+                            .unwrap();
+                        assert_eq!(
+                            fitted.bounds, natural.bounds,
+                            "{platform:?} {edge:?} {style:?} {viewport:?}"
+                        );
+                        assert_eq!(
+                            fitted.tiles.as_ref().unwrap().tiles,
+                            natural.tiles.as_ref().unwrap().tiles
+                        );
+                        assert!(!fitted.tabs_visible && !fitted.floating);
+                        let after = app.state.workspace.clone();
+                        invoke(&mut app, CommandId::UndoWorkspace);
+                        assert_eq!(app.state.workspace, before);
+                        invoke(&mut app, CommandId::RedoWorkspace);
+                        assert_eq!(app.state.workspace, after);
+                        app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                            .unwrap();
+                        assert_eq!(
+                            app.state.workspace, after,
+                            "Repeated reset is idempotent, never a floating layout cycle"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn floating_drag_area_cycles_defaults_and_panel_headers_on_every_platform() {
         let viewport = [1600.0, 1200.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
@@ -3100,7 +3289,7 @@ mod tests {
                 for step in 0..count {
                     let before = app.state.workspace.clone();
                     let change = app
-                        .dispatch(UiAction::CycleFloatingSize { group, viewport })
+                        .dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                         .unwrap();
                     assert!(!change.canvas_wake);
                     if panel.kind() == PanelKind::Tiles {
@@ -3136,7 +3325,7 @@ mod tests {
                 let floating = &mut app.state.workspace.layout.floating[0];
                 floating.width = 480.0;
                 floating.height = Some(500.0);
-                app.dispatch(UiAction::CycleFloatingSize { group, viewport })
+                app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                     .unwrap();
                 assert_eq!(app.state.workspace, initial);
                 let bounds = app
@@ -3149,7 +3338,7 @@ mod tests {
                 let floating = &mut app.state.workspace.layout.floating[0];
                 floating.width = bounds.width;
                 floating.height = Some(bounds.height);
-                app.dispatch(UiAction::CycleFloatingSize { group, viewport })
+                app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                     .unwrap();
                 assert_ne!(app.state.workspace, initial);
                 if panel.kind() == PanelKind::Content {
@@ -3160,7 +3349,7 @@ mod tests {
                     })
                     .unwrap();
                     let before = app.state.workspace.clone();
-                    app.dispatch(UiAction::CycleFloatingSize { group, viewport })
+                    app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                         .unwrap();
                     assert_eq!(
                         app.state.workspace, before,
@@ -4948,6 +5137,168 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn shortcut_search_includes_current_bindings_and_modifiers_on_every_platform() {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
+            let mut s = session();
+            s.set_platform(platform);
+            invoke(&mut s, CommandId::KeyboardShortcuts);
+            for query in ["z", " Z "] {
+                preference(
+                    &mut s,
+                    PreferenceAction::SearchShortcuts {
+                        query: query.into(),
+                    },
+                );
+                preference(
+                    &mut s,
+                    PreferenceAction::Search {
+                        query: query.into(),
+                    },
+                );
+                let view = s.preferences().unwrap();
+                for command in [
+                    CommandId::ZenMode,
+                    CommandId::Undo,
+                    CommandId::Redo,
+                    CommandId::UndoWorkspace,
+                    CommandId::RedoWorkspace,
+                ] {
+                    let id = command.shortcut_id();
+                    assert!(
+                        view.shortcuts.iter().any(|r| r.id == id && r.visible),
+                        "{platform:?}: {query} must find {id}"
+                    );
+                    assert!(view.search_results.iter().any(|r| matches!(&r.action, PreferenceAction::EditShortcut { id: found } if *found == id)));
+                }
+            }
+            let command_key = if platform.apple() { "⌘" } else { "ctrl" };
+            preference(
+                &mut s,
+                PreferenceAction::SearchShortcuts {
+                    query: format!("{command_key}+z"),
+                },
+            );
+            let view = s.preferences().unwrap();
+            assert!(
+                view.shortcuts
+                    .iter()
+                    .any(|r| r.id == CommandId::Undo.shortcut_id() && r.visible)
+            );
+            assert!(
+                !view
+                    .shortcuts
+                    .iter()
+                    .find(|r| r.id == CommandId::ZenMode.shortcut_id())
+                    .unwrap()
+                    .visible
+            );
+            let id = CommandId::Brush.shortcut_id();
+            preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
+            record_shortcut(&mut s, &id, "j", false);
+            preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+            preference(
+                &mut s,
+                PreferenceAction::SearchShortcuts { query: "j".into() },
+            );
+            assert!(
+                s.preferences()
+                    .unwrap()
+                    .shortcuts
+                    .iter()
+                    .find(|r| r.id == id)
+                    .unwrap()
+                    .visible
+            );
+            preference(&mut s, PreferenceAction::ResetShortcut { id: id.clone() });
+            assert!(
+                !s.preferences()
+                    .unwrap()
+                    .shortcuts
+                    .iter()
+                    .find(|r| r.id == id)
+                    .unwrap()
+                    .visible,
+                "Search must not retain removed bindings"
+            );
+        }
+    }
+
+    #[test]
+    fn shortcut_modified_tracks_binding_sets_not_saved_override_presence() {
+        let mut s = session();
+        invoke(&mut s, CommandId::KeyboardShortcuts);
+        let id = CommandId::Brush.shortcut_id();
+        preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
+        let modified = |s: &UiSession<Recorder>| {
+            let view = s.preferences().unwrap();
+            let modified = view.shortcuts.iter().find(|r| r.id == id).unwrap().modified;
+            assert_eq!(view.shortcut_editor.unwrap().modified, modified);
+            modified
+        };
+        assert!(!modified(&s));
+        record_shortcut(&mut s, &id, "j", false);
+        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+        assert!(modified(&s));
+        preference(
+            &mut s,
+            PreferenceAction::RemoveShortcut {
+                id: id.clone(),
+                index: 1,
+            },
+        );
+        assert!(s.state.settings.shortcuts.contains_key(&id));
+        assert!(
+            !modified(&s),
+            "Removing the extra binding restores the default"
+        );
+        preference(
+            &mut s,
+            PreferenceAction::RemoveShortcut {
+                id: id.clone(),
+                index: 0,
+            },
+        );
+        assert!(modified(&s));
+        assert_eq!(
+            s.preferences()
+                .unwrap()
+                .shortcuts
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .shortcut,
+            "Disabled"
+        );
+        record_shortcut(&mut s, &id, "b", false);
+        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+        assert!(
+            !modified(&s),
+            "Re-recording the default clears the indicator"
+        );
+        let redo = CommandId::Redo.shortcut_id();
+        let mut reversed = s.state.settings.keys(&redo);
+        reversed.reverse();
+        s.state.settings.shortcuts.insert(redo.clone(), reversed);
+        assert!(
+            !s.preferences()
+                .unwrap()
+                .shortcuts
+                .iter()
+                .find(|r| r.id == redo)
+                .unwrap()
+                .modified,
+            "Reordering alternatives doesn't customize the binding set"
+        );
+    }
+
     #[test]
     fn shortcut_editor_preserves_alternatives_and_owns_search_limits_and_defaults() {
         for platform in [Platform::Gtk, Platform::Web] {

@@ -66,9 +66,9 @@ internal class DockInteraction(val host: CanvasHost) {
         }
     }
     fun closeContext() { contextMenu = null; refresh() }
-    fun cycle(item: JSONObject) {
-        host.query(obj("type" to "floating_size_target", "item" to item)) { group ->
-            if (group is Number) host.dispatch(obj("type" to "cycle_floating_size", "group" to group, "viewport" to viewport))
+    fun doubleClickHandle(item: JSONObject) {
+        host.query(obj("type" to "panel_handle_target", "item" to item)) { group ->
+            if (group is Number) host.dispatch(obj("type" to "double_click_panel_handle", "group" to group, "viewport" to viewport))
         }
     }
     fun hit(point: Offset): Region? = if (!enabled || popupOpen || contextMenu != null) null else regions.values

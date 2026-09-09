@@ -68,6 +68,40 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   const float = async (panel, position = [430, 180]) => {
     await send({ type: "move_panel", panel, target: { kind: "float", position } }); await wait(); return group(panel);
   };
+  for (const theme of ["dark", "light"]) {
+    await reset(); await send({ type: "set_theme", theme });
+    for (const style of ["name", "icon"]) {
+      await customize({ type: "set_tab_style", target: { kind: "panel", panel: "sizes" }, style });
+      await wait();
+      const before = await snapshot();
+      for (const hidden of [true, false]) {
+        await clickAt(await point(grip("sizes")), 2);
+        assert.equal((await config("sizes")).hide_tab, hidden, "First double-click toggles docked header");
+        assert.equal((await config("sizes")).tab_style, style);
+        assert.equal((await group("sizes")).floating, false);
+        assert.equal((await group("sizes")).tabs_visible, !hidden);
+        assert.deepEqual((await snapshot()).layout.bands, before.layout.bands, "Dock dimensions remain unchanged");
+        await shot(`docked-handle-${style}-${hidden}-${theme}`);
+      }
+    }
+  }
+  await reset();
+  for (const edge of ["left", "right", "top", "bottom"]) {
+    for (const style of ["small", "large", "labeled"]) {
+      await reset();
+      await customize({ type: "set_tile_style", panel: "toolbar", style });
+      await send({ type: "move_panel", panel: "toolbar", target: { kind: "edge", edge, outer: true } });
+      await wait();
+      const natural = await group("toolbar"), oversized = await snapshot();
+      oversized.layout.bands.find(b => b.root.id === natural.id).extent += 120;
+      await send({ type: "restore_workspace", workspace: oversized }); await wait();
+      await clickAt(await point(grip("toolbar")), 2);
+      assert.deepEqual((await group("toolbar")).bounds, natural.bounds, `${edge} ${style}: first double-click restores dock fit`);
+      assert.equal((await group("toolbar")).tabs_visible, false);
+      await shot(`docked-toolbar-reset-${edge}-${style}`);
+    }
+  }
+  await reset();
   for (const theme of process.argv.includes("--gestures") ? [] : ["dark", "light"]) {
     await reset(); await send({ type: "set_theme", theme });
     await workspaceMenu(); await shot(`workspace-menu-${theme}`);

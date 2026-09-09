@@ -66,7 +66,7 @@ import kotlin.math.roundToInt
             val item = obj("kind" to "panel", "panel" to panel.getString("id"))
             Box(Modifier.placed(grip, density).testTag("ribbon-grip-${panel.getString("id")}").dragSource(dock, item,
                 context = obj("kind" to "ribbon", "panel" to panel.getString("id")))
-                .combinedClickable(onClick = {}, onDoubleClick = { dock.cycle(item) },
+                .combinedClickable(onClick = {}, onDoubleClick = { dock.doubleClickHandle(item) },
                     onLongClick = { dock.context(obj("kind" to "ribbon", "panel" to panel.getString("id"))) }), contentAlignment = Alignment.Center) {
                 PanelGrip("Move toolbar", vertical)
             }
