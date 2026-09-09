@@ -49,6 +49,7 @@ impl Frame {
     }
 }
 enum Command {
+    Thumbnail(u64, layer_core::LayerId),
     Frame(Box<Frame>),
     Asset(AssetId, [u32; 3], PixelFormat, Vec<u8>),
     Release(AssetId),
@@ -57,6 +58,7 @@ enum Command {
     Stop,
 }
 enum Reply {
+    Thumbnail(ReadbackImage),
     Error(String),
     Readback(ReadbackImage),
 }
@@ -70,6 +72,7 @@ pub struct RenderWorker {
     thread: Option<JoinHandle<()>>,
     outlines: HashMap<AssetId, TipOutline>,
     readbacks: VecDeque<ReadbackImage>,
+    thumbnails: VecDeque<ReadbackImage>,
     pub(super) geometry: Option<Geometry>,
     pub(super) surround: [f32; 4],
     pub(super) cursor: Vec<CursorSegment>,
@@ -120,7 +123,15 @@ impl RenderWorker {
                                 .send(Reply::Readback(image.map_err(error)?))
                                 .map_err(error)?;
                         }
-                        let next = if cfg!(test) || worker.pending_present {
+                        while let Some(image) = worker.renderer.take_thumbnail() {
+                            reply
+                                .send(Reply::Thumbnail(image.map_err(error)?))
+                                .map_err(error)?;
+                        }
+                        let next = if cfg!(test)
+                            || worker.pending_present
+                            || worker.renderer.thumbnails_pending()
+                        {
                             receiver.recv_timeout(Duration::from_millis(8))
                         } else {
                             receiver
@@ -144,6 +155,10 @@ impl RenderWorker {
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
                         match command {
+                            Command::Thumbnail(id, target) => worker
+                                .renderer
+                                .request_thumbnail(id, target)
+                                .map_err(error)?,
                             Command::Frame(frame) => {
                                 #[cfg(test)]
                                 timing.begin(frame.queued_ns);
@@ -202,6 +217,7 @@ impl RenderWorker {
             thread: Some(thread),
             outlines,
             readbacks: VecDeque::new(),
+            thumbnails: VecDeque::new(),
             geometry: None,
             surround: [0.033; 4],
             cursor: Vec::new(),
@@ -217,6 +233,7 @@ impl RenderWorker {
     pub(super) fn ready(&mut self) -> Result<bool, String> {
         while let Ok(reply) = self.replies.try_recv() {
             match reply {
+                Reply::Thumbnail(image) => self.thumbnails.push_back(image),
                 Reply::Error(error) => return Err(error),
                 Reply::Readback(image) => self.readbacks.push_back(image),
             }
@@ -237,6 +254,16 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn request_thumbnail(
+        &mut self,
+        id: u64,
+        target: layer_core::LayerId,
+    ) -> Result<(), Self::Error> {
+        self.send(Command::Thumbnail(id, target))
+    }
+    fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        self.thumbnails.pop_front().map(Ok)
+    }
     type Error = BackendError;
     fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
         self.outlines.get(asset)
@@ -245,13 +272,12 @@ impl CanvasRenderer for RenderWorker {
         Ok(())
     }
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
-        if image.format != PixelFormat::R8Unorm {
-            return Err(BackendError("Brush mask must be R8"));
+        if image.format == PixelFormat::R8Unorm {
+            self.outlines.insert(
+                asset.clone(),
+                layer_render::mask_outline(image.width, image.height, image.stride, image.bytes),
+            );
         }
-        self.outlines.insert(
-            asset.clone(),
-            layer_render::mask_outline(image.width, image.height, image.stride, image.bytes),
-        );
         self.send(Command::Asset(
             asset.clone(),
             [image.width, image.height, image.stride],
@@ -286,6 +312,13 @@ impl CanvasRenderer for RenderWorker {
                     strokes: Vec::new(),
                     asset: l.asset.clone(),
                     source_revision: l.source_revision,
+                    properties: l.properties.clone(),
+                    operations: l.operations.clone(),
+                    mask: l.mask.as_ref().map(|m| {
+                        let mut m = m.clone();
+                        m.strokes = Default::default();
+                        m
+                    }),
                 })
                 .collect(),
             dabs: packet.dabs.to_vec(),

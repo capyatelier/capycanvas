@@ -4,7 +4,9 @@
 //! executor, or platform types. Strokes are immutable after commit and use
 //! shared point storage so undo/redo moves handles instead of copying samples.
 
+mod layers;
 mod presets;
+pub use layers::*;
 
 pub use presets::{
     BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,
@@ -95,6 +97,7 @@ pub enum LayerKind {
     ImportedImage,
     AiSuggestion,
     Background,
+    Group,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,6 +112,9 @@ pub struct Layer {
     pub asset: Option<AssetId>,
     /// Document revision used to generate an AI suggestion.
     pub source_revision: Option<Revision>,
+    pub properties: LayerProperties,
+    pub mask: Option<LayerMask>,
+    pub operations: Vec<LayerOperation>,
 }
 
 impl Layer {
@@ -122,6 +128,9 @@ impl Layer {
             strokes: Vec::new(),
             asset: None,
             source_revision: None,
+            properties: LayerProperties::default(),
+            mask: None,
+            operations: Vec::new(),
         }
     }
 
@@ -139,6 +148,9 @@ impl Layer {
             strokes: Vec::new(),
             asset: Some(asset),
             source_revision: None,
+            properties: LayerProperties::default(),
+            mask: None,
+            operations: Vec::new(),
         }
     }
 }
@@ -1052,6 +1064,8 @@ pub struct Stroke {
     pub brush: BrushSnapshot,
     pub points: Arc<[StrokePoint]>,
     pub bounds: Rect,
+    /// Captured at contact start; replay must not use today's alpha lock.
+    pub alpha_locked: bool,
 }
 
 impl Stroke {
@@ -1096,6 +1110,7 @@ impl Stroke {
             brush,
             points,
             bounds,
+            alpha_locked: false,
         })
     }
 }
@@ -1108,6 +1123,9 @@ pub struct Document {
     /// Front-to-back display order.
     pub layers: Vec<Layer>,
     pub active_layer: LayerId,
+    pub active_mask: bool,
+    pub selection: Option<Selection>,
+    pub reference_layer: Option<LayerId>,
     pub revision: Revision,
     strokes: BTreeMap<StrokeId, Stroke>,
     next_layer_id: u64,
@@ -1132,9 +1150,15 @@ impl Document {
                     strokes: Vec::new(),
                     asset: None,
                     source_revision: None,
+                    properties: LayerProperties::default(),
+                    mask: None,
+                    operations: Vec::new(),
                 },
             ],
             active_layer: paint_id,
+            active_mask: false,
+            selection: None,
+            reference_layer: None,
             revision: 0,
             strokes: BTreeMap::new(),
             next_layer_id: 3,
@@ -1174,11 +1198,82 @@ impl Document {
     /// Applies one reversible edit and returns its exact inverse.
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
         let inverse = match edit {
+            Edit::Batch(edits) => {
+                let before = self.clone();
+                let mut inverses = Vec::with_capacity(edits.len());
+                for edit in edits {
+                    match self.apply(edit) {
+                        Ok(inverse) => inverses.push(inverse),
+                        Err(error) => {
+                            *self = before;
+                            return Err(error);
+                        }
+                    }
+                }
+                inverses.reverse();
+                Edit::Batch(inverses)
+            }
+            Edit::ReplaceLayer(layer) => {
+                self.validate_layer(&layer)?;
+                let id = layer.id;
+                let restore_mask_target =
+                    self.active_mask && self.active_layer == layer.id && layer.mask.is_none();
+                let target = self
+                    .layers
+                    .iter_mut()
+                    .find(|l| l.id == layer.id)
+                    .ok_or(DocumentError::MissingLayer(layer.id))?;
+                let inverse = Edit::ReplaceLayer(Box::new(std::mem::replace(target, *layer)));
+                if restore_mask_target {
+                    self.active_mask = false;
+                    Edit::Batch(vec![
+                        inverse,
+                        Edit::SetActiveLayer { id },
+                        Edit::SetMaskTarget(true),
+                    ])
+                } else {
+                    inverse
+                }
+            }
+            Edit::SetMaskTarget(active) => {
+                if active
+                    && self
+                        .layer(self.active_layer)
+                        .is_none_or(|l| l.mask.is_none())
+                {
+                    return Err(DocumentError::InvalidLayerOperation(
+                        "This layer has no mask",
+                    ));
+                }
+                if !active
+                    && let Some(mask) = self
+                        .layers
+                        .iter_mut()
+                        .find(|l| l.id == self.active_layer)
+                        .and_then(|l| l.mask.as_mut())
+                {
+                    mask.show_area = false;
+                }
+                Edit::SetMaskTarget(std::mem::replace(&mut self.active_mask, active))
+            }
+            Edit::SetSelection(selection) => {
+                Edit::SetSelection(std::mem::replace(&mut self.selection, selection))
+            }
+            Edit::SetReference(reference) => {
+                if let Some(id) = reference {
+                    let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
+                    if !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+                        return Err(DocumentError::NotDrawable(id));
+                    }
+                }
+                Edit::SetReference(std::mem::replace(&mut self.reference_layer, reference))
+            }
             Edit::InsertLayer { index, layer } => {
                 if self.layer(layer.id).is_some() {
                     return Err(DocumentError::DuplicateLayer(layer.id));
                 }
                 let id = layer.id;
+                self.validate_layer(&layer)?;
                 self.layers.insert(index.min(self.layers.len()), layer);
                 Edit::RemoveLayer { id }
             }
@@ -1203,7 +1298,14 @@ impl Document {
                     return Err(DocumentError::LastPaintLayer);
                 }
                 let removed = self.layers.remove(index);
+                let selected = self.active_layer == id;
+                let mask_selected = self.active_mask;
+                let reference = self.reference_layer == Some(id);
+                if reference {
+                    self.reference_layer = None;
+                }
                 if self.active_layer == id {
+                    self.active_mask = false;
                     self.active_layer = self
                         .layers
                         .iter()
@@ -1211,10 +1313,20 @@ impl Document {
                         .map(|layer| layer.id)
                         .unwrap_or(self.layers[0].id);
                 }
-                Edit::InsertLayer {
+                let mut inverse = vec![Edit::InsertLayer {
                     index,
                     layer: removed,
+                }];
+                if selected {
+                    inverse.extend([
+                        Edit::SetActiveLayer { id },
+                        Edit::SetMaskTarget(mask_selected),
+                    ]);
                 }
+                if reference {
+                    inverse.push(Edit::SetReference(Some(id)));
+                }
+                Edit::Batch(inverse)
             }
             Edit::MoveLayer { id, to } => {
                 let from = self
@@ -1227,6 +1339,9 @@ impl Document {
                 Edit::MoveLayer { id, to: from }
             }
             Edit::SetLayerOpacity { id, opacity } => {
+                if !opacity.is_finite() {
+                    return Err(DocumentError::InvalidLayerOperation("Invalid opacity"));
+                }
                 let layer = self
                     .layers
                     .iter_mut()
@@ -1254,18 +1369,30 @@ impl Document {
             }
             Edit::SetActiveLayer { id } => {
                 let target = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-                if target.kind != LayerKind::Paint {
+                if target.kind == LayerKind::Background {
                     return Err(DocumentError::NotDrawable(id));
                 }
                 let previous = self.active_layer;
+                let mask = self.active_mask;
+                self.active_mask = false;
                 self.active_layer = id;
-                Edit::SetActiveLayer { id: previous }
+                for layer in &mut self.layers {
+                    if layer.id != id
+                        && let Some(mask) = &mut layer.mask
+                    {
+                        mask.show_area = false;
+                    }
+                }
+                Edit::Batch(vec![
+                    Edit::SetActiveLayer { id: previous },
+                    Edit::SetMaskTarget(mask),
+                ])
             }
             Edit::InsertStroke(stroke) => {
                 let target = self
-                    .layer(stroke.layer_id)
+                    .target_owner(stroke.layer_id)
                     .ok_or(DocumentError::MissingLayer(stroke.layer_id))?;
-                if target.kind != LayerKind::Paint {
+                if target.id == stroke.layer_id && target.kind != LayerKind::Paint {
                     return Err(DocumentError::NotDrawable(stroke.layer_id));
                 }
                 if self.strokes.contains_key(&stroke.id) {
@@ -1274,11 +1401,8 @@ impl Document {
                 let layer_id = stroke.layer_id;
                 let stroke_id = stroke.id;
                 self.strokes.insert(stroke_id, *stroke);
-                self.layers
-                    .iter_mut()
-                    .find(|layer| layer.id == layer_id)
-                    .expect("layer checked above")
-                    .strokes
+                self.target_strokes_mut(layer_id)
+                    .expect("target checked above")
                     .push(stroke_id);
                 Edit::RemoveStroke { id: stroke_id }
             }
@@ -1287,11 +1411,8 @@ impl Document {
                     .strokes
                     .remove(&id)
                     .ok_or(DocumentError::MissingStroke(id))?;
-                self.layers
-                    .iter_mut()
-                    .find(|layer| layer.id == stroke.layer_id)
+                self.target_strokes_mut(stroke.layer_id)
                     .ok_or(DocumentError::MissingLayer(stroke.layer_id))?
-                    .strokes
                     .retain(|candidate| *candidate != id);
                 Edit::InsertStroke(Box::new(stroke))
             }
@@ -1303,6 +1424,11 @@ impl Document {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
+    Batch(Vec<Edit>),
+    ReplaceLayer(Box<Layer>),
+    SetMaskTarget(bool),
+    SetSelection(Option<Selection>),
+    SetReference(Option<LayerId>),
     InsertLayer { index: usize, layer: Layer },
     RemoveLayer { id: LayerId },
     MoveLayer { id: LayerId, to: usize },
@@ -1352,7 +1478,7 @@ impl Editor {
     pub fn perform(&mut self, edit: Edit) -> Result<(), DocumentError> {
         // Selecting the drawing target is navigation. It must neither consume
         // an undo step nor discard redoable painting work.
-        let selection_only = matches!(&edit, Edit::SetActiveLayer { .. });
+        let selection_only = matches!(&edit, Edit::SetActiveLayer { .. } | Edit::SetMaskTarget(_));
         let inverse = self.document.apply(edit)?;
         if !selection_only {
             self.undo.push(inverse);
@@ -1383,10 +1509,16 @@ impl Editor {
         self.undo.clear();
         self.redo.clear();
     }
+
+    /// Gesture preview, followed by restoration + one committed edit at release.
+    pub fn preview(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.document.apply(edit).map(|_| ())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentError {
+    InvalidLayerOperation(&'static str),
     MissingLayer(LayerId),
     MissingStroke(StrokeId),
     DuplicateLayer(LayerId),
@@ -1402,6 +1534,7 @@ pub enum DocumentError {
 impl fmt::Display for DocumentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidLayerOperation(message) => formatter.write_str(message),
             Self::MissingLayer(id) => write!(formatter, "layer {} does not exist", id.0),
             Self::MissingStroke(id) => write!(formatter, "stroke {} does not exist", id.0),
             Self::DuplicateLayer(id) => write!(formatter, "layer {} already exists", id.0),

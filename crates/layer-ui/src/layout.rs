@@ -5,6 +5,8 @@ use crate::{PanelConfig, PanelContent, TileStyle, ToolbarControl, ToolbarTile, W
 use serde::{Deserialize, Serialize};
 
 pub const TILE_SIZE: f32 = 36.0;
+/// Six standard toolbar tiles, including their five two-pixel gaps.
+pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
 const PANEL_GRIP_HEIGHT: f32 = 20.0;
 /// Shared gesture distances in logical UI pixels, not preferences.
@@ -1453,6 +1455,18 @@ impl DockLayout {
             .unwrap_or(0.0)
     }
 
+    fn group_min_width(&self, group: u32) -> f32 {
+        let content = if self
+            .group_panels(group)
+            .is_ok_and(|panels| panels.contains(&Panel::Layers))
+        {
+            LAYERS_MIN_WIDTH
+        } else {
+            0.0
+        };
+        self.tab_width(group).max(content)
+    }
+
     pub fn move_panel(
         &mut self,
         viewport: [f32; 2],
@@ -2005,7 +2019,7 @@ impl DockLayout {
             groups: Vec::new(),
             dividers: Vec::new(),
         };
-        for band in &self.bands {
+        for (band_index, band) in self.bands.iter().enumerate() {
             let parent = remaining;
             let axis = if matches!(band.edge, Edge::Left | Edge::Right) {
                 Axis::Vertical
@@ -2036,7 +2050,19 @@ impl DockLayout {
             } else {
                 0.0
             };
-            let limit = (available - 64.0).max(minimum).min(available).max(0.0);
+            let reserved_width = if axis == Axis::Vertical {
+                self.bands[band_index + 1..]
+                    .iter()
+                    .filter(|b| matches!(b.edge, Edge::Left | Edge::Right))
+                    .map(|b| tab_min_width(&b.root, self) + WORKSPACE_SPACING)
+                    .sum::<f32>()
+            } else {
+                0.
+            };
+            let limit = (available - reserved_width - 64.0)
+                .max(minimum)
+                .min(available)
+                .max(0.0);
             let extent = band.extent.max(minimum).min(limit);
             let mut bounds = remaining.strip(band.edge, extent);
             // The inside six logical units are a generous native drag handle.
@@ -2113,7 +2139,7 @@ impl DockLayout {
             };
             let max_width = (width - WORKSPACE_SPACING * 2.0).max(1.0);
             let max_height = (height - top - WORKSPACE_SPACING).max(1.0);
-            let mut width = floating.width.max(self.tab_width(*id)).min(max_width);
+            let mut width = floating.width.max(self.group_min_width(*id)).min(max_width);
             let natural = if toolbar {
                 let [tile_width, tile_height] = config.tile_style.size();
                 let count = config.tiles().len().max(1);
@@ -2233,6 +2259,8 @@ impl DockLayout {
         {
             return Err("Invalid floating panel size".into());
         }
+        self.fit_tab_groups.retain(|id| *id != group);
+        let minimum_width = self.group_min_width(group).max(TILE_SIZE);
         let floating = self
             .floating
             .iter_mut()
@@ -2248,7 +2276,7 @@ impl DockLayout {
         ) {
             left = (left + delta[0]).clamp(
                 WORKSPACE_SPACING,
-                (right - TILE_SIZE).max(WORKSPACE_SPACING),
+                (right - minimum_width).max(WORKSPACE_SPACING),
             );
         }
         if matches!(
@@ -2256,8 +2284,8 @@ impl DockLayout {
             ResizeEdge::Right | ResizeEdge::TopRight | ResizeEdge::BottomRight
         ) {
             right = (right + delta[0]).clamp(
-                left + TILE_SIZE,
-                (viewport[0] - WORKSPACE_SPACING).max(left + TILE_SIZE),
+                left + minimum_width,
+                (viewport[0] - WORKSPACE_SPACING).max(left + minimum_width),
             );
         }
         if matches!(
@@ -2831,7 +2859,7 @@ fn finite_extent(value: f32) -> f32 {
 
 fn tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
     match node {
-        DockNode::Tabs { id, .. } => layout.tab_width(*id),
+        DockNode::Tabs { id, .. } => layout.group_min_width(*id),
         DockNode::Split {
             axis,
             first,
@@ -2917,7 +2945,7 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
     if ribbon_axis == Axis::Vertical
         && let DockNode::Tabs { id, .. } = node
     {
-        minimum.max(layout.tab_width(*id))
+        minimum.max(layout.group_min_width(*id))
     } else {
         minimum
     }
@@ -3127,6 +3155,40 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layers_minimum_survives_dock_and_floating_resize() {
+        let mut layout = DockLayout::default();
+        layout.bands.iter_mut().find(|b| b.id == 7).unwrap().extent = 45.;
+        let r = layout.workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+        let row = r.groups.iter().find(|g| g.active == Panel::Layers).unwrap();
+        assert_eq!(row.bounds.width, LAYERS_MIN_WIDTH);
+        layout
+            .move_panel(
+                [1200., 900.],
+                Panel::Layers,
+                DockTarget::Float {
+                    position: [600., 200.],
+                },
+            )
+            .unwrap();
+        let r = layout.workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+        let row = r.groups.iter().find(|g| g.active == Panel::Layers).unwrap();
+        let right = row.bounds.x + row.bounds.width;
+        layout
+            .resize_floating(
+                row.id,
+                ResizeEdge::Left,
+                row.bounds,
+                [1000., 0.],
+                [1200., 900.],
+            )
+            .unwrap();
+        let r = layout.workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
+        let row = r.groups.iter().find(|g| g.active == Panel::Layers).unwrap();
+        assert_eq!(row.bounds.width, LAYERS_MIN_WIDTH);
+        assert_eq!(row.bounds.x + row.bounds.width, right);
+    }
 
     fn column_fixture(two_sections: bool) -> (DockLayout, [Panel; 4]) {
         let mut layout = DockLayout::default();

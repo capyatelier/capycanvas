@@ -290,6 +290,9 @@ fn source_over(destination: vec4<f32>, source_color: vec3<f32>, source_alpha: f3
     let da = destination.a;
     let backdrop = destination.rgb / max(da, 0.000001);
     let blended = blend_color(backdrop, source_color, style.render_mode.x);
+    if style.color.a > 0.5 {
+        return vec4<f32>(mix(destination.rgb, blended * da, source_alpha), da);
+    }
     let rgb = destination.rgb * (1.0 - source_alpha)
         + source_color * source_alpha * (1.0 - da)
         + blended * source_alpha * da;
@@ -656,8 +659,7 @@ fn wet_fragment(
     );
 }
 
-@fragment
-fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
+fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     let world = render_target.origin_extent.xy + fragment_position.xy;
     let first = style.operation.x;
     let count = style.operation.y;
@@ -727,6 +729,21 @@ fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOut
         vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0),
         vec4<f32>(0.0),
     );
+}
+
+@fragment
+fn fragment_main(@builtin(position) fragment_position: vec4<f32>) -> MaterialOutput {
+    var result = paint_fragment(fragment_position);
+    if style.color.a > 0.5 {
+        let world = render_target.origin_extent.xy + fragment_position.xy;
+        let original = canvas_load(world);
+        if style.operation.w != 0u { result.color = original; }
+        else {
+            result.color = vec4<f32>(result.color.rgb / max(result.color.a, 0.000001) * original.a, original.a);
+        }
+        result.wetness *= select(0.0, 1.0, original.a > 0.0);
+    }
+    return result;
 }
 
 @fragment

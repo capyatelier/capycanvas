@@ -634,8 +634,7 @@ pub struct Workspace {
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
     color: gtk::ColorDialogButton,
-    layers: gtk::Box,
-    layer_opacity: crate::number_control::NumberControl,
+    pub(crate) layer_panel: crate::layers::LayerPanel,
     tab: gtk::Label,
     view_info: gtk::Label,
     status: gtk::Label,
@@ -716,8 +715,7 @@ impl Workspace {
         toolbar.add_css_class("toolbar-controls");
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        let layers_panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        let layers = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let layer_panel = crate::layers::LayerPanel::new();
         let size_number = crate::number_control::NumberControl::new(
             NumericControl::brush_size(),
             "Brush size",
@@ -727,11 +725,6 @@ impl Workspace {
         let opacity =
             crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "");
         opacity.set_width_request(100);
-        let layer_opacity = crate::number_control::NumberControl::new(
-            NumericControl::percent(),
-            "Layer opacity",
-            "",
-        );
         let color = gtk::ColorDialogButton::new(Some(
             gtk::ColorDialog::builder().with_alpha(false).build(),
         ));
@@ -763,7 +756,7 @@ impl Workspace {
                 (Panel::Toolbar, toolbar.clone().upcast()),
                 (Panel::Brushes, scroll(&brushes)),
                 (Panel::Sizes, scroll(&sizes)),
-                (Panel::Layers, scroll(&layers_panel)),
+                (Panel::Layers, layer_panel.root.clone().upcast()),
             ],
             commands: RefCell::new(Vec::new()),
             menus: RefCell::new(Vec::new()),
@@ -774,8 +767,7 @@ impl Workspace {
             size_number,
             opacity,
             color,
-            layers,
-            layer_opacity,
+            layer_panel,
             tab,
             view_info,
             status,
@@ -795,7 +787,7 @@ impl Workspace {
             Platform::Gtk,
         ));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
-        this.build_controls(&brushes, &sizes, &layers_panel);
+        this.build_controls(&brushes, &sizes);
         this.customization.bind(&this);
         this.preferences.bind(&this);
         this.install_chrome();
@@ -806,7 +798,7 @@ impl Workspace {
         this
     }
 
-    fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box, layers: &gtk::Box) {
+    fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box) {
         margins(brushes, 8);
         let brush_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         brushes.append(&brush_list);
@@ -897,25 +889,19 @@ impl Workspace {
         self.customization
             .track(Panel::Sizes, PanelControl::SizePresets, &grid);
         self.append_panel_fields(Panel::Sizes, sizes);
-        margins(layers, 12);
-        let commands = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        commands.add_css_class("layer-tools");
-        for command in CommandId::LAYERS {
-            let button = self.command_button(command);
-            button.set_width_request(40);
-            commands.append(&button);
-        }
-        layers.append(&commands);
+        self.layer_panel.bind(self);
+        self.customization.track(
+            Panel::Layers,
+            PanelControl::LayerActions,
+            &self.layer_panel.footer,
+        );
         self.customization
-            .track(Panel::Layers, PanelControl::LayerActions, &commands);
-        layers.append(&self.layers);
-        self.customization
-            .track(Panel::Layers, PanelControl::Layers, &self.layers);
-        let layer_alpha = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        layer_alpha.append(&self.layer_opacity);
-        layers.append(&layer_alpha);
-        self.customization
-            .track(Panel::Layers, PanelControl::LayerOpacity, &layer_alpha);
+            .track(Panel::Layers, PanelControl::Layers, &self.layer_panel.list);
+        self.customization.track(
+            Panel::Layers,
+            PanelControl::LayerOpacity,
+            &self.layer_panel.header,
+        );
         self.size_number.connect_value_changed(glib::clone!(
             #[weak(rename_to = this)]
             self,
@@ -939,14 +925,6 @@ impl Workspace {
                     rgba: [c.red(), c.green(), c.blue(), c.alpha()],
                 });
             }
-        ));
-        self.layer_opacity.connect_value_changed(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |v| this.dispatch(UiAction::SetLayerOpacity {
-                id: None,
-                opacity: v.value() as f32
-            })
         ));
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -1575,34 +1553,7 @@ impl Workspace {
             }
         }
         if regions & regions::DOCUMENT != 0 {
-            while let Some(child) = self.layers.first_child() {
-                self.layers.remove(&child);
-            }
-            for layer in &state.layers {
-                let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                let visible = gtk::CheckButton::new();
-                visible.set_active(layer.visible);
-                visible.set_tooltip_text(Some(&format!("Show {}", layer.label)));
-                let id = layer.id;
-                visible.connect_toggled(glib::clone!(
-                    #[weak(rename_to = this)]
-                    self,
-                    move |v| this.dispatch(UiAction::SetLayerVisibility {
-                        id,
-                        visible: v.is_active()
-                    })
-                ));
-                row.append(&visible);
-                let button = self.action_button(&layer.label, UiAction::SelectLayer { id });
-                button.set_hexpand(true);
-                button.set_sensitive(layer.editable);
-                selected(&button, layer.selected);
-                row.append(&button);
-                self.layers.append(&row);
-            }
-            if let Some(layer) = state.layers.iter().find(|l| l.selected) {
-                self.layer_opacity.set_value(layer.opacity as f64);
-            }
+            self.layer_panel.refresh(&state);
             if let Some(tab) = state.tabs.first() {
                 self.tab
                     .set_text(&format!("{} · {} × {}", tab.title, tab.width, tab.height));

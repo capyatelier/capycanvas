@@ -1,6 +1,7 @@
 mod canvas;
 mod image_selector;
 mod input;
+mod layers;
 mod number_control;
 mod preferences;
 mod previews;

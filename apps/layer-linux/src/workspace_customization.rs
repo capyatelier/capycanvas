@@ -875,7 +875,9 @@ impl Customization {
                         state.layers.iter().position(|l| l.selected).unwrap_or(0) as u32
                     );
                 }
-                Some(FieldValue::LayerOpacity(input)) => input.set_value(w.layer_opacity.value()),
+                Some(FieldValue::LayerOpacity(input)) => {
+                    input.set_value(w.layer_panel.opacity.value())
+                }
                 Some(FieldValue::Commands(buttons)) => {
                     let gpu = w.gpu.borrow();
                     for (id, button) in buttons {
@@ -1313,7 +1315,7 @@ impl Workspace {
         popover.present();
     }
 
-    pub(super) fn populate_workspace_menu(
+    pub(crate) fn populate_workspace_menu(
         self: &Rc<Self>,
         popover: &gtk::PopoverMenu,
         menu: layer_ui::ContextMenu,

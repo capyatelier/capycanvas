@@ -54,6 +54,257 @@ fn native_test_app(id: &str) -> NativeTestApp {
     NativeTestApp(app)
 }
 
+#[test]
+#[ignore = "requires the private Wayland display and hardware GPU"]
+fn native_layer_panel_review() {
+    use layer_ui::{LayerAction as A, LayerCanvasTool as T};
+    fn send(w: &Rc<Workspace>, action: A) {
+        w.dispatch(UiAction::Layer { action });
+        pump(60);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    }
+    fn polygon(w: &Rc<Workspace>, points: &[[f32; 2]], tool: T) {
+        send(w, A::Tool { tool });
+        let camera = state(w).camera;
+        let m = camera.view().document_to_surface;
+        for (i, p) in points.iter().enumerate() {
+            w.gpu
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .session
+                .pen(PenEvent {
+                    device_id: 91,
+                    sequence: i as u64 + 1,
+                    timestamp_ns: glib::monotonic_time() as u64 * 1000,
+                    view_revision: camera.revision,
+                    surface_position: Point {
+                        x: m[0] * p[0] + m[2] * p[1] + m[4],
+                        y: m[1] * p[0] + m[3] * p[1] + m[5],
+                    },
+                    pressure: 1.,
+                    tilt_radians: [0.; 2],
+                    twist_radians: 0.,
+                    distance: 0.,
+                    phase: if i == 0 {
+                        PenPhase::Down
+                    } else if i + 1 == points.len() {
+                        PenPhase::Up
+                    } else {
+                        PenPhase::Move
+                    },
+                    tool: ToolKind::Pen,
+                    flags: SampleFlags::PRIMARY,
+                })
+                .unwrap();
+        }
+        w.wake();
+        pump(180);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    }
+    let app = native_test_app("art.capycanvas.LayerPanelReview");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let dir = "../../artifacts/ui/layers-gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Dark),
+    });
+    let names = [
+        ("Atmosphere", [0.77, 0.86, 0.83, 1.]),
+        ("Far hills", [0.35, 0.54, 0.49, 1.]),
+        ("Shirt base", [0.65, 0.32, 0.24, 1.]),
+        ("Skin base", [0.79, 0.62, 0.40, 1.]),
+    ];
+    for (i, (name, color)) in names.iter().enumerate() {
+        if i > 0 {
+            send(
+                &w,
+                A::New {
+                    group: false,
+                    clipped: false,
+                },
+            );
+        }
+        let id = state(&w).layers.iter().find(|l| l.selected).unwrap().id;
+        send(
+            &w,
+            A::Rename {
+                id,
+                name: (*name).into(),
+            },
+        );
+        w.dispatch(UiAction::SetColor { rgba: *color });
+        let points = match i {
+            0 => vec![[180., 160.], [1800., 160.], [1800., 1360.], [180., 1360.]],
+            1 => vec![
+                [180., 900.],
+                [500., 540.],
+                [860., 740.],
+                [1350., 390.],
+                [1800., 850.],
+                [1800., 1360.],
+                [180., 1360.],
+            ],
+            2 => vec![
+                [700., 690.],
+                [980., 640.],
+                [1150., 980.],
+                [1110., 1350.],
+                [560., 1350.],
+                [550., 950.],
+            ],
+            _ => (0..48)
+                .map(|i| {
+                    let a = i as f32 / 48. * std::f32::consts::TAU;
+                    [830. + a.cos() * 195., 500. + a.sin() * 260.]
+                })
+                .collect(),
+        };
+        polygon(&w, &points, T::LassoFill);
+        send(&w, A::AlphaLock { id, value: true });
+    }
+    send(
+        &w,
+        A::New {
+            group: false,
+            clipped: true,
+        },
+    );
+    let shading = state(&w).layers.iter().find(|l| l.selected).unwrap().id;
+    send(
+        &w,
+        A::Rename {
+            id: shading,
+            name: "Skin · soft shadow".into(),
+        },
+    );
+    send(
+        &w,
+        A::Blend {
+            id: shading,
+            value: 1,
+        },
+    );
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.32, 0.25, 0.21, 0.6],
+    });
+    polygon(
+        &w,
+        &[[810., 200.], [1100., 200.], [1100., 820.], [900., 800.]],
+        T::LassoFill,
+    );
+    // A deterministic source-image fixture, not a CPU canvas implementation.
+    let bytes: Vec<u8> = (0..2048 * 1536)
+        .flat_map(|i| {
+            let x = i % 2048;
+            let y = i / 2048;
+            if (x / 12 + y / 12) % 2 == 0 {
+                [220, 170, 66, 255]
+            } else {
+                [178, 124, 42, 255]
+            }
+        })
+        .collect();
+    w.gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .import_layer_image(
+            "Fabric texture",
+            layer_render::HostImage {
+                width: 2048,
+                height: 1536,
+                stride: 8192,
+                format: layer_render::PixelFormat::Rgba8Srgb,
+                bytes: &bytes,
+            },
+        )
+        .unwrap();
+    w.wake();
+    pump(200);
+    let texture = state(&w).layers.iter().find(|l| l.selected).unwrap().id;
+    polygon(
+        &w,
+        &[[640., 870.], [940., 810.], [1080., 1280.], [680., 1260.]],
+        T::Select,
+    );
+    send(
+        &w,
+        A::AddMask {
+            id: texture,
+            replace: false,
+        },
+    );
+    send(
+        &w,
+        A::LinkMask {
+            id: texture,
+            value: false,
+        },
+    );
+    pump(650);
+    let minimum = w
+        .layer_panel
+        .root
+        .measure(gtk::Orientation::Horizontal, -1)
+        .0;
+    assert!(
+        minimum <= layer_ui::LAYERS_MIN_WIDTH as i32,
+        "Layer widgets require {minimum}px"
+    );
+    capture_reference(&w, &format!("{dir}/01-compact-dark.png"), 1.);
+    send(
+        &w,
+        A::ShowMask {
+            id: texture,
+            value: true,
+        },
+    );
+    pump(200);
+    capture_reference(&w, &format!("{dir}/02-mask-overlay.png"), 1.);
+    send(
+        &w,
+        A::ShowMask {
+            id: texture,
+            value: false,
+        },
+    );
+    send(&w, A::ApplyMask { id: texture });
+    pump(200);
+    capture_reference(&w, &format!("{dir}/03-applied-mask.png"), 1.);
+    click(&command(&w, CommandId::Undo));
+    assert!(
+        state(&w)
+            .layers
+            .iter()
+            .find(|l| l.id == texture)
+            .unwrap()
+            .has_mask
+    );
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Light),
+    });
+    pump(300);
+    capture_reference(&w, &format!("{dir}/04-compact-light.png"), 1.);
+    for _ in 0..110 {
+        send(
+            &w,
+            A::New {
+                group: false,
+                clipped: false,
+            },
+        );
+    }
+    pump(300);
+    assert!(state(&w).layers.len() > 100);
+    capture_reference(&w, &format!("{dir}/05-many-layers.png"), 1.);
+    w.window.close();
+    pump(100);
+}
+
 fn command(w: &Workspace, id: CommandId) -> gtk::Button {
     if let Some((_, button)) = w.commands.borrow().iter().find(|(c, _)| *c == id) {
         return button.clone();
@@ -5257,24 +5508,28 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::Redo));
     assert!(white_pixels(&w) < initial - 500);
     let visibility = || {
-        w.layers
-            .first_child()
-            .unwrap()
-            .first_child()
-            .unwrap()
-            .downcast::<gtk::CheckButton>()
-            .unwrap()
+        find_named(
+            &w.layer_panel.root.clone().upcast(),
+            &format!("art-layer-{}", state(&w).layers[0].id),
+        )
+        .unwrap()
+        .downcast::<gtk::Box>()
+        .unwrap()
+        .first_child()
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap()
     };
-    visibility().set_active(false);
+    visibility().emit_clicked();
     pump(100);
     assert!(white_pixels(&w) > after_ink + 500);
-    visibility().set_active(true);
+    visibility().emit_clicked();
     pump(100);
     assert!(white_pixels(&w) < initial - 500);
-    edit_number(&w.layer_opacity, "50%");
+    edit_number(&w.layer_panel.opacity, "50%");
     pump(100);
     assert_eq!(state(&w).layers[0].opacity, 0.5);
-    edit_number(&w.layer_opacity, "100%");
+    edit_number(&w.layer_panel.opacity, "100%");
     pump(100);
     let painted_id = state(&w).layers[0].id;
     click(&command(&w, CommandId::LowerLayer));

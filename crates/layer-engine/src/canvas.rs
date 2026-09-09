@@ -234,6 +234,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(id)
     }
 
+    pub fn allocate_layer_id(&mut self) -> LayerId {
+        self.editor.allocate_layer_id()
+    }
+    pub fn allocate_stroke_id(&mut self) -> StrokeId {
+        self.editor.allocate_stroke_id()
+    }
+    pub fn preview_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        self.editor.preview(edit)?;
+        self.composite_all = true;
+        Ok(())
+    }
+
     pub fn remove_layer(&mut self, id: LayerId) -> Result<(), DocumentError> {
         self.apply_edit(Edit::RemoveLayer { id })
     }
@@ -317,7 +329,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn apply_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
         let rebuild = match &edit {
             Edit::InsertStroke(_) | Edit::RemoveStroke { .. } => true,
-            Edit::InsertLayer { layer, .. } => !layer.strokes.is_empty(),
+            Edit::InsertLayer { layer, .. } => !layer.strokes.is_empty() || layer.asset.is_some(),
+            Edit::Batch(_) => true,
+            Edit::ReplaceLayer(layer) => self.document().layer(layer.id).is_some_and(|old| {
+                old.strokes != layer.strokes
+                    || old.operations != layer.operations
+                    || old
+                        .mask
+                        .as_ref()
+                        .map(|m| (&m.initial, m.id, m.default_coverage))
+                        != layer
+                            .mask
+                            .as_ref()
+                            .map(|m| (&m.initial, m.id, m.default_coverage))
+            }),
             _ => false,
         };
         let changes_composite = !matches!(&edit, Edit::SetActiveLayer { .. });
@@ -449,7 +474,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     fn process_event(&mut self, event: PenEvent) -> Result<(), EngineError<B::Error>> {
         self.metrics.input_events = self.metrics.input_events.saturating_add(1);
-        let transform = self
+        let mut transform = self
             .transforms
             .iter()
             .rev()
@@ -464,27 +489,69 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .expect("one transform is always retained")
             });
 
+        let target_id = self
+            .active_stroke
+            .as_ref()
+            .map_or(self.document().active_target(), |s| s.layer_id);
+        let offset = self.document().layer_offset(target_id);
+        transform.surface_to_document[4] -= offset.x;
+        transform.surface_to_document[5] -= offset.y;
         match event.phase {
             PenPhase::Down => {
                 if self.active_stroke.is_some() {
                     self.cancel_active();
                 }
+                let layer_id = self.document().active_target();
+                let Some(owner) = self.document().target_owner(layer_id) else {
+                    return Ok(());
+                };
+                let is_mask = owner.id != layer_id;
+                if self.document().is_locked(layer_id)
+                    || (!is_mask && owner.kind != layer_core::LayerKind::Paint)
+                {
+                    return Ok(());
+                }
+                let alpha_locked = !is_mask && owner.properties.alpha_locked;
+                let inverted = is_mask && owner.mask.as_ref().is_some_and(|m| m.inverted);
                 let id = self.editor.allocate_stroke_id();
-                let layer_id = self.editor.document().active_layer;
-                let tool = if matches!(event.tool, ToolKind::Eraser)
+                let mut tool = if matches!(event.tool, ToolKind::Eraser)
                     || event.flags.contains(SampleFlags::INVERTED)
                 {
                     StrokeTool::Eraser
                 } else {
                     self.tool
                 };
+                let mut brush = self.brush.clone();
+                let mut feedback = self.instant_feedback;
+                if is_mask {
+                    // Coverage brushes use the same tip/dynamics, not pigment or fluid state.
+                    brush.color_rgba_linear = [1.0, 1.0, 1.0, brush.color_rgba_linear[3]];
+                    brush.color_dynamics = Default::default();
+                    brush.execution = BrushExecution::Dry;
+                    brush.grain = None;
+                    brush.dual = None;
+                    brush.rendering = Default::default();
+                    brush.transport = None;
+                    brush.wet_mix = Default::default();
+                    brush.deform = Default::default();
+                    feedback.enabled = false;
+                    if inverted {
+                        tool = if tool == StrokeTool::Brush {
+                            StrokeTool::Eraser
+                        } else {
+                            StrokeTool::Brush
+                        };
+                    }
+                }
+                let mut style = style_for(&brush, tool);
+                style.alpha_locked = alpha_locked;
                 let active = ActiveStroke {
                     id,
                     layer_id,
                     tool,
-                    brush: self.brush.clone(),
-                    style: style_for(&self.brush, tool),
-                    feedback: self.instant_feedback,
+                    brush,
+                    style,
+                    feedback,
                     persistent_started: false,
                     committed_smudge_dabs: 0,
                 };
@@ -554,7 +621,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 let active = self.active_stroke.take().expect("checked above");
                 let points = self.builder.finish().unwrap_or_default();
                 let has_end_taper = active.brush.taper.end_distance_diameters > 0.0;
-                let stroke = Stroke::new(
+                let alpha_locked = active.style.alpha_locked;
+                let mut stroke = Stroke::new(
                     active.id,
                     active.layer_id,
                     active.tool,
@@ -562,6 +630,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     points,
                 )
                 .map_err(EngineError::Document)?;
+                stroke.alpha_locked = alpha_locked;
                 self.editor
                     .perform(Edit::InsertStroke(Box::new(stroke)))
                     .map_err(EngineError::Document)?;
@@ -859,18 +928,66 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn build_full_scene(&mut self) {
         self.dabs.clear();
         self.batches.clear();
+        enum Replay {
+            Stroke(StrokeId),
+            Operation(LayerId, u32),
+        }
         let mut strokes = Vec::new();
         for layer in &self.editor.document().layers {
-            for id in &layer.strokes {
+            for id in layer
+                .mask
+                .iter()
+                .chain(layer.operations.iter().map(|o| &o.coverage))
+                .flat_map(|m| m.strokes.iter())
+            {
                 if let Some(stroke) = self.editor.document().stroke(*id) {
-                    strokes.push(stroke.clone());
+                    strokes.push(Replay::Stroke(stroke.id));
+                }
+            }
+            for index in 0..=layer.strokes.len() {
+                for (op, _) in layer
+                    .operations
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, o)| o.after_stroke == index)
+                {
+                    strokes.push(Replay::Operation(layer.id, op as u32));
+                }
+                if let Some(stroke) = layer
+                    .strokes
+                    .get(index)
+                    .and_then(|id| self.document().stroke(*id))
+                {
+                    strokes.push(Replay::Stroke(stroke.id));
                 }
             }
         }
-        for stroke in strokes {
-            let style = style_for(&stroke.brush, stroke.tool);
+        for replay in strokes {
+            let stroke = match replay {
+                Replay::Stroke(id) => self
+                    .editor
+                    .document()
+                    .stroke(id)
+                    .expect("replay stroke exists"),
+                Replay::Operation(layer_id, index) => {
+                    self.batches.push(DabBatch {
+                        stroke_id: StrokeId(0),
+                        layer_id,
+                        kind: DabBatchKind::LayerOperation(index),
+                        stroke_start: false,
+                        stroke_end: false,
+                        first_dab: 0,
+                        dab_count: 0,
+                        style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
+                        damage: Rect::EMPTY,
+                    });
+                    continue;
+                }
+            };
+            let mut style = style_for(&stroke.brush, stroke.tool);
+            style.alpha_locked = stroke.alpha_locked;
             let mut generator = DabGenerator::default();
-            generator.reset_for_replay(&stroke);
+            generator.reset_for_replay(stroke);
             let mut started = false;
             for point in stroke.points.iter().copied() {
                 let start = self.dabs.len();
@@ -1109,6 +1226,7 @@ fn rect_area(rect: Rect) -> f32 {
 
 fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
     DabStyle {
+        alpha_locked: false,
         tip: brush.tip.clone(),
         mode: match tool {
             StrokeTool::Brush => DabMode::Paint,
@@ -1189,6 +1307,7 @@ mod tests {
                 let end = start + batch.dab_count as usize;
                 let dabs = &packet.dabs[start..end];
                 match batch.kind {
+                    DabBatchKind::LayerOperation(_) => {}
                     DabBatchKind::Persistent => {
                         self.persistent_dabs += dabs.len();
                         self.persistent.extend_from_slice(dabs);

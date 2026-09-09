@@ -19,7 +19,12 @@ use layer_render::{
 };
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
+mod layer_masks;
+#[cfg(test)]
+mod layer_tests;
 mod present;
+mod scene;
+mod thumbnails;
 pub use present::ViewportPresenter;
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -36,6 +41,18 @@ const RESERVOIR_SIZE: u32 = 64;
 const RESERVOIR_BYTES: u64 = RESERVOIR_SIZE as u64 * RESERVOIR_SIZE as u64 * 4 * 2;
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
+
+fn needs_scene(layers: &[Layer]) -> bool {
+    layers.iter().any(|l| {
+        !l.operations.is_empty()
+            || l.mask.is_some()
+            || l.kind == LayerKind::Group
+            || l.properties.clipped
+            || l.properties.parent.is_some()
+            || l.properties.blend != layer_core::LayerBlend::Normal
+            || l.properties.offset != layer_core::Point::default()
+    })
+}
 
 /// Native writes reuse staging resources. On web, Queue::write_buffer transfers
 /// Wasm bytes directly; mapped slices would allocate and copy through JS memory.
@@ -59,6 +76,16 @@ impl Uploads {
         target: &wgpu::Buffer,
         bytes: &[u8],
     ) {
+        self.write_at(encoder, queue, target, 0, bytes);
+    }
+    fn write_at(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let _ = queue;
@@ -66,7 +93,7 @@ impl Uploads {
                 .write_buffer(
                     encoder,
                     target,
-                    0,
+                    offset,
                     wgpu::BufferSize::new(bytes.len() as u64).unwrap(),
                 )
                 .copy_from_slice(bytes);
@@ -74,7 +101,7 @@ impl Uploads {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = encoder;
-            queue.write_buffer(target, 0, bytes);
+            queue.write_buffer(target, offset, bytes);
         }
     }
     fn finish(&mut self, encoder: &wgpu::CommandEncoder) {
@@ -305,6 +332,7 @@ impl BrushPassPlan {
             watercolor_wetness: style.execution == BrushExecution::Watercolor,
         };
         let needs_destination = style.execution != BrushExecution::Dry
+            || style.alpha_locked
             || style.rendering.blend_mode != BrushBlendMode::Normal
             || state.coverage;
         let textured = style.grain.is_some()
@@ -526,6 +554,10 @@ pub struct WgpuRasterizer {
     surface_extent: [u32; 2],
     document_extent: [u32; 2],
     paint_layers: Vec<PaintLayer>,
+    layer_masks: layer_masks::MaskRenderer,
+    scene: Option<scene::Scene>,
+    thumbnails: thumbnails::Thumbnails,
+    images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
     composite_bind_group: Option<wgpu::BindGroup>,
@@ -569,6 +601,7 @@ pub struct WgpuRasterizer {
     pipelines: Pipelines,
     last_submission: Option<wgpu::SubmissionIndex>,
     pending_readback: Option<ReadbackImage>,
+    inspection: Option<(layer_render::ViewState, Vec<Layer>)>,
     metrics: GpuRasterMetrics,
 }
 
@@ -733,12 +766,18 @@ impl WgpuRasterizer {
         );
 
         let uploads = Uploads::new(&device, 64 * 1024);
+        let layer_masks =
+            layer_masks::MaskRenderer::new(&device, &style_layout, &target_layout, &texture_layout);
         let mut renderer = Self {
             adapter,
             device,
             queue,
             surface_extent: [0, 0],
             document_extent: [0, 0],
+            layer_masks,
+            scene: None,
+            thumbnails: thumbnails::Thumbnails::new(),
+            images: Default::default(),
             paint_layers: Vec::with_capacity(8),
             composite_texture: None,
             composite_view: None,
@@ -783,6 +822,7 @@ impl WgpuRasterizer {
             pipelines,
             last_submission: None,
             pending_readback: None,
+            inspection: None,
             metrics: GpuRasterMetrics::default(),
         };
         renderer.install_builtin_masks()?;
@@ -1719,7 +1759,16 @@ impl WgpuRasterizer {
                         .find(|stored| stored.id == layer.id)
                         .and_then(|stored| stored.watercolor)
                 });
-            let record = StyleGpu::layer(packet.document_extent, layer.opacity, watercolor);
+            let mut record = StyleGpu::layer(
+                packet.document_extent,
+                if needs_scene(packet.layers) {
+                    1.0
+                } else {
+                    layer.opacity
+                },
+                watercolor,
+            );
+            record.color[0] = f32::from(needs_scene(packet.layers));
             let offset = (packet.dab_batches.len() + index) * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -3278,6 +3327,31 @@ impl WgpuRasterizer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("layer explicit readback encoder"),
             });
+        // Inspection is a display aid, never exported. Recompose only on this
+        // explicit export path, then restore the visible scene in GPU order.
+        let inspection = self.inspection.take();
+        if let Some(scene) = &mut self.scene {
+            scene.begin_frame();
+        }
+        if let Some((view, layers)) = &inspection {
+            let mut scene = self.scene.take().expect("inspection scene");
+            scene.compose(
+                self,
+                FramePacket {
+                    view: *view,
+                    document_extent: [width, height],
+                    layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: false,
+                    composite_all: true,
+                },
+                PixelRect::full([width, height]),
+                &mut encoder,
+                false,
+            )?;
+            self.scene = Some(scene);
+        }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("layer GPU sRGB export conversion"),
@@ -3326,6 +3400,27 @@ impl WgpuRasterizer {
                 depth_or_array_layers: 1,
             },
         );
+        if let Some((view, layers)) = &inspection {
+            let mut scene = self.scene.take().expect("inspection scene");
+            scene.compose(
+                self,
+                FramePacket {
+                    view: *view,
+                    document_extent: [width, height],
+                    layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: false,
+                    composite_all: true,
+                },
+                PixelRect::full([width, height]),
+                &mut encoder,
+                true,
+            )?;
+            self.scene = Some(scene);
+        }
+        self.inspection = inspection;
+        self.uploads.finish(&encoder);
         let submission = self.queue.submit([encoder.finish()]);
         let (sender, receiver) = mpsc::channel();
         buffer
@@ -3372,6 +3467,12 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn request_thumbnail(&mut self, request_id: u64, target: LayerId) -> Result<(), Self::Error> {
+        self.start_thumbnail(request_id, target)
+    }
+    fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        self.thumbnails.take()
+    }
     fn tip_outline(&self, asset: &AssetId) -> Option<&layer_render::TipOutline> {
         let mask = self.mask(asset).ok()?;
         Some(mask.outline.get_or_init(|| {
@@ -3390,6 +3491,50 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
+        if image.format == PixelFormat::Rgba8Srgb {
+            let limit = self.device.limits().max_texture_dimension_2d;
+            if image.width == 0
+                || image.height == 0
+                || image.width > limit
+                || image.height > limit
+                || image.stride < image.width * 4
+                || image.bytes.len() < image.stride as usize * image.height as usize
+            {
+                return Err(GpuRasterError::InvalidImage);
+            }
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("immutable imported image"),
+                size: wgpu::Extent3d {
+                    width: image.width,
+                    height: image.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: EXPORT_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            self.queue.write_texture(
+                texture.as_image_copy(),
+                image.bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(image.stride),
+                    rows_per_image: Some(image.height),
+                },
+                texture.size(),
+            );
+            self.images.insert(
+                asset.clone(),
+                (
+                    texture.create_view(&Default::default()),
+                    [image.width, image.height],
+                ),
+            );
+            return Ok(());
+        }
         if image.format != PixelFormat::R8Unorm {
             return Err(GpuRasterError::InvalidImage);
         }
@@ -3397,11 +3542,71 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn release_asset(&mut self, asset: &AssetId) {
+        self.images.remove(asset);
         self.masks.retain(|stored| stored.id != *asset);
         self.texture_sets.clear();
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        let mut view = packet.view;
+        if let Some(background) = packet
+            .layers
+            .iter()
+            .find(|l| l.kind == LayerKind::Background)
+        {
+            view.background_rgba_linear[3] *= if background.visible {
+                background.opacity
+            } else {
+                0.
+            };
+        }
+        let packet = FramePacket { view, ..packet };
+        self.inspection = packet
+            .layers
+            .iter()
+            .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area))
+            .then(|| {
+                (
+                    packet.view,
+                    packet
+                        .layers
+                        .iter()
+                        .map(|l| {
+                            let mut layer = l.clone();
+                            layer.strokes.clear();
+                            layer
+                        })
+                        .collect(),
+                )
+            });
+        if let Some(scene) = &mut self.scene {
+            scene.begin_frame();
+            scene.style_base = packet.dab_batches.len();
+        }
+        let original_batches = packet.dab_batches;
+        let filtered: std::borrow::Cow<'_, [DabBatch]> = if original_batches
+            .iter()
+            .any(|b| layer_masks::MaskRenderer::is_mask(packet.layers, b.layer_id))
+        {
+            std::borrow::Cow::Owned(
+                original_batches
+                    .iter()
+                    .map(|b| {
+                        let mut b = b.clone();
+                        if layer_masks::MaskRenderer::is_mask(packet.layers, b.layer_id) {
+                            b.dab_count = 0;
+                        }
+                        b
+                    })
+                    .collect(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(original_batches)
+        };
+        let packet = FramePacket {
+            dab_batches: &filtered,
+            ..packet
+        };
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
         let reset = packet.reset_layers || resized;
@@ -3506,7 +3711,8 @@ impl CanvasRenderer for WgpuRasterizer {
             // not equal applying it once to their combined layer result.
             new_preview_requires_base = true;
         }
-        let new_preview_direct_to_composite = new_preview_layer.is_some()
+        let new_preview_direct_to_composite = !needs_scene(packet.layers)
+            && new_preview_layer.is_some()
             && !new_preview_requires_base
             && new_preview_layer.is_some_and(|layer_id| {
                 preview_layer_is_frontmost_visible(layer_id, packet.layers)
@@ -3521,6 +3727,7 @@ impl CanvasRenderer for WgpuRasterizer {
             })
             .count();
         let new_preview_from_persistent = destination_preview_batches == 1
+            && !needs_scene(packet.layers)
             && !preview_is_watercolor
             && packet
                 .dab_batches
@@ -3552,6 +3759,67 @@ impl CanvasRenderer for WgpuRasterizer {
                 label: Some("layer incremental sparse frame"),
             });
         let background_offset = self.prepare_uploads(packet, &mut encoder)?;
+        self.layer_masks.prepare(
+            &self.device,
+            &mut encoder,
+            packet.layers,
+            original_batches,
+            packet.document_extent,
+            reset,
+        );
+        for layer in packet.layers {
+            let Some(index) = self.paint_layers.iter().position(|l| l.id == layer.id) else {
+                continue;
+            };
+            if reset
+                && let Some((_, extent)) = layer.asset.as_ref().and_then(|a| self.images.get(a))
+            {
+                for c in page_coordinates(PixelRect::full([
+                    extent[0].min(packet.document_extent[0]),
+                    extent[1].min(packet.document_extent[1]),
+                ])) {
+                    if !self.paint_layers[index]
+                        .pages
+                        .iter()
+                        .any(|p| p.coordinate == c)
+                    {
+                        let page = self.create_page(c, "imported paint page");
+                        self.paint_layers[index].pages.push(page);
+                    }
+                }
+            }
+            for op in &layer.operations {
+                if matches!(op.kind, layer_core::LayerOperationKind::Fill { .. }) {
+                    let coords: Vec<_> = if op.coverage.default_coverage > 0. {
+                        page_coordinates(PixelRect::full(packet.document_extent)).collect()
+                    } else {
+                        self.layer_masks
+                            .pages
+                            .keys()
+                            .filter(|(id, _)| *id == op.coverage.id)
+                            .map(|(_, c)| *c)
+                            .collect()
+                    };
+                    for c in coords {
+                        if self.paint_layers[index]
+                            .pages
+                            .iter()
+                            .all(|p| p.coordinate != c)
+                        {
+                            let page = self.create_page(c, "fill paint page");
+                            self.paint_layers[index].pages.push(page);
+                        }
+                    }
+                }
+            }
+        }
+        self.encode_mask_dabs(&mut encoder, packet.layers, original_batches)?;
+        for batch in original_batches
+            .iter()
+            .filter(|b| layer_masks::MaskRenderer::is_mask(packet.layers, b.layer_id))
+        {
+            dirty = dirty.union(batch_pixel_rect(batch, packet.document_extent));
+        }
 
         // Newly allocated pages are explicitly initialized on the GPU before
         // any Load operation. No pixel buffer crosses the CPU boundary.
@@ -3618,6 +3886,11 @@ impl CanvasRenderer for WgpuRasterizer {
                 }
             }
         }
+        if reset && packet.layers.iter().any(|l| l.asset.is_some()) {
+            let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+            scene.initialize_images(self, packet.layers, &mut encoder)?;
+            self.scene = Some(scene);
+        }
         for layer in &mut self.paint_layers {
             for page in &mut layer.pages {
                 page.primary_needs_clear = false;
@@ -3642,8 +3915,30 @@ impl CanvasRenderer for WgpuRasterizer {
             .dab_batches
             .iter()
             .enumerate()
-            .filter(|(_, batch)| batch.kind == DabBatchKind::Persistent)
+            .filter(|(_, batch)| batch.kind != DabBatchKind::Preview)
         {
+            if let DabBatchKind::LayerOperation(op) = batch.kind {
+                let layer_index = packet
+                    .layers
+                    .iter()
+                    .position(|l| l.id == batch.layer_id)
+                    .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
+                let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+                scene.style_base = packet.dab_batches.len();
+                scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
+                self.scene = Some(scene);
+                dirty = PixelRect::full(packet.document_extent);
+                continue;
+            }
+            if batch.style.execution == BrushExecution::Watercolor
+                && batch.dab_count > 0
+                && let Some(stored) = self
+                    .paint_layers
+                    .iter_mut()
+                    .find(|l| l.id == batch.layer_id)
+            {
+                stored.watercolor = Some(WatercolorLayerStyle::from_dab_style(&batch.style));
+            }
             self.encode_brush_batch(
                 &mut encoder,
                 index,
@@ -3685,7 +3980,7 @@ impl CanvasRenderer for WgpuRasterizer {
                         .iter()
                         .find(|page| page.coordinate == coordinate)
                         .expect("preview pages are prepared before encoding");
-                    let local = if preview_is_watercolor {
+                    let local = if preview_is_watercolor || needs_scene(packet.layers) {
                         page_rect(coordinate).page_local(coordinate)
                     } else {
                         copied
@@ -3877,7 +4172,29 @@ impl CanvasRenderer for WgpuRasterizer {
             dirty = PixelRect::full(packet.document_extent);
         }
 
-        if !dirty.is_empty() {
+        if !dirty.is_empty() && needs_scene(packet.layers) {
+            let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+            scene.style_base = packet.dab_batches.len();
+            // A moved target's damage is stored in image coordinates. Round to
+            // scene tiles after applying the target's document translation.
+            for batch in original_batches {
+                if let Some(layer) = packet.layers.iter().find(|l| {
+                    l.id == batch.layer_id
+                        || l.mask.as_ref().is_some_and(|m| m.id == batch.layer_id)
+                }) {
+                    let offset =
+                        scene::world_offset(packet.layers, layer.id, layer.id != batch.layer_id);
+                    let mut rect = batch.damage;
+                    rect.min.x += offset.x;
+                    rect.max.x += offset.x;
+                    rect.min.y += offset.y;
+                    rect.max.y += offset.y;
+                    dirty = dirty.union(pixel_rect(rect, packet.document_extent));
+                }
+            }
+            scene.compose(self, packet, dirty, &mut encoder, true)?;
+            self.scene = Some(scene);
+        } else if !dirty.is_empty() {
             struct WatercolorBinding {
                 layer_id: LayerId,
                 coordinate: [u32; 2],
@@ -4354,6 +4671,7 @@ impl StyleGpu {
         // This lane is unused by dry and composite shaders and avoids growing
         // every style upload solely for one material-stage lifecycle bit.
         result.canvas_opacity[3] = f32::from(batch.stroke_start);
+        result.color[3] = f32::from(style.alpha_locked);
         result
     }
 }
@@ -5506,6 +5824,26 @@ fn brush_pipeline(
     blend: wgpu::BlendState,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
+    brush_pipeline_format(
+        device,
+        layout,
+        shader,
+        fragment_entry,
+        blend,
+        COLOR_FORMAT,
+        label,
+    )
+}
+
+fn brush_pipeline_format(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    blend: wgpu::BlendState,
+    format: wgpu::TextureFormat,
+    label: &'static str,
+) -> wgpu::RenderPipeline {
     const ATTRIBUTES: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
         0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x2,
         4 => Float32x4, 5 => Float32x2, 6 => Float32x2, 7 => Float32x4
@@ -5535,7 +5873,7 @@ fn brush_pipeline(
             entry_point: Some(fragment_entry),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: COLOR_FORMAT,
+                format,
                 blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -5913,6 +6251,7 @@ mod tests {
 
     fn test_style(execution: BrushExecution) -> DabStyle {
         DabStyle {
+            alpha_locked: false,
             tip: BrushTip::AnalyticEllipse,
             mode: DabMode::Paint,
             execution,
@@ -5923,6 +6262,96 @@ mod tests {
             transport: None,
             deform: BrushDeform::default(),
         }
+    }
+
+    #[test]
+    fn layer_system_selection_mask_and_incremental_erase() {
+        let mut r = WgpuRasterizer::new().expect("physical GPU required");
+        let mut layer = Layer::paint(LayerId(1), "Masked red");
+        let mut mask = layer_core::LayerMask::reveal_all(LayerId(3), Point::default());
+        mask.default_coverage = 0.;
+        mask.initial = Some(
+            layer_core::Selection::polygon(vec![
+                Point { x: 0., y: 0. },
+                Point { x: 64., y: 0. },
+                Point { x: 64., y: 128. },
+                Point { x: 0., y: 128. },
+            ])
+            .unwrap(),
+        );
+        layer.mask = Some(mask);
+        let mut dab = test_dab([64., 64.], [1., 0., 0., 1.], 1.);
+        dab.radii = [58., 58.];
+        let mut batch = DabBatch {
+            stroke_id: StrokeId(1),
+            layer_id: layer.id,
+            kind: DabBatchKind::Persistent,
+            stroke_start: true,
+            stroke_end: true,
+            first_dab: 0,
+            dab_count: 1,
+            style: test_style(BrushExecution::Dry),
+            damage: Rect {
+                min: Point { x: 0., y: 0. },
+                max: Point { x: 128., y: 128. },
+            },
+        };
+        r.submit(FramePacket {
+            view: test_view(),
+            document_extent: [128, 128],
+            layers: std::slice::from_ref(&layer),
+            dabs: std::slice::from_ref(&dab),
+            dab_batches: std::slice::from_ref(&batch),
+            reset_layers: true,
+            composite_all: true,
+        })
+        .unwrap();
+        let mut image = vec![0; 128 * 128 * 4];
+        r.copy_rgba8_srgb(&mut image, 512).unwrap();
+        assert!(
+            image[(64 * 128 + 40) * 4 + 1] < 5,
+            "selected half reveals red"
+        );
+        assert!(
+            image[(64 * 128 + 90) * 4 + 1] > 250,
+            "outside selection is hidden"
+        );
+        batch.layer_id = LayerId(3);
+        batch.style.mode = DabMode::Erase;
+        dab.center = Point { x: 40., y: 64. };
+        dab.radii = [10., 10.];
+        dab.color_rgba_linear = [1.; 4];
+        r.submit(FramePacket {
+            view: test_view(),
+            document_extent: [128, 128],
+            layers: std::slice::from_ref(&layer),
+            dabs: std::slice::from_ref(&dab),
+            dab_batches: std::slice::from_ref(&batch),
+            reset_layers: false,
+            composite_all: false,
+        })
+        .unwrap();
+        r.copy_rgba8_srgb(&mut image, 512).unwrap();
+        assert!(
+            image[(64 * 128 + 40) * 4 + 1] > 250,
+            "erase on mask hides without erasing paint"
+        );
+        layer.mask = None;
+        r.submit(FramePacket {
+            view: test_view(),
+            document_extent: [128, 128],
+            layers: std::slice::from_ref(&layer),
+            dabs: &[],
+            dab_batches: &[],
+            reset_layers: false,
+            composite_all: true,
+        })
+        .unwrap();
+        r.copy_rgba8_srgb(&mut image, 512).unwrap();
+        assert!(
+            image[(64 * 128 + 40) * 4 + 1] < 5,
+            "delete mask restores paint"
+        );
     }
 
     #[test]
@@ -6945,6 +7374,7 @@ mod tests {
             offset: [0.05, 0.0],
         };
         let style = DabStyle {
+            alpha_locked: false,
             tip: BrushTip::AnalyticEllipse,
             mode: DabMode::Paint,
             execution: BrushExecution::Dry,
@@ -7041,6 +7471,7 @@ mod tests {
             first_dab: 0,
             dab_count: 1,
             style: DabStyle {
+                alpha_locked: false,
                 tip: BrushTip::AnalyticEllipse,
                 mode: DabMode::Paint,
                 execution: BrushExecution::Dry,
@@ -7093,6 +7524,7 @@ mod tests {
             first_dab: 0,
             dab_count: 1,
             style: DabStyle {
+                alpha_locked: false,
                 tip: BrushTip::AnalyticEllipse,
                 mode: DabMode::Paint,
                 execution: BrushExecution::Smudge,
@@ -7141,6 +7573,7 @@ mod tests {
             first_dab: 0,
             dab_count: 1,
             style: DabStyle {
+                alpha_locked: false,
                 tip: BrushTip::AnalyticEllipse,
                 mode: DabMode::Paint,
                 execution: BrushExecution::Liquify,

@@ -4,6 +4,9 @@ use crate::*;
 use layer_core::{Document, LayerId, LayerKind, StrokeTool, default_brush};
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurve, input_queue};
 use layer_render::CanvasRenderer;
+#[path = "art_layers.rs"]
+mod art_layers;
+pub use art_layers::{LayerAction, LayerCanvasTool, LayersView};
 
 const ZEN_CORNER_GUARD: f32 = 300.0;
 
@@ -46,6 +49,7 @@ pub struct UiSession<R: CanvasRenderer> {
     interaction: Interaction,
     cursor: cursor::Cursor,
     next_request: u32,
+    layer_interaction: art_layers::LayerInteraction,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -80,6 +84,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             interaction: Interaction::default(),
             cursor: cursor::Cursor::default(),
             next_request: 1,
+            layer_interaction: Default::default(),
             state: UiState {
                 revision: 0,
                 workspace: WorkspaceState::default(),
@@ -91,6 +96,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     color: [0.075, 0.075, 0.07, 1.0],
                 },
                 layers: Vec::new(),
+                layer_tools: LayersView::default(),
                 tabs: Vec::new(),
                 commands: Vec::new(),
                 settings: Settings::default(),
@@ -938,6 +944,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::Layer { action } => {
+                self.require_idle()?;
+                self.layer_action(action)?;
+                self.refresh_document();
+                (DOCUMENT | BRUSH, true)
+            }
             UiAction::MeasurePanels { measurements } => {
                 let mut accepted = Vec::new();
                 for measurement in measurements {
@@ -1095,6 +1107,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.invoke(command)?
             }
             UiAction::SelectBrush { id } => {
+                self.layer_interaction.tool = LayerCanvasTool::Paint;
+                self.state.layer_tools.tool = LayerCanvasTool::Paint;
                 let preset = preset(id)?;
                 let brush = default_brush(preset);
                 self.state.brush.preset = id;
@@ -1135,8 +1149,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .document()
                     .layer(LayerId(id))
                     .ok_or("Unknown layer")?;
-                if layer.kind != LayerKind::Paint {
-                    return Err("Select a paint layer to draw".into());
+                if layer.kind == LayerKind::Background {
+                    return Err("The canvas background is not a paint layer".into());
                 }
                 if self.engine.document().active_layer != LayerId(id) {
                     self.engine.set_active_layer(LayerId(id)).map_err(error)?;
@@ -1410,7 +1424,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if changed & LAYOUT != 0 {
             self.sync_work_area();
         }
-        if self.engine.document().revision != revision {
+        if self.engine.document().revision != revision || self.layer_interaction.changed {
+            self.layer_interaction.changed = false;
             self.refresh_document();
             changed |= DOCUMENT;
         }
@@ -1423,6 +1438,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        if self.layer_interaction.tool != LayerCanvasTool::Paint {
+            if let Err(error) = self.layer_pen(event) {
+                self.state.host_error = Some(error);
+            }
+            self.input_pending = true;
+            return Ok(());
+        }
         self.pen.push(event)?;
         self.initial_fit = false;
         self.input_pending = true;
@@ -1583,7 +1605,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .map_err(error)?;
         self.input_pending = false;
         let mut changed = 0;
-        if self.engine.document().revision != revision {
+        if self.engine.document().revision != revision || self.layer_interaction.changed {
+            self.layer_interaction.changed = false;
             self.refresh_document();
             changed |= regions::DOCUMENT;
         }
@@ -1597,6 +1620,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         use regions::*;
         match command {
             CommandId::Brush | CommandId::Eraser => {
+                self.layer_interaction.tool = LayerCanvasTool::Paint;
+                self.state.layer_tools.tool = LayerCanvasTool::Paint;
                 self.state.brush.tool = if command == CommandId::Brush {
                     Tool::Brush
                 } else {
@@ -1614,31 +1639,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((0, true))
             }
             CommandId::AddLayer => {
-                let count = self
-                    .engine
-                    .document()
-                    .layers
-                    .iter()
-                    .filter(|l| l.kind == LayerKind::Paint)
-                    .count();
-                let index = self
-                    .engine
-                    .document()
-                    .layers
-                    .iter()
-                    .position(|l| l.id == self.engine.document().active_layer)
-                    .unwrap_or(0);
-                let id = self
-                    .engine
-                    .create_paint_layer(format!("Paint {}", count + 1), index)
-                    .map_err(error)?;
-                self.engine.set_active_layer(id).map_err(error)?;
+                self.layer_action(LayerAction::New {
+                    group: false,
+                    clipped: false,
+                })?;
                 Ok((0, true))
             }
             CommandId::DeleteLayer => {
-                self.engine
-                    .remove_layer(self.engine.document().active_layer)
-                    .map_err(error)?;
+                self.layer_action(LayerAction::Delete {
+                    id: self.engine.document().active_layer.0,
+                })?;
                 Ok((0, true))
             }
             CommandId::RaiseLayer | CommandId::LowerLayer => {
@@ -1850,8 +1860,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn refresh_document(&mut self) {
         let doc = self.engine.document();
         self.state.layers = doc
-            .layers
-            .iter()
+            .ordered_layers()
+            .into_iter()
+            .filter(|l| !self.layer_interaction.hidden_by_group(doc, l))
             .map(|l| LayerState {
                 id: l.id.0,
                 label: l.name.to_string(),
@@ -1859,8 +1870,37 @@ impl<R: CanvasRenderer> UiSession<R> {
                 visible: l.visible,
                 opacity: l.opacity,
                 selected: l.id == doc.active_layer,
+                mask_selected: l.id == doc.active_layer && doc.active_mask,
+                has_mask: l.mask.is_some(),
+                mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
+                mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
+                show_mask_area: l.mask.as_ref().is_some_and(|m| m.show_area),
+                alpha_locked: l.properties.alpha_locked,
+                locked: doc.is_locked(l.id),
+                clipped: l.properties.clipped,
+                reference: doc.reference_layer == Some(l.id),
+                group: l.kind == LayerKind::Group,
+                depth: self.layer_interaction.depth(doc, l),
+                collapsed: self.layer_interaction.collapsed.contains(&l.id),
+                blend: l.properties.blend as u32,
+                blend_label: l.properties.blend.label().into(),
+                paint_revision: l
+                    .strokes
+                    .last()
+                    .map_or(0, |id| id.0)
+                    .wrapping_mul(4099)
+                    .wrapping_add(l.operations.len() as u64),
+                mask_revision: l.mask.as_ref().map_or(0, |m| {
+                    m.id.0
+                        .wrapping_mul(65537)
+                        .wrapping_add(m.strokes.last().map_or(0, |id| id.0) * 2)
+                        .wrapping_add(u64::from(m.inverted))
+                }),
+                mask_id: l.mask.as_ref().map(|m| m.id.0),
             })
             .collect();
+        self.state.layer_tools.has_selection = doc.selection.is_some();
+        self.state.layer_tools.tool = self.layer_interaction.tool;
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
             title: "Untitled".into(),
@@ -1947,6 +1987,124 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn layer_mask_creation_deletion_apply_and_targets_round_trip_history() {
+        use layer_core::{LayerOperationKind, Selection};
+        let mut s = session();
+        let id = s.engine.document().active_layer.0;
+        let selection = Selection::polygon(vec![
+            Point { x: 0., y: 0. },
+            Point { x: 100., y: 0. },
+            Point { x: 100., y: 100. },
+        ])
+        .unwrap();
+        s.engine
+            .apply_edit(layer_core::Edit::SetSelection(Some(selection.clone())))
+            .unwrap();
+        s.layer_action(LayerAction::AddMask { id, replace: false })
+            .unwrap();
+        assert!(s.engine.document().active_mask);
+        assert!(s.engine.document().selection.is_none());
+        s.engine.undo().unwrap();
+        assert!(!s.engine.document().active_mask);
+        assert_eq!(s.engine.document().selection, Some(selection));
+        s.engine.redo().unwrap();
+        assert!(s.engine.document().active_mask);
+        let mask = s.engine.document().layer(LayerId(id)).unwrap().mask.clone();
+        for apply in [false, true] {
+            s.layer_action(if apply {
+                LayerAction::ApplyMask { id }
+            } else {
+                LayerAction::DeleteMask { id }
+            })
+            .unwrap();
+            assert!(!s.engine.document().active_mask);
+            let l = s.engine.document().layer(LayerId(id)).unwrap();
+            assert!(l.mask.is_none());
+            if apply {
+                assert_eq!(
+                    l.operations.last().unwrap().kind,
+                    LayerOperationKind::ApplyMask
+                );
+            }
+            s.engine.undo().unwrap();
+            assert!(s.engine.document().active_mask);
+            assert_eq!(s.engine.document().layer(LayerId(id)).unwrap().mask, mask);
+        }
+    }
+
+    #[test]
+    fn undo_mask_removal_after_navigating_restores_the_owner_target() {
+        let mut s = session();
+        let first = s.engine.document().active_layer;
+        s.layer_action(LayerAction::New {
+            group: false,
+            clipped: false,
+        })
+        .unwrap();
+        let second = s.engine.document().active_layer;
+        s.layer_action(LayerAction::AddMask {
+            id: second.0,
+            replace: false,
+        })
+        .unwrap();
+        s.layer_action(LayerAction::DeleteMask { id: second.0 })
+            .unwrap();
+        s.layer_action(LayerAction::Select {
+            id: first.0,
+            mask: false,
+        })
+        .unwrap();
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().active_layer, second);
+        assert!(s.engine.document().active_mask);
+    }
+
+    #[test]
+    fn reparent_keeps_world_position_and_group_rows_travel_together() {
+        let mut s = session();
+        let id = s.engine.document().active_layer.0;
+        s.layer_action(LayerAction::AddMask { id, replace: false })
+            .unwrap();
+        s.layer_action(LayerAction::New {
+            group: true,
+            clipped: false,
+        })
+        .unwrap();
+        let group = s.engine.document().active_layer;
+        let edit = s
+            .engine
+            .document()
+            .move_target_edit(Point { x: 50., y: 90. })
+            .unwrap();
+        s.engine.apply_edit(edit).unwrap();
+        s.layer_action(LayerAction::Reparent {
+            id,
+            parent: Some(group.0),
+            index: 0,
+        })
+        .unwrap();
+        let doc = s.engine.document();
+        assert_eq!(doc.layer_offset(LayerId(id)), Point::default());
+        assert_eq!(
+            doc.layer_offset(doc.layer(LayerId(id)).unwrap().mask.as_ref().unwrap().id),
+            Point::default()
+        );
+        let rows = doc.ordered_layers();
+        let g = rows.iter().position(|l| l.id == group).unwrap();
+        assert_eq!(rows[g + 1].id, LayerId(id));
+        assert!(
+            s.layer_action(LayerAction::Reparent {
+                id: group.0,
+                parent: Some(id),
+                index: 0
+            })
+            .is_err()
+        );
+        s.layer_action(LayerAction::Solo { id: group.0 }).unwrap();
+        assert!(s.engine.document().layer(LayerId(id)).unwrap().visible);
     }
     #[test]
     fn workspace_management_is_shared_transactional_and_independent_of_artwork() {

@@ -15,6 +15,7 @@ mod settings;
 mod shortcuts;
 mod theme;
 mod workspace;
+pub use session::{LayerAction, LayerCanvasTool, LayersView};
 
 pub use camera::{Camera, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
@@ -33,7 +34,10 @@ pub use layout::{
     PANEL_CONFIGURATION_WIDTH, PANEL_EXPANSION_MS, Panel, PanelExpansion, PanelMeasurement,
     ResizeEdge, ResolvedLayout,
 };
-pub use layout::{DropHint, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout, tile_layout};
+pub use layout::{
+    DropHint, LAYERS_MIN_WIDTH, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout,
+    tile_layout,
+};
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
@@ -425,6 +429,23 @@ pub struct LayerState {
     pub visible: bool,
     pub opacity: f32,
     pub selected: bool,
+    pub mask_selected: bool,
+    pub has_mask: bool,
+    pub mask_enabled: bool,
+    pub mask_linked: bool,
+    pub show_mask_area: bool,
+    pub alpha_locked: bool,
+    pub locked: bool,
+    pub clipped: bool,
+    pub reference: bool,
+    pub group: bool,
+    pub depth: u32,
+    pub collapsed: bool,
+    pub blend: u32,
+    pub blend_label: String,
+    pub paint_revision: u64,
+    pub mask_revision: u64,
+    pub mask_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -442,6 +463,7 @@ pub struct UiState {
     pub workspace: WorkspaceState,
     pub brush: BrushState,
     pub layers: Vec<LayerState>,
+    pub layer_tools: LayersView,
     pub tabs: Vec<DocumentTab>,
     pub commands: Vec<CommandState>,
     pub settings: Settings,
@@ -462,6 +484,9 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Layer {
+        action: LayerAction,
+    },
     MeasurePanels {
         measurements: Vec<PanelMeasurement>,
     },

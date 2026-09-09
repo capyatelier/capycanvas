@@ -74,6 +74,7 @@ pub enum DabMode {
 /// instance record; color and texture identity are submitted only once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DabStyle {
+    pub alpha_locked: bool,
     pub tip: BrushTip,
     pub mode: DabMode,
     pub execution: BrushExecution,
@@ -87,6 +88,8 @@ pub struct DabStyle {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DabBatchKind {
+    /// Ordered fill / destructive mask application between committed strokes.
+    LayerOperation(u32),
     /// Incrementally changes the persistent active-layer image.
     Persistent,
     /// Replaces renderer-owned predicted-input preview state for this frame.
@@ -172,6 +175,13 @@ pub trait CanvasRenderer {
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error>;
     fn release_asset(&mut self, asset: &AssetId);
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error>;
+    /// Small asynchronous UI previews, never full-resolution paint readback.
+    fn request_thumbnail(&mut self, _request_id: u64, _target: LayerId) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        None
+    }
     fn request_readback(&mut self, request_id: u64) -> Result<(), Self::Error>;
     fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>>;
 }

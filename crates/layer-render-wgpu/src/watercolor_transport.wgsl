@@ -322,12 +322,15 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
         );
     }
     let unclamped_pigment = clamp(combined_pigment, vec4<f32>(0.0), vec4<f32>(1.0));
-    let next_pigment = vec4<f32>(
+    var next_pigment = vec4<f32>(
         min(unclamped_pigment.rgb, vec3<f32>(unclamped_pigment.a)),
         unclamped_pigment.a,
     );
+    if style.color.a > 0.5 {
+        next_pigment = vec4<f32>(next_pigment.rgb / max(next_pigment.a, 0.000001) * center.a, center.a);
+    }
     return TransportOutput(
         next_pigment,
-        vec4<f32>(next_wetness, 0.0, 0.0, 1.0),
+        vec4<f32>(select(next_wetness, 0.0, style.color.a > 0.5 && center.a == 0.0), 0.0, 0.0, 1.0),
     );
 }
