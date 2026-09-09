@@ -270,6 +270,23 @@ impl WebApp {
     pub fn tool_picker(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.tool_picker())
     }
+    pub fn toolbar_prompt(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.toolbar_prompt())
+    }
+    pub fn workspace_menu(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.workspace_menu())
+    }
+    pub fn floating_size_target(&self, item: JsValue) -> Result<JsValue, JsValue> {
+        let item = serde_wasm_bindgen::from_value(item).map_err(js)?;
+        serialize(
+            &self
+                .session
+                .state()
+                .workspace
+                .layout
+                .floating_reset_target(item),
+        )
+    }
     pub fn context_menu(&self, target: JsValue) -> Result<JsValue, JsValue> {
         let target = serde_wasm_bindgen::from_value(target).map_err(js)?;
         serialize(&self.session.context_menu(target).map_err(js)?)

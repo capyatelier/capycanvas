@@ -5,6 +5,13 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   dispatch, draggable, grip, place, updateZen }) {
   const send = (action) => dispatch({ type: "customize", action });
   const views = new Map(), fields = new Map();
+  const tileResize = new ResizeObserver(entries => {
+    for (const { target: strip } of entries) {
+      if (!strip.isConnected || !strip.dataset.axis) continue;
+      layoutTiles(strip, app.panel_tiles(strip.dataset.panel, strip.clientWidth, strip.clientHeight,
+        strip.dataset.axis, strip.dataset.standalone === "true"));
+    }
+  });
   let anchor = [320, 120], expanded = null, animation = 0, popupControl = null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
@@ -26,22 +33,44 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     updateZen();
   });
   const target = (node, value) => { node.dataset.context = JSON.stringify(value); return node; };
+  // The same recursive Rust menu drives both the header and contextual menus.
+  // Submenus replace their parent page, as in GTK's sliding popover menus.
+  function renderMenu(container, model, close, parents = []) {
+    container.classList.add("workspace-menu-items");
+    container.setAttribute("aria-label", model.title);
+    container.replaceChildren();
+    if (parents.length) {
+      const back = button(model.title, () => {
+        const previous = parents.at(-1);
+        renderMenu(container, previous, close, parents.slice(0, -1));
+      }, "submenu-back");
+      back.prepend(icon("down")); container.append(back, element("hr"));
+    }
+    model.sections.filter(section => section.length).forEach((section, index) => {
+      if (index) container.append(element("hr"));
+      for (const item of section) {
+        const submenu = item.sections?.some(section => section.length);
+        const row = button("", () => {
+          if (submenu) renderMenu(container, { title: item.label, sections: item.sections }, close, [...parents, model]);
+          else { close(); if (item.action) dispatch(item.action); }
+        });
+        row.disabled = !item.enabled;
+        row.setAttribute("role", item.selected == null ? "menuitem" : "menuitemcheckbox");
+        if (item.selected != null) row.setAttribute("aria-checked", item.selected);
+        const mark = element("span", "menu-check");
+        if (item.selected) mark.append(icon("check"));
+        row.append(mark, element("span", "menu-label", item.label));
+        if (item.hint) row.append(element("span", "shortcut-hint", item.hint));
+        if (submenu) { const arrow = icon("down"); arrow.classList.add("submenu-arrow"); row.append(arrow); }
+        container.append(row);
+      }
+    });
+    if (container === context && context.matches(":popover-open")) positionPopup(context);
+  }
   function showContext(node, point) {
     const model = app.context_menu(JSON.parse(node.dataset.context));
     anchor = point;
-    context.setAttribute("aria-label", model.title);
-    context.replaceChildren();
-    model.sections.forEach((section, index) => {
-      if (index) context.append(element("hr"));
-      for (const item of section) {
-        const row = button("", () => { context.hidePopover(); send(item.action); });
-        row.setAttribute("role", item.selected == null ? "menuitem" : "menuitemradio");
-        if (item.selected != null) row.setAttribute("aria-checked", item.selected);
-        const mark = element("span", "context-radio");
-        mark.hidden = item.selected == null;
-        row.append(mark, element("span", "", item.label)); context.append(row);
-      }
-    });
+    renderMenu(context, model, () => context.hidePopover());
     context.showPopover(); positionPopup(context);
   }
   function positionPopup(node) {
@@ -68,13 +97,13 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (e.pointerType !== "touch" || !node) return;
     hold = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
       heldPointer = e.pointerId; cancelHold();
-      node.dispatchEvent(new Event("workspace-context-claimed"));
+      node.dispatchEvent(new Event("workspace-context-claimed", { bubbles: true }));
       showContext(node, [e.clientX, e.clientY]);
     }, 500) };
   });
   workspace.addEventListener("pointermove", (e) => {
     if (hold && Math.hypot(e.clientX - hold.x, e.clientY - hold.y) > 8) cancelHold();
-  });
+  }, { capture: true });
   for (const event of ["pointerup", "pointercancel", "dragstart", "scroll"])
     workspace.addEventListener(event, cancelHold, { capture: true });
   window.addEventListener("blur", cancelHold);
@@ -158,11 +187,13 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       const toolbar = config.content.kind === "toolbar";
       target(panel, { kind: toolbar ? "ribbon" : "panel", panel: config.id });
       if (toolbar) {
-        const key = JSON.stringify(config.content.tiles);
+        const key = JSON.stringify([config.content.tiles, view.tile_style]);
         if (panel.dataset.tiles !== key) {
           panel.dataset.tiles = key;
+          const old = panel.querySelector(".toolbar-controls"); if (old) tileResize.unobserve(old);
           const strip = element("div", "toolbar-controls");
-          strip.append(grip({ kind: "panel", panel: config.id }));
+          strip.dataset.panel = config.id;
+          strip.dataset.tileStyle = view.tile_style;
           for (const tile of view.tiles) {
             // Like GTK, drag/context target surrounds the command button. A
             // disabled command remains movable and removable.
@@ -173,12 +204,17 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
               dispatch({ type: "activate_tile", panel: config.id, tile: tile.id });
             });
             if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
-            node.append(icon(tile.icon));
+            const glyph = icon(tile.icon);
+            glyph.style.width = glyph.style.height = `${view.tile_style === "large" ? 32 : 16}px`;
+            node.append(glyph);
+            if (view.tile_style === "labeled") node.append(element("span", "tile-label", tile.label));
             tileRoot.append(node);
             target(tileRoot, { kind: "tile", panel: config.id, tile: tile.id });
             strip.append(draggable(tileRoot, { kind: "tile", panel: config.id, tile: tile.id }));
           }
+          strip.append(grip({ kind: "panel", panel: config.id }));
           panel.replaceChildren(strip);
+          tileResize.observe(strip);
         }
         for (const tile of view.tiles) {
           const node = panel.querySelector(`[data-tile="${tile.id}"] > button`);
@@ -193,7 +229,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         }
       }
     }
-    for (const [id, panel] of panels) if (!views.has(id)) { discardFields(panel); panel.parentElement.remove(); panels.delete(id); }
+    for (const [id, panel] of panels) if (!views.has(id)) {
+      const strip = panel.querySelector(".toolbar-controls"); if (strip) tileResize.unobserve(strip);
+      discardFields(panel); panel.parentElement.remove(); panels.delete(id);
+    }
   }
 
   const picker = element("dialog", "tool-picker"); picker.id = "tool-picker";
@@ -238,13 +277,44 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (!picker.open) { picker.showModal(); (model.name == null ? search : name).focus(); }
   }
 
+  const prompt = element("dialog", "toolbar-prompt"), promptTitle = element("h2"), promptMessage = element("p");
+  prompt.id = "toolbar-prompt";
+  const promptNameRow = element("label", "toolbar-name"), promptNameLabel = element("span"), promptName = element("input");
+  promptName.id = "toolbar-prompt-name";
+  promptName.addEventListener("input", () => send({ type: "toolbar_name", name: promptName.value }));
+  promptNameRow.append(promptNameLabel, promptName);
+  const promptError = element("p", "preferences-error"), promptActions = element("div", "prompt-actions");
+  const cancelPrompt = () => send({ type: "cancel_toolbar" });
+  const promptCancel = button("", cancelPrompt), promptConfirm = button("", () => send({ type: "confirm_toolbar" }));
+  promptConfirm.id = "confirm-toolbar"; promptActions.append(promptCancel, promptConfirm);
+  prompt.append(promptTitle, promptMessage, promptNameRow, promptError, promptActions); workspace.append(prompt);
+  prompt.addEventListener("cancel", e => { e.preventDefault(); cancelPrompt(); });
+  prompt.addEventListener("close", () => { if (app.toolbar_prompt()) cancelPrompt(); });
+  promptName.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !promptConfirm.disabled) { e.preventDefault(); promptConfirm.click(); }
+  });
+  function refreshPrompt() {
+    const model = app.toolbar_prompt();
+    if (!model) { if (prompt.open) prompt.close(); return; }
+    promptTitle.textContent = model.title; prompt.setAttribute("aria-label", model.title);
+    promptMessage.textContent = model.message; promptMessage.hidden = !model.message;
+    promptNameRow.hidden = model.name == null;
+    promptNameLabel.textContent = model.name_label; promptName.setAttribute("aria-label", model.name_label);
+    if (model.name != null && promptName.value !== model.name) promptName.value = model.name;
+    promptError.textContent = model.error || ""; promptError.hidden = !model.error;
+    promptCancel.textContent = model.cancel_label; promptConfirm.textContent = model.confirm_label;
+    promptConfirm.disabled = !model.can_confirm;
+    promptConfirm.className = model.destructive ? "destructive-action" : "suggested-action";
+    if (!prompt.open) { prompt.showModal(); if (model.name != null) { promptName.focus(); promptName.select(); } }
+  }
+
   function clearExpansion() {
     cancelAnimationFrame(animation); animation = 0;
     if (!expanded) return;
     discardFields(expanded.configuration);
     expanded.configuration.remove(); expanded.join.remove();
     expanded.root.classList.remove("expanded-panel", "configuration-left", "configuration-right", "configuration-flush");
-    expanded.root.style.zIndex = "";
+    expanded.root.style.zIndex = expanded.root.dataset.zIndex;
     place(expanded.root, expanded.docked);
     const preview = expanded.root.querySelector(".panel-preview");
     preview.removeAttribute("style"); expanded = null;
@@ -304,11 +374,14 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         check.addEventListener("change", () => send({ type: "set_control_visible", panel: id, control: control.control, visible: check.checked }));
         label.append(check, document.createTextNode(control.label)); row.append(label, field(control.control, control.label)); body.append(row);
       }
-      if (!view.controls.length) body.append(button("Add Tools…", () => send({ type: "insert_tools", panel: id, before: null })));
+      if (view.toolbar_options.length) {
+        const options = element("div", "toolbar-options"); body.append(options);
+        renderToolbarOptions(options, view.toolbar_options);
+      }
       const configuration = panelFrame(body), join = element("div", "panel-column-join");
       configuration.classList.add("panel-configuration"); join.setAttribute("aria-hidden", "true");
       root.querySelector(".panel-columns").append(configuration, join);
-      root.classList.add("expanded-panel"); root.style.zIndex = "4";
+      root.classList.add("expanded-panel"); root.style.zIndex = "2000";
       expanded = { panel: id, group: group.id, root, configuration, body, join, docked: group.bounds,
         open: true, headerHeight: group.tabs_visible ? resolved.tab_bar_height : 0, axis: group.axis,
         from, started: performance.now(), placement: from };
@@ -326,10 +399,14 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     [...strip.querySelectorAll(":scope > .tile-button")].forEach((tile, i) => place(tile, geometry.tiles[i]));
   }
   function refresh() {
-    refreshPanels(); refreshPicker();
+    refreshPanels(); refreshPicker(); refreshPrompt();
     for (const update of fields.values()) update();
     if (expanded) for (const check of expanded.body.querySelectorAll("[data-visible]")) {
       check.checked = views.get(expanded.panel)?.controls.find((c) => c.control === check.dataset.visible)?.visible_in_panel || false;
+    }
+    if (expanded) {
+      const options = expanded.body.querySelector(".toolbar-options");
+      if (options) renderToolbarOptions(options, views.get(expanded.panel)?.toolbar_options || []);
     }
     const control = state().customization.control;
     if (popupControl !== control) {
@@ -343,7 +420,26 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     }
     workspace.style.setProperty("--paint-color", hexColor(state().brush.color));
   }
-  return { refresh, arrange, target, view: (id) => views.get(id), layoutTiles,
+  function renderToolbarOptions(container, sections) {
+    const key = JSON.stringify(sections);
+    if (container.dataset.key === key) return;
+    container.dataset.key = key;
+    container.replaceChildren(...sections.filter(s => s.length).map(section => {
+      const list = element("div", "toolbar-option-group");
+      for (const item of section) {
+        const row = button("", () => dispatch(item.action)); row.disabled = !item.enabled;
+        if (item.selected != null) {
+          row.setAttribute("role", "radio"); row.setAttribute("aria-checked", item.selected);
+          row.append(element("span", "option-radio"));
+        }
+        row.append(element("span", "menu-label", item.label));
+        if (item.hint) row.append(element("span", "shortcut-hint", item.hint));
+        list.append(row);
+      }
+      return list;
+    }));
+  }
+  return { refresh, arrange, target, renderMenu, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

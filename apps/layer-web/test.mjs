@@ -8,7 +8,7 @@ import { checkParity } from "./parity.mjs";
 import { checkPreferences } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup } from "./gpu.test.mjs";
-import { checkCustomization } from "./customization.test.mjs";
+import { checkCustomization, checkWorkspace } from "./customization.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
 
@@ -164,14 +164,17 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--customization")) {
+  if (process.argv.includes("--workspace")) {
+    await checkWorkspace({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--customization")) {
     await checkCustomization({ call, evaluate, settle, canvasPixels });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
     await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url });
     assert.deepEqual(errors, []);
-  } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity")) {
+  } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke")) {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--preferences")) {
@@ -432,219 +435,7 @@ try {
     );
     await click('[data-brush="4"]');
     await click('[data-size="96"]');
-    // Set up adjacent docks; native drag/drop and tab insertion tested below.
-    await evaluate(
-      `layerApp.dispatch({type:"move_panel",panel:"sizes",target:{kind:"edge",edge:"right",outer:false}})`,
-    );
-    await settle();
-    assert.equal(
-      await evaluate(
-        'layerApp.state().workspace.layout.bands.filter(b => b.edge === "right").length',
-      ),
-      2,
-    );
-    assert.ok(
-      await evaluate(
-        `document.querySelector('[data-panel="sizes"]').getBoundingClientRect().right <= document.querySelector('[data-panel="layers"]').getBoundingClientRect().left`,
-      ),
-    );
-    await evaluate(
-      `layerApp.dispatch({type:"move_panel",panel:"brushes",target:{kind:"tab",group:8}})`,
-    );
-    await settle();
-    assert.equal(
-      await evaluate(
-        'document.querySelector("[data-panel=brushes] .dock-tabs").querySelectorAll(".dock-tab").length',
-      ),
-      2,
-    );
-    await evaluate(
-      `Array.from(document.querySelectorAll('[data-panel="brushes"] .dock-tab')).find(b => b.textContent === 'Layers').click()`,
-    );
-    await settle();
-    assert.equal(
-      await evaluate(
-        'document.querySelector("[data-panel=layers] .layer-row") !== null',
-      ),
-      true,
-    );
-    const slot = await evaluate(
-      `(() => {const b=document.querySelector('[data-panel="layers"] .dock-tab').getBoundingClientRect();return{x:b.x+5,y:b.y+5};})()`,
-    );
-    // A real browser drop on the header reorders tabs, not a split above them.
-    for (const type of ["dragEnter", "dragOver", "drop"])
-      await call("Input.dispatchDragEvent", {
-        type,
-        ...slot,
-        data: {
-          items: [
-            {
-              mimeType: "text/layer-dock",
-              data: JSON.stringify({ kind: "panel", panel: "brushes" }),
-            },
-          ],
-          dragOperationsMask: 16,
-        },
-      });
-    await settle();
-    assert.deepEqual(
-      await evaluate(
-        "layerApp.app.layout(1440,1000).groups.find(g=>g.id===8).panels",
-      ),
-      ["brushes", "layers"],
-    );
-    // Tools as a tab has no inner grip; its tab-bar grip moves the entire group.
-    await evaluate(
-      `layerApp.dispatch({type:"move_panel",panel:"toolbar",target:{kind:"tab",group:8}})`,
-    );
-    await settle();
-    const groupBefore = await evaluate(
-      "layerApp.app.layout(1440,1000).groups.find(g=>g.id===8)",
-    );
-    assert.ok(
-      await evaluate(
-        "document.querySelector('[data-panel=toolbar] .toolbar-controls > .panel-grip').hidden",
-      ),
-    );
-    assert.ok(
-      await evaluate(
-        `(() => {const s=document.querySelector('[data-panel=toolbar] .toolbar-controls'),b=s.getBoundingClientRect(),t=s.querySelector('.tile-button').getBoundingClientRect();return t.x>=b.x+4 && t.y===b.y+4;})()`,
-      ),
-      "tabbed Tools retains its content inset",
-    );
-    assert.deepEqual(
-      await evaluate(
-        `(() => { window.groupGrip=document.querySelector('[data-panel=toolbar] .dock-tabs > .panel-grip'); const data=new DataTransfer(); groupGrip.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:data})); return JSON.parse(data.getData('text/layer-dock')); })()`,
-      ),
-      { kind: "group", group: 8 },
-    );
-    const groupDrop = {
-      x: 720,
-      y: 995,
-      data: {
-        items: [
-          {
-            mimeType: "text/layer-dock",
-            data: JSON.stringify({ kind: "group", group: 8 }),
-          },
-        ],
-        dragOperationsMask: 16,
-      },
-    };
-    for (const type of ["dragEnter", "dragOver"])
-      await call("Input.dispatchDragEvent", { type, ...groupDrop });
-    assert.equal(
-      await evaluate("document.querySelector('.drop-indicator').hidden"),
-      false,
-    );
-    await call("Input.dispatchDragEvent", { type: "drop", ...groupDrop });
-    await evaluate(
-      "groupGrip.dispatchEvent(new DragEvent('dragend',{bubbles:true}))",
-    );
-    await settle();
-    const groupAfter = await evaluate(
-      "layerApp.app.layout(1440,1000).groups.find(g=>g.id===8)",
-    );
-    assert.deepEqual(groupAfter.panels, groupBefore.panels);
-    assert.equal(groupAfter.active, groupBefore.active);
-    assert.ok(
-      await evaluate(
-        "layerApp.state().workspace.layout.bands.some(b=>b.edge==='bottom'&&b.root.id===8)",
-      ),
-    );
-    await evaluate(`layerApp.dispatch({type:"invoke",command:"reset_layout"})`);
-    await settle();
-    // Actual captured pointer drag goes through the one shared resize action.
-    assert.equal(
-      await evaluate("document.querySelectorAll('.dock-menu').length"),
-      0,
-    );
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#header-start > button').dataset.command",
-      ),
-      "zen_mode",
-    );
-    assert.equal(
-      await evaluate(
-        "document.querySelector('#header-start > button').textContent.trim()",
-      ),
-      "",
-    );
-    assert.ok(
-      await evaluate(
-        `(() => {const t=document.querySelector('[data-panel="toolbar"]').getBoundingClientRect(),s=document.querySelector('#canvas-status').getBoundingClientRect();return t.x===s.x && t.width===s.width;})()`,
-      ),
-    );
-    assert.ok(
-      await evaluate(
-        `Array.from(document.querySelectorAll('.toolbar-controls > .tile-button')).every(n=>{const b=n.getBoundingClientRect();return b.width===36&&b.height===36;})`,
-      ),
-    );
-    const initialDockExtent = await evaluate(
-      "layerApp.state().workspace.layout.bands.find(b=>b.id===3).extent",
-    );
-    const divider = await evaluate(
-      `(() => {const n=Array.from(document.querySelectorAll('.divider')).find(n=>n.divider.id===3);const r=n.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`,
-    );
-    await call("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      ...divider,
-      button: "left",
-      buttons: 1,
-      clickCount: 1,
-    });
-    for (let i = 1; i <= 8; i++)
-      await call("Input.dispatchMouseEvent", {
-        type: "mouseMoved",
-        x: divider.x + i * 8,
-        y: divider.y,
-        button: "left",
-        buttons: 1,
-      });
-    await call("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: divider.x + 64,
-      y: divider.y,
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
-    });
-    await settle();
-    assert.ok(
-      Math.abs(
-        (await evaluate(
-          "layerApp.state().workspace.layout.bands.find(b=>b.id===3).extent",
-        )) -
-          (initialDockExtent + 64),
-      ) < 1,
-      "drag should resize the left dock by exactly 64 logical pixels",
-    );
-    const drop = await evaluate(
-      `(() => {const r=document.querySelector('[data-panel="layers"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`,
-    );
-    for (const type of ["dragEnter", "dragOver", "drop"])
-      await call("Input.dispatchDragEvent", {
-        type,
-        ...drop,
-        data: {
-          items: [
-            {
-              mimeType: "text/layer-dock",
-              data: JSON.stringify({ kind: "panel", panel: "sizes" }),
-            },
-          ],
-          dragOperationsMask: 16,
-        },
-      });
-    await settle();
-    assert.ok(
-      await evaluate(
-        'layerApp.app.layout(1440,1000).groups.some(g=>g.panels.includes("layers")&&g.panels.includes("sizes"))',
-      ),
-    );
-    await evaluate(`layerApp.dispatch({type:"invoke",command:"reset_layout"})`);
-    await settle();
+    // Workspace gestures are covered by the shared browser suite below.
     const camera = await evaluate(
       "({zoom:layerApp.state().camera.zoom, rotation:layerApp.state().camera.rotation})",
     );
@@ -746,7 +537,7 @@ try {
       [600, 120, true],
       [600, 80, false],
       [600, 120, false],
-      [600, 125, true],
+      [600, 165, true],
       [600, 120, true],
       [600, 820, true], // Empty bottom edge: the status HUD is not a panel.
       [600, 820, true],
@@ -874,7 +665,8 @@ try {
       const strip=document.querySelector('.toolbar-controls'),panel=strip.parentElement,box=strip.getBoundingClientRect(),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tabGrip=document.querySelector('.dock-tabs>.panel-grip').getBoundingClientRect(),zen=document.querySelector('#header-start>button').getBoundingClientRect();
       return {gripSize:[grip.width,grip.height],tabGripSize:[tabGrip.width,tabGrip.height],overflow:[panel.scrollWidth-panel.clientWidth,panel.scrollHeight-panel.clientHeight],top:box.top,above:zen.top,below:box.top-zen.bottom};
     })()`);
-      assert.deepEqual(chromeGeometry.gripSize, chromeGeometry.tabGripSize);
+      assert.deepEqual(chromeGeometry.gripSize, [20, 36]);
+      assert.deepEqual(chromeGeometry.tabGripSize, [20, 24]);
       assert.deepEqual(chromeGeometry.overflow, [0, 0]);
       assert.equal(chromeGeometry.top, 48);
       assert.ok(Math.abs(chromeGeometry.above - chromeGeometry.below) <= 1);
@@ -892,145 +684,8 @@ try {
         `(() => {const n=document.querySelector('#view-info').getBoundingClientRect(),p=document.querySelector('[data-panel=layers]').getBoundingClientRect();return Math.abs(n.bottom-p.bottom)<1;})()`,
       ),
     );
-    // Standalone ribbons grow across their axis when their length runs out.
-    const ribbonGeometry = () =>
-      evaluate(`(() => {
-    const strip=document.querySelector('.toolbar-controls'),b=strip.getBoundingClientRect(),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),horizontal=strip.dataset.axis==='horizontal';
-    return {width:b.width,height:b.height,fits:[...strip.querySelectorAll('.tile-button')].every(node=>{const t=node.getBoundingClientRect();return t.x>=b.x&&t.y>=b.y&&t.right<=b.right&&t.bottom<=b.bottom&&(horizontal?t.right+2<=grip.x:t.bottom+2<=grip.y);})};
-  })()`);
-    for (const vertical of [false, true]) {
-      if (vertical)
-        await evaluate(`
-      layerApp.dispatch({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge:'left',outer:true}});
-      layerApp.dispatch({type:'move_panel',panel:'sizes',target:{kind:'edge',edge:'top',outer:true}});
-    `);
-      await call("Emulation.setDeviceMetricsOverride", {
-        width: vertical ? 1200 : 680,
-        height: vertical ? 480 : 900,
-        deviceScaleFactor: 1,
-        mobile: false,
-      });
-      await settle();
-      const wrapped = await ribbonGeometry();
-      assert.equal(vertical ? wrapped.width : wrapped.height, 74);
-      assert.ok(wrapped.fits);
-      await call("Emulation.setDeviceMetricsOverride", {
-        width: 1200,
-        height: 900,
-        deviceScaleFactor: 1,
-        mobile: false,
-      });
-      await settle();
-      const unwrapped = await ribbonGeometry();
-      assert.equal(vertical ? unwrapped.width : unwrapped.height, 36);
-    }
-    await evaluate("layerApp.dispatch({type:'invoke',command:'reset_layout'})");
-    await settle();
-    // Real side drop: preserve each panel's width, taking space from the canvas.
-    const side = await evaluate(
-      `(() => {const t=document.querySelector('[data-panel=layers]').getBoundingClientRect(),s=document.querySelector('[data-panel=sizes]').getBoundingClientRect();return{x:t.right-5,y:t.y+t.height/2,target:t.width,source:s.width};})()`,
-    );
-    for (const type of ["dragEnter", "dragOver", "drop"])
-      await call("Input.dispatchDragEvent", {
-        type,
-        x: side.x,
-        y: side.y,
-        data: {
-          items: [
-            {
-              mimeType: "text/layer-dock",
-              data: JSON.stringify({ kind: "panel", panel: "sizes" }),
-            },
-          ],
-          dragOperationsMask: 16,
-        },
-      });
-    await settle();
-    for (const [panel, expected] of [
-      ["layers", side.target],
-      ["sizes", side.source],
-    ])
-      assert.ok(
-        Math.abs(
-          (await evaluate(
-            `document.querySelector('[data-panel=${panel}]').getBoundingClientRect().width`,
-          )) - expected,
-        ) < 1,
-      );
-    const sideShot = await call("Page.captureScreenshot", {
-      format: "png",
-      clip: reviewClip,
-    });
-    await writeFile(
-      "artifacts/ui/web-side-dock.png",
-      Buffer.from(sideShot.data, "base64"),
-    );
-    await click('[data-command="reset_layout"]');
-    await evaluate("layerApp.dispatch({type:'set_theme',theme:'dark'})");
-    for (const panel of ["brushes", "sizes", "toolbar"])
-      await evaluate(
-        `layerApp.dispatch({type:'move_panel',panel:${JSON.stringify(panel)},target:{kind:'tab',group:8}})`,
-      );
-    await evaluate(
-      "layerApp.dispatch({type:'select_panel_tab',group:8,panel:'brushes'})",
-    );
-    await settle();
-    const append = await evaluate(
-      `(() => {const p=document.querySelector('[data-group="8"]'),b=p.getBoundingClientRect(),g=p.querySelector('.panel-grip').getBoundingClientRect(),list=p.querySelector('.tab-list');return{x:b.x+b.width/2,y:b.y+b.height/2,top:b.y,grip:g.x,overflow:list.scrollWidth>list.clientWidth};})()`,
-    );
-    assert.ok(append.overflow);
-    const appendData = {
-      items: [
-        {
-          mimeType: "text/layer-dock",
-          data: JSON.stringify({ kind: "panel", panel: "layers" }),
-        },
-      ],
-      dragOperationsMask: 16,
-    };
-    await evaluate(
-      `(() => {window.appendTab=[...document.querySelectorAll('[data-group="8"] .dock-tab')].find(t=>t.textContent==='Layers');const data=new DataTransfer();appendTab.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:data}));})()`,
-    );
-    for (const type of ["dragEnter", "dragOver"])
-      await call("Input.dispatchDragEvent", {
-        type,
-        x: append.x,
-        y: append.y,
-        data: appendData,
-      });
-    const marker = await evaluate(
-      `(() => {const n=document.querySelector('.drop-indicator'),b=n.getBoundingClientRect();return {hidden:n.hidden,width:b.width,y:b.y,right:b.right,kind:n.dataset.kind};})()`,
-    );
-    assert.equal(marker.hidden, false);
-    assert.equal(marker.kind, "tab");
-    assert.equal(marker.width, 3);
-    assert.equal(marker.y, append.top);
-    assert.ok(Math.abs(marker.right - append.grip) < 1);
-    const tabShot = await call("Page.captureScreenshot", {
-      format: "png",
-      clip: reviewClip,
-    });
-    await writeFile(
-      "artifacts/ui/web-tab-insertion.png",
-      Buffer.from(tabShot.data, "base64"),
-    );
-    await call("Input.dispatchDragEvent", {
-      type: "drop",
-      x: append.x,
-      y: append.y,
-      data: appendData,
-    });
-    await evaluate(
-      "appendTab.dispatchEvent(new DragEvent('dragend',{bubbles:true}))",
-    );
-    await settle();
-    assert.equal(
-      await evaluate(
-        "layerApp.app.layout(1200,900).groups.find(g=>g.id===8).panels.at(-1)",
-      ),
-      "layers",
-    );
-    await click('[data-command="reset_layout"]');
+    await checkWorkspace({ call, evaluate, settle });
+    await checkCustomization({ call, evaluate, settle, canvasPixels });
     await evaluate("layerApp.dispatch({type:'set_theme',theme:'light'})");
     await settle();
     // Review the transparent decoration area over zoomed artwork.
@@ -1045,7 +700,7 @@ try {
     await settle();
     const zoomShot = await call("Page.captureScreenshot", {
       format: "png",
-      clip: reviewClip,
+      clip: { ...reviewClip, scale: 1 }, // The workspace suites restored 1× DPR.
     });
     await writeFile(
       "artifacts/ui/web-zoom.png",
@@ -1053,7 +708,7 @@ try {
     );
     assert.deepEqual(errors, []);
     console.log(
-      "PASS: hardware Wasm/WebGPU ink, pen pressure, controls/layers/undo, settings apply/cancel, dock moves/tabs/drag/resize, two-touch camera, Zen fade/reveal without viewport change, dark/light/Zen screenshots",
+      "PASS: hardware Wasm/WebGPU ink, pen pressure, controls/layers/undo, settings persistence, dock moves/tabs/drag/resize, two-touch camera, Zen fade/reveal without viewport change, dark/light/Zen screenshots",
     );
   }
 } catch (error) {

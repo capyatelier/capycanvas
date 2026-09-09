@@ -157,13 +157,13 @@ export function packageWeb() {
     const mark = read(join(web, "icons/layer-zen-symbolic.svg"))
       .replace('width="24" height="24"', 'x="96" y="96" width="320" height="320" color="#f6f5f4"');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="76.8" fill="#767676"/>${mark}</svg>`;
-    for (const size of [32, 180, 192, 512])
-      run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), "-", join(runtime, `icon-${size}.png`)], {
-        // Apple masks Home Screen artwork itself; transparent corners can
-        // acquire a black border. Other platforms retain our rounded artwork.
-        input: size === 180 ? svg.replace(' rx="76.8"', "") : svg,
-        stdio: ["pipe", "inherit", "inherit"],
-      });
+    for (const size of [32, 180, 192, 512]) {
+      // File input avoids renderer stdin/EOF stalls in constrained build hosts.
+      // Apple masks artwork itself; other platforms retain rounded corners.
+      const source = join(staging, "icon.svg");
+      writeFileSync(source, size === 180 ? svg.replace(' rx="76.8"', "") : svg);
+      run(resvg, ["--resources-dir", web, "--width", String(size), "--height", String(size), source, join(runtime, `icon-${size}.png`)]);
+    }
     const names = fingerprintAssets(runtime);
     const asset = (path) => `assets/${names[path]}`;
     // Apple's out-of-page icon lookup also needs a conventional stable URL.

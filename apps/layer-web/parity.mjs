@@ -23,9 +23,9 @@ export async function checkParity({ call, evaluate, settle }) {
   );
   assert.deepEqual(
     await evaluate(
-      "[...document.querySelectorAll('.header-menu')].map(m=>[...m.querySelectorAll('button')].map(b=>b.dataset.command))",
+      "[...document.querySelectorAll('.header-menu')].filter(m=>!m.querySelector('#workspace-menu')).map(m=>[...m.querySelectorAll('button')].map(b=>b.dataset.command))",
     ),
-    catalog.menus.map((m) => m.sections.flat()),
+    catalog.menus.filter(m=>m.sections.length).map(m => m.sections.flat()),
   );
   assert.deepEqual(
     await evaluate(
@@ -143,7 +143,7 @@ export async function checkParity({ call, evaluate, settle }) {
     ...metrics.dark[".header-menu > summary"],
   ];
   for (const header of [nativeHeader, webHeader]) {
-    assert.equal(header.length, 3);
+    assert.equal(header.length, 1 + catalog.menus.length);
     assert.deepEqual(header[0].bounds, [6, 6, 36, 36]);
     header.forEach((n, i) => {
       assert.equal(n.bounds[1], 6);
@@ -518,7 +518,8 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(await point(600, 95), true);
   assert.equal(await point(600, 79), false);
   assert.equal(await point(600, 115), false);
-  assert.equal(await point(600, 150), true);
+  assert.equal(await point(600, 150), false); // 80px keep-visible margin below ribbon.
+  assert.equal(await point(600, 170), true);
   assert.equal(await point(600, 899), true); // HUD alone is not a bottom panel.
   assert.equal(await point(1, 450), false);
   assert.equal(await point(600, 450), true);
@@ -531,9 +532,11 @@ export async function checkParity({ call, evaluate, settle }) {
     });
   assert.equal(await point(600, 450), true);
   assert.equal(await point(1, 450), true); // No remaining left dock.
+  for (const panel of ["brushes", "sizes", "layers"])
+    await action({type:"customize",action:{type:"set_panel_visible",panel,visible:false}});
   await action({
-    type: "move_group",
-    group: 8,
+    type: "move_panel",
+    panel: "toolbar",
     target: { kind: "edge", edge: "bottom", outer: false },
   });
   assert.equal(await point(600, 450), true);
@@ -679,6 +682,6 @@ export async function checkParity({ call, evaluate, settle }) {
     "",
   );
   console.log(
-    "PASS: GTK/web geometry ≤1px, dark/light/settings captures, nonselectable chrome/no focus halos, copyable title, live controls, immediate settings persistence, occupied-edge Zen 80/40, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
+    "PASS: GTK/web geometry ≤1px, dark/light/settings captures, nonselectable chrome/no focus halos, copyable title, live controls, immediate settings persistence, occupied-edge Zen 80/80, wheel modifiers, ribbon wrapping/tabbed grips, fresh Wasm workspace restore",
   );
 }

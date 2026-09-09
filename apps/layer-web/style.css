@@ -25,7 +25,7 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 #workspace { position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
 #center { position: absolute; inset: 0; }
 body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
-#gpu-notice { position: absolute; inset: 54px 6px 30px; display: flex; flex-direction: column; padding: 6px; overflow: auto; background: var(--bg); cursor: default; }
+#gpu-notice { position: absolute; inset: 54px 6px 30px; display: flex; flex-direction: column; padding: 6px; overflow: auto; background: var(--bg); cursor: default; container-type: inline-size; }
 #gpu-notice[hidden] { display: none; }
 .gpu-help { width: 100%; max-width: 640px; flex: none; margin: auto; padding: 16px 20px; font-size: var(--ui-text-size); line-height: 1.4; user-select: text; overflow-wrap: anywhere; }
 .gpu-help h1 { font-size: var(--ui-text-size); line-height: 1.25; margin: 0 0 8px; }
@@ -45,13 +45,20 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 .gpu-address code { min-width: 0; flex: 0 1 auto; }
 .gpu-launch code { white-space: nowrap; }
 .gpu-address button { flex: none; min-height: 28px; padding: 2px 10px; font-size: var(--ui-text-size); background: var(--button); user-select: none; }
+/* Keep readable 11pt text when the side panels leave a narrow help column. */
+@container (max-width: 460px) {
+  .gpu-help { padding: 12px 16px; line-height: 1.3; }
+  .gpu-help p { margin-block: 6px; }
+  .gpu-help .gpu-cause { margin-bottom: 16px; }
+  .gpu-steps { margin-bottom: 16px; }
+}
 #canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: none; }
 #canvas-cursor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
 #canvas-cursor path { fill: none; stroke: black; stroke-width: 1; }
 #canvas-cursor .cursor-outline-front { stroke: white; stroke-dasharray: 3 3; }
 #canvas-cursor .cursor-marker-back { stroke-width: 3; }
 #canvas-cursor .cursor-marker-front { stroke: white; }
-#header { position: absolute; inset: 0 0 auto; height: 48px; padding: 6px; display: flex; align-items: center; justify-content: space-between; background: transparent; z-index: 5; }
+#header { position: absolute; inset: 0 0 auto; height: 48px; padding: 6px; display: flex; align-items: center; justify-content: space-between; background: transparent; z-index: 1000; }
 #header nav > button, .header-menu > summary, #document-title { background: var(--bg); border-radius: 6px; }
 :where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
@@ -74,6 +81,9 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tile-button, .panel-grip { display: grid; place-items: center; padding: 0; min-height: 0; min-width: 0; }
 .tile-button { width: 36px; height: 36px; }
 .panel-grip { cursor: grab; opacity: .65; }
+.panel-footer { flex: none; width: 100%; cursor: grab; touch-action: none; }
+.panel-footer > .panel-grip { width: 100%; height: 100%; }
+.panel-footer .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
 /* 20px target, 7.2px-wide dots: shift 1.6px to leave the tab label's 8px inset. */
 .panel-grip svg { transform: translateX(-1.6px); }
 .dock-tabs > .panel-grip { flex: none; margin-left: auto; width: 20px; height: 24px; }
@@ -116,10 +126,19 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; border: 0; border-radius: 12px; background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
 .panel-context-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; text-align: left; font-weight: 400; }
 .panel-context-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
+.workspace-menu-items button { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-weight: 400; white-space: nowrap; }
+.menu-check { flex: none; width: 16px; height: 16px; }
+.menu-label { flex: 1; min-width: 0; }
+.submenu-arrow { transform: rotate(-90deg); margin-left: auto; }
+.submenu-back > svg { transform: rotate(90deg); }
+.toolbar-options { display: flex; flex-direction: column; gap: 12px; }
+.toolbar-option-group { background: var(--button); border-radius: 12px; overflow: hidden; }
+.panel .toolbar-option-group button { display: flex; align-items: center; width: 100%; gap: 12px; padding: 9px; font-weight: 400; text-align: left; border-radius: 0; }
+.toolbar-option-group button + button { border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent); }
 .preference-context-menu .command-label { flex: 1; }
 .preference-context-menu button { gap: 24px; }
-.context-radio { width: 14px; height: 14px; border: 2px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 50%; }
-[aria-checked="true"] > .context-radio { border: 4px solid var(--accent); background: white; }
+.option-radio { flex: none; width: 16px; height: 16px; border: 2px solid color-mix(in srgb, var(--text) 30%, transparent); border-radius: 50%; }
+[aria-checked="true"] > .option-radio { border: 5px solid var(--accent); background: white; }
 .tool-picker { width: 480px; height: 560px; }
 .tool-picker[open] { display: flex; flex-direction: column; }
 .tool-picker > .dialog-header { display: flex; justify-content: space-between; padding: 6px; height: 48px; }
@@ -138,7 +157,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tool-choice > span { flex: 1; min-width: 0; }
 .tool-choice small { display: block; opacity: .55; margin-top: 4px; }
 .tool-count { opacity: .6; }
-.dock-tabs { display: flex; gap: 0; padding: 0; height: var(--tab-bar-height); flex-shrink: 0; align-items: center; background: var(--tabbar); font-size: var(--ui-text-size); }
+.dock-tabs { display: flex; gap: 0; padding: 0; height: var(--tab-bar-height); flex-shrink: 0; align-items: center; background: var(--tabbar); font-size: var(--ui-text-size); cursor: grab; touch-action: none; }
 .tab-list { display: flex; align-items: center; flex: 1; min-width: 0; height: var(--tab-bar-height); overflow: auto hidden; scrollbar-width: none; }
 .tab-list > .dock-tab { flex: none; }
 .dock-tab { position: relative; white-space: nowrap; cursor: grab; height: 36px; min-height: 36px; padding: 4px 8px; border-radius: 6px 6px 0 0; display: flex; align-items: center; touch-action: none; }
@@ -161,6 +180,10 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .toolbar-controls > button, .toolbar-controls > .tool-tile { position: absolute; min-height: 0; padding: 0; }
 .panel .tool-tile > button { display: grid; place-items: center; padding: 0; min-height: 0; width: 100%; height: 100%; }
 .tool-tile > button:disabled { pointer-events: none; }
+.panel .toolbar-controls[data-tile-style="labeled"] .tool-tile > button { display: flex; justify-content: flex-start; gap: 0; text-align: left; }
+.toolbar-controls[data-tile-style="labeled"] .tool-tile svg { width: 16px; margin: 0 10px; }
+.tile-label { width: 72px; padding-right: 4px; line-height: 18px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.panel-measure { position: fixed; left: -10000px; top: 0; visibility: hidden; pointer-events: none; }
 .toolbar-controls[data-axis="vertical"] > .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
 .brush-list { display: flex; flex-direction: column; gap: 2px; }
 .brush-list h3 { align-self: flex-start; margin: 8px; font-size: inherit; line-height: 18px; font-weight: 700; opacity: .55; }
@@ -222,10 +245,15 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .divider { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; background: transparent; z-index: 3; }
 .divider.horizontal { cursor: col-resize; }
 .divider.vertical { cursor: row-resize; }
-.drop-indicator { position: absolute; z-index: 10; background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 1px #0003; pointer-events: none; }
+.drop-indicator { position: absolute; z-index: 3000; background: var(--accent); border-radius: 2px; box-shadow: 0 0 0 1px #0003; pointer-events: none; }
 .chrome, .dock-group { transition: opacity 180ms ease-out; }
-.zen-hidden > .chrome, .zen-hidden > .dock-group, .zen-hidden > .divider { opacity: 0; pointer-events: none; }
-.zen-hidden .panel-preview, .zen-hidden .panel-configuration { pointer-events: none; }
+.floating-resize { position: absolute; touch-action: none; user-select: none; -webkit-user-select: none; }
+.floating-resize[data-edge="left"], .floating-resize[data-edge="right"] { cursor: ew-resize; }
+.floating-resize[data-edge="top"], .floating-resize[data-edge="bottom"] { cursor: ns-resize; }
+.floating-resize[data-edge="top_left"], .floating-resize[data-edge="bottom_right"] { cursor: nwse-resize; }
+.floating-resize[data-edge="top_right"], .floating-resize[data-edge="bottom_left"] { cursor: nesw-resize; }
+.zen-hidden > .chrome, .zen-hidden > .dock-group:not(.floating-panel), .zen-hidden > .divider { opacity: 0; pointer-events: none; }
+.zen-hidden .dock-group:not(.floating-panel) .panel-preview, .zen-hidden .dock-group:not(.floating-panel) .panel-configuration { pointer-events: none; }
 .zen-hidden #canvas { outline: none; }
 #status { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px; background: var(--popover); box-shadow: 0 2px 8px #0004; z-index: 10; max-width: 80vw; }
 #status:empty { display: none; }
@@ -305,6 +333,13 @@ dialog footer { display: flex; justify-content: end; align-items: center; gap: 6
 dialog footer .preferences-error { flex: 1; }
 dialog footer button { background: color-mix(in srgb, var(--text) 8%, transparent); }
 dialog .suggested-action { background: var(--accent); color: #fff; }
+dialog.toolbar-prompt { width: 400px; height: auto; padding: 24px; }
+.toolbar-prompt h2 { font-size: 20px; text-align: center; }
+.toolbar-prompt p { line-height: 1.5; margin: 16px 0; }
+.toolbar-prompt .toolbar-name { margin-top: 20px; }
+.prompt-actions { display: flex; gap: 12px; margin-top: 24px; }
+.prompt-actions button { flex: 1; background: var(--button); }
+.prompt-actions .destructive-action { color: white; background: #c01c28; }
 dialog.shortcut-capture { width: 414px; height: fit-content; min-height: 250px; }
 dialog.shortcut-capture[open] { display: flex; flex-direction: column; gap: 12px; }
 .shortcut-capture footer { flex: none; }

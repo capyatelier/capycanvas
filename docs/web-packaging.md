@@ -86,6 +86,13 @@ node apps/layer-web/test.mjs --package
 
 # Inject unavailable API/adapter/device and delayed startup; verify UI + reload.
 node apps/layer-web/test.mjs --package --gpu-startup
+
+# Native-pointer workspace menus, floating panels, resize, presets and Zen.
+node apps/layer-web/test.mjs --package --workspace
+node apps/layer-web/test.mjs --package --customization
+
+# Complete GPU input/drawing smoke plus the shared workspace interaction suites.
+node apps/layer-web/test.mjs --package --smoke
 ```
 
 The browser test uses a fresh temporary Chrome profile on Wayland and serves

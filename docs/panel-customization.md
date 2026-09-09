@@ -193,7 +193,8 @@ no third-party code or assets are imported.
   saved settings or undo entries. Hosts do not decide widths, heights, targets,
   naming rules or menu availability. `DragWorkspace` owns tear-off, live movement,
   snapping, singleton/group semantics and Zen reveal state. `ResizeFloating`
-  owns eight-edge resizing; `ResetFloatingSize` restores intrinsic dimensions.
+  owns eight-edge resizing; `CycleFloatingSize` restores intrinsic dimensions
+  and cycles the applicable default layout or tab visibility.
   Both continuous gestures use Down/Move/Up/Cancel and coalesced history. Native
   hosts retain their gesture on the workspace container, not a replaceable tab
   widget. `ChromeFacts.dragging` is reserved for native tool-tile DND, not shared
@@ -202,7 +203,7 @@ no third-party code or assets are imported.
 - Toolbar tiles have stable IDs and typed controls. The available-button catalog
   includes application commands, brush presets, size presets and color/opacity
   buttons; control values and execution remain in the existing Rust session.
-- System-panel control catalogs define allowed controls and compact defaults.
+- Built-in-panel control catalogs define allowed controls and compact defaults.
   The configuration column shows that catalog, including hidden controls. This is
   metadata for native controls, not a generic widget-tree abstraction.
 - Missing configuration in older workspaces receives the original defaults.
@@ -237,9 +238,13 @@ GTK tool ribbons are explicitly clipped and never gain a scroller.
 Web uses `customization.js` for DOM context menus, picker widgets, live controls
 and expansion presentation. `app.js` keeps event routing and the existing panel
 widgets; toolbars now consume the dynamic Rust tile views instead of a fixed
-six-button list. The Wasm adapter exposes the same context, picker, tile layout,
-expanded geometry and validated drop APIs. Touch uses pointer capture for moving
-tiles/tabs and a cancellable long-press recognizer for context menus; mouse/pen
+six-button list. The Wasm adapter exposes the same workspace/context menus,
+toolbar prompts, picker, tile layout, expanded geometry and validated drop APIs.
+Panel, group and resize gestures capture on the stable workspace, so replacing a
+tab or grip during tear-off cannot cancel the gesture. Rust handles every phase,
+including sizing cycles, history, snapping and Zen visibility. External resize
+strips suppress native selection drags. Touch uses pointer capture for moving
+tiles and a cancellable long-press recognizer for context menus; mouse/pen
 secondary click uses the browser context event. Disabled command buttons remain
 inside an enabled drag/context target, so they can still be removed or moved.
 
@@ -260,9 +265,11 @@ Regression coverage:
 | Live controls, visibility, selected-tab toggle, different-tab switch, outside/Escape dismissal | Core interaction tests; native expansion test; browser customization test |
 | Same/cross-toolbar moves, stable IDs and insertion previews | Core slot/move tests; native drop signal; browser native-DND and touch movement |
 | Dynamic wrapping, tabbing, clipped overflow and resize | Core allocation tests; GTK ribbon captures; web customization/parity checks |
-| Combined shadow, all four expansion edges, seamless corners, 11pt controls | Dark/light GTK and browser captures; web geometry/shadow comparison |
+| Combined shadow, permitted expansion placements, seamless corners, 11pt controls | Dark/light GTK and browser captures; web geometry/shadow comparison |
 | Workspace restore, reset retaining custom toolbars, malformed/stale targets | Core validation tests and both host round trips |
 | Zen drag/dismiss lifecycle and no accidental ink | Core input tests; native expansion test; browser customization/parity tests |
+| Workspace menus, naming/duplicate/delete prompts, visibility and independent history | GTK workspace-management test; browser workspace menu/button/shortcut tests |
+| Live tear-off, external resize, first double-click reset, layout/style cycles, floating-only Zen merges | Shared core tests; GTK native input tests; browser mouse/touch workspace regressions |
 
 Run the native tests separately (GTK initialization is thread-affine):
 
@@ -273,9 +280,12 @@ cargo test --release -p layer-linux native_web_parity_reference -- --ignored --t
 ```
 
 Use isolated `LAYER_SETTINGS_FILE` paths and a Wayland/Vulkan display. After
-building/serving the web client, run `node apps/layer-web/test.mjs --customization`
-and `--parity` against `LAYER_WEB_URL`. Captures are under the ignored
-`artifacts/ui/customization/` and `artifacts/ui/parity/` directories. The browser
+building/serving the web client, run `node apps/layer-web/test.mjs --customization`,
+`--workspace` and `--parity` against `LAYER_WEB_URL`, or add `--package` to test
+the static build. `--workspace --gestures` runs only the pointer/touch subset.
+Web customization/workspace captures are under
+`artifacts/ui/workspace-management/web/`; parity captures remain under
+`artifacts/ui/parity/`. These directories are ignored. The browser
 harness uses a temporary profile; its software Canvas2D context only inspects
 captured PNGs, never renders the application's canvas.
 

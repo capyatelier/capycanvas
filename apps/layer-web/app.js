@@ -182,6 +182,11 @@ function fullscreenButton() {
   return node;
 }
 function draggable(node, item) {
+  if (item.kind !== "tile") {
+    node.draggable = false;
+    node.dataset.workspaceDrag = JSON.stringify({ type: "drag_workspace", item });
+    return node;
+  }
   node.draggable = true;
   let pointer;
   node.addEventListener("workspace-context-claimed", () => { pointer = null; });
@@ -235,12 +240,23 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if (["move_panel", "move_group", "move_tile"].includes(action.type))
+    if (["move_panel", "move_group", "move_tile", "cycle_floating_size"].includes(action.type))
       action = {
         ...action,
         viewport: [workspace.clientWidth, workspace.clientHeight],
       };
+    const animated = ["cycle_floating_size", "select_panel_tab"].includes(action.type) ? groups.get(action.group) : null;
+    const before = animated?.getBoundingClientRect();
     applyChange(app.dispatch(action));
+    if (before && animated?.classList.contains("floating-panel") && !animated.classList.contains("expanded-panel")
+      && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const after = animated.getBoundingClientRect();
+      if (before.width !== after.width || before.height !== after.height) {
+        animated.getAnimations().forEach(a => a.cancel());
+        const frame = r => ({ left: `${r.x}px`, top: `${r.y}px`, width: `${r.width}px`, height: `${r.height}px` });
+        animated.animate([frame(before), frame(after)], { duration: catalog.panel_expansion_ms, easing: "cubic-bezier(.2,0,0,1)" });
+      }
+    }
   } catch (error) {
     message(error);
   }
@@ -336,7 +352,7 @@ function arrange() {
       workspace.append(node);
     }
     const key = JSON.stringify([group.panels.map((id) => {
-      const view = customization.view(id); return [id, view.title, view.tab_style];
+      const view = customization.view(id); return [id, view.title, view.tab_style, view.icon];
     }), group.active, group.tabs_visible]);
     if (node.dataset.key !== key) {
       node.dataset.key = key;
@@ -346,6 +362,7 @@ function arrange() {
       node.classList.toggle("toolbar", !!group.tiles);
       const preview = node.querySelector(".panel-preview");
       const tabs = element("nav", "dock-tabs");
+      draggable(tabs, { kind: "group", group: group.id });
       customization.target(tabs, { kind: "group", group: group.id });
       tabs.setAttribute("aria-label", "Panel tabs");
       if (group.tabs_visible) {
@@ -369,13 +386,26 @@ function arrange() {
         });
         tabs.append(labels, grip({ kind: "group", group: group.id }));
         preview.replaceChildren(tabs, panels.get(group.active).parentElement);
-      } else preview.replaceChildren(panels.get(group.active).parentElement);
+      } else {
+        preview.replaceChildren(panels.get(group.active).parentElement);
+        if (group.footer_grip) {
+          const footer = element("div", "panel-footer");
+          footer.style.height = `${group.footer_grip.height}px`;
+          draggable(footer, { kind: "group", group: group.id });
+          customization.target(footer, { kind: "group", group: group.id });
+          footer.append(grip({ kind: "group", group: group.id })); preview.append(footer);
+        }
+      }
     }
+    node.classList.toggle("floating-panel", group.floating);
+    node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "0";
+    if (!node.classList.contains("expanded-panel")) node.style.zIndex = node.dataset.zIndex;
     place(node, group.bounds);
     if (group.tiles) {
       const strip = node.querySelector(".toolbar-controls");
       const geometry = group.tiles;
       strip.dataset.axis = group.axis;
+      strip.dataset.standalone = !group.tabs_visible;
       customization.layoutTiles(strip, geometry);
     }
   }
@@ -385,44 +415,38 @@ function arrange() {
       groups.delete(id);
     }
   const liveDividers = new Set();
-  for (const divider of layout.dividers) {
-    const key = `${divider.band}:${divider.id}`;
+  const handles = [
+    ...layout.dividers.map(d => ({ key: `${d.band}:${d.id}`, bounds: d.bounds,
+      axis: d.axis, action: { type: "drag_divider", id: d.id } })),
+    ...layout.groups.filter(g => g.floating).flatMap(g => g.resize_handles.map(h => ({
+      key: `floating:${g.id}:${h.edge}`, bounds: h.bounds, edge: h.edge,
+      zIndex: Number(groups.get(g.id).dataset.zIndex) + 1,
+      action: { type: "resize_floating", group: g.id, edge: h.edge },
+    }))),
+  ];
+  for (const handle of handles) {
+    const { key } = handle;
     liveDividers.add(key);
     let node = dividers.get(key);
     if (!node) {
-      node = element("div", `divider ${divider.axis}`);
+      node = element("div");
       node.tabIndex = 0;
       node.setAttribute("role", "separator");
       node.setAttribute("aria-label", "Resize dock");
-      node.setAttribute(
-        "aria-orientation",
-        divider.axis === "horizontal" ? "vertical" : "horizontal",
-      );
-      node.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0) return;
-        dragDivider(node.divider.id, "down", e);
-        chromeHeld = true;
-        updateZen();
-        node.setPointerCapture(e.pointerId);
-        e.preventDefault();
-      });
-      node.addEventListener("pointermove", (e) => {
-        if (node.hasPointerCapture(e.pointerId))
-          dragDivider(node.divider.id, "move", e);
-      });
-      node.addEventListener("lostpointercapture", () => {
-        dragDivider(node.divider.id, "cancel");
-        chromeHeld = false;
-        updateZen();
-      });
       node.addEventListener("keydown", (e) => {
-        keyInput(e, true, node.divider.id);
+        if (node.dragAction.type === "drag_divider") keyInput(e, true, node.dragAction.id);
       });
       dividers.set(key, node);
       workspace.append(node);
     }
-    node.divider = divider;
-    place(node, divider.bounds);
+    node.dragAction = handle.action;
+    node.dataset.workspaceDrag = JSON.stringify(handle.action);
+    node.className = handle.edge ? "floating-resize" : `divider ${handle.axis}`;
+    if (handle.edge) {
+      node.dataset.edge = handle.edge; node.style.zIndex = handle.zIndex;
+      node.hidden = state.customization.expanded != null && layout.groups.find(g => g.id === handle.action.group)?.panels.includes(state.customization.expanded);
+    } else node.setAttribute("aria-orientation", handle.axis === "horizontal" ? "vertical" : "horizontal");
+    place(node, handle.bounds);
   }
   for (const [key, node] of dividers)
     if (!liveDividers.has(key)) {
@@ -436,14 +460,43 @@ function arrange() {
   place($("gpu-notice"), layout.work_area);
   resizeCanvas();
   updateZen();
+  queuePanelMeasurements();
 }
-function dragDivider(id, phase, e) {
-  dispatch({
-    type: "drag_divider",
-    id,
-    phase,
-    position: e ? [e.clientX, e.clientY] : [0, 0],
-    viewport: [workspace.clientWidth, workspace.clientHeight],
+// Measure intrinsic widget content only when its width/copy changes. Rust owns
+// tab growth and floating sizes; moving a float reuses these cached DOM facts.
+const panelMeasurements = new Map();
+let measuringPanels = false;
+const measureBox = element("div", "panel-measure");
+measureBox.setAttribute("aria-hidden", "true"); workspace.append(measureBox);
+function queuePanelMeasurements() {
+  if (measuringPanels) return;
+  measuringPanels = true;
+  requestAnimationFrame(() => {
+    measuringPanels = false;
+    const measurements = state.workspace.layout.panels.map(config => {
+      const view = customization.view(config.id);
+      const width = layout.groups.find(g => g.panels.includes(config.id))?.bounds.width || 232;
+      const key = JSON.stringify([width, view.title, view.tab_style, view.icon, view.controls, view.tile_style, state.layers.length]);
+      let cached = panelMeasurements.get(config.id);
+      if (cached?.key !== key) {
+        const tab = element("button", "dock-tab");
+        tab.style.width = "max-content";
+        if (view.tab_style === "icon") tab.append(icon(view.icon)); else tab.textContent = view.title;
+        measureBox.style.width = `${width}px`; measureBox.replaceChildren(tab);
+        const tabWidth = tab.getBoundingClientRect().width;
+        const content = panels.get(config.id).cloneNode(true);
+        content.style.height = "auto"; content.style.width = `${width}px`;
+        measureBox.replaceChildren(content);
+        cached = { key, value: { panel: config.id, tab_width: tabWidth,
+          content_height: config.content.kind === "toolbar" ? 0 : content.getBoundingClientRect().height } };
+        panelMeasurements.set(config.id, cached); measureBox.replaceChildren();
+      }
+      return cached.value;
+    });
+    for (const id of panelMeasurements.keys()) if (!panels.has(id)) panelMeasurements.delete(id);
+    // The core returns no change for identical measurements, including after
+    // workspace restore. This avoids keeping a second authoritative size cache.
+    dispatch({ type: "measure_panels", measurements });
   });
 }
 function resizeCanvas() {
@@ -593,6 +646,7 @@ function update(regions) {
     $("layer-opacity").update(state.layers.find((l) => l.selected).opacity);
   }
   if (regions & (1 | 4 | 128)) arrange();
+  if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();
   if (regions & (4 | 8))
     for (const command of state.commands)
       for (const node of commands.get(command.id) || []) {
@@ -640,6 +694,67 @@ function update(regions) {
 // Rust owns transient interaction policy. These are only DOM event/capture
 // records; CSS animates the returned visibility without resizing the canvas.
 let revealPointer = null;
+let workspaceGesture = null;
+function workspaceGestureEvent(phase, e) {
+  const drag = workspaceGesture;
+  if (!drag) return;
+  dispatch({ ...drag.action, phase, position: [e.clientX, e.clientY],
+    viewport: [workspace.clientWidth, workspace.clientHeight],
+    ...(drag.action.type === "drag_workspace" ? { tabs: tabHits() } : {}),
+  });
+}
+function endWorkspaceGesture(e, cancel = false) {
+  const drag = workspaceGesture;
+  if (!drag || (e && drag.id !== e.pointerId)) return;
+  if (drag.started) workspaceGestureEvent(cancel ? "cancel" : "up", e || drag.last);
+  workspaceGesture = null;
+  if (workspace.hasPointerCapture(drag.id)) workspace.releasePointerCapture(drag.id);
+  dropIndicator.hidden = true;
+  if (drag.started) { revealPointer = drag.id; e?.preventDefault(); e?.stopPropagation(); }
+  updateZen();
+}
+workspace.addEventListener("pointerdown", e => {
+  if (e.button !== 0 || workspaceGesture) return;
+  const node = e.target.closest("[data-workspace-drag]");
+  if (!node) return;
+  workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
+    start: e, last: e, started: false };
+  // External resize strips are outside the unselectable panel. Prevent a
+  // native text-selection drag from stealing their pointer sequence.
+  if (workspaceGesture.action.type !== "drag_workspace") e.preventDefault();
+}, { capture: true });
+workspace.addEventListener("pointermove", e => {
+  const drag = workspaceGesture;
+  if (!drag || drag.id !== e.pointerId) return;
+  drag.last = e;
+  if (!drag.started) {
+    const distance = Math.hypot(e.clientX - drag.start.clientX, e.clientY - drag.start.clientY);
+    if (distance <= (drag.action.type === "drag_workspace" ? 8 : 0)) return;
+    drag.started = true;
+    // Capture on the stable workspace before Rust tears off/rebuilds a tab.
+    workspace.setPointerCapture(e.pointerId);
+    groups.forEach(node => node.getAnimations().forEach(a => a.cancel()));
+    workspaceGestureEvent("down", drag.start);
+  }
+  workspaceGestureEvent("move", e);
+  if (drag.action.type === "drag_workspace") showDropHint(dropHint(e, drag.action.item));
+  e.preventDefault(); e.stopPropagation();
+}, { capture: true });
+workspace.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });
+workspace.addEventListener("pointercancel", e => endWorkspaceGesture(e, true), { capture: true });
+workspace.addEventListener("lostpointercapture", e => endWorkspaceGesture(e, true));
+workspace.addEventListener("workspace-context-claimed", () => endWorkspaceGesture(null, true));
+workspace.addEventListener("dblclick", e => {
+  if (e.target.closest(".dock-tab")) return;
+  const node = e.target.closest("[data-workspace-drag]");
+  if (!node) return;
+  const action = JSON.parse(node.dataset.workspaceDrag);
+  if (action.type !== "drag_workspace") return;
+  const group = app.floating_size_target(action.item);
+  if (group == null) return;
+  e.preventDefault(); e.stopPropagation();
+  dispatch({ type: "cycle_floating_size", group });
+});
 function input(event) {
   if (!app) return {};
   try {
@@ -694,6 +809,10 @@ function buildHeader() {
         popup.hidePopover();
     });
     const contents = element("div", "popover");
+    if (!sections.length) {
+      contents.id = "workspace-menu";
+      details.addEventListener("toggle", () => { if (details.open) refreshWorkspaceMenu(); });
+    }
     for (const [index, ids] of sections.entries()) {
       if (index) contents.append(element("hr"));
       for (const id of ids) {
@@ -714,6 +833,12 @@ function buildHeader() {
   for (const spec of catalog.menus)
     $("header-start").append(menu(spec.label, spec.sections));
   $("header-end").append(fullscreenButton(), iconButton("settings"));
+}
+function refreshWorkspaceMenu() {
+  const contents = $("workspace-menu");
+  if (contents && customization) customization.renderMenu(contents, app.workspace_menu(), () => {
+    contents.parentElement.open = false; updateZen();
+  });
 }
 function pointerStyle(e) {
   // Touch leaves :hover stuck until the next tap; track actual pointer input
@@ -916,13 +1041,14 @@ function keyInput(e, pressed, divider = null) {
 window.addEventListener("keydown", (e) => keyInput(e, true));
 window.addEventListener("keyup", (e) => keyInput(e, false));
 window.addEventListener("blur", () => {
+  endWorkspaceGesture(null, true);
   cursorInput(null);
   chromeHeld = false;
   if (input({ type: "blur" }).cancel_paint && lastPenEvent)
     queuePen(lastPenEvent, 4);
 });
-function dropHint(e, item) {
-  const tabs = [...groups.entries()].flatMap(([group, node]) =>
+function tabHits() {
+  return [...groups.entries()].flatMap(([group, node]) =>
     [...node.querySelectorAll(".dock-tab")].map((tab) => {
       const b = tab.getBoundingClientRect();
       return {
@@ -932,11 +1058,13 @@ function dropHint(e, item) {
       };
     }),
   );
+}
+function dropHint(e, item) {
   try {
     return app.drop_hint({
       viewport: [workspace.clientWidth, workspace.clientHeight],
       position: [e.clientX, e.clientY],
-      tabs,
+      tabs: tabHits(),
       item,
       expansion: customization.placement(),
     });
@@ -947,7 +1075,8 @@ function dropHint(e, item) {
 function draggedItem(e) {
   if (dragItem) return dragItem;
   try {
-    return JSON.parse(e.dataTransfer.getData("text/layer-dock"));
+    const item = JSON.parse(e.dataTransfer.getData("text/layer-dock"));
+    return item.kind === "tile" ? item : null;
   } catch {
     /* External drags cannot provide data during protected dragover. */
   }
@@ -958,10 +1087,8 @@ function showDropHint(hint) {
   if (hint) { place(dropIndicator, hint.bounds); dropIndicator.dataset.kind = hint.target.kind; }
 }
 function dropItem(item, hint) {
-  if (!hint) return;
-  const { kind, ...source } = item;
-  dispatch({ type: kind === "group" ? "move_group" : kind === "tile" ? "move_tile" : "move_panel",
-    ...source, target: hint.target });
+  if (hint && item.kind === "tile")
+    dispatch({ type: "move_tile", panel: item.panel, tile: item.tile, target: hint.target });
 }
 workspace.addEventListener("dragover", (e) => {
   if (!e.dataTransfer.types.includes("text/layer-dock")) return;

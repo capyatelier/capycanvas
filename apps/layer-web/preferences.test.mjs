@@ -28,7 +28,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
     const metrics = await evaluate(`(() => {
       const style = selector => getComputedStyle(document.querySelector(selector));
       return { fonts:['.dock-tab','.brush-list h3','.size-button','.number-entry','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
-        step:parseFloat(style('.panel .number-step svg').width), tool:parseFloat(style('.tile-button svg').width),
+        step:parseFloat(style('.panel .number-step svg').width), tool:parseFloat(style('.toolbar-controls .tile-button svg').width),
         tile:document.querySelector('.tile-button').getBoundingClientRect().height,
         preview:document.querySelector('.brush-preview').getBoundingClientRect().height,
         slider:document.querySelector('.size-controls input[type=range]').getBoundingClientRect().height,
@@ -38,6 +38,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(metrics.step, 16);
     assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 28);
   }
+  assert.equal(await evaluate("document.querySelector('#header-start [data-command=zen_mode] svg').getBoundingClientRect().width"), await evaluate("layerApp.app.catalog().zen_icon_size"));
   await capture('typography');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#size-number .number-labels')).paddingLeft"), '6px', 'panel labels mirror the value inset');
   assert.ok(await evaluate(`(() => {
@@ -78,6 +79,8 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await click(darkMode);
     const menus = await evaluate("layerApp.app.catalog().menus");
     for (const [index, spec] of menus.entries()) {
+      // Dynamic workspace menus have their own real-pointer suite.
+      if (!spec.sections.length) continue;
       const selector = `.header-menu:nth-of-type(${index + 1})`;
       await click(`${selector} summary`);
       const items = await evaluate(`[...document.querySelector(${JSON.stringify(selector)}).querySelector('.popover').children].map(n=>n.tagName==='HR'?'separator':n.dataset.command)`);

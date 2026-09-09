@@ -221,6 +221,11 @@ export async function checkPwa({ call, evaluate, settle, canvasPixels, host }) {
     await tap(zen);
     assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true", "Touch preserves intentional toggle selection");
     assert.notEqual(await background(zen), idle);
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+    // The first new contact reveals hidden chrome without activating it.
+    await tap(zen);
+    assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+    assert.equal(await evaluate(`document.querySelector('${zen}').getAttribute('aria-pressed')`), "true");
     await tap(zen);
     assert.equal(await background(zen), idle, "Zen returns to its idle color when toggled off by touch");
   }

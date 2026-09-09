@@ -6,22 +6,22 @@ and will be updated with the implementation. No renderer changes are required.
 
 | # | Required behavior | Core | GTK | Web | Android |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Workspace menu: built-in-panel visibility, separate toolbar visibility section | Verified | Verified | Pending | Pending |
-| 2 | Workspace menu: New Toolbar | Verified | Verified | Pending | Pending |
-| 3 | Group menu: Add built-in panel submenu, checked membership, move existing panel | Verified | Verified | Pending | Pending |
-| 4 | Group menu: Add Toolbar submenu, move existing toolbar | Verified | Verified | Pending | Pending |
-| 5 | Configure entries use the actual panel/toolbar name | Verified | Verified | Pending | Pending |
-| 6 | Standalone toolbar: Rename includes the current name (revised copy) | Verified | Verified | Pending | Pending |
-| 7 | Duplicate toolbar: editable unique suggested name; names unique with built-in panels | Verified | Verified | Pending | Pending |
-| 8 | Hide named panel/toolbar; retain configuration | Verified | Verified | Pending | Pending |
-| 9 | Delete Toolbar confirmation, distinct from hiding; workspace undo guidance | Verified | Verified | Pending | Pending |
-| 10 | Independent workspace undo/redo for every durable workspace edit; shortcuts | Verified | Verified | Pending | Pending |
-| 11 | Small 1×1, large 2×2, labeled 3×2 tiles; correct wrapping/resize/drop slots | Verified | Verified | Pending | Pending |
-| 12 | Toolbar configuration column contains management/display options; tab context stays concise | Verified | Verified | Pending | Pending |
-| 13 | First tool supplies toolbar tab icon | Verified | Verified | Pending | Pending |
-| 14 | Narrow vertical ribbons retain a central tab-merge drop zone | Verified | Verified | Pending | Pending |
-| 15 | Adding tabs grows group to fit tab names/icons; later manual shrink allowed | Verified | Verified | Pending | Pending |
-| 16 | Floating groups/toolbars: live tear-off/move, eight external resize edges, snap zones, Zen visibility, natural sizing and animated reset | Verified | Verified | Pending | Pending |
+| 1 | Workspace menu: built-in-panel visibility, separate toolbar visibility section | Verified | Verified | Verified | Pending |
+| 2 | Workspace menu: New Toolbar | Verified | Verified | Verified | Pending |
+| 3 | Group menu: Add built-in panel submenu, checked membership, move existing panel | Verified | Verified | Verified | Pending |
+| 4 | Group menu: Add Toolbar submenu, move existing toolbar | Verified | Verified | Verified | Pending |
+| 5 | Configure entries use the actual panel/toolbar name | Verified | Verified | Verified | Pending |
+| 6 | Standalone toolbar: Rename includes the current name (revised copy) | Verified | Verified | Verified | Pending |
+| 7 | Duplicate toolbar: editable unique suggested name; names unique with built-in panels | Verified | Verified | Verified | Pending |
+| 8 | Hide named panel/toolbar; retain configuration | Verified | Verified | Verified | Pending |
+| 9 | Delete Toolbar confirmation, distinct from hiding; workspace undo guidance | Verified | Verified | Verified | Pending |
+| 10 | Independent workspace undo/redo for every durable workspace edit; shortcuts | Verified | Verified | Verified | Pending |
+| 11 | Small 1×1, large 2×2, labeled 3×2 tiles; correct wrapping/resize/drop slots | Verified | Verified | Verified | Pending |
+| 12 | Toolbar configuration column contains management/display options; tab context stays concise | Verified | Verified | Verified | Pending |
+| 13 | First tool supplies toolbar tab icon | Verified | Verified | Verified | Pending |
+| 14 | Narrow vertical ribbons retain a central tab-merge drop zone | Verified | Verified | Verified | Pending |
+| 15 | Adding tabs grows group to fit tab names/icons; later manual shrink allowed | Verified | Verified | Verified | Pending |
+| 16 | Floating groups/toolbars: live tear-off/move, eight external resize edges, snap zones, Zen visibility, natural sizing and animated reset | Verified | Verified | Verified | Pending |
 
 ## Verification gates
 
@@ -115,7 +115,32 @@ and will be updated with the implementation. No renderer changes are required.
   top-edge line below the app header, size-reset animation, dark/light labeled
   toolbars, configuration drawers, hidden-tab menus/grips, column collapse and
   the three default floating grids after another tab is removed.
-- Web/Android presentation has not yet been ported to these new models. Do not
-  treat shared-core coverage as frontend validation. Initial GTK milestone
-  `a7e0f9a` is pushed; subsequent feedback above is part of the reference behavior.
-  Web is next, followed by Android, with commit/push at each platform gate.
+- Web `--package --workspace`: passed real mouse/touch tear-off and continued
+  movement after DOM reconciliation, all eight external resize handles, first
+  double-click reset, panel tab toggling, all three toolbar layouts in all tile
+  styles/themes, preset-preserving style changes, toolbar-only group collapse,
+  narrow-ribbon merges, stacked dividers, top snap below the header, menus,
+  prompts, validation, hide/show, workspace undo/redo and its keyboard shortcut.
+  Zen tests cover hidden-edge rejection, floating-only tab merging, edge reveal
+  latching through a drag, and ordinary proximity after release. External resize
+  strips suppress browser text selection so native selection cannot steal a drag.
+- Web `--package --customization`: passed picker/cancel/restore, real context
+  clicks and touch long-press, native tile DND and touch reorder, clipped/wrapped
+  toolbars, live controls, two-column/tab animations and Zen drawer dismissal.
+- Refreshed `native_web_parity_reference` and web `--package --parity`: passed
+  measured control geometry within 1px, 11pt text, shared icons, input/selection
+  behavior, default spacing and dark/light panel/shadow pixels within 3/255.
+  Inspected web review PNGs: `artifacts/ui/workspace-management/web/` (ignored),
+  including menus, prompts, configuration, all floating tile styles, hidden tabs,
+  Zen floating merges and the narrow-ribbon/top-edge indicators.
+- Final web gates passed: preferences, injected GPU startup/failure cases,
+  static PWA install/offline/update/scope tests, and the complete GPU drawing/input
+  smoke run with the workspace/customization suites. Legacy panel HTML-DND tests
+  and routing were replaced by the shared pointer suite; native HTML-DND remains
+  only for tiles. Added direct side-width preservation and manual-shrink/overflow
+  tab-append checks. Narrow GPU help keeps 11pt text and fits at 900×760 using
+  tighter responsive spacing. Launcher/package tests, 111 core tests, Wasm
+  strict clippy and formatting pass. Generated builds and review PNGs stay ignored.
+- Initial GTK milestones `a7e0f9a` and `8614af3` are pushed. Android presentation
+  is still pending; shared-core coverage does not count as frontend validation.
+  Continue the Android port after the web platform commit/push gate.
