@@ -37,11 +37,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
@@ -61,6 +62,7 @@ internal data class Palette(val dark: Boolean) {
     val text = Color(if (dark) 0xfffafafb else 0xff2e2e32)
     val secondary = text.copy(alpha = .55f)
     val accent = Color(0xff3584e4)
+    val sliderFill = lerp(panel, text, .5f)
     val active = accent.copy(alpha = .22f)
     val button = Color(if (dark) 0x0dffffff else 0x0d000000)
     val thumb = Color(if (dark) 0xffd3d3d3 else 0xfffafafa)
@@ -147,12 +149,13 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
         .rotate(if (vertical) 90f else 0f))
 }
 
-/** Native slider gestures/semantics, with the editor's 4dp track and 16dp knob. */
+/** Native slider gestures/semantics with a 4dp track and an optional 16dp thumb. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun EditorSlider(value: Float, onChange: (Float) -> Unit,
     modifier: Modifier = Modifier, range: ClosedFloatingPointRange<Float> = 0f..1f,
     enabled: Boolean = true, label: String = "", height: Dp = 28.dp,
-    inactiveTrackColor: Color = LocalPalette.current.input,
+    inactiveTrackColor: Color = LocalPalette.current.input, showThumb: Boolean = true,
+    activeTrackColor: Color = LocalPalette.current.accent,
     onValueChangeFinished: (() -> Unit)? = null) {
     val colors = LocalPalette.current
     val focus = LocalFocusManager.current
@@ -162,17 +165,17 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
             thumb = {
                 // Material measures the slider from its thumb/track, so reserve
                 // the hit height here without enlarging the visible knob.
-                Box(Modifier.width(16.dp).height(height), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(16.dp).shadow(2.dp, CircleShape).background(colors.thumb, CircleShape))
+                Box(Modifier.width(if (showThumb) 16.dp else 0.dp).height(height), contentAlignment = Alignment.Center) {
+                    if (showThumb) Box(Modifier.size(16.dp).shadow(2.dp, CircleShape).background(colors.thumb, CircleShape))
                 }
             },
             track = { state ->
                 ComposeCanvas(Modifier.fillMaxWidth().height(4.dp)) {
-                    val end = Offset(size.width, center.y)
-                    drawLine(inactiveTrackColor, Offset(0f, center.y), end, size.height, StrokeCap.Round)
+                    val radius = CornerRadius(size.height / 2f)
+                    drawRoundRect(inactiveTrackColor, cornerRadius = radius)
                     val fraction = (state.value - range.start) / (range.endInclusive - range.start)
-                    drawLine(colors.accent.copy(alpha = if (enabled) 1f else .4f), Offset(0f, center.y),
-                        Offset(size.width * fraction, center.y), size.height, StrokeCap.Round)
+                    if (fraction > 0f) drawRoundRect(activeTrackColor.copy(alpha = if (enabled) 1f else .4f),
+                        size = Size(size.width * fraction, size.height), cornerRadius = radius)
                 }
             })
     }

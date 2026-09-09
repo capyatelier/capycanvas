@@ -17,7 +17,8 @@ static SAVE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 
 enum Field {
     Choice(adw::ComboRow),
-    Number(adw::SpinRow),
+    Spin(adw::SpinRow),
+    Number(gtk::ListBoxRow, crate::number_control::NumberControl),
     Switch(adw::SwitchRow),
     Info(adw::ActionRow),
 }
@@ -25,7 +26,8 @@ impl Field {
     fn widget(&self) -> &gtk::Widget {
         match self {
             Self::Choice(w) => w.upcast_ref(),
-            Self::Number(w) => w.upcast_ref(),
+            Self::Number(w, _) => w.upcast_ref(),
+            Self::Spin(w) => w.upcast_ref(),
             Self::Switch(w) => w.upcast_ref(),
             Self::Info(w) => w.upcast_ref(),
         }
@@ -35,7 +37,12 @@ impl Field {
         self.widget().set_visible(row.visible);
         match (self, &row.kind) {
             (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
-            (Self::Number(w), PreferenceKind::Number { value, .. }) => w.set_value(*value as f64),
+            (Self::Number(_, w), PreferenceKind::Number { value, .. }) => {
+                w.set_value(*value as f64)
+            }
+            (Self::Spin(w), PreferenceKind::Number { value, control }) => {
+                w.set_value(*value as f64 * control.scale)
+            }
             (Self::Switch(w), PreferenceKind::Switch { active }) => w.set_active(*active),
             _ => {}
         }
@@ -491,14 +498,65 @@ impl Preferences {
                             ));
                             Field::Choice(control)
                         }
+                        PreferenceKind::Number { control, .. }
+                            if control.kind == NumericKind::Number =>
+                        {
+                            let spin = adw::SpinRow::with_range(
+                                control.min * control.scale,
+                                control.max * control.scale,
+                                control.step * control.scale,
+                            );
+                            spin.set_title(&row.title);
+                            spin.set_subtitle(&row.description);
+                            spin.set_use_markup(false);
+                            spin.set_digits(control.digits);
+                            spin.set_numeric(false);
+                            spin.set_update_policy(gtk::SpinButtonUpdatePolicy::IfValid);
+                            let spec = control.clone();
+                            spin.connect_input(move |spin| {
+                                Some(
+                                    spec.resolve(
+                                        0.0,
+                                        NumericOperation::Expression {
+                                            text: spin.text().into(),
+                                        },
+                                    )
+                                    .map(|v| v.value * spec.scale)
+                                    .map_err(|_| ()),
+                                )
+                            });
+                            let scale = control.scale;
+                            spin.connect_value_notify(glib::clone!(
+                                #[weak]
+                                w,
+                                move |spin| send(
+                                    &w,
+                                    PreferenceAction::Edit {
+                                        id,
+                                        value: PreferenceValue::Number(
+                                            (spin.value() / scale) as f32
+                                        )
+                                    }
+                                )
+                            ));
+                            Field::Spin(spin)
+                        }
                         PreferenceKind::Number { control, .. } => {
-                            let number =
-                                adw::SpinRow::with_range(control.min, control.max, control.step);
-                            number.set_title(&row.title);
-                            number.set_use_markup(false);
-                            number.set_subtitle(&row.description);
-                            number.set_digits(control.digits);
-                            number.connect_value_notify(glib::clone!(
+                            let native_row = gtk::ListBoxRow::new();
+                            native_row.set_activatable(false);
+                            native_row.add_css_class("number-preference");
+                            let number = crate::number_control::NumberControl::new(
+                                control.clone(),
+                                &row.title,
+                                &row.description,
+                            );
+                            let clamp = adw::Clamp::builder()
+                                .maximum_size(600)
+                                .tightening_threshold(480)
+                                .child(&number)
+                                .build();
+                            number.set_widget_name(&format!("setting-{}", id.key()));
+                            number.connect_value_changed(glib::clone!(
                                 #[weak]
                                 w,
                                 move |c| send(
@@ -509,8 +567,8 @@ impl Preferences {
                                     }
                                 )
                             ));
-                            crate::workspace::shared_spin_icons(number.upcast_ref());
-                            Field::Number(number)
+                            native_row.set_child(Some(&clamp));
+                            Field::Number(native_row, number)
                         }
                         PreferenceKind::Switch { .. } => {
                             let control = adw::SwitchRow::builder()
@@ -546,9 +604,15 @@ impl Preferences {
                             Field::Info(control)
                         }
                     };
-                    field
-                        .widget()
-                        .set_widget_name(&format!("setting-{}", id.key()));
+                    field.widget().set_widget_name(&format!(
+                        "{}-{}",
+                        if matches!(field, Field::Number(..)) {
+                            "preference"
+                        } else {
+                            "setting"
+                        },
+                        id.key()
+                    ));
                     native.add(field.widget());
                     self.fields.borrow_mut().insert(id, field);
                 }

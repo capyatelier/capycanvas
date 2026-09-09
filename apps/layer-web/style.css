@@ -101,8 +101,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .configuration-row, .panel-field { display: flex; flex-direction: column; gap: 6px; }
 .configuration-row > label { display: flex; align-items: center; gap: 4px; min-height: 24px; }
 .panel-field > label { margin-top: 12px; }
-.panel .panel-field .spin { width: 100%; }
-.panel .panel-field .spin input { flex: 1; }
+.panel .panel-field .number-control { width: 100%; }
 .panel-field > input[type="color"] { background: var(--button); padding: 4px 12px; width: 100%; height: 34px; }
 .panel-field > input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
 .panel-field > input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 4px; }
@@ -166,23 +165,34 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .brush-preview { width: 100%; height: 40px; object-fit: fill; border-radius: 3px; }
 .sizes-panel { container-type: inline-size; }
 .size-controls { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
-.spin { display: flex; width: 114px; flex: none; height: 28px; border-radius: 6px; background: var(--input); overflow: hidden; }
-.spin input { min-width: 0; width: 60px; padding: 0 6px; border: 0; color: var(--text); background: transparent; appearance: textfield; -moz-appearance: textfield; font-variant-numeric: tabular-nums; }
-.spin input::-webkit-inner-spin-button, .spin input::-webkit-outer-spin-button { appearance: none; margin: 0; }
-.spin button, .panel .spin button { display: grid; place-items: center; width: 27px; flex: none; padding: 0; border: 0; border-radius: 0; }
-.panel .spin { width: max-content; height: calc(1em + 16px); }
-.panel .spin input { width: 66px; flex: none; }
-.panel .spin button { width: max(27px, calc(1.16em + 12px)); min-height: 0; height: 100%; }
-.panel .spin button svg { width: 1.16em; height: 1.16em; }
-.spin button:last-child { border-radius: 0 6px 6px 0; }
+.number-control { width: 100%; min-width: 0; font-size: var(--ui-text-size); }
+.number-header { display: flex; align-items: center; gap: 6px; }
+.number-labels { flex: 1; min-width: 0; align-self: center; }
+.panel .number-labels { padding-left: 6px; }
+.number-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.number-description { margin: 0; opacity: .55; line-height: 1.25; }
+.number-value-box { display: flex; align-items: center; flex: none; }
+.number-control .number-value, .number-control .number-entry { min-height: 24px; height: 24px; line-height: 20px; padding: 2px 6px; font-weight: 400; font-variant-numeric: tabular-nums; text-align: right; }
+.number-control .number-entry { width: auto; min-width: 0; border: 0; border-radius: 6px; outline: 0; background: var(--input); color: var(--text); }
+.number-control.error .number-entry { box-shadow: inset 0 0 0 1px #e55; }
+.number-track { display: flex; align-items: center; gap: 6px; }
+.number-control .number-step { display: grid; place-items: center; flex: none; min-width: 32px; min-height: 32px; width: 32px; height: 32px; padding: 0; }
+.number-step svg { width: 16px; height: 16px; }
+.number-control .number-slider { appearance: none; flex: 1; width: 0; min-width: 0; height: 32px; padding: 0; margin: 0; border: 0; background: transparent; touch-action: pan-y; }
+.number-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--number-fill, var(--accent)) var(--fill), var(--number-track, var(--input)) var(--fill)); }
+.number-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--number-track, var(--input)); }
+.number-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--number-fill, var(--accent)); }
+.panel .number-control { --number-fill: color-mix(in srgb, var(--panel), var(--text)); }
+.number-slider::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -6px; border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
+.number-slider::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
+.panel .number-track { gap: 6px; }
+.panel .number-track .number-step { min-width: 24px; min-height: 24px; width: 24px; height: 24px; }
+.panel .number-control .number-slider { height: 24px; }
+.panel .number-slider::-webkit-slider-thumb { width: 0; height: 0; margin-top: 2px; box-shadow: none; }
+.panel .number-slider::-moz-range-thumb { width: 0; height: 0; box-shadow: none; }
+.number-spin { background: var(--input); border-radius: 6px; overflow: hidden; }
+.number-spin .number-entry { width: 60px; height: 32px; }
 .panel select { background: var(--input); }
-input[type="range"] { appearance: none; -webkit-appearance: none; display: block; height: 28px; min-width: 0; width: 100%; margin: 0; padding: 0 6px; background: linear-gradient(to right, var(--accent) var(--fill, 0%), var(--input) var(--fill, 0%)) center / calc(100% - 24px) 4px no-repeat; }
-input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: transparent; }
-input[type="range"]::-moz-range-track { height: 4px; background: transparent; }
-input[type="range"]::-moz-range-progress { background: transparent; }
-input[type="range"]::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; border: 0; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
-input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; border: 0; background: var(--thumb); box-shadow: 0 1px 3px #0005; }
-.size-controls > input { flex: 1; width: 0; }
 .size-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 2px; }
 @container (width < 174px) { .size-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @container (width < 130px) { .size-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -200,6 +210,7 @@ input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius
 .toolbar-controls .success { fill: var(--paint-color); }
 .layer-rows { display: flex; flex-direction: column; gap: 6px; }
 .layer-row { display: flex; align-items: center; gap: 6px; border-radius: 6px; }
+.layer-row .layer-select { min-height: 33px; }
 .layer-select { flex: 1; text-align: center; min-width: 0; background: var(--button); }
 .layer-row.selected .layer-select { background: var(--selected); }
 .layer-row input { appearance: none; flex: none; width: 16px; height: 16px; margin: 0 3px; border: 2px solid color-mix(in srgb, var(--text) 45%, transparent); border-radius: 4px; }
@@ -256,9 +267,14 @@ body[data-theme="light"] .preferences-error { color: #c01c28; }
 .settings-link { color: var(--accent); text-decoration: underline; padding: 6px 17px; overflow-wrap: anywhere; }
 .preference-row + .preference-row { border-top: 1px solid #80808026; }
 .preference-row select { padding: 0 4px; max-width: 48%; font-weight: 400; background: transparent; }
-.preference-row .spin { width: 146px; height: 34px; background: transparent; align-items: center; gap: 10px; }
-.preference-row .spin input { width: 66px; text-align: right; }
-.preference-row .spin button { border: 0; border-radius: 50%; width: 30px; min-height: 30px; height: 30px; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.number-preference .number-control { max-width: 600px; margin-inline: auto; }
+.number-preference .number-value, .number-preference .number-entry { min-height: 34px; height: 34px; padding: 0 9px; }
+.number-preference .number-track { margin-top: 3px; }
+.number-preference { --number-track: color-mix(in srgb, var(--text) 12%, transparent); }
+.settings-group { max-width: 600px; margin-inline: auto; }
+.number-preference .number-spin { background: transparent; }
+.number-preference .number-spin .number-entry { background: transparent; }
+.number-preference .number-spin .number-step { border-radius: 50%; background: var(--button); margin-inline-start: 6px; }
 .settings-switch { appearance: none; flex: none; position: relative; width: 48px; height: 26px; border: 0; border-radius: 20px; background: color-mix(in srgb, var(--text) 20%, transparent); }
 .settings-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; }
 .settings-switch:checked { background: var(--accent); }

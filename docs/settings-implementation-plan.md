@@ -123,7 +123,7 @@ the filtered results and navigation actions. The main pane has its own
 centered page title and a filled Material Done button at the top right; Back
 appears at its top left for details. Done closes the auto-saving overlay rather
 than committing a form. Narrower windows use list/page navigation with Done in
-the currently visible pane. Content is bounded to 800 dp for readable rows.
+the currently visible pane. Content is bounded to 632 dp for readable rows.
 
 Android settings use native-scale 16 sp body/sidebar text, 14 sp descriptions,
 18 sp group headings and 20 sp pane titles. Done has a 16 sp label in a 40 dp
@@ -137,14 +137,14 @@ is reused with a 48 dp settings touch height, a contrasting inactive track and
 a release callback, without changing compact editor sliders. Controls retain
 at least 48 dp touch targets.
 
-All numeric rows use the same renderer: a compact slider beside an 80 dp numeric
-field. Track length grows logarithmically with `(max - min) / step`, bounded to
-160–224 dp; narrow panes stack the field above the track within the right column.
-This is a generic presentation rule, not a second settings/range catalog.
+Numeric rows use the [shared touch-first control contract](numeric-controls.md):
+small integers have a trailing spin control; continuous/wide ranges have a plain
+editable value above a slider with minus/plus buttons. The slider sits below
+all labels and spans the row up to a 600 dp cap, not beside the description.
 Rust owns IDs, text, groups, visibility, enabled state, defaults, choice options,
-ranges, steps, validation and persistence. `PreferenceAction::Slide` snaps raw
-slider values to the core step; text edits submit through `Edit` without native
-parsing or snapping. Adding a setting of an existing kind requires only core
+ranges, mapping curves, steps, resolution, expression parsing and persistence.
+Native positions and text resolve through `NumericControl`, then the accepted
+number submits through `Edit`. Adding a setting of an existing kind requires only core
 changes, not Android row-specific wiring. A genuinely new control kind still
 requires a renderer in each frontend.
 
@@ -153,7 +153,7 @@ in their rows; choice value buttons open the shared `PreferencesView.detail`.
 Shortcuts use `shortcut_editor`.
 Details slide into the content pane from the right, with a Back arrow at its top
 left. Recording, conflicts and validation errors appear inline. Numeric text is
-validated by Rust on IME Done or focus loss; sliders submit on release. A full-size
+validated by Rust on IME Done or focus loss; sliders update live. A full-size
 input barrier protects the still-mounted GPU canvas throughout entry and exit.
 
 This follows Android's settings organization and adaptive list/detail patterns;

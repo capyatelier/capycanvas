@@ -197,7 +197,7 @@ impl ToolbarControl {
                 preset(id)?;
             }
             Self::Size { pixels } => {
-                BRUSH_SIZE_CONTROL.validate(pixels as f32, "Brush size")?;
+                NumericControl::brush_size().validate(pixels as f32, "Brush size")?;
             }
             _ => (),
         }

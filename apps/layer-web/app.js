@@ -2,6 +2,7 @@ import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
 import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
+import { createNumberField } from "./numeric.js";
 
 // The static packager fills this map with fingerprinted artwork filenames.
 const assetPaths = {};
@@ -66,84 +67,8 @@ function button(text, action, className = "") {
   node.addEventListener("click", action);
   return node;
 }
-// Native DOM inputs keep editing, keyboard and assistive-technology behavior.
-// The adjacent buttons give number inputs the same compact layout as GTK spins.
-function spin(input, digits) {
-  const node = element("div", "spin");
-  input.dataset.digits = digits;
-  node.append(input);
-  for (const [label, direction] of [
-    ["Decrease", -1],
-    ["Increase", 1],
-  ]) {
-    const step = () => {
-      if (direction < 0) input.stepDown();
-      else input.stepUp();
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    };
-    let timer,
-      repeated = false;
-    const control = button(direction < 0 ? "−" : "+", () => {
-      if (!repeated) step();
-      repeated = false;
-    });
-    control.replaceChildren(icon(direction < 0 ? "minus" : "plus"));
-    const stop = () => clearTimeout(timer);
-    control.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
-      repeated = false;
-      control.setPointerCapture(e.pointerId);
-      timer = setTimeout(function repeat() {
-        repeated = true;
-        step();
-        timer = setTimeout(repeat, 50);
-      }, 400);
-    });
-    for (const event of ["pointerup", "pointercancel", "lostpointercapture"])
-      control.addEventListener(event, stop);
-    window.addEventListener("blur", stop);
-    control.setAttribute(
-      "aria-label",
-      `${label} ${input.getAttribute("aria-label")}`,
-    );
-    node.append(control);
-  }
-  input.addEventListener("blur", () => {
-    if (input.value !== "") input.value = Number(input.value).toFixed(digits);
-    syncSpin(input);
-  });
-  input.addEventListener("input", () => syncSpin(input));
-  input.addEventListener("keydown", (e) => {
-    // Enter commits the numeric edit, not the dialog's first submit button.
-    if (e.key === "Enter") {
-      e.preventDefault();
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-  });
-  return node;
-}
-function setNumber(input, value) {
-  if (document.activeElement !== input)
-    input.value = value.toFixed(Number(input.dataset.digits));
-  syncSpin(input);
-}
-function syncSpin(input) {
-  const [decrease, increase] = input.parentElement.querySelectorAll("button");
-  if (!decrease || !increase) return;
-  decrease.disabled = input.disabled || input.value === "" || Number(input.value) <= Number(input.min);
-  increase.disabled = input.disabled || input.value === "" || Number(input.value) >= Number(input.max);
-}
-function setRange(input, value) {
-  input.value = value;
-  const fraction =
-    (Number(input.value) - Number(input.min)) /
-    (Number(input.max) - Number(input.min));
-  input.style.setProperty("--fill", `${fraction * 100}%`);
-}
-function numericControl(input, spec) {
-  input.min = spec.min;
-  input.max = spec.max;
-  input.step = spec.step;
+function numberField(control, label, onChange) {
+  return createNumberField({ control, label, onChange, icon, resolve: request => app.number_input(request) });
 }
 // Overlay scrollbars do not take width away from previews or tiles. Scrolling
 // itself stays in the browser; this one thumb also supports pointer dragging.
@@ -556,26 +481,8 @@ function buildPanels() {
   panels.get("brushes").append(list);
   const controls = element("div", "size-controls");
   controls.dataset.control = "brush_size";
-  for (const type of ["range", "number"]) {
-    const input = element("input");
-    input.id = `size-${type}`;
-    input.type = type;
-    numericControl(
-      input,
-      type === "range" ? catalog.brush_size_slider : catalog.brush_size,
-    );
-    input.setAttribute("aria-label", "Brush diameter in pixels");
-    input.addEventListener("input", () => {
-      if (input.value !== "" && input.validity.valid)
-        dispatch({ type: "set_brush_size", value: Number(input.value) });
-    });
-    input.addEventListener("blur", () =>
-      setNumber(input, state.brush.diameter),
-    );
-    controls.append(
-      type === "number" ? spin(input, catalog.brush_size.digits) : input,
-    );
-  }
+  const size = numberField(catalog.brush_size, "Brush size", value => dispatch({ type: "set_brush_size", value }));
+  size.id = "size-number"; controls.append(size);
   const grid = element("div", "size-grid");
   grid.dataset.control = "size_presets";
   for (const value of catalog.brush_sizes) {
@@ -605,20 +512,10 @@ function buildPanels() {
   const rows = element("div", "layer-rows");
   rows.dataset.control = "layers";
   rows.id = "layer-rows";
-  const label = element("label", "", "Layer opacity");
-  label.htmlFor = "layer-opacity";
-  const layerOpacity = element("input");
+  const layerOpacity = numberField(catalog.opacity, "Layer opacity", opacity => dispatch({ type: "set_layer_opacity", opacity }));
   layerOpacity.id = "layer-opacity";
-  layerOpacity.type = "range";
-  numericControl(layerOpacity, catalog.opacity);
-  layerOpacity.addEventListener("input", () =>
-    dispatch({
-      type: "set_layer_opacity",
-      opacity: Number(layerOpacity.value),
-    }),
-  );
   const opacityRow = element("div", "layer-opacity-control");
-  opacityRow.dataset.control = "layer_opacity"; opacityRow.append(label, layerOpacity);
+  opacityRow.dataset.control = "layer_opacity"; opacityRow.append(layerOpacity);
   layers.append(tools, rows, opacityRow);
   panels.get("layers").append(layers);
 }
@@ -632,8 +529,7 @@ function update(regions) {
         "aria-pressed",
         String(size === state.brush.diameter),
       );
-    setRange($("size-range"), state.brush.diameter);
-    setNumber($("size-number"), state.brush.diameter);
+    $("size-number").update(state.brush.diameter);
   }
   if (regions & 4) {
     const tab = state.tabs[0];
@@ -687,7 +583,7 @@ function update(regions) {
         .querySelector("button")
         .setAttribute("aria-pressed", String(layer.selected));
     }
-    setRange($("layer-opacity"), state.layers.find((l) => l.selected).opacity);
+    $("layer-opacity").update(state.layers.find((l) => l.selected).opacity);
   }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (4 | 8))
@@ -1108,12 +1004,12 @@ try {
   document.documentElement.style.setProperty("--ui-text-size", `${catalog.text_size_pt}pt`);
   document.title = `${catalog.app_name} — drawing workspace`;
   await loadIcons();
-  refreshPreferences = createPreferences({ element, button, icon, spin, setNumber, numericControl, panelFrame, dispatch, view: () => app.preferences() });
+  refreshPreferences = createPreferences({ element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences() });
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
   buildHeader();
   buildPanels();
   customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
-    element, button, icon, spin, setNumber, setRange, numericControl, panelFrame,
+    element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen });
   update(255);
   $("status").textContent = "";

@@ -10,10 +10,10 @@ export async function checkParity({ call, evaluate, settle }) {
   const catalog = await evaluate("layerApp.app.catalog()");
   assert.deepEqual(
     await evaluate(`(() => {
-    const n=document.querySelector('#size-number');
-    return [getComputedStyle(n).fontVariantNumeric,...[...n.parentNode.querySelectorAll('button')].map(b=>getComputedStyle(b).borderLeftWidth)];
+    const n=document.querySelector('#size-number .number-entry');
+    return [getComputedStyle(n).fontVariantNumeric,...[...n.closest('.number-control').querySelectorAll('button')].map(b=>getComputedStyle(b).borderLeftWidth)];
   })()`),
-    ["tabular-nums", "0px", "0px"],
+    ["tabular-nums", "0px", "0px", "0px"],
   );
   assert.deepEqual(
     await evaluate(
@@ -35,15 +35,14 @@ export async function checkParity({ call, evaluate, settle }) {
   );
   for (const [id, spec] of [
     ["size-number", catalog.brush_size],
-    ["size-range", catalog.brush_size_slider],
-    [".sizes-panel [data-control=brush_opacity] input", catalog.opacity],
+    [".sizes-panel [data-control=brush_opacity] .number-control", catalog.opacity],
     ["layer-opacity", catalog.opacity],
   ]) {
     assert.deepEqual(
       await evaluate(
-        `(() => {const n=document.querySelector(${JSON.stringify(id.startsWith(".") ? id : `#${id}`)});return [Number(n.min),Number(n.max),Number(n.step)]})()`,
+        `(() => {const n=document.querySelector(${JSON.stringify(id.startsWith(".") ? id : `#${id}`)}).querySelector('input[type=range]');return [Number(n.min),Number(n.max),n.step]})()`,
       ),
-      [spec.min, spec.max, spec.step],
+      [0, 1, "any"],
     );
   }
   // Real DOM shortcut wiring uses Rust's modifier guards and repeat policy.
@@ -109,7 +108,7 @@ export async function checkParity({ call, evaluate, settle }) {
     await action({ type: "system_theme_changed", theme });
     await capture(theme);
     metrics[theme] = await evaluate(`(() => {
-      const selectors = ['#document-title','#header-start > button','.header-menu > summary','.brush-list h3','.brush-choice','.size-controls','.size-controls .spin','.size-button','.layer-tools','.layer-row','.layer-row input','.layers-content > label','#layer-opacity','#view-info','.dock-group','.dock-tab'];
+      const selectors = ['#document-title','#header-start > button','.header-menu > summary','.brush-list h3','.brush-choice','.size-controls','.size-controls .number-control','.size-button','.layer-tools','.layer-row','.layer-row input','#layer-opacity','#view-info','.dock-group','.dock-tab'];
       return Object.fromEntries(selectors.map(s=>[s,[...document.querySelectorAll(s)].map(n=>{const b=n.getBoundingClientRect(),c=getComputedStyle(n);return {bounds:[b.x,b.y,b.width,b.height],font:c.font,color:c.color,background:c.backgroundColor}})]));
     })()`);
     await click('[data-command="settings"]');
@@ -118,7 +117,7 @@ export async function checkParity({ call, evaluate, settle }) {
       await evaluate(
         `(() => {const b=document.querySelector('#settings').getBoundingClientRect();return [b.x,b.y,b.width,b.height]})()`,
       ),
-      [200, 140, 800, 620],
+      [100, 140, 1000, 620],
     );
     await click(".dialog-close");
     assert.equal(
@@ -211,11 +210,11 @@ export async function checkParity({ call, evaluate, settle }) {
   const comparisons = [
     [".brush-list h3", (n) => n.css.includes("heading")],
     [".brush-choice", (n) => n.css.includes("brush-choice")],
-    [".size-controls .spin", (n) => n.name === "brush-size"],
+    [".size-controls .number-control", (n) => n.name === "brush-size"],
     [".size-button", (n) => n.css.includes("size-preset")],
     [".layer-row", (n) => n.type === "GtkCheckButton"],
     [".layer-row input", (n) => nativeChecks.some((c) => c.children[0] === n)],
-    ["#layer-opacity", (n) => n.type === "GtkScale" && n.bounds[0] > 900],
+    ["#layer-opacity", (n) => n.type === "CapyNumberControl" && n.bounds[0] > 900],
     ["#view-info", (n) => n.css.includes("status-bubble")],
   ];
   const differences = [];
@@ -330,7 +329,7 @@ export async function checkParity({ call, evaluate, settle }) {
   );
   assert.deepEqual(
     await evaluate(
-      `['#document-title','#size-number','#view-info'].map(s=>getComputedStyle(document.querySelector(s)).userSelect)`,
+      `['#document-title','#size-number .number-entry','#view-info'].map(s=>getComputedStyle(document.querySelector(s)).userSelect)`,
     ),
     ["text", "text", "text"],
   );
@@ -379,18 +378,19 @@ export async function checkParity({ call, evaluate, settle }) {
     "layerApp.app.pen=dismissOriginalPen; delete window.dismissOriginalPen;",
   );
 
-  await click(".size-controls .spin button:last-child");
-  assert.equal(await evaluate("layerApp.state().brush.diameter"), 18.5);
+  const beforeStep = await evaluate("layerApp.state().brush.diameter");
+  await click('.size-controls [aria-label="Increase Brush size"]');
+  assert.equal(await evaluate("layerApp.state().brush.diameter"), beforeStep + catalog.brush_size.step);
   await click('[data-size="96"]');
   assert.equal(
-    await evaluate("document.querySelector('#size-number').value"),
+    await evaluate("document.querySelector('#size-number .number-entry').value"),
     "96.0",
   );
   await evaluate(
-    `window.savedSlider=document.querySelector('#layer-opacity');savedSlider.value=.4;savedSlider.dispatchEvent(new Event('input'));`,
+    `window.savedSlider=document.querySelector('#layer-opacity input[type=range]');savedSlider.value=.4;savedSlider.dispatchEvent(new Event('input'));`,
   );
   assert.equal(
-    await evaluate("document.querySelector('#layer-opacity')===savedSlider"),
+    await evaluate("document.querySelector('#layer-opacity input[type=range]')===savedSlider"),
     true,
   );
   assert.ok(
@@ -404,9 +404,11 @@ export async function checkParity({ call, evaluate, settle }) {
   await click('[data-command="delete_layer"]');
   await click('[data-command="settings"]');
   await click('[data-settings-page="input"]');
+  await click('#setting-pressure .number-value');
+  await evaluate("document.querySelector('#setting-pressure .number-entry').value='1.5'");
   assert.equal(
     await evaluate(
-      "document.querySelector('#setting-pressure').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))",
+      "document.querySelector('#setting-pressure .number-entry').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}))",
     ),
     false,
   );
@@ -414,14 +416,11 @@ export async function checkParity({ call, evaluate, settle }) {
     await evaluate("document.querySelector('#settings').open"),
     true,
   );
-  await evaluate(
-    `const pressure=document.querySelector('#setting-pressure');pressure.value='1.5';pressure.dispatchEvent(new Event('input'));`,
-  );
   await click('#close-settings');
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5);
   await click('[data-command="settings"]');
   await click('[data-settings-page="input"]');
-  await click('#setting-pressure + button + button');
+  await click('#setting-pressure .number-step:last-child');
   await click("#close-settings");
   assert.ok(
     Math.abs(
@@ -644,9 +643,8 @@ export async function checkParity({ call, evaluate, settle }) {
   const savedWorkspace = await evaluate("layerApp.state().workspace");
   const savedLayout = await evaluate("layerApp.app.layout(1200,900)");
   const fresh = await evaluate(`(async () => {
-    const {WebApp}=await import('./pkg/layer_web.js');
     const surface=document.createElement('canvas');surface.width=1200;surface.height=900;
-    const session=WebApp.create(surface);
+    const session=layerApp.app.constructor.create(surface);
     try {
       session.dispatch({type:'restore_workspace',workspace:${JSON.stringify(savedWorkspace)}});
       return {workspace:session.state().workspace,layout:session.layout(1200,900)};

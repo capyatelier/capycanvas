@@ -1,6 +1,6 @@
 // DOM adapter for the same PreferencesView as GTK. Definitions, dependencies,
 // validation, search, recording and conflicts are all resolved in Rust.
-export function createPreferences({ element, button, icon, spin, setNumber, numericControl, panelFrame, dispatch, view }) {
+export function createPreferences({ element, button, icon, numberField, panelFrame, dispatch, view }) {
   const dialog = document.getElementById("settings");
   const send = (action) => dispatch({ type: "preferences", action });
   const close = () => dispatch({ type: "close_settings" });
@@ -100,8 +100,9 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
               }
               break;
             case "number":
-              input = element("input"); input.type = "number"; numericControl(input, row.kind.control);
-              input.setAttribute("aria-label", row.title); widget = spin(input, row.kind.control.digits); break;
+              input = numberField(row.kind.control, row.title, value => send({ type: "edit", id: row.id, value }));
+              input.setDescription(row.description); text.remove();
+              line.classList.add("number-preference"); widget = input; break;
             case "switch":
               input = element("input", "settings-switch"); input.type = "checkbox"; input.setAttribute("role", "switch"); widget = input; break;
             case "info":
@@ -112,13 +113,9 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
               widget = input; break;
           }
           input.id = id; input.setAttribute("aria-label", row.title);
-          input.addEventListener("input", () => {
+          if (row.kind.type !== "number") input.addEventListener("input", () => {
             if (input.type === "number" && input.value === "") return;
             send({ type: "edit", id: row.id, value: row.kind.type === "switch" ? input.checked : Number(input.value) });
-          });
-          if (row.kind.type === "number") input.addEventListener("blur", () => {
-            const current = view()?.pages.flatMap((p) => p.groups.flatMap((g) => g.rows)).find((r) => r.id === row.id);
-            if (current) setNumber(input, current.kind.value);
           });
           line.append(widget); list.append(line); fields.set(row.id, { line, input, widget });
         }
@@ -182,7 +179,7 @@ export function createPreferences({ element, button, icon, spin, setNumber, nume
       line.hidden = !row.visible; if (row.visible) visible.add(row.id);
       line.classList.toggle("disabled", !row.enabled);
       for (const control of [input, ...widget.querySelectorAll("button")]) control.disabled = !row.enabled;
-      if (row.kind.type === "number") setNumber(input, row.kind.value);
+      if (row.kind.type === "number") { input.setDisabled(!row.enabled); input.update(row.kind.value); }
       else if (row.kind.type === "choice") {
         input.value = row.kind.selected;
         if (row.kind.icons.length) {

@@ -29,11 +29,25 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-panel button { border-radius: 6px; min-height: 1.66em; padding: 4px 12px; }
 .dock-panel image { -gtk-icon-size: 14px; }
 .dock-panel .layer-tools button { min-width: 16px; min-height: 20px; }
-.dock-panel spinbutton { min-height: calc(1em + 16px); }
-.dock-panel spinbutton > button { min-width: 15px; min-height: 0; padding: 4px 6px; border: 0; box-shadow: none; }
-.dock-panel spinbutton image { -gtk-icon-size: 1.16em; }
-.dock-panel scale { min-height: 16px; padding: 6px 12px; }
-.dock-panel scale slider { min-width: 16px; min-height: 16px; margin: -6px; }
+.number-control { font-size: var(--ui-text-size); }
+.dock-panel .number-labels { padding-left: 6px; }
+.number-control button.number-value, .number-control entry.number-entry { min-height: 20px; padding: 2px 6px; font-weight: 400; font-feature-settings: "tnum"; }
+.number-control entry.number-entry { border: 0; border-radius: 6px; background: var(--input-bg); }
+.number-control button.number-step { min-width: 32px; min-height: 32px; padding: 0; }
+.number-control button.number-step image { -gtk-icon-size: 16px; }
+.number-control scale { min-height: 32px; padding: 0 8px; margin: 0 6px; }
+.number-control scale trough { min-height: 4px; background: var(--input-bg); }
+.number-control scale slider { min-width: 16px; min-height: 16px; margin: -6px; }
+.dock-panel .number-control button.number-step { min-width: 24px; min-height: 24px; }
+.dock-panel .number-control scale { min-height: 24px; padding: 0; margin: 0 6px; }
+.dock-panel .number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
+.dock-panel .number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
+.number-control.error entry { box-shadow: inset 0 0 0 1px #e55; }
+.number-preference { padding: 12px 16px; }
+.number-preference button.number-value, .number-preference entry.number-entry { min-height: 34px; padding: 0 9px; }
+.number-preference .number-track { margin-top: 3px; }
+.number-preference scale trough { background: alpha(var(--window-fg-color), .12); }
+.number-control spinbutton button { border: 0; box-shadow: none; }
 .dock-panel checkbutton check { min-width: 16px; min-height: 16px; -gtk-icon-size: 16px; padding: 0; border-radius: 4px; }
 .dock-panel checkbutton check:checked { -gtk-icon-source: -gtk-icontheme("layer-check-symbolic"); -gtk-icon-transform: none; }
 .dock-panel checkbutton check:indeterminate { -gtk-icon-source: -gtk-icontheme("layer-minus-symbolic"); }
@@ -43,7 +57,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .dock-tabs button { border-radius: 6px 6px 0 0; min-height: 28px; padding: 4px 8px; }
 .dock-tabs button.selected-tool { background: var(--panel-bg); }
 .tab-joins { color: var(--panel-bg); }
-.dock-panel spinbutton, .dock-panel entry, .dock-panel dropdown > button, .dock-panel scale trough { background: var(--input-bg); }
+.dock-panel entry, .dock-panel dropdown > button { background: var(--input-bg); }
 .dock-panel .brush-choice { padding: 3px 6px; }
 .brush-choice label { font-size: 1em; }
 .dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }

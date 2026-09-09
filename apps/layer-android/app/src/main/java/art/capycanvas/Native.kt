@@ -18,4 +18,6 @@ internal object Native {
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)
     @JvmStatic external fun snapshot(handle: Long): String?
     @JvmStatic external fun query(handle: Long, query: String): String
+    /** Pure shared number-field math; no native session handle or GPU work. */
+    @JvmStatic external fun number(request: String): String
 }

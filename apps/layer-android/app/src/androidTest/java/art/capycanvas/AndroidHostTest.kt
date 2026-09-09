@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.TextLayoutResult
@@ -389,26 +390,24 @@ class AndroidHostTest {
         assertNull("Numbers edit directly in their row", preferences().objectOrNull("detail"))
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
-        val slider = compose.onNodeWithTag("setting-slider-prediction_horizon").assertTouchHeightIsEqualTo(48.dp)
+        val slider = compose.onNodeWithTag("setting-slider-pressure").performScrollTo().assertTouchHeightIsEqualTo(48.dp)
         val track = slider.captureToImage().toPixelMap()
         val trackX = track.width * 9 / 10
         assertTrue("Inactive slider track remains visible on the light settings surface",
             track[trackX, track.height / 4].red - track[trackX, track.height / 2].red > .05f)
         capture("32-inline-numbers")
         val before = state().getJSONObject("settings").number("prediction_ms")
-        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("65")
+        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("1/0")
         compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
-        compose.waitUntil(10_000) { !preferences().isNull("error") }
+        compose.onNodeWithText("Enter a finite number", substring = true).assertExists()
         assertEquals(before, state().getJSONObject("settings").number("prediction_ms"))
         capture("33-number-invalid")
         slider.performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(width * .75f, center.y), 300) }
         compose.waitForIdle()
-        waitState { it.getJSONObject("settings").number("prediction_ms") != before }
-        val dragged = state().getJSONObject("settings").number("prediction_ms")
-        assertTrue("A slider drag changes the value inside its range ($dragged)", dragged in 0f..64f)
-        assertEquals("Core snaps the drag to whole milliseconds", 0f, dragged % 1f)
-        assertTrue("Slider release validates and applies through Rust", preferences().isNull("error"))
-        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("64")
+        waitState { it.getJSONObject("settings").number("pressure_gamma") != 1f }
+        val dragged = state().getJSONObject("settings").number("pressure_gamma")
+        assertTrue("A slider drag changes the value inside its range ($dragged)", dragged in .25f..4f)
+        compose.onNodeWithTag("setting-number-prediction_horizon").performTextReplacement("32*2")
         compose.onNodeWithTag("setting-number-prediction_horizon").performImeAction()
         waitState { it.getJSONObject("settings").number("prediction_ms") == 64f }
         assertTrue(preferences().isNull("error"))
@@ -455,16 +454,21 @@ class AndroidHostTest {
                 val kind = row.getJSONObject("kind")
                 if (kind.getString("type") == "number") {
                     val label = compose.onNodeWithTag("preference-label-$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
-                    val field = compose.onNodeWithTag("setting-number-$id").assertHeightIsEqualTo(48.dp)
-                    assertTrue("$id input is to the right of its description", field.fetchSemanticsNode().boundsInRoot.left > label.right)
-                    val slider = compose.onNodeWithTag("setting-slider-$id").assertTouchHeightIsEqualTo(48.dp)
-                    val progress = slider.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
                     val control = kind.getJSONObject("control")
-                    assertEquals(control.number("min"), progress.range.start)
-                    assertEquals(control.number("max"), progress.range.endInclusive)
-                    assertEquals(kind.number("value"), progress.current)
-                    val widthDp = slider.fetchSemanticsNode().boundsInRoot.width / compose.activity.resources.displayMetrics.density
-                    assertTrue("$id slider is compact instead of spanning the content pane", widthDp in 150f..224f)
+                    val ranged = control.getString("kind") == "slider"
+                    val field = compose.onNodeWithTag(if (ranged) "number-value-$id" else "setting-number-$id").assertHeightIsEqualTo(48.dp)
+                    assertTrue("$id input is to the right of its description", field.fetchSemanticsNode().boundsInRoot.left > label.right)
+                    if (ranged) {
+                        val slider = compose.onNodeWithTag("setting-slider-$id").assertTouchHeightIsEqualTo(48.dp)
+                        val bounds = slider.fetchSemanticsNode().boundsInRoot
+                        assertTrue("$id slider is below all labels", bounds.top >= label.bottom)
+                        val progress = slider.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+                        val formatted = JSONObject(Native.number(obj("control" to control, "value" to kind.number("value"), "operation" to obj("type" to "format")).toString()))
+                        assertEquals(0f, progress.range.start); assertEquals(1f, progress.range.endInclusive)
+                        assertEquals(formatted.number("fill"), progress.current)
+                        val widthDp = bounds.width / compose.activity.resources.displayMetrics.density
+                        assertTrue("$id slider uses available width with a 600dp control cap", widthDp in 150f..600f)
+                    } else compose.onNodeWithTag("setting-slider-$id").assertDoesNotExist()
                 }
             }
         }
@@ -473,7 +477,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("preference-feedback").performClick()
         waitState { !it.getJSONObject("settings").getBoolean("feedback") }
         compose.onNodeWithTag("setting-number-prediction_horizon").assertIsNotEnabled()
-        compose.onNodeWithTag("setting-slider-prediction_horizon").assertIsNotEnabled()
+        compose.onNodeWithTag("setting-slider-tip_lock").assertIsNotEnabled()
         compose.onNodeWithTag("preference-feedback").performClick()
         waitState { it.getJSONObject("settings").getBoolean("feedback") }
         compose.onNodeWithTag("setting-number-prediction_horizon").assertIsEnabled()
@@ -538,7 +542,20 @@ class AndroidHostTest {
         val firstTile = toolbar.array("tiles").objects().first().getInt("id")
         compose.onNodeWithTag("tile-toolbar-$firstTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
         compose.onNodeWithContentDescription("Zen mode").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
-        compose.onNodeWithTag("number-Brush size").assertHeightIsEqualTo(31.dp)
+        compose.onNodeWithTag("number-value-Brush size").assertHeightIsEqualTo(24.dp)
+        compose.onNodeWithTag("number-slider-Brush size").assertHeightIsEqualTo(24.dp)
+        val numericSlider = compose.onNodeWithTag("number-slider-Brush size")
+        // Visual spacing excludes Compose's expanded minimum touch targets.
+        val rangeBounds = numericSlider.fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
+        val minusBounds = compose.onNodeWithContentDescription("Decrease Brush size").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
+        val plusBounds = compose.onNodeWithContentDescription("Increase Brush size").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot()
+        val gap = with(compose.density) { 6.dp.toPx() }
+        assertEquals(gap, rangeBounds.left - minusBounds.right, 1f)
+        assertEquals(gap, plusBounds.left - rangeBounds.right, 1f)
+        numericSlider.performTouchInput { swipe(center, centerRight, 300) }
+        waitState { it.getJSONObject("brush").getDouble("diameter") > 1000.0 }
+        numericSlider.performTouchInput { swipe(center, centerLeft, 300) }
+        waitState { it.getJSONObject("brush").getDouble("diameter") < 2.0 }
         val brush = state().getJSONObject("brush").getInt("preset")
         compose.onNodeWithTag("brush-preview-$brush", useUnmergedTree = true).assertHeightIsEqualTo(40.dp)
         compose.onAllNodesWithContentDescription("Move panel group").onFirst().assertWidthIsEqualTo(20.dp)
@@ -556,13 +573,15 @@ class AndroidHostTest {
     }
 
     @Test fun compactNumberInputAndVerticalRibbonStayUsable() {
-        val field = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("number-Brush size")))
-        field.performTextReplacement("42.5")
+        compose.onNodeWithTag("number-value-Brush size").performClick()
+        val field = compose.onNodeWithTag("number-Brush size")
+        field.performTextReplacement("85/2")
+        field.performImeAction()
         waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
         compose.onNodeWithContentDescription("Increase Brush size").performClick()
         val step = host.catalog.getJSONObject("brush_size").number("step")
         waitState { it.getJSONObject("brush").number("diameter") == 42.5f + step }
-        field.assertTextEquals("%.1f".format(java.util.Locale.ROOT, 42.5f + step))
+        compose.onNodeWithTag("number-value-Brush size").assertTextEquals("%.1f px".format(java.util.Locale.ROOT, 42.5f + step))
         compose.onNodeWithContentDescription("Decrease Brush size").performClick()
         waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
 
@@ -750,6 +769,7 @@ class AndroidHostTest {
     @Test fun palmDoesNotPanWhilePenDrawsAndEraserWorks() {
         val pen = androidx.compose.ui.geometry.Offset(0.45f, 0.5f)
         val palm = androidx.compose.ui.geometry.Offset(0.6f, 0.6f)
+        val hover = androidx.compose.ui.geometry.Offset(0.7f, 0.3f)
         val camera = state().getJSONObject("camera").toString()
         val tools = listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_FINGER)
         canvasEvent(MotionEvent.ACTION_DOWN, listOf(pen), MotionEvent.TOOL_TYPE_STYLUS)
@@ -759,6 +779,9 @@ class AndroidHostTest {
         canvasEvent(MotionEvent.ACTION_UP, listOf(pen), MotionEvent.TOOL_TYPE_STYLUS)
         waitState { it.array("commands").objects().first { c -> c.getString("id") == "undo" }.getBoolean("enabled") }
         assertEquals("Palm contact must not move the camera", camera, state().getJSONObject("camera").toString())
+        // The cursor is presentation, not pigment: move it out of the sampled
+        // area before both captures (its size changes for the eraser).
+        canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(hover), MotionEvent.TOOL_TYPE_STYLUS)
         val painted = darkPixels(capture("22-pen-with-palm"))
         assertTrue("Pen still deposits pigment during palm contact", painted > 100)
         compose.runOnIdle { host.dispatch(obj("type" to "set_brush_size", "value" to 64)) }
@@ -766,6 +789,7 @@ class AndroidHostTest {
         canvasEvent(MotionEvent.ACTION_DOWN, listOf(pen), MotionEvent.TOOL_TYPE_ERASER)
         canvasEvent(MotionEvent.ACTION_MOVE, listOf(pen + androidx.compose.ui.geometry.Offset(0.1f, 0f)), MotionEvent.TOOL_TYPE_ERASER)
         canvasEvent(MotionEvent.ACTION_UP, listOf(pen), MotionEvent.TOOL_TYPE_ERASER)
+        canvasEvent(MotionEvent.ACTION_HOVER_MOVE, listOf(hover), MotionEvent.TOOL_TYPE_ERASER)
         assertTrue("The eraser removes deposited pigment", darkPixels(capture("23-eraser")) < painted / 5)
         assertNull(host.failure)
     }

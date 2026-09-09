@@ -335,11 +335,6 @@ pub enum PreferenceAction {
         id: PreferenceId,
         value: PreferenceValue,
     },
-    /// Native sliders submit their raw position; the core owns step snapping.
-    Slide {
-        id: PreferenceId,
-        value: f32,
-    },
     BeginShortcut {
         id: String,
     },
@@ -401,11 +396,17 @@ fn number(
         description,
         PreferenceKind::Number {
             value,
-            control: NumericControl {
-                min,
-                max,
-                step,
-                digits: if step < 1.0 { 2 } else { 0 },
+            control: match id {
+                PreferenceId::TipLock => NumericControl::percent(),
+                PreferenceId::PredictionHorizon => {
+                    NumericControl::number(min, max, step, 0).unit("ms")
+                }
+                PreferenceId::ZenReveal | PreferenceId::ZenHide => {
+                    NumericControl::number(min, max, step, 0).unit("px")
+                }
+                _ => {
+                    NumericControl::number(min, max, step, if step < 1.0 { 2 } else { 0 }).unit("×")
+                }
             },
         },
     )
@@ -419,7 +420,7 @@ impl Settings {
                 "Pressure response",
                 "1 is linear. Lower values reach full pressure sooner.",
                 PreferenceKind::Number {
-                    control: PRESSURE_CONTROL,
+                    control: NumericControl::pressure(),
                     value: self.pressure_gamma,
                 },
             ),
@@ -443,7 +444,7 @@ impl Settings {
             number(
                 TipLock,
                 "Tip lock",
-                "0 preserves modeled geometry; 1 brings coverage to the pen tip.",
+                "0% preserves modeled geometry; 100% brings coverage to the pen tip.",
                 self.tip_lock,
                 0.0,
                 1.0,
@@ -848,17 +849,6 @@ impl PreferencesState {
                 self.shortcut_query = query;
             }
             PreferenceAction::Edit { id, value } => settings.edit(id, value, platform)?,
-            PreferenceAction::Slide { id, value } => {
-                let field = settings.field(id, platform)?;
-                let PreferenceKind::Number { control, .. } = field.kind else {
-                    return Err("This setting has no slider".into());
-                };
-                control.validate(value, &field.title)?;
-                let snapped = (control.min
-                    + ((value as f64 - control.min) / control.step).round() * control.step)
-                    .clamp(control.min, control.max) as f32;
-                settings.edit(id, PreferenceValue::Number(snapped), platform)?;
-            }
             PreferenceAction::EditShortcut { id } => {
                 if !crate::shortcuts::definitions(settings, platform)
                     .iter()

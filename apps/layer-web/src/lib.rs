@@ -255,6 +255,11 @@ impl WebApp {
     pub fn catalog(&self) -> Result<JsValue, JsValue> {
         serialize(&ui_catalog())
     }
+    pub fn number_input(&self, request: JsValue) -> Result<JsValue, JsValue> {
+        let request: layer_ui::NumericRequest =
+            serde_wasm_bindgen::from_value(request).map_err(js)?;
+        serialize(&request.resolve().map_err(js)?)
+    }
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())
     }

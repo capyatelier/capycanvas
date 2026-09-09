@@ -65,7 +65,8 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
-    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nconst assetPaths = {};',
+    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nconst assetPaths = {};',
+    "numeric.js": "export function createNumberField() {}",
     "preferences.js": "export function createPreferences() {}",
     "gpu.js": "export function showGpuNotice() {}",
     "customization.js": "export function createCustomization() {}",
@@ -91,7 +92,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
     assert.equal(name, `${original.slice(0, -extension.length)}.${hash}${extension}`);
   }
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
-  for (const path of ["preferences.js", "gpu.js", "customization.js", "pkg/layer_web.js"])
+  for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "pkg/layer_web.js"])
     assert.ok(app.includes(`from "./${names[path]}"`));
   for (const path of ["icons/pen.svg", "brush-previews/1-dark.png"])
     assert.ok(app.includes(JSON.stringify(names[path])));
@@ -102,7 +103,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["app.js", "style.css", "gpu.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png"]) {
+  for (const path of ["app.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png"]) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);

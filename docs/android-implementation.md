@@ -136,7 +136,9 @@ Settings uses a full-screen top-sliding overlay with automatic persistence, not
 a tablet dialog or a global header above two panes. Persistent search is at the
 sidebar's top; the main pane has its page title, filled Done button and detail
 Back control. Rows have name/description on the left and value/control on the
-right, including compact sliders and numeric fields. Category/detail panes adapt to list/page
+right. Numeric slider rows put the track below the entire label/value header,
+with minus/plus ends and a 600 dp numeric-content cap; small integers use a
+trailing stepper. See [numeric controls](numeric-controls.md). Category/detail panes adapt to list/page
 navigation below 840 dp. All detail editors, choice lists, recording/conflicts
 and errors stay inline; Back returns within the content pane. Rust owns detail
 selection, slider step snapping and per-edit validation/apply/save. Compose owns transitions, native

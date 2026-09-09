@@ -21,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
@@ -68,15 +67,12 @@ import kotlin.math.roundToInt
         panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
             when (item.getString("control")) {
                 "brushes" -> BrushList(host, state.getJSONObject("brush"))
-                "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size"), host.catalog.getJSONObject("brush_size_slider")) {
+                "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                     host.dispatch(obj("type" to "set_brush_size", "value" to it))
                 }
                 "size_presets" -> SizePresets(host, state.getJSONObject("brush").number("diameter"))
-                "brush_opacity" -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Brush opacity")
-                    EditorSlider(state.getJSONObject("brush").number("opacity"), {
-                        host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
-                    }, Modifier.fillMaxWidth(), label = "Brush opacity")
+                "brush_opacity" -> NumericSetting("Brush opacity", state.getJSONObject("brush").number("opacity"), host.catalog.getJSONObject("opacity")) {
+                    host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                 }
                 "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
                 "layers" -> LayerList(host, state)
@@ -91,42 +87,12 @@ import kotlin.math.roundToInt
                     }
                 }
                 "layer_opacity" -> state.array("layers").objects().find { it.getBoolean("selected") }?.let { layer ->
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Layer opacity", Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                        EditorSlider(layer.number("opacity"), {
-                            host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it))
-                        }, Modifier.fillMaxWidth(), label = "Layer opacity")
+                    NumericSetting("Layer opacity", layer.number("opacity"), host.catalog.getJSONObject("opacity")) {
+                        host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it))
                     }
                 }
             }
         }
-    }
-}
-@Composable internal fun NumberStepper(label: String, value: Float, control: JSONObject,
-    modifier: Modifier = Modifier, enabled: Boolean = true, onChange: (Float) -> Unit) {
-    val low = control.number("min"); val high = control.number("max"); val step = control.number("step", 1.0)
-    val focus = LocalFocusManager.current
-    val text = "%.${control.optInt("digits", 0)}f".format(java.util.Locale.ROOT, value)
-    Row(modifier.width(124.dp).height(31.dp).clip(RoundedCornerShape(6.dp)).background(LocalPalette.current.input),
-        verticalAlignment = Alignment.CenterVertically) {
-        CoreTextField(text, { next -> next.toFloatOrNull()?.takeIf { it.isFinite() && it in low..high }?.let(onChange) },
-            Modifier.weight(1f).testTag("number-$label"), height = 31.dp, enabled = enabled,
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal))
-        listOf(-1 to "minus", 1 to "plus").forEach { (direction, icon) ->
-            val available = enabled && if (direction < 0) value > low else value < high
-            Box(Modifier.size(29.dp, 31.dp).alpha(if (available) 1f else .36f)
-                .clickable(enabled = available) { focus.clearFocus(); onChange((value + direction * step).coerceIn(low, high)) }, contentAlignment = Alignment.Center) {
-                SharedIcon(icon, "${if (direction < 0) "Decrease" else "Increase"} $label", Modifier.size(17.dp))
-            }
-        }
-    }
-}
-@Composable internal fun NumericSetting(label: String, value: Float, control: JSONObject, slider: JSONObject = control,
-    onChange: (Float) -> Unit) {
-    val range = slider.number("min")..slider.number("max")
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        EditorSlider(value, onChange, Modifier.weight(1f), range, label = label)
-        NumberStepper(label, value, control, onChange = onChange)
     }
 }
 @Composable private fun BrushList(host: CanvasHost, brush: JSONObject) {
@@ -197,12 +163,9 @@ import kotlin.math.roundToInt
     val values = (0..3).map { rgba.optDouble(it, 1.0).toFloat() }
     Row(Modifier.fillMaxWidth().height(36.dp).background(Color(values[0], values[1], values[2], values[3]), RoundedCornerShape(6.dp))) {}
     listOf("Red", "Green", "Blue").forEachIndexed { index, label ->
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, Modifier.width(48.dp))
-            EditorSlider(values[index], { value ->
+        NumericSetting(label, values[index], host.catalog.getJSONObject("opacity")) { value ->
                 val changed = values.toMutableList(); changed[index] = value
                 host.dispatch(obj("type" to "set_color", "rgba" to JSONArray(changed)))
-            }, modifier = Modifier.weight(1f))
         }
     }
 }
@@ -237,12 +200,12 @@ import kotlin.math.roundToInt
 @Composable private fun ConfigurationControl(host: CanvasHost, state: JSONObject, control: String, label: String) {
     val brush = state.getJSONObject("brush")
     when (control) {
-        "brush_size" -> NumberStepper(label, brush.number("diameter"), host.catalog.getJSONObject("brush_size"), Modifier.fillMaxWidth()) {
+        "brush_size" -> NumericSetting(label, brush.number("diameter"), host.catalog.getJSONObject("brush_size")) {
             host.dispatch(obj("type" to "set_brush_size", "value" to it))
         }
-        "brush_opacity" -> EditorSlider(brush.number("opacity"), { host.dispatch(obj("type" to "set_brush_opacity", "value" to it)) }, Modifier.fillMaxWidth(), label = label)
+        "brush_opacity" -> NumericSetting(label, brush.number("opacity"), host.catalog.getJSONObject("opacity")) { host.dispatch(obj("type" to "set_brush_opacity", "value" to it)) }
         "layer_opacity" -> state.array("layers").objects().find { it.getBoolean("selected") }?.let { layer ->
-            EditorSlider(layer.number("opacity"), { host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it)) }, Modifier.fillMaxWidth(), label = label)
+            NumericSetting(label, layer.number("opacity"), host.catalog.getJSONObject("opacity")) { host.dispatch(obj("type" to "set_layer_opacity", "opacity" to it)) }
         }
         "brush_color" -> {
             val rgba = brush.array("color")

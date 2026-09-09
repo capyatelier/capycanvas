@@ -13,7 +13,7 @@ panels, tab dragging, and drawing/recovery states.
 | Typography | Regular brush/tab/menu labels; Material defaults override control sizes | Core 11pt text, matching weight/line height; native Android font |
 | Panel shell | 10dp radius, missing concave tab joins, incorrect grip inset | 8dp shell, 6dp tab shoulders, 8dp label/grip inset |
 | Brushes | Tiny preview alongside name, 44dp rows | Full-width 40dp preview above right-aligned name, 2dp gaps |
-| Brush size | Huge outlined input and extra label/slider rows | Compact filled number stepper beside thin slider; no repeated label |
+| Brush size | Huge outlined input and extra label/slider rows | Label and plain editable value above a thin slider with minus/plus ends |
 | Presets | Filled squares, no size visualization | Four-column responsive grid, brush dots above numbers |
 | Layers | Oversized checks, whole-row selection, oversized actions and opacity editor | 16dp checks, separate compact selection buttons, thin opacity slider |
 | Header / HUD | Off-center title without dimensions; centered HUD | Centered document title with dimensions; bottom/right-aligned HUD |
@@ -54,7 +54,7 @@ Fresh web reference captures are in `artifacts/ui/customization/web/`.
 - 13 emulator integration tests cover drawing/undo/redo, palm/eraser input,
   recovery/rotation, settings/search/theme/shortcuts, panel/tile/group dragging,
   dividers, Zen mode, number editing and horizontal/vertical ribbons.
-- Geometry assertions verify 36dp tools/Zen/tabs, 40dp brush previews, 31dp number
+- Geometry assertions verify 36dp tools/Zen/tabs, 40dp brush previews, 32dp number
   inputs and 20dp group grips. The settings-window assertion was subsequently
   replaced by full-screen geometry for the approved overlay design below.
 - Portrait checks exercise category → detail → Back, not just a resized image.
@@ -87,16 +87,18 @@ popups. Narrow screens retain category-to-page navigation.
 Settings typography uses 16 sp body/sidebar labels, 14 sp descriptions, 18 sp
 group headings and 20 sp pane titles. Done's 16 sp label sits in a 40 dp visible
 button with a 48 dp hit target. Sidebar glyphs remain 20 dp in 48 dp rows, with
-8 dp insets and 4 dp gaps. Content groups have 24 dp spacing and an 800 dp width
+8 dp insets and 4 dp gaps. Content groups have 24 dp spacing and a 632 dp width
 cap. Each row has name/description on the left and the value/control on the
-right. Sliders use the existing editor skin, 48 dp touch height and a compact
-160–224 dp track, sized generically from the core range/step count; fields are
-80 dp wide. On narrow layouts the field and slider stack within the right side.
+right. [Numeric controls](numeric-controls.md) use a trailing stepper for small
+integers; sliders span the row below all labels, with minus/plus ends and a
+plain editable value above. Settings retain 48 dp touch height and up to 600 dp
+numeric content width, with a contrasting track in both themes.
 The editor's shared 11 pt typography, tool geometry and GPU path are unchanged.
 
 Rust supplies every setting's identity, groups, labels, descriptions, choices,
 defaults, ranges, steps and enabled/visible state. Numeric text is submitted on
-IME Done/focus loss; slider release uses `Slide` for core-owned step snapping.
+IME Done/focus loss; slider positions use shared Rust mapping and resolution
+before live updates through the ordinary typed preference action.
 No per-setting Android renderer or secondary range/default catalog is required.
 Choice values open the existing in-pane list; numbers edit directly in rows.
 
@@ -119,9 +121,17 @@ in light/dark and portrait layouts.
 Final emulator run `1788912118247` passes all 17 tests and produces 38 PNGs.
 Android arm64/x86_64 APK builds, test build and lint pass.
 
-The preceding shared-model milestone also passed 72 core tests, packaged web
-preferences/customization suites and GTK preferences in an isolated headless
-Wayland session. The current shared-core suite has 74 tests, including generic
-slider snapping, invalid input, dependencies and persistent-search state. GTK
-and web (including wasm32) compile checks pass with the extended action model;
-their settings presentation is unchanged.
+The touch-first numeric controls now share expression evaluation, formatting,
+constraints and slider mapping with GTK and web in `layer-ui`. Panel value and
+track rows are 24dp high, with thumb-free grey bars and 6dp end gaps. Settings
+retain 48dp targets, larger value padding, accent fill and visible thumbs.
+See [Numeric controls](numeric-controls.md) for the current cross-platform design.
+
+The current shared-core suite passes 80 tests. Android run `1788922144800`
+passes all 18 integration tests and produces 39 PNGs under
+`artifacts/ui/numeric/android/1788922144800/`. Geometry checks cover the visual
+bar spacing separately from Android's expanded touch targets. Pixel-based
+eraser checks move the cursor outside the sampled area to measure pigment,
+not the differently sized cursor overlays. Android build and lint pass; GTK
+numeric feedback, native entry sizing, preferences and parity-reference tests
+pass in a private headless Wayland session.

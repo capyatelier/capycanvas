@@ -1,5 +1,6 @@
 mod canvas;
 mod input;
+mod number_control;
 mod preferences;
 mod previews;
 mod render_thread;

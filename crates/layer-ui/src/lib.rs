@@ -9,6 +9,7 @@ mod cursor;
 mod customization;
 mod interaction;
 mod layout;
+mod numeric;
 mod session;
 mod settings;
 mod shortcuts;
@@ -30,6 +31,9 @@ pub use layout::{
     ResolvedLayout,
 };
 pub use layout::{DropHint, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout, tile_layout};
+pub use numeric::{
+    NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
+};
 pub use session::UiSession;
 pub use settings::{
     HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
@@ -169,49 +173,6 @@ pub const MENUS: &[MenuSpec] = &[
     },
 ];
 
-#[derive(Clone, Copy, Debug, Serialize)]
-pub struct NumericControl {
-    pub min: f64,
-    pub max: f64,
-    pub step: f64,
-    pub digits: u32,
-}
-impl NumericControl {
-    pub fn validate(self, value: f32, label: &str) -> Result<(), String> {
-        let value = f64::from(value);
-        if !value.is_finite() || !(self.min..=self.max).contains(&value) {
-            Err(format!(
-                "{label} must be between {} and {}",
-                self.min, self.max
-            ))
-        } else {
-            Ok(())
-        }
-    }
-}
-pub const BRUSH_SIZE_CONTROL: NumericControl = NumericControl {
-    min: 0.5,
-    max: 2048.0,
-    step: 0.5,
-    digits: 1,
-};
-pub const BRUSH_SIZE_SLIDER: NumericControl = NumericControl {
-    max: 512.0,
-    ..BRUSH_SIZE_CONTROL
-};
-pub const OPACITY_CONTROL: NumericControl = NumericControl {
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-    digits: 2,
-};
-pub const PRESSURE_CONTROL: NumericControl = NumericControl {
-    min: 0.25,
-    max: 4.0,
-    step: 0.05,
-    digits: 2,
-};
-
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {
     pub id: Panel,
@@ -245,7 +206,6 @@ pub struct UiCatalog {
     pub brush_categories: Vec<BrushCategory>,
     pub brush_sizes: &'static [f32],
     pub brush_size: NumericControl,
-    pub brush_size_slider: NumericControl,
     pub opacity: NumericControl,
     pub pressure: NumericControl,
 }
@@ -297,10 +257,9 @@ pub fn ui_catalog() -> UiCatalog {
         layer_commands: &CommandId::LAYERS,
         brush_categories: brush_categories().collect(),
         brush_sizes: BRUSH_SIZES,
-        brush_size: BRUSH_SIZE_CONTROL,
-        brush_size_slider: BRUSH_SIZE_SLIDER,
-        opacity: OPACITY_CONTROL,
-        pressure: PRESSURE_CONTROL,
+        brush_size: NumericControl::brush_size(),
+        opacity: NumericControl::percent(),
+        pressure: NumericControl::pressure(),
     }
 }
 fn preset(id: u32) -> Result<DefaultBrushPreset, String> {

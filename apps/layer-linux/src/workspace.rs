@@ -498,12 +498,11 @@ pub struct Workspace {
     brush_buttons: RefCell<Vec<(u32, gtk::Button)>>,
     brush_previews: RefCell<Vec<(u32, gtk::Picture)>>,
     size_buttons: RefCell<Vec<(f32, gtk::Button)>>,
-    size: gtk::Scale,
-    size_number: gtk::SpinButton,
-    opacity: gtk::Scale,
+    size_number: crate::number_control::NumberControl,
+    opacity: crate::number_control::NumberControl,
     color: gtk::ColorDialogButton,
     layers: gtk::Box,
-    layer_opacity: gtk::Scale,
+    layer_opacity: crate::number_control::NumberControl,
     tab: gtk::Label,
     view_info: gtk::Label,
     status: gtk::Label,
@@ -574,17 +573,20 @@ impl Workspace {
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layers_panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layers = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let size = scale(BRUSH_SIZE_SLIDER);
-        let size_number = gtk::SpinButton::with_range(
-            BRUSH_SIZE_CONTROL.min,
-            BRUSH_SIZE_CONTROL.max,
-            BRUSH_SIZE_CONTROL.step,
+        let size_number = crate::number_control::NumberControl::new(
+            NumericControl::brush_size(),
+            "Brush size",
+            "",
         );
-        size_number.set_digits(BRUSH_SIZE_CONTROL.digits);
         size_number.set_widget_name("brush-size");
-        let opacity = scale(OPACITY_CONTROL);
+        let opacity =
+            crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "");
         opacity.set_width_request(100);
-        let layer_opacity = scale(OPACITY_CONTROL);
+        let layer_opacity = crate::number_control::NumberControl::new(
+            NumericControl::percent(),
+            "Layer opacity",
+            "",
+        );
         let color = gtk::ColorDialogButton::new(Some(
             gtk::ColorDialog::builder().with_alpha(false).build(),
         ));
@@ -619,7 +621,6 @@ impl Workspace {
             brush_buttons: RefCell::new(Vec::new()),
             brush_previews: RefCell::new(Vec::new()),
             size_buttons: RefCell::new(Vec::new()),
-            size,
             size_number,
             opacity,
             color,
@@ -648,7 +649,6 @@ impl Workspace {
     }
 
     fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box, layers: &gtk::Box) {
-        shared_spin_icons(self.size_number.upcast_ref());
         margins(brushes, 8);
         let brush_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         brushes.append(&brush_list);
@@ -688,8 +688,7 @@ impl Workspace {
         self.append_panel_fields(Panel::Brushes, brushes);
         margins(sizes, 8);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        self.size.set_hexpand(true);
-        row.append(&self.size);
+        self.size_number.set_hexpand(true);
         row.append(&self.size_number);
         sizes.append(&row);
         self.customization
@@ -755,18 +754,10 @@ impl Workspace {
         self.customization
             .track(Panel::Layers, PanelControl::Layers, &self.layers);
         let layer_alpha = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        layer_alpha.append(&gtk::Label::new(Some(PanelControl::LayerOpacity.label())));
         layer_alpha.append(&self.layer_opacity);
         layers.append(&layer_alpha);
         self.customization
             .track(Panel::Layers, PanelControl::LayerOpacity, &layer_alpha);
-        self.size.connect_value_changed(glib::clone!(
-            #[weak(rename_to = this)]
-            self,
-            move |v| this.dispatch(UiAction::SetBrushSize {
-                value: v.value() as f32
-            })
-        ));
         self.size_number.connect_value_changed(glib::clone!(
             #[weak(rename_to = this)]
             self,
@@ -1347,7 +1338,6 @@ impl Workspace {
         };
         self.refreshing.set(true);
         if regions & regions::BRUSH != 0 {
-            self.size.set_value(state.brush.diameter as f64);
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
             let [r, g, b, a] = state.brush.color;
@@ -1835,32 +1825,11 @@ impl Workspace {
     }
 }
 
-/// Keep the native spin behavior, replacing only its theme-dependent glyphs.
-pub(crate) fn shared_spin_icons(widget: &gtk::Widget) {
-    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
-        if button.has_css_class("up") {
-            button.set_icon_name("layer-plus-symbolic");
-        } else if button.has_css_class("down") {
-            button.set_icon_name("layer-minus-symbolic");
-        }
-    }
-    let mut child = widget.first_child();
-    while let Some(current) = child {
-        shared_spin_icons(&current);
-        child = current.next_sibling();
-    }
-}
-
 fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
     widget.set_margin_start(value);
     widget.set_margin_end(value);
     widget.set_margin_top(value);
     widget.set_margin_bottom(value);
-}
-fn scale(spec: NumericControl) -> gtk::Scale {
-    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, spec.min, spec.max, spec.step);
-    scale.set_draw_value(false);
-    scale
 }
 fn scroll(child: &impl IsA<gtk::Widget>) -> gtk::Widget {
     gtk::ScrolledWindow::builder()

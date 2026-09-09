@@ -344,7 +344,7 @@ try {
     );
     await click('[data-command="settings"]');
     await evaluate(
-      `(() => { const input=document.querySelector('#setting-pressure'); input.value='1.5'; input.dispatchEvent(new Event('input')); })()`,
+      `(() => { document.querySelector('#setting-pressure .number-value').click(); const input=document.querySelector('#setting-pressure .number-entry'); input.value='1.5'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); })()`,
     );
     assert.equal(
       await evaluate("layerApp.state().settings.pressure_gamma"),
@@ -848,7 +848,7 @@ try {
       assert.equal(surfaces.active, surfaces.panel);
       assert.equal(
         await evaluate(
-          "getComputedStyle(document.querySelector('.size-controls .spin')).backgroundColor",
+          "getComputedStyle(document.querySelector('.size-controls .number-entry')).backgroundColor",
         ),
         theme === "dark" ? "rgb(51, 51, 51)" : "rgb(250, 250, 250)",
       );

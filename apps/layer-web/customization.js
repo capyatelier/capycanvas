@@ -1,7 +1,7 @@
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, workspace, panels, groups,
-  element, button, icon, spin, setNumber, setRange, numericControl, panelFrame,
+  element, button, icon, numberField, panelFrame,
   dispatch, draggable, grip, place, updateZen }) {
   const send = (action) => dispatch({ type: "customize", action });
   const views = new Map(), fields = new Map();
@@ -87,19 +87,14 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     const row = element("div", "panel-field"); row.dataset.control = control;
     let input, sync = () => {};
     const range = (value, action) => {
-      input = element("input"); input.type = "range"; numericControl(input, catalog.opacity);
-      input.addEventListener("input", () => dispatch(action(Number(input.value))));
-      sync = () => setRange(input, value()); row.append(input);
+      input = numberField(catalog.opacity, label, value => dispatch(action(value)));
+      sync = () => input.update(value()); row.append(input);
     };
     switch (control) {
       case "brush_size":
-        input = element("input"); input.type = "number"; numericControl(input, catalog.brush_size);
-        input.setAttribute("aria-label", label);
-        input.addEventListener("input", () => {
-          if (input.value !== "" && input.validity.valid) dispatch({ type: "set_brush_size", value: Number(input.value) });
-        });
-        row.append(spin(input, catalog.brush_size.digits));
-        sync = () => setNumber(input, state().brush.diameter); break;
+        input = numberField(catalog.brush_size, label, value => dispatch({ type: "set_brush_size", value }));
+        row.append(input);
+        sync = () => input.update(state().brush.diameter); break;
       case "brush_opacity":
         range(() => state().brush.opacity, (value) => ({ type: "set_brush_opacity", value })); break;
       case "layer_opacity":
@@ -193,7 +188,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       } else {
         for (const control of view.controls) {
           let row = panel.querySelector(`[data-control="${control.control}"]`);
-          if (!row) { row = field(control.control, control.label); row.prepend(element("label", "", control.label)); panel.append(row); }
+          if (!row) { row = field(control.control, control.label); if (!row.querySelector(".number-control")) row.prepend(element("label", "", control.label)); panel.append(row); }
           row.hidden = !control.visible_in_panel;
         }
       }
@@ -341,7 +336,9 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       popupControl = control; discardFields(popup); popup.replaceChildren();
       if (control) {
         const label = [...views.values()].flatMap((v) => v.controls).find((c) => c.control === control).label;
-        popup.append(element("label", "", label), field(control, label)); popup.showPopover(); positionPopup(popup);
+        const content = field(control, label);
+        if (!content.querySelector(".number-control")) popup.append(element("label", "", label));
+        popup.append(content); popup.showPopover(); positionPopup(popup);
       } else if (popup.matches(":popover-open")) popup.hidePopover();
     }
     workspace.style.setProperty("--paint-color", hexColor(state().brush.color));

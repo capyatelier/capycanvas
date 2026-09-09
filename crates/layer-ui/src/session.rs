@@ -199,6 +199,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Invalid chrome position".into());
                 }
                 let was_hidden = self.interaction.hidden;
+                if matches!(event, ChromeEvent::Contact { .. })
+                    || matches!(event, ChromeEvent::Leave { touch: false })
+                    || position.is_some_and(|[x, y]| {
+                        !(0.0..200.0).contains(&x) || !(0.0..200.0).contains(&y)
+                    })
+                {
+                    self.interaction.zen_entry_guard = false;
+                }
                 if self.interaction.facts.dragging
                     && !facts.dragging
                     && self.state.workspace.zen_mode
@@ -427,6 +435,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn refresh_chrome(&mut self) {
         if !self.state.workspace.zen_mode {
             self.interaction.keep_chrome_until_contact = false;
+            self.interaction.zen_entry_guard = false;
+        }
+        // Hover/refresh and button release inside the activation corner must
+        // not undo the user's explicit request to hide. A fresh contact or
+        // pointer movement outside the fixed guard restores normal revealing.
+        if self.interaction.zen_entry_guard {
+            self.interaction.hidden = true;
+            return;
         }
         let pinned = self.interaction.facts.held
             || self.interaction.facts.dragging
@@ -668,13 +684,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::SetBrushSize { value } => {
-                BRUSH_SIZE_CONTROL.validate(value, "Brush size")?;
+                NumericControl::brush_size().validate(value, "Brush size")?;
                 self.state.brush.diameter = value;
                 self.apply_brush()?;
                 (BRUSH, false)
             }
             UiAction::SetBrushOpacity { value } => {
-                OPACITY_CONTROL.validate(value, "Opacity")?;
+                NumericControl::percent().validate(value, "Opacity")?;
                 self.state.brush.opacity = value;
                 self.apply_brush()?;
                 (BRUSH, false)
@@ -711,7 +727,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SetLayerOpacity { id, opacity } => {
                 self.require_idle()?;
-                OPACITY_CONTROL.validate(opacity, "Opacity")?;
+                NumericControl::percent().validate(opacity, "Opacity")?;
                 let id = id
                     .map(LayerId)
                     .unwrap_or(self.engine.document().active_layer);
@@ -1240,6 +1256,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::ZenMode => {
                 self.state.workspace.zen_mode = !self.state.workspace.zen_mode;
+                self.interaction.zen_entry_guard = self.state.workspace.zen_mode
+                    && self.interaction.hover.is_some_and(|[x, y]| {
+                        (0.0..200.0).contains(&x) && (0.0..200.0).contains(&y)
+                    });
+                self.interaction.hidden = self.state.workspace.zen_mode;
+                self.interaction.keep_chrome_until_contact = false;
+                self.interaction.keyboard_chrome = false;
                 Ok((LAYOUT, false))
             }
         }
@@ -1541,6 +1564,72 @@ mod tests {
         assert!(chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
         assert!(!key(&mut s, "Tab", true, false, false).chrome_hidden);
         assert!(chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
+    }
+    #[test]
+    fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let facts = ChromeFacts::default();
+            chrome(
+                &mut s,
+                ChromeEvent::Motion {
+                    position: [24.0, 24.0],
+                },
+                facts,
+            );
+            invoke(&mut s, CommandId::ZenMode);
+            assert!(s.interaction.hidden);
+            for event in [
+                ChromeEvent::Refresh,
+                ChromeEvent::Motion {
+                    position: [24.0, 24.0],
+                },
+                ChromeEvent::Motion {
+                    position: [199.0, 79.0],
+                },
+                ChromeEvent::Motion {
+                    position: [79.0, 199.0],
+                },
+            ] {
+                assert!(chrome(&mut s, event, facts).chrome_hidden);
+            }
+            assert!(
+                chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [500.0, 400.0]
+                    },
+                    facts
+                )
+                .chrome_hidden
+            );
+            assert!(
+                !chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [24.0, 24.0]
+                    },
+                    facts
+                )
+                .chrome_hidden
+            );
+            invoke(&mut s, CommandId::ZenMode);
+            invoke(&mut s, CommandId::ZenMode);
+            assert!(
+                !chrome(
+                    &mut s,
+                    ChromeEvent::Contact {
+                        position: [24.0, 24.0],
+                        canvas: true
+                    },
+                    facts
+                )
+                .chrome_hidden
+            );
+            invoke(&mut s, CommandId::ZenMode);
+            assert!(!chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
+        }
     }
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
@@ -2265,12 +2354,7 @@ mod tests {
             serde_json::to_value(&catalog).unwrap()["pressure"]["step"],
             0.05
         );
-        for control in [
-            catalog.brush_size,
-            catalog.brush_size_slider,
-            catalog.opacity,
-            catalog.pressure,
-        ] {
+        for control in [catalog.brush_size, catalog.opacity, catalog.pressure] {
             assert!(control.validate(control.min as f32, "test").is_ok());
             assert!(control.validate(control.max as f32, "test").is_ok());
             assert!(control.validate(f32::NAN, "test").is_err());
@@ -2848,8 +2932,11 @@ mod tests {
                 let PreferenceKind::Number { control, .. } = row.kind else {
                     continue;
                 };
-                let value = (control.min + control.step * 1.4) as f32;
-                preference(&mut s, PreferenceAction::Slide { id: row.id, value });
+                let resolved = control
+                    .resolve(control.min, NumericOperation::Position { position: 0.37 })
+                    .unwrap()
+                    .value as f32;
+                edit_preference(&mut s, row.id, PreferenceValue::Number(resolved));
                 assert!(s.preferences().unwrap().error.is_none());
                 let actual = s
                     .preferences()
@@ -2863,9 +2950,9 @@ mod tests {
                 let PreferenceKind::Number { value, .. } = actual.kind else {
                     unreachable!()
                 };
-                assert!((value as f64 - (control.min + control.step)).abs() < 0.00001);
+                assert_eq!(value, resolved);
                 for value in [control.min as f32, control.max as f32] {
-                    preference(&mut s, PreferenceAction::Slide { id: row.id, value });
+                    edit_preference(&mut s, row.id, PreferenceValue::Number(value));
                     assert!(s.preferences().unwrap().error.is_none());
                 }
                 let saved = s.state.settings.clone();
@@ -2875,7 +2962,7 @@ mod tests {
                     (control.min - 1.0) as f32,
                     f32::NAN,
                 ] {
-                    preference(&mut s, PreferenceAction::Slide { id: row.id, value });
+                    edit_preference(&mut s, row.id, PreferenceValue::Number(value));
                     assert!(s.preferences().unwrap().error.is_some());
                     assert_eq!(s.state.settings, saved);
                     assert_eq!(s.state.requests.len(), requests);
@@ -2885,18 +2972,18 @@ mod tests {
             let saved = s.state.settings.clone();
             preference(
                 &mut s,
-                PreferenceAction::Slide {
+                PreferenceAction::Edit {
                     id: PreferenceId::PredictionHorizon,
-                    value: 20.0,
+                    value: PreferenceValue::Number(20.0),
                 },
             );
             assert!(s.preferences().unwrap().error.is_some());
             assert_eq!(s.state.settings, saved);
             preference(
                 &mut s,
-                PreferenceAction::Slide {
+                PreferenceAction::Edit {
                     id: PreferenceId::Theme,
-                    value: 1.0,
+                    value: PreferenceValue::Number(1.5),
                 },
             );
             assert!(s.preferences().unwrap().error.is_some());

@@ -11,15 +11,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.border
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.*
@@ -32,7 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
@@ -138,7 +132,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
                         Column(Modifier.fillMaxSize().testTag("settings-content-" + model.settingsRoute())
                             .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally) {
-                            Column(Modifier.widthIn(max = 800.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            Column(Modifier.widthIn(max = 632.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                                 when {
                                     row != null -> PreferenceDetail(host, row)
                                     editor != null -> ShortcutEditor(host, model, editor)
@@ -234,15 +228,21 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("detail")?.let { "
     }
 }
 
-private fun numberLabel(kind: JSONObject, value: Float = kind.number("value")): String =
-    "%.${kind.getJSONObject("control").getInt("digits")}f".format(java.util.Locale.ROOT, value)
-
 @Composable private fun PreferenceRow(host: CanvasHost, row: JSONObject) {
     val colors = LocalPalette.current
     val kind = row.getJSONObject("kind")
     val type = kind.getString("type")
     val context = LocalContext.current
     val enabled = row.optBoolean("enabled", true)
+    if (type == "number") {
+        Box(Modifier.fillMaxWidth().testTag("preference-" + row.getString("id")).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.TopCenter) {
+            NumericSetting(row.getString("title"), kind.number("value"), kind.getJSONObject("control"),
+                enabled = enabled, description = row.optString("description"), settings = true, id = row.getString("id")) {
+                host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))
+            }
+        }
+        return
+    }
     val action = if (type == "switch") Modifier.toggleable(kind.getBoolean("active"), enabled = enabled, role = Role.Switch) {
         host.preference(obj("type" to "edit", "id" to row.getString("id"), "value" to it))
     } else Modifier
@@ -257,14 +257,6 @@ private fun numberLabel(kind: JSONObject, value: Float = kind.number("value")): 
                 }
             }
             when (type) {
-                "number" -> {
-                    val control = kind.getJSONObject("control")
-                    // Presentation only: more selectable steps get a longer
-                    // track, bounded to keep descriptions readable. No ID rules.
-                    val intervals = (control.number("max") - control.number("min")) / control.number("step")
-                    val trackWidth = (112f + 12f * kotlin.math.log2(intervals.coerceAtLeast(1f))).coerceIn(160f, 224f).dp
-                    PreferenceNumber(host, row, Modifier.width(minOf(controlWidth, trackWidth + 92.dp)))
-                }
                 "switch" -> Switch(kind.getBoolean("active"), onCheckedChange = null, enabled = enabled)
                 "choice" -> {
                     val selected = kind.getInt("selected")
@@ -317,53 +309,6 @@ private fun numberLabel(kind: JSONObject, value: Float = kind.number("value")): 
             }
         }
     } else PreferenceRow(host, row)
-}
-
-/** One renderer for every numeric setting. Only unfinished text/drag state is
- * local; Rust parses, validates, snaps slider steps, applies and persists. */
-@Composable private fun PreferenceNumber(host: CanvasHost, row: JSONObject, modifier: Modifier) {
-    val kind = row.getJSONObject("kind")
-    val control = kind.getJSONObject("control")
-    val id = row.getString("id")
-    val enabled = row.getBoolean("enabled")
-    val colors = LocalPalette.current
-    val focus = androidx.compose.ui.platform.LocalFocusManager.current
-    val value = kind.number("value")
-    var text by rememberSaveable(id) { mutableStateOf(numberLabel(kind)) }
-    var focused by remember { mutableStateOf(false) }
-    var slider by remember(value) { mutableFloatStateOf(value) }
-    LaunchedEffect(value, focused) { if (!focused) text = numberLabel(kind) }
-    DisposableEffect(Unit) { onDispose { if (focused) host.editingText = false } }
-    val field: @Composable () -> Unit = {
-        BasicTextField(text, { text = it }, Modifier.width(80.dp).height(48.dp).onFocusChanged {
-            if (focused && !it.isFocused) host.preference(obj("type" to "edit", "id" to id, "value" to text))
-            focused = it.isFocused; host.editingText = focused
-        }.testTag("setting-number-$id"), enabled = enabled, singleLine = true,
-            textStyle = LocalTextStyle.current.copy(color = if (enabled) colors.text else colors.settingsSecondary, textAlign = TextAlign.End),
-            cursorBrush = SolidColor(colors.accent),
-            keyboardOptions = KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal,
-                imeAction = androidx.compose.ui.text.input.ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-            decorationBox = { input -> Box(Modifier.fillMaxSize().background(colors.input, RoundedCornerShape(8.dp))
-                .border(1.dp, if (focused) colors.accent else colors.divider, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp),
-                contentAlignment = Alignment.CenterEnd) { input() } })
-    }
-    val track: @Composable (Modifier) -> Unit = { trackModifier ->
-        EditorSlider(slider, { slider = it; text = numberLabel(kind, it) }, trackModifier.testTag("setting-slider-$id"),
-            enabled = enabled, range = control.number("min")..control.number("max"), height = 48.dp,
-            label = row.getString("title"), inactiveTrackColor = colors.divider,
-            onValueChangeFinished = {
-                host.preference(obj("type" to "slide", "id" to id, "value" to slider))
-                slider = value
-                text = numberLabel(kind) // accepted value until Rust acknowledges the snapped result
-            })
-    }
-    BoxWithConstraints(modifier) {
-        if (maxWidth < 220.dp) Column(horizontalAlignment = Alignment.End) { field(); track(Modifier.fillMaxWidth()) }
-        else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            track(Modifier.weight(1f)); field()
-        }
-    }
 }
 
 @Composable private fun Shortcuts(host: CanvasHost, view: JSONObject) {

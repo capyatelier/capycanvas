@@ -11,12 +11,12 @@ pub(super) struct ToolbarView {
 }
 
 enum FieldValue {
-    Size(gtk::SpinButton),
-    Opacity(gtk::Scale),
+    Size(crate::number_control::NumberControl),
+    Opacity(crate::number_control::NumberControl),
     Color(gtk::ColorDialogButton),
     Brush(gtk::DropDown),
     Layer(gtk::DropDown),
-    LayerOpacity(gtk::Scale),
+    LayerOpacity(crate::number_control::NumberControl),
     Commands(Vec<(CommandId, gtk::Button)>),
 }
 struct ControlWidget {
@@ -681,7 +681,12 @@ impl Workspace {
             group.set_widget_name(&format!("panel-field-{panel:?}-{control:?}"));
             let label = gtk::Label::new(Some(control.label()));
             label.set_xalign(0.0);
-            group.append(&label);
+            if !matches!(
+                control,
+                PanelControl::BrushSize | PanelControl::BrushOpacity | PanelControl::LayerOpacity
+            ) {
+                group.append(&label);
+            }
             let value = self.panel_field(control, &group);
             group.set_visible(false);
             body.append(&group);
@@ -723,10 +728,11 @@ impl Workspace {
     fn panel_field(self: &Rc<Self>, control: PanelControl, group: &gtk::Box) -> Option<FieldValue> {
         Some(match control {
             PanelControl::BrushSize => {
-                let spec = BRUSH_SIZE_CONTROL;
-                let input = gtk::SpinButton::with_range(spec.min, spec.max, spec.step);
-                input.set_digits(spec.digits);
-                shared_spin_icons(input.upcast_ref());
+                let input = crate::number_control::NumberControl::new(
+                    NumericControl::brush_size(),
+                    control.label(),
+                    "",
+                );
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -738,7 +744,11 @@ impl Workspace {
                 FieldValue::Size(input)
             }
             PanelControl::BrushOpacity => {
-                let input = scale(OPACITY_CONTROL);
+                let input = crate::number_control::NumberControl::new(
+                    NumericControl::percent(),
+                    control.label(),
+                    "",
+                );
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,
@@ -804,7 +814,11 @@ impl Workspace {
                 FieldValue::Layer(input)
             }
             PanelControl::LayerOpacity => {
-                let input = scale(OPACITY_CONTROL);
+                let input = crate::number_control::NumberControl::new(
+                    NumericControl::percent(),
+                    control.label(),
+                    "",
+                );
                 input.connect_value_changed(glib::clone!(
                     #[weak(rename_to = w)]
                     self,

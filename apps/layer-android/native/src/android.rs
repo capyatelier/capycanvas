@@ -401,3 +401,18 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
         .map(|v| v.to_string());
     string(&mut env, result)
 }
+
+/// Stateless numeric math is independent of the render-owned session. Safe to
+/// call on the UI thread; no renderer lock, I/O or expression compilation loop.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_number(
+    mut env: JNIEnv,
+    _: JClass,
+    request: JString,
+) -> jstring {
+    let result = read(&mut env, &request)
+        .and_then(|s| serde_json::from_str::<layer_ui::NumericRequest>(&s).map_err(error))
+        .and_then(|request| request.resolve())
+        .and_then(|value| serde_json::to_string(&value).map_err(error));
+    string(&mut env, result)
+}

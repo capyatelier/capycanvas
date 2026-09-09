@@ -109,6 +109,8 @@ pub(crate) struct Interaction {
     pub pan_key: Option<String>,
     pub keyboard_chrome: bool,
     pub keep_chrome_until_contact: bool,
+    /// Fixed top-left guard after explicitly entering Zen. Not a preference.
+    pub zen_entry_guard: bool,
     pub hover: Option<[f32; 2]>,
     pub facts: ChromeFacts,
     pub viewport: Option<[f32; 2]>,

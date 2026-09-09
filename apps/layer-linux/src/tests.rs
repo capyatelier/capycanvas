@@ -1204,6 +1204,22 @@ fn native_preferences_and_shortcuts() {
                     .page,
                 page
             );
+            if page == SettingsPage::Input {
+                let field =
+                    find_named(w.preferences.dialog.upcast_ref(), "setting-pressure").unwrap();
+                let scale = field
+                    .last_child()
+                    .unwrap()
+                    .first_child()
+                    .unwrap()
+                    .next_sibling()
+                    .unwrap()
+                    .downcast::<gtk::Scale>()
+                    .unwrap();
+                assert_eq!(scale.height(), 32, "settings keep the expanded slider");
+                let (start, end) = scale.slider_range();
+                assert!(end - start >= 16, "settings keep the visible thumb");
+            }
             if page == SettingsPage::About {
                 assert!(w.preferences.dialog.is_mapped());
                 let view = w
@@ -1381,6 +1397,306 @@ fn native_preferences_and_shortcuts() {
     w.window.destroy();
     pump(200);
     assert!(windows.borrow().is_empty());
+}
+
+#[test]
+#[ignore = "native slider feedback: requires a Wayland/Vulkan display"]
+fn native_slider_feedback() {
+    let app = native_test_app("dev.layer.SliderFeedbackTest");
+    let slider = |control: &crate::number_control::NumberControl| {
+        control
+            .last_child()
+            .unwrap()
+            .first_child()
+            .unwrap()
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Scale>()
+            .unwrap()
+    };
+    for spec in [
+        NumericControl::brush_size(),
+        NumericControl::percent(),
+        NumericControl::pressure(),
+    ] {
+        let control = crate::number_control::NumberControl::new(spec.clone(), "Value", "");
+        let scale = slider(&control);
+        let notifications = Rc::new(RefCell::new(Vec::new()));
+        control.connect_value_changed({
+            let notifications = notifications.clone();
+            move |field| {
+                let mut values = notifications.borrow_mut();
+                values.push(field.value());
+                // End a broken feedback loop at an exactly representable value,
+                // so the regression fails instead of hanging the test process.
+                let echo = if values.len() > 8 {
+                    1.0
+                } else {
+                    field.value() as f32 as f64
+                };
+                drop(values);
+                field.set_value(echo);
+            }
+        });
+        control.set_value(0.6);
+        assert!(
+            notifications.borrow().is_empty(),
+            "model refresh is not a user edit"
+        );
+        for i in 1..100 {
+            notifications.borrow_mut().clear();
+            let position = i as f64 / 100.0;
+            scale.set_value(position);
+            assert!(
+                notifications.borrow().len() <= 1,
+                "feedback at {position}: {:?}",
+                notifications.borrow()
+            );
+            let expected = spec
+                .resolve(0.0, NumericOperation::Position { position })
+                .unwrap()
+                .value as f32;
+            assert_eq!(control.value() as f32, expected);
+        }
+    }
+    // Exercise the real session/refresh path, including fractional f32 echoes,
+    // in both directions while allowing GTK's event loop to advance.
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(600);
+    let spec = NumericControl::brush_size();
+    let scale = slider(&w.size_number);
+    let edits = Rc::new(Cell::new(0));
+    w.size_number.connect_value_changed({
+        let edits = edits.clone();
+        move |_| edits.set(edits.get() + 1)
+    });
+    for i in (0..=200).chain((0..200).rev()) {
+        edits.set(0);
+        let position = i as f64 / 200.0;
+        scale.emit_by_name::<bool>("change-value", &[&gtk::ScrollType::Jump, &position]);
+        let expected = spec
+            .resolve(0.0, NumericOperation::Position { position })
+            .unwrap()
+            .value as f32;
+        assert_eq!(state(&w).brush.diameter, expected);
+        assert!(edits.get() <= 1, "one user action must not feed back");
+        if i % 10 == 0 {
+            pump(1);
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "numeric widget editing and review sheet: requires a Wayland display"]
+fn native_number_controls() {
+    let app = native_test_app("dev.layer.NumberTest");
+    gtk::gio::resources_register_include!("layer-icons.gresource").unwrap();
+    gtk::IconTheme::for_display(&gdk::Display::default().unwrap())
+        .add_resource_path("/dev/layer/icons");
+    let window = adw::ApplicationWindow::builder()
+        .application(&*app)
+        .default_width(560)
+        .default_height(360)
+        .build();
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.set_margin_top(18);
+    body.set_margin_bottom(18);
+    body.set_margin_start(18);
+    body.set_margin_end(18);
+    body.add_css_class("dock-panel");
+    let size =
+        crate::number_control::NumberControl::new(NumericControl::brush_size(), "Brush size", "");
+    let alpha = crate::number_control::NumberControl::new(NumericControl::percent(), "Opacity", "");
+    let small = crate::number_control::NumberControl::new(
+        NumericControl::number(0.0, 16.0, 1.0, 0),
+        "Small integer",
+        "",
+    );
+    for field in [&size, &alpha, &small] {
+        body.append(field);
+    }
+    size.set_value(32.0);
+    alpha.set_value(0.5);
+    small.set_value(4.0);
+    let narrow = crate::number_control::NumberControl::new(
+        NumericControl::percent(),
+        "A long slider name that must not wrap",
+        "",
+    );
+    narrow.set_value(0.5);
+    let narrow_container = adw::Clamp::builder()
+        .maximum_size(176)
+        .tightening_threshold(176)
+        .child(&narrow)
+        .build();
+    body.append(&narrow_container);
+    let described = crate::number_control::NumberControl::new(
+        NumericControl::pressure(),
+        "Pressure response",
+        "Adjust how pen pressure affects your brush. The value centers against this complete label block.",
+    );
+    described.set_value(1.0);
+    body.append(&described);
+    window.set_content(Some(&body));
+    window.present();
+    pump(300);
+    fn descendant<T: IsA<gtk::Widget> + glib::types::StaticType + Clone>(
+        w: &impl IsA<gtk::Widget>,
+    ) -> T {
+        let mut child = w.first_child();
+        while let Some(node) = child {
+            if let Ok(found) = node.clone().downcast::<T>() {
+                return found;
+            }
+            // Flatten without depending on private GTK node layout.
+            let mut queue = vec![node.clone()];
+            while let Some(parent) = queue.pop() {
+                let mut nested = parent.first_child();
+                while let Some(n) = nested {
+                    if let Ok(found) = n.clone().downcast::<T>() {
+                        return found;
+                    }
+                    nested = n.next_sibling();
+                    queue.push(n);
+                }
+            }
+            child = node.next_sibling();
+        }
+        panic!("missing widget {}", T::static_type());
+    }
+    let scale: gtk::Scale = descendant(&size);
+    for field in [&size, &narrow, &described] {
+        let header = field.first_child().unwrap();
+        let labels = header.first_child().unwrap();
+        let title = labels
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Label>()
+            .unwrap();
+        let value = header.last_child().unwrap();
+        let lb = labels.compute_bounds(field).unwrap();
+        let vb = value.compute_bounds(field).unwrap();
+        assert!((lb.y() + lb.height() / 2.0 - vb.y() - vb.height() / 2.0).abs() <= 1.0);
+        assert!((vb.x() + vb.width() - field.width() as f32).abs() <= 1.0);
+        assert!(!title.wraps());
+        assert_eq!(title.ellipsize(), gtk::pango::EllipsizeMode::End);
+        assert_eq!(title.tooltip_text().unwrap(), title.text());
+        assert_eq!(title.compute_bounds(field).unwrap().x(), 6.0);
+        if field == &narrow {
+            assert!(title.layout().is_ellipsized());
+        }
+        assert!(
+            vb.width() < 90.0,
+            "hidden entry must not reserve width: {vb:?}"
+        );
+    }
+    assert!(
+        narrow.height() <= 50,
+        "compact row height: {}",
+        narrow.height()
+    );
+    assert_eq!(narrow.width(), 176);
+    let track = scale.parent().unwrap();
+    let minus = track.first_child().unwrap().compute_bounds(&track).unwrap();
+    let plus = track.last_child().unwrap().compute_bounds(&track).unwrap();
+    let bar = scale.compute_bounds(&track).unwrap();
+    assert_eq!(bar.height(), 24.0);
+    assert_eq!(bar.x(), minus.x() + minus.width() + 6.0);
+    assert_eq!(bar.x() + bar.width() + 6.0, plus.x());
+    assert_eq!(scale.range_rect().width(), scale.width());
+    let (start, end) = scale.slider_range();
+    assert_eq!(start, end, "compact slider reserves no thumb width");
+    let value_label: gtk::Label = descendant(&descendant::<gtk::Button>(&size));
+    assert_eq!(value_label.xalign(), 1.0);
+    scale.set_value(0.5);
+    assert!((size.value() - 32.0).abs() < 0.1);
+    let display: gtk::Button = descendant(&size);
+    click(&display);
+    let entry: gtk::Entry = descendant(&size);
+    entry.set_text("85/2");
+    entry.emit_activate();
+    assert_eq!(size.value(), 42.5);
+    click(&display);
+    entry.set_text("1/0");
+    entry.emit_activate();
+    assert!(size.has_css_class("error"));
+    assert_eq!(size.value(), 42.5);
+    entry.set_text("2049");
+    entry.emit_activate();
+    assert_eq!(size.value(), 2048.0);
+    let spin: gtk::SpinButton = descendant(&small);
+    spin.set_text("3*2");
+    spin.update();
+    assert_eq!(small.value(), 6.0);
+    spin.set_text("sqrt(81)");
+    spin.update();
+    assert_eq!(small.value(), 9.0);
+    click(&descendant::<gtk::Button>(&alpha));
+    let percent: gtk::Entry = descendant(&alpha);
+    percent.set_text("75%");
+    percent.emit_activate();
+    assert_eq!(alpha.value(), 0.75);
+    let dir = "../../artifacts/ui/numeric";
+    std::fs::create_dir_all(dir).unwrap();
+    for (theme, scheme) in [
+        ("dark", adw::ColorScheme::ForceDark),
+        ("light", adw::ColorScheme::ForceLight),
+    ] {
+        app.style_manager().set_color_scheme(scheme);
+        if theme == "light" {
+            window.add_css_class("light-theme");
+        }
+        pump(150);
+        crate::snapshot_window(&window, 1.0)
+            .save_to_png(format!("{dir}/gtk-{theme}.png"))
+            .unwrap();
+        let value: gtk::Button = descendant(&narrow);
+        click(&value);
+        pump(100);
+        let input: gtk::Entry = descendant(&narrow);
+        assert!(input.width() < 100, "short values use compact editors");
+        crate::snapshot_window(&window, 1.0)
+            .save_to_png(format!("{dir}/gtk-edit-{theme}.png"))
+            .unwrap();
+        input.emit_activate();
+    }
+    // Preferences use the native entry height, not the compact panel editor.
+    body.remove(&described);
+    let preferences = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    preferences.add_css_class("number-preference");
+    preferences.append(&described);
+    let standard = gtk::Entry::builder().text("Standard GTK entry").build();
+    preferences.append(&standard);
+    window.set_content(Some(&preferences));
+    for (theme, scheme) in [
+        ("dark", adw::ColorScheme::ForceDark),
+        ("light", adw::ColorScheme::ForceLight),
+    ] {
+        app.style_manager().set_color_scheme(scheme);
+        if theme == "light" {
+            window.add_css_class("light-theme");
+        } else {
+            window.remove_css_class("light-theme");
+        }
+        pump(150);
+        let value: gtk::Button = descendant(&described);
+        assert_eq!(value.height(), standard.height());
+        click(&value);
+        pump(100);
+        let entry: gtk::Entry = descendant(&described);
+        assert_eq!(entry.height(), standard.height());
+        assert_eq!(entry.height(), 34);
+        crate::snapshot_window(&window, 1.0)
+            .save_to_png(format!("{dir}/gtk-settings-edit-{theme}.png"))
+            .unwrap();
+        entry.set_text("sqrt(4)");
+        entry.emit_activate();
+        assert_eq!(described.value(), 2.0);
+    }
+    window.destroy();
 }
 
 #[test]
@@ -1953,7 +2269,7 @@ fn native_workspace_controls_docking_and_ink() {
     assert_eq!(state(&w).brush.diameter, 96.0);
     w.size_number.set_value(84.0);
     assert_eq!(state(&w).brush.diameter, 84.0);
-    assert_eq!(w.size.value(), 84.0);
+    assert_eq!(w.size_number.value(), 84.0);
     click(&command(&w, CommandId::AddLayer));
     assert_eq!(state(&w).layers.len(), 3);
     let view = state(&w).camera;
@@ -2058,10 +2374,11 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::Settings));
     assert!(state(&w).settings_open);
     assert!(w.preferences.dialog.root().is_some());
-    let pressure: adw::SpinRow = find_named(w.preferences.dialog.upcast_ref(), "setting-pressure")
-        .unwrap()
-        .downcast()
-        .unwrap();
+    let pressure: crate::number_control::NumberControl =
+        find_named(w.preferences.dialog.upcast_ref(), "setting-pressure")
+            .unwrap()
+            .downcast()
+            .unwrap();
     pressure.set_value(1.45);
     assert_eq!(state(&w).settings.pressure_gamma, 1.45);
     w.preferences.dialog.close();

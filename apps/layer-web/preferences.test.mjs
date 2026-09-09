@@ -27,18 +27,43 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(await evaluate("'panel_text_pt' in layerApp.state().settings"), false);
     const metrics = await evaluate(`(() => {
       const style = selector => getComputedStyle(document.querySelector(selector));
-      return { fonts:['.dock-tab','.brush-list h3','.size-button','.spin input','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
-        step:parseFloat(style('.panel .spin button svg').width), tool:parseFloat(style('.tile-button svg').width),
+      return { fonts:['.dock-tab','.brush-list h3','.size-button','.number-entry','#view-info','#document-title'].map(s=>parseFloat(style(s).fontSize)),
+        step:parseFloat(style('.panel .number-step svg').width), tool:parseFloat(style('.tile-button svg').width),
         tile:document.querySelector('.tile-button').getBoundingClientRect().height,
         preview:document.querySelector('.brush-preview').getBoundingClientRect().height,
         slider:document.querySelector('.size-controls input[type=range]').getBoundingClientRect().height,
         layerIconButton:document.querySelector('.layer-tools button').getBoundingClientRect().height};
     })()`);
     for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
-    assert.ok(Math.abs(metrics.step - points * 4 / 3 * 1.16) < .1);
-    assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 28); assert.equal(metrics.layerIconButton, 28);
+    assert.equal(metrics.step, 16);
+    assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 28);
   }
   await capture('typography');
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('#size-number .number-labels')).paddingLeft"), '6px', 'panel labels mirror the value inset');
+  assert.ok(await evaluate(`(() => {
+    const track=document.querySelector('#size-number .number-track'), [minus,bar,plus]=[...track.children].map(n=>n.getBoundingClientRect());
+    return minus.height===24 && plus.height===24 && bar.left===minus.right+6 && bar.right+6===plus.left;
+  })()`), 'compact panel track has symmetric 6px gaps before the step buttons');
+  // Real host events: activation hides immediately, even while the pointer
+  // remains over the Zen button, and the fixed corner guard survives refresh.
+  await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
+  await click('#header-start [data-command="zen_mode"]');
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+  await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:180,clientY:24,pointerType:'mouse',bubbles:true}))");
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), true);
+  await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,pointerType:'mouse',bubbles:true})); window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,pointerType:'mouse',bubbles:true}))");
+  assert.equal(await evaluate("document.querySelector('#workspace').classList.contains('zen-hidden')"), false);
+  await click('#header-start [data-command="zen_mode"]');
+  // Values are plain editing buttons. The slider uses the
+  // exact Rust mapping and stepping keeps using display units.
+  await click('#size-number .number-value');
+  assert.ok(await evaluate(`(() => {const n=document.querySelector('#size-number .number-entry');return n.getBoundingClientRect().width<100 && getComputedStyle(n).borderRadius==='6px';})()`), 'short values use compact rounded editors');
+  await evaluate("document.querySelector('#size-number .number-entry').value='85/2'"); await key('Enter');
+  assert.equal(await evaluate('layerApp.state().brush.diameter'), 42.5);
+  await click('#size-number [aria-label="Increase Brush size"]');
+  assert.equal(await evaluate('layerApp.state().brush.diameter'), 43.5);
+  await evaluate("const slider=document.querySelector('#size-number input[type=range]');slider.value=.5;slider.dispatchEvent(new Event('input',{bubbles:true}))");
+  assert.equal(await evaluate('layerApp.state().brush.diameter'), 32);
   await action({ type: "open_settings", page: "appearance" });
   assert.equal(await evaluate("document.querySelector('#setting-panel-text-size')"), null);
   await action({ type: "close_settings" });
@@ -68,6 +93,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.deepEqual(await evaluate("layerApp.app.preferences().pages.map(p=>p.id)"), ["appearance", "canvas", "input", "shortcuts", "about"]);
     for (const page of ["appearance", "canvas", "input", "shortcuts", "about"]) {
       await click(`[data-settings-page="${page}"]`);
+      assert.ok(await evaluate(`(() => [...document.querySelectorAll('.preferences-page:not([hidden]) input.number-slider')].every(slider => {
+        const row=slider.closest('.number-control'), header=row.querySelector('.number-header').getBoundingClientRect(), track=row.querySelector('.number-track').getBoundingClientRect();
+        const labels=row.querySelector('.number-labels').getBoundingClientRect(), value=row.querySelector('.number-value-box').getBoundingClientRect(), title=row.querySelector('.number-title');
+        return track.top>=header.bottom && Math.abs(track.width-header.width)<1 && track.width<=600 && slider.getBoundingClientRect().height===32
+          && value.height===34 && Math.abs(labels.top+labels.height/2-value.top-value.height/2)<1 && Math.abs(value.right-header.right)<1
+          && getComputedStyle(title).whiteSpace==='nowrap' && getComputedStyle(title).textOverflow==='ellipsis' && title.title===title.textContent;
+      }))()`), 'sliders span the capped row; right-aligned values center against the complete label block');
       await capture(`${page}-${theme}`);
       assert.equal(await evaluate("document.querySelector('.preferences-page:not([hidden])').dataset.page"), page);
       assert.equal(await evaluate("layerApp.app.preferences().page"), page);
@@ -124,7 +156,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await click('#setting-feedback');
   assert.equal(await evaluate("document.querySelector('#setting-prediction-horizon').disabled"), true);
   await click('#setting-feedback');
-  await evaluate("const pressure=document.querySelector('#setting-pressure');pressure.value='1.5';pressure.dispatchEvent(new Event('input'));pressure.focus()");
+  await click('#setting-pressure .number-value');
+  assert.ok(await evaluate(`(() => { const field=document.querySelector('#setting-pressure .number-entry'), css=getComputedStyle(field); return field.getBoundingClientRect().height===34 && css.paddingLeft==='9px' && css.paddingRight==='9px' && css.borderRadius==='6px'; })()`), 'settings editors use full-size Adwaita spacing');
+  await evaluate("document.querySelector('#setting-pressure .number-entry').value='1.5'");
+  await key("Enter");
+  await click('#setting-pressure .number-value');
   await key("b");
   assert.equal(await evaluate("layerApp.app.preferences().query"), "", "number editing does not start global search");
   assert.equal(await evaluate("layerApp.app.preferences().capture ?? null"), null);
