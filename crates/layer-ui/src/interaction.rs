@@ -94,9 +94,10 @@ pub struct InputReply {
     pub cancel_paint: bool,
     pub dismiss_popups: bool,
     pub chrome_hidden: bool,
-    /// Hide all editor chrome, including floats, except an inactive-style Zen
-    /// button. The button still invokes the normal Zen command to exit.
-    pub zen_button_only: bool,
+    /// Include floating panels when hiding the chrome.
+    pub hide_floating_panels: bool,
+    /// Keep the Zen button visible, in its inactive style, when chrome is hidden.
+    pub keep_zen_button: bool,
     pub pan_cursor: bool,
 }
 

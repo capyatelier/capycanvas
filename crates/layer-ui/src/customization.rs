@@ -264,6 +264,7 @@ impl ToolbarControl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextTarget {
+    ZenMode,
     Panel { panel: Panel },
     Group { group: u32 },
     Tile { panel: Panel, tile: u32 },
@@ -389,6 +390,7 @@ impl DockLayout {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
+            ContextTarget::ZenMode => return Err("Not a panel context".into()),
             ContextTarget::Panel { panel } => {
                 let p = self.panel(panel)?;
                 (
@@ -497,7 +499,7 @@ impl DockLayout {
                 let selected = if let Some(group) = group {
                     self.panel_group(p.id) == Some(group)
                 } else {
-                    self.panels_visible && self.panel_group(p.id).is_some()
+                    self.panel_group(p.id).is_some()
                 };
                 let action = if let Some(group) = group {
                     CustomizationAction::AddPanel { panel: p.id, group }
@@ -678,8 +680,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::RaiseLayer => "Move the active layer up",
                 CommandId::LowerLayer => "Move the active layer down",
                 CommandId::ResetLayout => "Restore panel docking positions",
-                CommandId::TogglePanels => "Show or hide the docked panels",
-                CommandId::ZenMode => "Hide controls while drawing away from the edges",
+                CommandId::ZenMode => "Hide or show the editor controls",
                 CommandId::NewWindow => "Open another drawing window",
                 CommandId::KeyboardShortcuts => "Customize application shortcuts",
                 CommandId::About => "Application information and links",

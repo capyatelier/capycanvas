@@ -481,18 +481,18 @@ fn native_zen_behaviors() {
         });
         pump(250);
         let row: adw::ComboRow =
-            find_named(w.preferences.dialog.upcast_ref(), "setting-zen-behavior")
+            find_named(w.preferences.dialog.upcast_ref(), "setting-zen-reveal-mode")
                 .unwrap()
                 .downcast()
                 .unwrap();
         row.set_selected(selected);
         pump(100);
         assert_eq!(
-            state(&w).settings.zen_behavior,
+            state(&w).settings.zen_reveal_mode,
             if selected == 0 {
-                layer_ui::ZenBehavior::RevealAtEdges
+                layer_ui::ZenRevealMode::Edges
             } else {
-                layer_ui::ZenBehavior::ButtonOnly
+                layer_ui::ZenRevealMode::Button
             }
         );
     };
@@ -505,6 +505,49 @@ fn native_zen_behaviors() {
             .unwrap(),
     );
     pump(300);
+    let open_zen_menu = || {
+        let controllers = zen.observe_controllers();
+        let hold = (0..controllers.n_items())
+            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
+            .find(|g| g.name().as_deref() == Some("workspace-context-hold"))
+            .unwrap();
+        hold.emit_by_name::<()>("pressed", &[&18.0f64, &18.0f64]);
+        pump(150);
+        let popup = w
+            .popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .find(|p| p.is_visible() && p.has_css_class("panel-context-menu"))
+            .unwrap()
+            .downcast::<gtk::PopoverMenu>()
+            .unwrap();
+        let menu = popup.menu_model().unwrap();
+        assert!(menu_action(&menu, "At edges").is_some());
+        assert!(menu_action(&menu, "With button").is_some());
+        assert!(menu_action(&menu, "Keep Zen button visible").is_some());
+        assert_eq!(
+            menu.n_items(),
+            2,
+            "divider separates reveal mode and button visibility"
+        );
+        popup
+    };
+    for (label, mode) in [
+        ("At edges", layer_ui::ZenRevealMode::Edges),
+        ("With button", layer_ui::ZenRevealMode::Button),
+    ] {
+        let popup = open_zen_menu();
+        popup
+            .activate_action(
+                &menu_action(&popup.menu_model().unwrap(), label).unwrap(),
+                None,
+            )
+            .unwrap();
+        pump(150);
+        assert_eq!(state(&w).settings.zen_reveal_mode, mode);
+        assert!(!state(&w).settings_open && !state(&w).workspace.zen_mode);
+    }
     for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         pump(250);
@@ -512,7 +555,7 @@ fn native_zen_behaviors() {
         click(&zen);
         pump(250);
         assert!(state(&w).workspace.zen_mode);
-        assert!(zen.has_css_class("zen-button-only"));
+        assert!(zen.has_css_class("zen-button-neutral"));
         for (slot, widget) in w.surface.imp().children.borrow().iter() {
             let visible = matches!(slot, Slot::Canvas | Slot::ZenButton);
             assert_eq!(
@@ -539,15 +582,35 @@ fn native_zen_behaviors() {
             [600.0, viewport[1] - 1.0],
         ] {
             let reply = w.chrome_event(ChromeEvent::Motion { position });
-            assert!(reply.chrome_hidden && reply.zen_button_only);
+            assert!(reply.chrome_hidden && reply.hide_floating_panels);
             assert!(!w.reveal_chrome_at(position[0], position[1]));
         }
         capture_reference(&w, &format!("{dir}/gtk-button-only-{name}.png"), 1.0);
+        let popup = open_zen_menu();
+        assert!(
+            w.header.has_css_class("zen-hidden"),
+            "opening the menu doesn't reveal With button chrome"
+        );
+        capture_popover(
+            popup.upcast_ref(),
+            &format!("{dir}/gtk-button-menu-{name}.png"),
+        );
+        popup
+            .activate_action(
+                &menu_action(&popup.menu_model().unwrap(), "With button").unwrap(),
+                None,
+            )
+            .unwrap();
+        pump(150);
+        assert!(
+            state(&w).workspace.zen_mode,
+            "context selection must not click the Zen toggle"
+        );
         // It remains a working button, not a disabled control or a duplicate.
         click(&zen);
         pump(250);
         assert!(!state(&w).workspace.zen_mode);
-        assert!(!zen.has_css_class("zen-button-only"));
+        assert!(!zen.has_css_class("zen-button-neutral"));
         assert!(!zen.has_css_class("selected-tool"));
         assert!(
             w.surface
@@ -571,7 +634,8 @@ fn native_zen_behaviors() {
         .chrome_hidden
     );
     pump(250);
-    assert!(zen.has_css_class("zen-hidden") && !zen.can_target());
+    assert!(!zen.has_css_class("zen-hidden") && zen.can_target());
+    assert!(zen.has_css_class("zen-button-neutral"));
     let floating = w
         .groups
         .borrow()
@@ -584,9 +648,58 @@ fn native_zen_behaviors() {
     let reply = w.chrome_event(ChromeEvent::Motion {
         position: [6.0, 6.0],
     });
-    assert!(!reply.chrome_hidden && !reply.zen_button_only);
+    assert!(!reply.chrome_hidden && !reply.hide_floating_panels);
     assert!(zen.can_target() && zen.has_css_class("selected-tool"));
     click(&zen);
+    for mode in [0, 1] {
+        choose(mode);
+        let show: adw::SwitchRow =
+            find_named(w.preferences.dialog.upcast_ref(), "setting-zen-show-button")
+                .unwrap()
+                .downcast()
+                .unwrap();
+        assert!(show.is_active(), "show button is on by default");
+        show.set_active(false);
+        assert!(!state(&w).settings.zen_show_button);
+        w.dispatch(UiAction::CloseSettings);
+        pump(300);
+        click(&zen);
+        assert!(
+            w.chrome_event(ChromeEvent::Motion {
+                position: [600.0, 450.0]
+            })
+            .chrome_hidden
+        );
+        assert!(zen.has_css_class("zen-hidden") && !zen.can_target());
+        pump(250);
+        capture_reference(&w, &format!("{dir}/gtk-mode-{mode}-hidden-button.png"), 1.0);
+        let reply = w.chrome_event(ChromeEvent::Motion {
+            position: [6.0, 6.0],
+        });
+        assert_eq!(reply.chrome_hidden, mode == 1);
+        for pressed in [true, false] {
+            w.interact(UiInput::Key {
+                key: "z".into(),
+                pressed,
+                repeat: false,
+                modifiers: layer_ui::Modifiers::default(),
+                editing: false,
+                divider: None,
+            });
+        }
+        assert!(!state(&w).workspace.zen_mode);
+        assert!(zen.can_target() && !zen.has_css_class("zen-hidden"));
+        // Both dimensions can also be changed through the context menu.
+        let popup = open_zen_menu();
+        popup
+            .activate_action(
+                &menu_action(&popup.menu_model().unwrap(), "Keep Zen button visible").unwrap(),
+                None,
+            )
+            .unwrap();
+        pump(150);
+        assert!(state(&w).settings.zen_show_button);
+    }
     w.window.close();
     pump(100);
 }
@@ -5027,9 +5140,7 @@ fn native_workspace_controls_docking_and_ink() {
     pump(100);
     click(&command(&w, CommandId::ZenMode));
     assert!(!w.header.has_css_class("zen-hidden"));
-    click(&command(&w, CommandId::TogglePanels));
     assert_eq!(state(&w).camera.translation, camera.translation);
-    click(&command(&w, CommandId::TogglePanels));
     click(&command(&w, CommandId::ToggleTheme));
     pump(200);
     assert_eq!(state(&w).theme, Theme::Light);

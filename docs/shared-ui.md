@@ -202,7 +202,7 @@ GTK observes the default `AdwStyleManager` and applies overrides to the display
 manager; web observes `prefers-color-scheme`. OS changes never overwrite a user
 override. Returning to System uses the latest OS value.
 
-`ZenMode` toggles shared `UiState.workspace.zen_mode`. In the default **Reveal at edges**
+`ZenMode` toggles shared `UiState.workspace.zen_mode`. In the default **At edges**
 mode, the shared `near_chrome` rule reveals
 hidden controls only within a fixed 80 logical pixels of an occupied window edge,
 not by approaching a hidden toolbar/panel. The top always reveals the header;
@@ -227,16 +227,26 @@ On touch, the last contact keeps revealed controls available after finger lift;
 another contact away from controls can hide them. The reveal contact cannot
 also activate a newly exposed button.
 
-GTK also previews **Button only**, selected in Preferences → Appearance → Zen mode.
-While active, all editor controls, including floating panels, fade out except the
-same top-left Zen button. It uses its inactive appearance but remains clickable;
-clicking it disables Zen. Edge proximity, contact, Tab and drag/menu pins cannot
-reveal the hidden editor. Explicit settings dialogs still work. Rust owns this
-policy through `Settings.zen_behavior` and `InputReply.zen_button_only`; GTK only
-applies visibility, hit-testing and styling. The button is a sibling of the native
-header with a same-sized header spacer, preserving its 36×36px size and 6px inset.
-Web/Android retain edge-reveal behavior and do not expose the choice during this
-GTK-first trial, even when loading settings saved with Button only selected.
+GTK previews two independent settings in Preferences → Appearance → Zen mode:
+**Show controls** selects **At edges** (default) or **With button**. With button
+hides all editor controls, including floats; edge proximity, contact, Tab and
+drag/menu pins cannot reveal them. **Keep Zen button visible** defaults on and
+keeps the same top-left button in its inactive style whenever controls are hidden,
+in either reveal mode. Clicking it disables Zen. Turning it off hides the button
+with the controls; With button then requires the Zen shortcut (Z by default) or
+an explicit Preferences shortcut to recover controls. Explicit settings dialogs
+remain usable. The button never disappears while Zen is off.
+
+Rust owns these decisions through `Settings.zen_reveal_mode`, `zen_show_button`
+and `InputReply`'s `chrome_hidden`, `hide_floating_panels`, `keep_zen_button` flags.
+GTK only applies visibility, hit-testing and styling. The button is a sibling of
+the native header with a same-sized spacer, preserving its 36×36px size and 6px
+inset. Web/Android retain their previous edge-reveal/hidden-button behavior and
+do not expose these settings until the GTK trial is approved.
+Right-clicking or touch-holding GTK's Zen button opens the two reveal choices,
+a divider, then the button visibility toggle, with current values checked.
+Rust generates the menu from the same preference rows and applies their normal
+edit actions without opening Preferences.
 
 Zen's hidden/visible state, last hover/contact, keyboard pin, and first-contact
 consumption live in Rust, not frontend booleans. Hosts send `UiInput::Chrome`
@@ -245,8 +255,8 @@ combines those facts with settings/divider state and returns visibility and
 dismiss/consume instructions. The DOM retains only its suppressed-click pointer
 ID to prevent the browser's subsequent click from activating a revealed control.
 
-Fading does not change allocation, camera or viewport. `TogglePanels` preserves
-dock topology and changes only visibility/work-area fitting bounds. Dock moves,
+Fading does not change allocation, camera or viewport. Zen is the sole global
+controls-visibility toggle; Workspace still manages individual panels. Dock moves,
 resizes, hiding and Zen do not request brush/render frames. Window resize still
 resizes the full GPU viewport; Fit Canvas explicitly uses updated work-area bounds.
 

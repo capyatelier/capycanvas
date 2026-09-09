@@ -609,12 +609,10 @@ try {
     );
     await evaluate("layerApp.dispatch({type:'close_settings'})");
     await click('[data-command="zen_mode"]');
-    await click('[data-command="toggle_panels"]');
     assert.deepEqual(
       await evaluate("layerApp.state().camera.translation"),
       geometry.view.translation,
     );
-    await click('[data-command="toggle_panels"]');
     await evaluate("document.activeElement?.blur()");
     for (const theme of ["dark", "light"]) {
       await evaluate(

@@ -442,7 +442,6 @@ pub struct PanelMeasurement {
 pub struct DockLayout {
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
-    pub panels_visible: bool,
     #[serde(default = "PanelConfig::defaults")]
     pub panels: Vec<PanelConfig>,
     #[serde(default)]
@@ -874,7 +873,6 @@ impl Default for DockLayout {
             active: panel,
         };
         Self {
-            panels_visible: true,
             panels: PanelConfig::defaults(),
             floating: Vec::new(),
             fit_tab_groups: Vec::new(),
@@ -1148,9 +1146,6 @@ impl DockLayout {
     pub fn set_panel_visible(&mut self, panel: Panel, visible: bool) -> Result<(), String> {
         self.panel(panel)?;
         if visible == self.panel_group(panel).is_some() {
-            if visible {
-                self.panels_visible = true;
-            }
             return Ok(());
         }
         if !visible {
@@ -1179,7 +1174,6 @@ impl DockLayout {
                 active: panel,
             },
         });
-        next.panels_visible = true;
         next.validate()?;
         *self = next;
         Ok(())
@@ -1204,7 +1198,6 @@ impl DockLayout {
             self.panel_mut(panel)?.hide_tab = false;
         }
         self.fit_tabs(group);
-        self.panels_visible = true;
         Ok(())
     }
 
@@ -1345,7 +1338,6 @@ impl DockLayout {
         next.bands = defaults.bands;
         next.floating.clear();
         next.fit_tab_groups.clear();
-        next.panels_visible = true;
         let tools: Vec<_> = self
             .panels
             .iter()
@@ -1976,9 +1968,6 @@ impl DockLayout {
             dividers: Vec::new(),
         };
         for band in &self.bands {
-            if !self.panels_visible {
-                continue;
-            }
             let parent = remaining;
             let axis = if matches!(band.edge, Edge::Left | Edge::Right) {
                 Axis::Vertical
@@ -3415,7 +3404,7 @@ mod tests {
             }
         }
         let empty = DockLayout {
-            panels_visible: false,
+            bands: Vec::new(),
             ..Default::default()
         }
         .workspace(1200.0, 900.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
@@ -4129,12 +4118,6 @@ mod tests {
         assert!(floating.floating && floating.resize_handles.len() == 8);
         assert_eq!(floating.bounds.width, original_width);
         assert_eq!(floating.bounds.height, 675.0);
-        layout.panels_visible = false;
-        assert_eq!(
-            resolve(&layout).groups.len(),
-            1,
-            "global dock visibility never hides floating groups"
-        );
         layout.add_panel_to_group(Panel::Layers, group).unwrap();
         let current = resolve(&layout);
         let floating = current.groups.iter().find(|g| g.id == group).unwrap();
@@ -5114,7 +5097,7 @@ mod tests {
         assert!(resolved.near_chrome([600.0, 875.0], VIEWPORT, false));
         assert!(!resolved.near_chrome([600.0, 450.0], VIEWPORT, false));
         let mut hidden = layout;
-        hidden.panels_visible = false;
+        hidden.bands.clear();
         let resolved = hidden.workspace(1200.0, 900.0, 48.0, 28.0);
         assert!(resolved.groups.is_empty() && resolved.dividers.is_empty());
         assert!(!resolved.near_chrome([20.0, 450.0], VIEWPORT, false));
@@ -5204,7 +5187,7 @@ mod tests {
                     );
                 }
             }
-            layout.panels_visible = false;
+            layout.bands.clear();
             let resolved = layout.workspace(1200.0, 900.0, 48.0, 28.0);
             for (edge, point) in edges {
                 assert_eq!(

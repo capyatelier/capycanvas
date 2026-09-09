@@ -128,7 +128,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
-        self.state.workspace.layout.context_menu(target)
+        match target {
+            ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
+            _ => self.state.workspace.layout.context_menu(target),
+        }
     }
     pub fn workspace_menu(&self) -> ContextMenu {
         let command = |id: CommandId| {
@@ -246,8 +249,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply {
-            chrome_hidden: self.button_only_zen(),
-            zen_button_only: self.button_only_zen(),
+            chrome_hidden: self.button_zen(),
+            hide_floating_panels: self.button_zen(),
+            keep_zen_button: self.keep_zen_button(),
             ..Default::default()
         };
         let mut contact = None;
@@ -286,7 +290,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
-                    && !self.button_only_zen()
+                    && !self.button_zen()
                     && !facts.popup_open
                     && !facts.expanded_panel.is_some_and(|e| {
                         // Tabs activate on release. Leave the press available
@@ -360,7 +364,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         }
                         reply.change = self.changed(regions::SETTINGS, false);
                         reply.handled = true;
-                        reply.chrome_hidden = reply.zen_button_only;
+                        reply.chrome_hidden = reply.hide_floating_panels;
                         return Ok(reply);
                     }
                     if matches!(key.as_str(), "tab" | "escape") {
@@ -502,21 +506,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
-        reply.zen_button_only = self.button_only_zen();
+        reply.hide_floating_panels = self.button_zen();
+        reply.keep_zen_button = self.keep_zen_button();
         reply.pan_cursor = self.interaction.pan_key.is_some();
         Ok(reply)
     }
 
-    fn button_only_zen(&self) -> bool {
+    fn button_zen(&self) -> bool {
         self.state.workspace.zen_mode
             && self.state.platform == Platform::Gtk
-            && self.state.settings.zen_behavior == ZenBehavior::ButtonOnly
+            && self.state.settings.zen_reveal_mode == ZenRevealMode::Button
+    }
+
+    fn keep_zen_button(&self) -> bool {
+        self.state.platform == Platform::Gtk && self.state.settings.zen_show_button
     }
 
     fn refresh_chrome(&mut self) {
         // Explicit exit only: proximity, first contact, keyboard chrome hints
         // and drag/popup pins must not reveal the editor in this mode.
-        if self.button_only_zen() {
+        if self.button_zen() {
             self.interaction.hidden = true;
             self.interaction.zen_entry_guard = false;
             self.interaction.keep_chrome_until_contact = false;
@@ -738,7 +747,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return None;
         }
-        if self.button_only_zen() {
+        if self.button_zen() {
             return None;
         }
         let mut resolved = self.layout(viewport);
@@ -882,7 +891,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             (id, self.state.brush.tool),
             (CommandId::Brush, Tool::Brush) | (CommandId::Eraser, Tool::Eraser)
         ) || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
-            || (id == CommandId::TogglePanels && self.state.workspace.layout.panels_visible)
             || (id == CommandId::ToggleTheme
                 && self.state.settings.theme.unwrap_or(self.system_theme) == Theme::Dark);
         (enabled, selected)
@@ -904,10 +912,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::NudgeDivider { .. }
                 | UiAction::PrioritizeBand { .. }
                 | UiAction::Invoke {
-                    command: CommandId::ResetLayout
-                        | CommandId::TogglePanels
-                        | CommandId::ZenMode
-                        | CommandId::NewToolbar
+                    command: CommandId::ResetLayout | CommandId::ZenMode | CommandId::NewToolbar
                 }
         )
         .then(|| self.state.workspace.clone());
@@ -1318,7 +1323,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (SETTINGS, false)
             }
             UiAction::Preferences { action } => {
-                if !self.state.settings_open {
+                if !self.state.settings_open
+                    && !matches!(
+                        action,
+                        PreferenceAction::Edit { .. } | PreferenceAction::Reset { .. }
+                    )
+                {
                     return Err("Settings are not open".into());
                 }
                 // Validate edits atomically. Search, navigation and recording
@@ -1366,13 +1376,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .state
                 .customization
                 .expanded
-                .filter(|panel| {
-                    layout.panels_visible
-                        || layout
-                            .floating
-                            .iter()
-                            .any(|f| f.root.group_for(*panel).is_some())
-                })
                 .and_then(|panel| layout.active_panel(panel));
         }
         if was_expanded && self.state.customization.expanded.is_none() {
@@ -1694,11 +1697,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
                 )?;
                 Ok((changed, false))
-            }
-            CommandId::TogglePanels => {
-                self.state.workspace.layout.panels_visible =
-                    !self.state.workspace.layout.panels_visible;
-                Ok((LAYOUT, false))
             }
             CommandId::ZenMode => {
                 self.state.workspace.zen_mode = !self.state.workspace.zen_mode;
@@ -2158,12 +2156,12 @@ mod tests {
         invoke(&mut s, CommandId::Settings);
         edit_preference(
             &mut s,
-            PreferenceId::ZenBehavior,
+            PreferenceId::ZenRevealMode,
             PreferenceValue::Choice(1),
         );
         assert!(matches!(s.state.requests.last().unwrap().kind,
             HostRequestKind::SaveSettings { ref settings }
-                if settings.zen_behavior == ZenBehavior::ButtonOnly));
+                if settings.zen_reveal_mode == ZenRevealMode::Button));
         s.dispatch(UiAction::CloseSettings).unwrap();
         let viewport = [1200.0, 900.0];
         s.dispatch(UiAction::MovePanel {
@@ -2185,7 +2183,7 @@ mod tests {
         let layout = s.state.workspace.layout.clone();
         invoke(&mut s, CommandId::ZenMode);
         let assert_hidden = |reply: InputReply| {
-            assert!(reply.chrome_hidden && reply.zen_button_only);
+            assert!(reply.chrome_hidden && reply.hide_floating_panels);
             reply
         };
         let facts = ChromeFacts::default();
@@ -2221,7 +2219,7 @@ mod tests {
                     None
                 )
                 .is_none(),
-                "all docking targets are hidden in Button only mode"
+                "all docking targets are hidden with button-only reveal"
             );
         }
         for facts in [
@@ -2292,7 +2290,7 @@ mod tests {
         s.dispatch(UiAction::CloseSettings).unwrap();
         invoke(&mut s, CommandId::ZenMode);
         let reply = chrome(&mut s, ChromeEvent::Refresh, facts);
-        assert!(!reply.chrome_hidden && !reply.zen_button_only);
+        assert!(!reply.chrome_hidden && !reply.hide_floating_panels);
         assert!(!s.state.workspace.zen_mode);
         assert_eq!(s.state.workspace.layout, layout);
         assert_eq!(s.state.camera, camera);
@@ -2313,7 +2311,7 @@ mod tests {
             s.set_platform(platform);
             s.dispatch(UiAction::RestoreSettings {
                 settings: Settings {
-                    zen_behavior: ZenBehavior::ButtonOnly,
+                    zen_reveal_mode: ZenRevealMode::Button,
                     ..Settings::default()
                 },
             })
@@ -2338,8 +2336,161 @@ mod tests {
                 facts,
             );
             assert_eq!(reply.chrome_hidden, platform == Platform::Gtk);
-            assert_eq!(reply.zen_button_only, platform == Platform::Gtk);
+            assert_eq!(reply.hide_floating_panels, platform == Platform::Gtk);
         }
+    }
+
+    #[test]
+    fn zen_context_menu_uses_preference_options_and_edits_without_a_dialog() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let target = ContextTarget::ZenMode;
+        for index in [1, 0] {
+            let menu = s.context_menu(target).unwrap();
+            assert_eq!(menu.title, "Zen mode");
+            assert_eq!(menu.sections.len(), 2);
+            assert_eq!(
+                menu.sections[0]
+                    .iter()
+                    .map(|i| i.label.as_str())
+                    .collect::<Vec<_>>(),
+                ["At edges", "With button"]
+            );
+            let change = s
+                .dispatch(menu.sections[0][index].action.clone().unwrap())
+                .unwrap();
+            assert!(!s.state.settings_open && !s.state.workspace.zen_mode);
+            assert_ne!(change.regions & regions::SETTINGS, 0);
+            assert_eq!(
+                s.context_menu(target).unwrap().sections[0][index].selected,
+                Some(true)
+            );
+            assert!(matches!(
+                s.state.requests.last().unwrap().kind,
+                HostRequestKind::SaveSettings { .. }
+            ));
+        }
+        assert!(
+            s.dispatch(UiAction::Preferences {
+                action: PreferenceAction::Search {
+                    query: "Zen".into(),
+                }
+            })
+            .is_err(),
+            "navigation still requires an open dialog"
+        );
+        for visible in [false, true] {
+            let menu = s.context_menu(target).unwrap();
+            assert_eq!(menu.sections[1][0].label, "Keep Zen button visible");
+            s.dispatch(menu.sections[1][0].action.clone().unwrap())
+                .unwrap();
+            assert_eq!(s.state.settings.zen_show_button, visible);
+            assert_eq!(
+                s.context_menu(target).unwrap().sections[1][0].selected,
+                Some(visible)
+            );
+        }
+        for platform in [Platform::Web, Platform::Android] {
+            s.set_platform(platform);
+            assert!(s.context_menu(target).is_err());
+        }
+    }
+
+    #[test]
+    fn zen_reveal_and_button_visibility_are_independent() {
+        for mode in [ZenRevealMode::Edges, ZenRevealMode::Button] {
+            for show_button in [true, false] {
+                let mut s = session();
+                s.set_platform(Platform::Gtk);
+                s.dispatch(UiAction::RestoreSettings {
+                    settings: Settings {
+                        zen_reveal_mode: mode,
+                        zen_show_button: show_button,
+                        ..Settings::default()
+                    },
+                })
+                .unwrap();
+                invoke(&mut s, CommandId::ZenMode);
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [600.0, 450.0],
+                    },
+                    ChromeFacts::default(),
+                );
+                assert!(reply.chrome_hidden);
+                assert_eq!(reply.keep_zen_button, show_button);
+                assert_eq!(reply.hide_floating_panels, mode == ZenRevealMode::Button);
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [6.0, 6.0],
+                    },
+                    ChromeFacts::default(),
+                );
+                assert_eq!(reply.chrome_hidden, mode == ZenRevealMode::Button);
+                assert_eq!(reply.keep_zen_button, show_button);
+                let exit = key(&mut s, "z", true, false, false);
+                assert!(exit.handled && !exit.chrome_hidden && !exit.hide_floating_panels);
+                assert!(!s.state.workspace.zen_mode);
+            }
+        }
+    }
+
+    #[test]
+    fn retired_global_panel_toggle_does_not_break_saved_workspaces_or_settings() {
+        let mut s = session();
+        let mut saved = serde_json::to_value(&s.state.workspace).unwrap();
+        saved["layout"]["panels_visible"] = false.into();
+        saved["layout"]["panels"][0]["content"]["tiles"][0]["control"]["command"] =
+            "toggle_panels".into();
+        s.dispatch(UiAction::RestoreWorkspace {
+            workspace: serde_json::from_value(saved).unwrap(),
+        })
+        .unwrap();
+        assert!(!s.layout([1200.0, 900.0]).groups.is_empty());
+        assert_eq!(
+            s.state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()[0]
+                .control,
+            ToolbarControl::Command {
+                command: CommandId::ZenMode
+            }
+        );
+        let serialized = serde_json::to_string(&s.state.workspace).unwrap();
+        assert!(!serialized.contains("panels_visible") && !serialized.contains("toggle_panels"));
+        let saved = serde_json::json!({ "type": "restore_settings", "settings": {
+            "pressure_gamma": 1.5, "shortcuts": {
+                "command.TogglePanels": [{"key":"h","command":false,"alt":false,"shift":false}],
+                "command.Brush": []
+            }
+        }});
+        s.dispatch(serde_json::from_value(saved).unwrap()).unwrap();
+        assert_eq!(s.state.settings.pressure_gamma, 1.5);
+        assert_eq!(s.state.settings.shortcuts.len(), 1);
+        assert!(s.state.settings.shortcuts.contains_key("command.Brush"));
+        invoke(&mut s, CommandId::Settings);
+        assert!(
+            !s.preferences()
+                .unwrap()
+                .shortcuts
+                .iter()
+                .any(|r| r.id == "command.TogglePanels")
+        );
+        assert!(
+            !serde_json::to_string(&s.state.commands)
+                .unwrap()
+                .contains("toggle_panels")
+        );
+        assert!(
+            !serde_json::to_string(MENUS)
+                .unwrap()
+                .contains("toggle_panels")
+        );
     }
 
     #[test]
@@ -2745,9 +2896,9 @@ mod tests {
                 viewport,
             })
             .unwrap();
-        for visible in [true, false] {
-            if !visible {
-                invoke(&mut source, CommandId::TogglePanels);
+        for zen_mode in [true, false] {
+            if !zen_mode {
+                invoke(&mut source, CommandId::ZenMode);
             }
             let saved = serde_json::to_string(&source.state.workspace).unwrap();
             let mut restored = session();
@@ -2763,8 +2914,7 @@ mod tests {
             assert_eq!(restored.engine.document().revision, revision);
             assert_eq!(restored.state.camera, camera);
             assert_eq!(restored.state.workspace, source.state.workspace);
-            assert!(restored.command(CommandId::ZenMode).selected);
-            assert_eq!(restored.command(CommandId::TogglePanels).selected, visible);
+            assert_eq!(restored.command(CommandId::ZenMode).selected, zen_mode);
             for viewport in [[1200.0, 900.0], [680.0, 480.0], [900.0, 1200.0]] {
                 assert_eq!(
                     serde_json::to_value(source.layout(viewport)).unwrap(),
@@ -2772,9 +2922,6 @@ mod tests {
                 );
             }
             // The saved ID allocator remains safe for subsequent editing.
-            if !visible {
-                invoke(&mut restored, CommandId::TogglePanels);
-            }
             restored
                 .dispatch(UiAction::MovePanel {
                     panel: Panel::Sizes,
@@ -3912,33 +4059,19 @@ mod tests {
         assert_eq!(s.state.camera.rotation, before.rotation);
     }
     #[test]
-    fn zen_and_panels_do_not_move_camera_or_request_canvas_work() {
+    fn zen_does_not_move_camera_layout_or_request_canvas_work() {
         let mut s = session();
         s.set_viewport([1000.0; 2], [1000; 2]).unwrap();
         let camera = s.state.camera.clone();
         let layout = s.state.workspace.layout.clone();
-        for command in [CommandId::ZenMode, CommandId::TogglePanels] {
-            let change = invoke(&mut s, command);
+        for zen_mode in [true, false] {
+            let change = invoke(&mut s, CommandId::ZenMode);
             assert!(!change.canvas_wake);
-            assert_eq!(s.state.camera.translation, camera.translation);
-            assert_eq!(s.state.camera.revision, camera.revision);
-            assert_eq!(s.state.camera.zoom, camera.zoom);
+            assert_eq!(s.state.camera, camera);
+            assert_eq!(s.state.workspace.layout, layout);
+            assert_eq!(s.state.workspace.zen_mode, zen_mode);
+            assert_eq!(s.command(CommandId::ZenMode).selected, zen_mode);
         }
-        assert!(s.state.workspace.zen_mode);
-        assert!(s.command(CommandId::ZenMode).selected);
-        assert!(!s.state.workspace.layout.panels_visible);
-        assert!(
-            s.state
-                .workspace
-                .layout
-                .resolve(1000.0, 1000.0)
-                .groups
-                .is_empty()
-        );
-        assert_eq!(s.state.workspace.layout.bands, layout.bands);
-        invoke(&mut s, CommandId::TogglePanels);
-        assert_eq!(s.state.workspace.layout, layout);
-        assert_eq!(s.state.camera.translation, camera.translation);
         invoke(&mut s, CommandId::FitCanvas);
         assert_eq!(s.state.camera.viewport, [1000, 1000]);
         assert_eq!(s.state.camera.translation, camera.translation);
@@ -4154,7 +4287,7 @@ mod tests {
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
                 ["fit_canvas"],
-                ["zen_mode", "toggle_theme", "toggle_panels"],
+                ["zen_mode", "toggle_theme"],
                 ["reset_layout"]
             ])
         );
@@ -4514,7 +4647,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(app.state.customization.expanded, Some(Panel::Layers));
-        invoke(&mut app, CommandId::TogglePanels);
+        app.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetPanelVisible {
+                panel: Panel::Layers,
+                visible: false,
+            },
+        })
+        .unwrap();
         assert!(app.state.customization.expanded.is_none());
     }
     #[test]

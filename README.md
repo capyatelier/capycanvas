@@ -82,9 +82,10 @@ app icon and license files; GTK/libadwaita remain system dependencies. It does
 not install files into your desktop or bundle third-party UI libraries.
 The compact native/DOM controls float over a full-window canvas. **Zen mode**
 in the top bar (or Z) fades them when the pointer moves away, with no camera
-or viewport changes. GTK also offers **Button only** in Preferences → Appearance:
-hide all controls except the Zen button, then click it to exit Zen. Brush selectors
-show real GPU-rendered samples.
+or viewport changes. GTK's Preferences → Appearance → Zen mode lets you reveal
+controls **At edges** or **With button**, and independently keep the Zen button
+visible. Right-click or touch-hold the button for the same choices. Defaults are
+At edges with the button visible. Brush selectors show real GPU-rendered samples.
 
 Preferences has core-driven Appearance, Canvas, Pen & Input, Keyboard Shortcuts
 and About pages. GTK opens its adaptive sidebar dialog from the top-right main

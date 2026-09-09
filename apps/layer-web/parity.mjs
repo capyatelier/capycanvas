@@ -542,7 +542,7 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal(await point(600, 450), true);
   assert.equal(await point(1199, 450), true); // No remaining right dock.
   assert.equal(await point(600, 899), false); // Bottom dock now exists.
-  await action({ type: "invoke", command: "toggle_panels" });
+  await action({type:"customize",action:{type:"set_panel_visible",panel:"toolbar",visible:false}});
   assert.equal(await point(600, 450), true);
   assert.equal(await point(600, 899), true);
   assert.equal(await point(600, 1), false); // Header always remains reachable.

@@ -52,7 +52,7 @@ validation and palette generation are shared Rust behavior. See the
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; dark/light base hex colors; Zen mode: Reveal at edges / Button only (GTK trial) |
+| Appearance | System/Light/Dark; dark/light base hex colors; separate Zen mode section: Show controls (At edges / With button), Keep Zen button visible (GTK trial) |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
@@ -60,18 +60,28 @@ validation and palette generation are shared Rust behavior. See the
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
-Defaults preserve the previous drawing behavior: System theme, Reveal at edges Zen,
+Defaults preserve the previous drawing behavior: System theme, At edges Zen,
 fixed 80px reveal/keep-visible distances, linear pressure, normal scroll speeds,
-8ms prediction. GTK's Button only option hides all editor controls except an
-inactive-styled, clickable Zen button; clicking it exits Zen. This choice is
-persisted, validated and resettable through the same Rust row model. Other hosts
-keep edge-reveal behavior and do not expose the choice until the GTK trial is approved.
+8ms prediction. GTK now keeps the Zen button visible by default when controls
+hide, with an independent switch to hide it too. With button disables edge
+reveal; without a visible button, use the Zen shortcut to exit. Both settings
+are persisted, validated and resettable through the Rust row model. Other hosts
+keep their existing edge-reveal/hidden-button behavior until the GTK trial is approved.
+GTK's Zen button also exposes these choices on right-click or touch-hold, with
+a divider before the visibility toggle. Rust generates the menu from the rows, using
+the same validated, persisted edit action as the settings page. Individual
+preference edits/resets can execute without a settings dialog; navigation and
+shortcut recording still require it to be open.
 All UI text uses the shared Rust `UI_TEXT_PT` constant (11 pt), including panels,
 tabs, menus, preference descriptions and zoom/rotation status text. There is no
 font-size setting. Text controls and inline step symbols use font-relative sizes;
 tool icons, brush previews, sliders and checkboxes retain their dimensions.
 The core ignores the retired `panel_text_pt`, `zen_hide` and `zen_reveal` fields when loading saved settings,
 without dropping other preferences or relaxing validation of unknown fields.
+Older `zen_behavior` saves migrate to `zen_reveal_mode`. Retired Show panels
+toolbar actions migrate to Zen, obsolete shortcut overrides are discarded, and
+the old global `panels_visible` field is ignored. Individual panel placement is
+preserved; there is no separate global hide state or command.
 
 ### Restoring defaults
 

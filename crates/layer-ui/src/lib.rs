@@ -41,7 +41,7 @@ pub use settings::{
     HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
     PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow, PreferenceSearchResult,
     PreferenceValue, PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor,
-    TextConstraint, ZenBehavior,
+    TextConstraint, ZenRevealMode,
 };
 pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
 pub use theme::{HexColor, Theme, ThemePalette};
@@ -167,11 +167,7 @@ pub const MENUS: &[MenuSpec] = &[
         label: "View",
         sections: &[
             &[CommandId::FitCanvas],
-            &[
-                CommandId::ZenMode,
-                CommandId::ToggleTheme,
-                CommandId::TogglePanels,
-            ],
+            &[CommandId::ZenMode, CommandId::ToggleTheme],
             &[CommandId::ResetLayout],
         ],
     },
@@ -307,7 +303,8 @@ pub enum CommandId {
     RaiseLayer,
     LowerLayer,
     ResetLayout,
-    TogglePanels,
+    // Old saved toolbar/custom-action entries now use the sole visibility toggle.
+    #[serde(alias = "toggle_panels")]
     ZenMode,
     NewWindow,
     KeyboardShortcuts,
@@ -316,7 +313,7 @@ pub enum CommandId {
 impl CommandId {
     /// Retained on/off commands can be presented as checkable menu items.
     pub fn is_toggle(self) -> bool {
-        matches!(self, Self::ZenMode | Self::TogglePanels | Self::ToggleTheme)
+        matches!(self, Self::ZenMode | Self::ToggleTheme)
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
@@ -334,7 +331,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 19] = [
         Self::Brush,
         Self::Eraser,
         Self::Undo,
@@ -350,7 +347,6 @@ impl CommandId {
         Self::RaiseLayer,
         Self::LowerLayer,
         Self::ResetLayout,
-        Self::TogglePanels,
         Self::ZenMode,
         Self::NewWindow,
         Self::KeyboardShortcuts,
@@ -379,7 +375,6 @@ impl CommandId {
             Self::RaiseLayer => "Raise layer",
             Self::LowerLayer => "Lower layer",
             Self::ResetLayout => "Reset layout",
-            Self::TogglePanels => "Show panels",
             Self::ZenMode => "Zen mode",
             Self::NewWindow => "New Window",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",

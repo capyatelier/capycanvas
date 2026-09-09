@@ -128,16 +128,18 @@ for `cursor: none`. Packaged browser tests check mouse/pen hover, drawing, relea
 and exit at the DOM level; CDP input does not exercise native Wayland tablet
 delivery and cannot establish that the physical stylus cursor is hidden.
 
-Zen fades chrome over 180 ms when the pointer is away. Hidden chrome reveals only
+The default edge-reveal Zen mode fades chrome over 180 ms when the pointer is away. Hidden chrome reveals only
 within 80 logical pixels of the top edge or an edge with a visible dock panel.
 Empty left/right/bottom edges do not reveal; the status HUD is not a bottom panel.
 Visible chrome retains its original
-40px control-relative hide margin, and remains visible in the edge reveal zone.
+80px control-relative hide margin, and remains visible in the edge reveal zone.
 Menus/settings and keyboard navigation keep
 controls available. Hidden controls are not invisible click targets. Fading
 does not move the artwork, resize the viewport or wake the canvas frame loop.
-The shared work-area rectangle affects initial/explicit Fit Canvas. View's
-Show Panels action hides panels without discarding their layout.
+The shared work-area rectangle affects initial/explicit Fit Canvas. Zen is the
+only global visibility toggle; Workspace manages individual panels. GTK also
+offers With button and independent button visibility through Preferences or its context menu; see
+[Zen modes](shared-ui.md#window-chrome-and-zen-mode).
 
 The brush selector displays real GPU-rendered stroke samples, including seeded
 destination interactions for blending and liquify tools. Both clients reuse
@@ -349,8 +351,8 @@ Two fingers pan/zoom/rotate without painting. B/E select brush/eraser, F fits,
 Z toggles Zen mode, Tab reveals controls for keyboard navigation,
 and Ctrl+Z/Ctrl+Shift+Z undo/redo. These bindings are configurable. GTK Preferences
 lives in the top-right primary menu, alongside New Window, Keyboard Shortcuts
-and About Capy Canvas; web uses a direct gear button. View contains panel
-visibility/reset. Drag panel grips/tabs: header slots insert/reorder tabs, body
+and About Capy Canvas; web uses a direct gear button. View contains Fit canvas,
+Zen mode, Dark Mode and Reset layout. Drag panel grips/tabs: header slots insert/reorder tabs, body
 centers append tabs, narrow body edges split beside a panel, and workspace
 edges create dock bands. A highlighted insertion line previews the result. Drag
 dividers or focus them and use arrow keys. Settings use the shared auto-saving

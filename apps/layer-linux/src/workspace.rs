@@ -1036,6 +1036,7 @@ impl Workspace {
         zen_space.set_size_request(TILE_SIZE as i32, TILE_SIZE as i32);
         self.header.pack_start(&zen_space);
         self.surface.add(Slot::ZenButton, &zen);
+        self.install_context(&zen, ContextTarget::ZenMode);
         for menu in MENUS {
             self.header
                 .pack_start(&self.chrome_menu(menu.label, menu.sections));
@@ -1279,7 +1280,11 @@ impl Workspace {
     }
 
     fn present_interaction(&self, reply: InputReply) {
-        self.set_chrome_hidden(reply.chrome_hidden, reply.zen_button_only);
+        self.set_chrome_hidden(
+            reply.chrome_hidden,
+            reply.hide_floating_panels,
+            reply.keep_zen_button,
+        );
         let cursor = Some(if reply.pan_cursor { "grab" } else { "none" });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
             self.area.set_cursor_from_name(cursor);
@@ -1326,18 +1331,18 @@ impl Workspace {
         .handled
     }
 
-    fn set_chrome_hidden(&self, hidden: bool, zen_button_only: bool) {
+    fn set_chrome_hidden(&self, hidden: bool, hide_floating_panels: bool, keep_zen_button: bool) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
             if !matches!(slot, Slot::Canvas) {
                 let hidden = if *slot == Slot::ZenButton {
-                    if zen_button_only {
-                        widget.add_css_class("zen-button-only");
+                    if hidden && keep_zen_button {
+                        widget.add_css_class("zen-button-neutral");
                     } else {
-                        widget.remove_css_class("zen-button-only");
+                        widget.remove_css_class("zen-button-neutral");
                     }
-                    hidden && !zen_button_only
+                    hidden && !keep_zen_button
                 } else {
-                    hidden && (zen_button_only || !widget.has_css_class("floating-panel"))
+                    hidden && (hide_floating_panels || !widget.has_css_class("floating-panel"))
                 };
                 if widget.has_css_class("zen-hidden") == hidden && widget.can_target() != hidden {
                     continue;

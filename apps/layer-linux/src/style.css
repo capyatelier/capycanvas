@@ -21,7 +21,7 @@ window, label, text { font-size: var(--ui-text-size); }
 button.workspace-zen { min-width: 24px; min-height: 24px; padding: 6px; border-radius: 6px; background: var(--window-bg-color); }
 button.workspace-zen:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
 button.workspace-zen:active { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
-button.workspace-zen.selected-tool:not(.zen-button-only) { background: alpha(var(--accent-bg-color), .22); }
+button.workspace-zen.selected-tool:not(.zen-button-neutral) { background: alpha(var(--accent-bg-color), .22); }
 .document-title { font-weight: 600; padding: 4px 8px; }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }

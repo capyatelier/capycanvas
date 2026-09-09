@@ -27,16 +27,16 @@ impl Platform {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ZenBehavior {
+pub enum ZenRevealMode {
     #[default]
-    RevealAtEdges,
-    ButtonOnly,
+    #[serde(alias = "reveal_at_edges")]
+    Edges,
+    #[serde(alias = "button_only")]
+    Button,
 }
-impl ZenBehavior {
-    const CHOICES: [(Self, &'static str); 2] = [
-        (Self::RevealAtEdges, "Reveal at edges"),
-        (Self::ButtonOnly, "Button only"),
-    ];
+impl ZenRevealMode {
+    const CHOICES: [(Self, &'static str); 2] =
+        [(Self::Edges, "At edges"), (Self::Button, "With button")];
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -46,7 +46,9 @@ pub struct Settings {
     pub theme: Option<Theme>,
     pub dark_base: HexColor,
     pub light_base: HexColor,
-    pub zen_behavior: ZenBehavior,
+    #[serde(alias = "zen_behavior")]
+    pub zen_reveal_mode: ZenRevealMode,
+    pub zen_show_button: bool,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub pan_speed: f32,
@@ -67,7 +69,8 @@ impl Default for Settings {
             theme: None,
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
-            zen_behavior: ZenBehavior::default(),
+            zen_reveal_mode: ZenRevealMode::default(),
+            zen_show_button: true,
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             pan_speed: 1.0,
@@ -92,6 +95,9 @@ impl Settings {
             fields.remove("panel_text_pt");
             fields.remove("zen_hide");
             fields.remove("zen_reveal");
+            if let Some(shortcuts) = fields.get_mut("shortcuts").and_then(|v| v.as_object_mut()) {
+                shortcuts.remove("command.TogglePanels");
+            }
         }
         serde_json::from_value(value).map_err(serde::de::Error::custom)
     }
@@ -175,7 +181,9 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
-    ZenBehavior,
+    #[serde(alias = "zen_behavior")]
+    ZenRevealMode,
+    ZenShowButton,
     DarkBase,
     LightBase,
     Cursor,
@@ -196,7 +204,8 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
-            Self::ZenBehavior => "zen-behavior",
+            Self::ZenRevealMode => "zen-reveal-mode",
+            Self::ZenShowButton => "zen-show-button",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
             Self::Cursor => "cursor",
@@ -725,22 +734,35 @@ impl Settings {
         // GTK preview rollout: other hosts retain edge reveal until they render
         // the persistent exit button. Availability is core policy, not UI logic.
         if platform == Platform::Gtk {
-            groups[0][0].rows.push(row(
-                PreferenceId::ZenBehavior,
-                "Zen mode",
-                "Choose how to show controls while in Zen mode.",
-                PreferenceKind::Choice {
-                    icons: Vec::new(),
-                    options: crate::ZenBehavior::CHOICES
-                        .iter()
-                        .map(|c| c.1.into())
-                        .collect(),
-                    selected: crate::ZenBehavior::CHOICES
-                        .iter()
-                        .position(|c| c.0 == self.zen_behavior)
-                        .unwrap() as u32,
-                },
-            ));
+            groups[0].push(PreferenceGroup {
+                title: CommandId::ZenMode.label().into(),
+                rows: vec![
+                    row(
+                        PreferenceId::ZenRevealMode,
+                        "Show controls",
+                        "Choose how to bring controls back into view.",
+                        PreferenceKind::Choice {
+                            icons: Vec::new(),
+                            options: crate::ZenRevealMode::CHOICES
+                                .iter()
+                                .map(|c| c.1.into())
+                                .collect(),
+                            selected: crate::ZenRevealMode::CHOICES
+                                .iter()
+                                .position(|c| c.0 == self.zen_reveal_mode)
+                                .unwrap() as u32,
+                        },
+                    ),
+                    row(
+                        ZenShowButton,
+                        "Keep Zen button visible",
+                        "Keep the button visible while controls are hidden.",
+                        PreferenceKind::Switch {
+                            active: self.zen_show_button,
+                        },
+                    ),
+                ],
+            });
         }
         SettingsPage::ALL
             .into_iter()
@@ -753,6 +775,47 @@ impl Settings {
             })
             .collect()
     }
+    pub(crate) fn zen_menu(&self, platform: Platform) -> Result<ContextMenu, String> {
+        let mut sections = Vec::new();
+        for id in [PreferenceId::ZenRevealMode, PreferenceId::ZenShowButton] {
+            let row = self.field(id, platform)?;
+            let item = |label, value, selected| {
+                let mut item = ContextMenuItem::command(
+                    label,
+                    UiAction::Preferences {
+                        action: PreferenceAction::Edit { id, value },
+                    },
+                );
+                item.enabled = row.enabled;
+                item.selected = Some(selected);
+                item
+            };
+            sections.push(match row.kind {
+                PreferenceKind::Choice {
+                    options, selected, ..
+                } => options
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, label)| {
+                        item(
+                            label,
+                            PreferenceValue::Choice(i as u32),
+                            i as u32 == selected,
+                        )
+                    })
+                    .collect(),
+                PreferenceKind::Switch { active } => {
+                    vec![item(row.title, PreferenceValue::Bool(!active), active)]
+                }
+                _ => unreachable!("Zen menu fields must be choices or switches"),
+            });
+        }
+        Ok(ContextMenu {
+            title: CommandId::ZenMode.label().into(),
+            sections,
+        })
+    }
+
     fn field(&self, id: PreferenceId, platform: Platform) -> Result<PreferenceRow, String> {
         self.pages(platform)
             .into_iter()
@@ -809,9 +872,11 @@ impl Settings {
                 }
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
-            ZenBehavior => {
-                self.zen_behavior = crate::ZenBehavior::CHOICES[value.choice().unwrap() as usize].0
+            ZenRevealMode => {
+                self.zen_reveal_mode =
+                    crate::ZenRevealMode::CHOICES[value.choice().unwrap() as usize].0
             }
+            ZenShowButton => self.zen_show_button = matches!(value, PreferenceValue::Bool(true)),
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
@@ -1150,32 +1215,49 @@ mod copy_tests {
     use super::*;
 
     #[test]
-    fn zen_behavior_is_persistent_resettable_and_gtk_only_for_now() {
+    fn zen_preferences_are_persistent_resettable_and_gtk_only_for_now() {
         let mut settings: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(settings.zen_behavior, ZenBehavior::RevealAtEdges);
-        let id = PreferenceId::ZenBehavior;
+        assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Edges);
+        assert!(settings.zen_show_button);
+        let group = settings
+            .pages(Platform::Gtk)
+            .into_iter()
+            .find(|p| p.id == SettingsPage::Appearance)
+            .unwrap()
+            .groups
+            .into_iter()
+            .find(|g| g.title == "Zen mode")
+            .unwrap();
+        assert_eq!(
+            group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [PreferenceId::ZenRevealMode, PreferenceId::ZenShowButton]
+        );
+        let legacy: Settings = serde_json::from_str(r#"{"zen_behavior":"button_only"}"#).unwrap();
+        assert_eq!(legacy.zen_reveal_mode, ZenRevealMode::Button);
+        assert!(legacy.zen_show_button);
+        let id = PreferenceId::ZenRevealMode;
         let row = settings.field(id, Platform::Gtk).unwrap();
         assert!(
             matches!(row.kind, PreferenceKind::Choice { selected: 0, options, .. }
-            if options == ["Reveal at edges", "Button only"])
+            if options == ["At edges", "With button"])
         );
         assert!(!row.reset.unwrap().enabled);
         settings
             .edit(id, PreferenceValue::Choice(1), Platform::Gtk)
             .unwrap();
-        assert_eq!(settings.zen_behavior, ZenBehavior::ButtonOnly);
+        assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Button);
         let reset = settings.field(id, Platform::Gtk).unwrap().reset.unwrap();
         assert!(reset.enabled);
-        assert_eq!(reset.value, "Reveal at edges");
+        assert_eq!(reset.value, "At edges");
         assert!(
             settings
                 .edit(id, PreferenceValue::Choice(2), Platform::Gtk)
                 .is_err()
         );
-        assert_eq!(settings.zen_behavior, ZenBehavior::ButtonOnly);
+        assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Button);
         let saved = serde_json::to_string(&settings).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
-        assert!(serde_json::from_str::<Settings>(r#"{"zen_behavior":"unknown"}"#).is_err());
+        assert!(serde_json::from_str::<Settings>(r#"{"zen_reveal_mode":"unknown"}"#).is_err());
         for platform in [
             Platform::Generic,
             Platform::Web,
@@ -1194,6 +1276,23 @@ mod copy_tests {
         let mut state = PreferencesState::default();
         state.edit(&mut settings, PreferenceAction::Reset { id }, Platform::Gtk);
         assert!(state.error.is_none());
+        assert_eq!(settings, Settings::default());
+        settings
+            .edit(
+                PreferenceId::ZenShowButton,
+                PreferenceValue::Bool(false),
+                Platform::Gtk,
+            )
+            .unwrap();
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
+        state.edit(
+            &mut settings,
+            PreferenceAction::Reset {
+                id: PreferenceId::ZenShowButton,
+            },
+            Platform::Gtk,
+        );
         assert_eq!(settings, Settings::default());
     }
 
