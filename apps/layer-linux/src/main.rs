@@ -1,4 +1,5 @@
 mod canvas;
+mod image_selector;
 mod input;
 mod number_control;
 mod preferences;

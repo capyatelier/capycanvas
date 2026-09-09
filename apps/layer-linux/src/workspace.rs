@@ -1613,6 +1613,14 @@ impl Workspace {
                 if let Some(command) = state.commands.iter().find(|c| c.id == *id) {
                     button.set_sensitive(command.enabled);
                     selected(button, command.selected);
+                    if let Some(icon) = command.icon
+                        && let Some(image) = button.child().and_downcast::<gtk::Image>()
+                    {
+                        let name = format!("layer-{icon}-symbolic");
+                        if image.icon_name().as_deref() != Some(&name) {
+                            image.set_icon_name(Some(&name));
+                        }
+                    }
                 }
             }
             for menu in self.menus.borrow_mut().iter_mut() {

@@ -200,9 +200,9 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
     }
 }
 @Composable internal fun IconTile(name: String, label: String, selected: Boolean = false,
-    enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, fill: Color? = null, iconSize: Dp = 16.dp, onClick: () -> Unit) {
+    enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, fill: Color? = null, iconSize: Dp = 16.dp, selectedColor: Color? = null, onClick: () -> Unit) {
     val colors = LocalPalette.current
-    Box(modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) colors.active else Color.Transparent, RoundedCornerShape(6.dp))
+    Box(modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, RoundedCornerShape(6.dp))
         .combinedClickable(enabled = enabled, role = Role.Button, onClickLabel = label, onLongClick = onLongClick, onClick = onClick), contentAlignment = Alignment.Center) {
         SharedIcon(name, label, modifier = Modifier.size(iconSize), fill = fill)
     }

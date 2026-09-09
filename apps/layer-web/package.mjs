@@ -154,7 +154,7 @@ export function packageWeb() {
       }
     }
     // Shared brand geometry and mid-gray background at every icon size.
-    const mark = read(join(web, "icons/layer-zen-symbolic.svg"))
+    const mark = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"))
       .replace('width="24" height="24"', 'x="96" y="96" width="320" height="320" color="#f6f5f4"');
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" rx="76.8" fill="#767676"/>${mark}</svg>`;
     for (const size of [32, 180, 192, 512]) {

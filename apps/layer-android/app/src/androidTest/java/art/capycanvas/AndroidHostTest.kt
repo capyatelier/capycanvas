@@ -1078,7 +1078,7 @@ class AndroidHostTest {
         search.performTextInput("z")
         compose.waitUntil(10_000) { preferences().getString("shortcut_query") == "z" }
         compose.waitForIdle()
-        for (id in listOf("ZenMode", "Undo", "Redo", "UndoWorkspace", "RedoWorkspace")) {
+        for (id in listOf("Undo", "Redo", "UndoWorkspace", "RedoWorkspace")) {
             compose.onNodeWithTag("shortcut-command.$id").performScrollTo().assertIsDisplayed()
         }
         search.performTextReplacement("Ctrl+Z")

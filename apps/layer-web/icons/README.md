@@ -1,10 +1,14 @@
 # Shared application icons
 
 These SVGs are project assets, not imported GNOME artwork. Generic interface
-icons are MIT OR Apache-2.0. **Exception:** `layer-zen-symbolic.svg` is the
-owner-contributed capybara mark, covered only by the separate
+icons are MIT OR Apache-2.0. **Exception:** the four `layer-zen-*-symbolic.svg`
+capybara marks listed in BRANDING.md are covered only by the separate
 [branding license](../../../BRANDING.md), not either software license.
-The owner confirmed authorship of the artwork used for that vector trace.
+These vector traces use the owner's four supplied screenshots. Looking up is
+the default, followed by Facing forward, Bathing and Sleeping. The canonical
+24px SVGs use square viewBoxes, centered artwork and a consistent maximum
+extent; `currentColor` supplies light/dark tint without duplicate drawings.
+The GTK, Android and PWA build scripts derive app/launcher icons from Looking up.
 Web loads these files directly. GTK embeds the same files in its resource bank;
 there are no generated copies or toolkit-specific icon drawings to maintain.
 `layer-ui` supplies command/icon identities to both hosts.

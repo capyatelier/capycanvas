@@ -9,7 +9,7 @@ fn main() {
         .collect();
     names.sort();
     let mut xml = String::from("<gresources><gresource prefix=\"/dev/layer/icons\">");
-    let mark = std::fs::read_to_string(format!("{source}/layer-zen-symbolic.svg"))
+    let mark = std::fs::read_to_string(format!("{source}/layer-zen-looking-up-symbolic.svg"))
         .unwrap()
         .replace(
             "width=\"24\" height=\"24\"",

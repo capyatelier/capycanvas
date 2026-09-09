@@ -69,15 +69,23 @@ and will be updated with the implementation. No renderer changes are required.
   Rust owns handle eligibility and the double-click action for every
   host; tab labels keep their separate activation behavior.
 - One Rust 80px constant governs tear-off, snap reach, Zen edge reveal and the
-  keep-visible margin. In the default At edges mode, float dragging does not reveal hidden docks until an
+  keep-visible margin. In the default Reveal at screen edges mode, float dragging does not reveal hidden docks until an
   occupied screen edge is reached; revelation lasts through that drag. Every
   drop returns to ordinary cursor proximity, with no post-drop pin. While hidden,
   docks and screen edges cannot capture a drop; only other floating tab groups
   remain targets. Floating groups never accept side-by-side split drops.
-- GTK additionally previews With button Zen, hiding floats too, and an independent
-  Keep Zen button visible switch. Defaults are At edges with the button visible.
+- GTK additionally previews Reveal with Zen button Zen, hiding floats too, and an independent
+  Keep Zen button visible switch. Defaults are Reveal at screen edges with the button visible.
   Rust owns both settings and the button context menu; other hosts retain their
   existing edge-reveal/hidden-button behavior until approved.
+- The GTK Zen icon selector offers four owner-supplied vector capys, with Looking
+  up as the default. A generic Rust image-choice presentation drives centered
+  native tiles; the context menu opens that preference via a shared reveal action.
+  The main icon is 28px inside the unchanged 36px button. Active grey is suppressed
+  while only that button is shown. Tab is now the shared default Zen shortcut.
+  GTK Preferences is 1000×744, with native ×/Escape dismissal and no footer.
+  Validated by `native_zen_icons`, `native_zen_behaviors`, and
+  `native_preferences_and_shortcuts`; review images are in `artifacts/ui/zen-icons/`.
 - The user-approved GTK behavior is now the reference for both ports. The
   current contract supersedes the original goal wherever later feedback differs:
   no central float rectangle; 80/40px snapping; top targets below the app header;

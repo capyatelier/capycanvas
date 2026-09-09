@@ -18,6 +18,7 @@ static SAVE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU6
 enum Field {
     Text(adw::ActionRow, gtk::Entry, gtk::EventControllerFocus),
     Choice(adw::ComboRow),
+    ImageChoice(gtk::ListBoxRow, crate::image_selector::ImageSelector),
     Spin(adw::SpinRow),
     Number(gtk::ListBoxRow, crate::number_control::NumberControl),
     Switch(adw::SwitchRow),
@@ -28,6 +29,7 @@ impl Field {
         match self {
             Self::Text(w, _, _) => w.upcast_ref(),
             Self::Choice(w) => w.upcast_ref(),
+            Self::ImageChoice(w, _) => w.upcast_ref(),
             Self::Number(w, _) => w.upcast_ref(),
             Self::Spin(w) => w.upcast_ref(),
             Self::Switch(w) => w.upcast_ref(),
@@ -44,6 +46,9 @@ impl Field {
                 }
             }
             (Self::Choice(w), PreferenceKind::Choice { selected, .. }) => w.set_selected(*selected),
+            (Self::ImageChoice(_, w), PreferenceKind::Choice { selected, .. }) => {
+                w.set_selected(*selected)
+            }
             (Self::Number(_, w), PreferenceKind::Number { value, .. }) => {
                 w.set_value(*value as f64)
             }
@@ -67,6 +72,7 @@ pub struct Preferences {
     search_results: gtk::ListBox,
     search: gtk::SearchEntry,
     search_focus: Cell<u64>,
+    reveal: Cell<Option<PreferenceId>>,
     shortcut_search: gtk::SearchEntry,
     empty: gtk::Label,
     error: gtk::Label,
@@ -344,7 +350,7 @@ impl Preferences {
         let dialog = adw::Dialog::builder()
             .title("Preferences")
             .content_width(1000)
-            .content_height(620)
+            .content_height(744)
             .width_request(360)
             .height_request(360)
             .build();
@@ -363,6 +369,7 @@ impl Preferences {
         sidebar_header.pack_start(&search_toggle);
         sidebar_view.add_top_bar(&sidebar_header);
         let content_view = adw::ToolbarView::new();
+        content_view.set_widget_name("preferences-content");
         let header = adw::HeaderBar::new();
         header.set_show_start_title_buttons(false);
         content_view.add_top_bar(&header);
@@ -458,6 +465,7 @@ impl Preferences {
             search_results,
             search,
             search_focus: Cell::new(0),
+            reveal: Cell::new(None),
             shortcut_search,
             empty,
             error,
@@ -508,14 +516,9 @@ impl Preferences {
             }
         ));
         self.dialog.add_controller(pointer);
-        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        margins(&footer, 12);
-        self.error.set_hexpand(true);
-        footer.append(&self.error);
-        let done = action_button("Done", w, UiAction::CloseSettings);
-        done.set_widget_name("close-settings");
-        footer.append(&done);
-        self.content_view.add_bottom_bar(&footer);
+        margins(&self.error, 12);
+        self.error.set_visible(false);
+        self.content_view.add_top_bar(&self.error);
         self.dialog.set_child(Some(&self.split));
         self.dialog.connect_closed(glib::clone!(
             #[weak]
@@ -675,6 +678,48 @@ impl Preferences {
                 for row in &group.rows {
                     let id = row.id;
                     let field = match &row.kind {
+                        PreferenceKind::Choice {
+                            options,
+                            icons,
+                            presentation: ChoicePresentation::ImageTiles { columns },
+                            ..
+                        } => {
+                            let native_row = gtk::ListBoxRow::new();
+                            native_row.set_activatable(false);
+                            native_row.add_css_class("image-preference");
+                            let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                            let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
+                            let title = gtk::Label::builder().label(&row.title).xalign(0.0).build();
+                            let description = gtk::Label::builder()
+                                .label(&row.description)
+                                .xalign(0.0)
+                                .wrap(true)
+                                .build();
+                            description.add_css_class("dim-label");
+                            text.append(&title);
+                            text.append(&description);
+                            body.append(&text);
+                            let selector = crate::image_selector::ImageSelector::new(
+                                options,
+                                icons,
+                                *columns,
+                                glib::clone!(
+                                    #[weak]
+                                    w,
+                                    move |selected| send(
+                                        &w,
+                                        PreferenceAction::Edit {
+                                            id,
+                                            value: PreferenceValue::Choice(selected)
+                                        }
+                                    )
+                                ),
+                            );
+                            // Center the choices; no import control in this version.
+                            body.append(&selector.widget);
+                            native_row.set_child(Some(&body));
+                            Field::ImageChoice(native_row, selector)
+                        }
                         PreferenceKind::Choice { options, icons, .. } => {
                             let model = gtk::StringList::new(
                                 &options.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -956,6 +1001,9 @@ impl Preferences {
             view.as_ref().is_some_and(|v| v.capture.is_some()),
         ];
         let was_open = self.shown.replace(open);
+        if !open[0] {
+            self.reveal.set(None);
+        }
         if let Some(view) = view {
             if self.fields.borrow().is_empty() {
                 self.build(w, &view);
@@ -1018,6 +1066,7 @@ impl Preferences {
                 );
             }
             self.error.set_text(view.error.as_deref().unwrap_or(""));
+            self.error.set_visible(view.error.is_some());
             if self
                 .shortcut_rows
                 .borrow()
@@ -1062,6 +1111,14 @@ impl Preferences {
             if !was_open[0] {
                 self.dialog.present(Some(&w.window));
                 self.split.set_show_content(true);
+            }
+            if self.reveal.replace(view.reveal) != view.reveal
+                && let Some(id) = view.reveal
+                && let Some(field) = self.fields.borrow().get(&id)
+            {
+                // Native focus navigation scrolls the row into view. The core
+                // supplies the page/target, independent of GTK's widget tree.
+                field.widget().child_focus(gtk::DirectionType::TabForward);
             }
             if let Some(editor) = &view.shortcut_editor {
                 let signature = serde_json::to_string(&(editor, &view.error)).unwrap();

@@ -165,10 +165,11 @@ or theme-colored strips hide any canvas area. DOM elements do the equivalent
 in the browser, without fake operating-system window buttons. No custom chrome
 compositor, full-window drag gesture, or backdrop blur is required.
 
-An icon-only Zen toggle (a shared, centered SVG trace of the supplied seated,
-right-facing capybara reference) occupies the
-top-left, followed by caret-free Edit and View menus. Edge-reveal Zen uses the normal
-active-tool highlight. Header controls use the standard button radius; only the
+An icon-only Zen toggle (a shared, centered capybara SVG, Looking up by default)
+occupies the top-left, followed by caret-free Edit and View menus. Its active
+state uses the subtle grey hover background while controls are visible. When
+the button remains visible alone, its active highlight is suppressed; hover
+still works. Header controls use the standard button radius; only the
 close control is circular, with unchanged shared header-control colors. Its
 circle uses libadwaita's native 16px icon plus 4px padding (24px circle), within
 the larger native click target; we do not enlarge the circle to the entire button.
@@ -202,7 +203,7 @@ GTK observes the default `AdwStyleManager` and applies overrides to the display
 manager; web observes `prefers-color-scheme`. OS changes never overwrite a user
 override. Returning to System uses the latest OS value.
 
-`ZenMode` toggles shared `UiState.workspace.zen_mode`. In the default **At edges**
+`ZenMode` toggles shared `UiState.workspace.zen_mode`. In the default **Reveal at screen edges**
 mode, the shared `near_chrome` rule reveals
 hidden controls only within a fixed 80 logical pixels of an occupied window edge,
 not by approaching a hidden toolbar/panel. The top always reveals the header;
@@ -221,21 +222,37 @@ control's reveal zone reveals instead of painting. A captured stroke does not
 reveal controls under its moving tip. Moving away or leaving the window fades
 the chrome, except during a native title-bar grab. A release or subsequent
 unpressed motion clears that grab latch; leave/cancel during a WM drag does not.
-Z also toggles Zen. Web respects reduced-motion preferences; GTK
+Tab toggles Zen outside settings and native text editors. Web respects reduced-motion preferences; GTK
 uses the platform animation setting.
 On touch, the last contact keeps revealed controls available after finger lift;
 another contact away from controls can hide them. The reveal contact cannot
 also activate a newly exposed button.
 
-GTK previews two independent settings in Preferences → Appearance → Zen mode:
-**Show controls** selects **At edges** (default) or **With button**. With button
-hides all editor controls, including floats; edge proximity, contact, Tab and
+GTK previews these settings in Preferences → Appearance → Zen mode:
+**Show controls** selects **Screen edges** (default) or **Zen button**. Zen button
+hides all editor controls, including floats; edge proximity, contact and
 drag/menu pins cannot reveal them. **Keep Zen button visible** defaults on and
-keeps the same top-left button in its inactive style whenever controls are hidden,
+keeps the same top-left button in its inactive style while controls are hidden,
 in either reveal mode. Clicking it disables Zen. Turning it off hides the button
-with the controls; With button then requires the Zen shortcut (Z by default) or
+with the controls; Zen button then requires the Zen shortcut (Tab by default) or
 an explicit Preferences shortcut to recover controls. Explicit settings dialogs
 remain usable. The button never disappears while Zen is off.
+
+**Button icon** offers Looking up (default), Facing forward, Bathing and Sleeping.
+Rust stores `Settings.zen_icon` and supplies each command's icon. The generic
+`ChoicePresentation::ImageTiles { columns: 4 }` uses the same choice validation,
+persistence and Reset to Default as dropdowns. GTK renders four native toggle
+64px tiles with centered 48px previews and labels as tooltips. There is no import control
+yet, and no Zen-specific selection logic. The context menu's **Change icon…**
+opens the selector via a generic `PreferenceAction::Reveal { id }`: Rust resolves
+the page and GTK scrolls/focuses the named row. All four canonical, theme-tinted SVGs live in the shared
+icon bank; app/launcher/PWA icons derive from Looking up at build time.
+The main Zen icon is 28px inside its unchanged 36px button. SVG artwork retains
+roughly 5% padding along its longest dimension without stretching its proportions.
+The GTK Preferences dialog defaults to 1000×744 logical pixels, constrained by
+the window. It has no footer/Done button; × or Escape close it, following native
+libadwaita behavior without custom outside-click dismissal. Errors appear below
+the header only while present. Detailed shortcut dialogs retain their own actions.
 
 Rust owns these decisions through `Settings.zen_reveal_mode`, `zen_show_button`
 and `InputReply`'s `chrome_hidden`, `hide_floating_panels`, `keep_zen_button` flags.
@@ -244,7 +261,8 @@ the native header with a same-sized spacer, preserving its 36×36px size and 6px
 inset. Web/Android retain their previous edge-reveal/hidden-button behavior and
 do not expose these settings until the GTK trial is approved.
 Right-clicking or touch-holding GTK's Zen button opens the two reveal choices,
-a divider, then the button visibility toggle, with current values checked.
+a divider, the button visibility toggle, then a separate **Change icon…** entry.
+Current reveal/visibility values are checked.
 Rust generates the menu from the same preference rows and applies their normal
 edit actions without opening Preferences.
 
@@ -358,7 +376,8 @@ The single keymap routes commands, brush/size presets and registered parameteriz
 `UiAction`s. Hosts do not resolve shortcuts. Explicit conflict replacement only
 removes the colliding alternative; Clear, Reset and Reset All apply atomically.
 Recording is provisional until confirmed; navigation and recording alone never save.
-Escape cancels recording; Tab and native editing stay reserved. Platform-global
+Escape cancels recording; Tab can be reassigned like other shortcuts, but retains
+native focus navigation inside settings and text editors. Platform-global
 shortcuts are not inhibited. Browser-reserved bindings are rejected by the core.
 
 Applied settings emit a durable `HostRequest::SaveSettings`; GTK writes atomically

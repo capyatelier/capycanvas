@@ -20,7 +20,7 @@ consumers must assess their actual dependency graph. See
 | --- | --- |
 | Application Rust, WGSL, web UI and tests | Project implementations, MIT OR Apache-2.0; the Oklab conversion exception is attributed separately. |
 | `apps/layer-web/icons/*.svg`, except the Zen mark | Original generic vector assets, MIT OR Apache-2.0. No GNOME icon set is vendored. |
-| `apps/layer-web/icons/layer-zen-symbolic.svg` | Owner-contributed capybara mark. The owner confirmed authorship of the source artwork; it has the separate Capy Canvas Branding License. |
+| Four `apps/layer-web/icons/layer-zen-*-symbolic.svg` files listed in BRANDING.md | Vector traces of owner-supplied capybara artwork; covered by the separate Capy Canvas Branding License. Looking up is the default app mark. |
 | `assets/brushes/*.pgm` | First-party numeric brush masks introduced during brush-engine development; not a redistributed commercial or GPL brush pack. |
 | `apps/layer-web/brush-previews/*.png` | Runtime assets rendered from project presets by `crates/layer-bench/src/previews.rs`. Regenerate with `cargo run --release -p layer-bench -- --brush-previews`. No external reference images or fonts are used by that generator. |
 | Oklab conversion functions | Adaptation of Björn Ottosson's MIT reference; exact notice and local modifications are recorded in `THIRD_PARTY_NOTICES.md`. |

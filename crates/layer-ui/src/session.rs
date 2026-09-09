@@ -367,9 +367,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.chrome_hidden = reply.hide_floating_panels;
                         return Ok(reply);
                     }
-                    if matches!(key.as_str(), "tab" | "escape") {
+                    if key == "escape" {
                         self.interaction.keyboard_chrome = true;
-                        reply.dismiss_popups = key == "escape";
+                        reply.dismiss_popups = true;
                     }
                     if key == "escape"
                         && self.state.customization.expanded.is_some()
@@ -839,7 +839,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         CommandState {
-            icon: id.icon(),
+            icon: self.command_icon(id),
             id,
             label: id.label(),
             enabled,
@@ -849,6 +849,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .state
                 .settings
                 .shortcut_label(&id.shortcut_id(), self.state.platform),
+        }
+    }
+    fn command_icon(&self, id: CommandId) -> Option<&'static str> {
+        if id == CommandId::ZenMode && self.state.platform == Platform::Gtk {
+            Some(self.state.settings.zen_icon.icon())
+        } else {
+            id.icon()
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
@@ -1326,17 +1333,23 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.state.settings_open
                     && !matches!(
                         action,
-                        PreferenceAction::Edit { .. } | PreferenceAction::Reset { .. }
+                        PreferenceAction::Edit { .. }
+                            | PreferenceAction::Reset { .. }
+                            | PreferenceAction::Reveal { .. }
                     )
                 {
                     return Err("Settings are not open".into());
                 }
                 // Validate edits atomically. Search, navigation and recording
                 // change only view state and never trigger storage or rendering.
+                let reveal = matches!(action, PreferenceAction::Reveal { .. });
                 let mut settings = self.state.settings.clone();
                 self.state
                     .preferences
                     .edit(&mut settings, action, self.state.platform);
+                if reveal && self.state.preferences.error.is_none() {
+                    self.state.settings_open = true;
+                }
                 save_settings =
                     self.state.preferences.error.is_none() && settings != self.state.settings;
                 if save_settings {
@@ -1794,10 +1807,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut changed = false;
         for (index, id) in CommandId::ALL.into_iter().enumerate() {
             let (enabled, selected) = self.command_flags(id);
+            let icon = self.command_icon(id);
             if let Some(previous) = self.state.commands.get_mut(index) {
-                if previous.enabled != enabled || previous.selected != selected {
+                if previous.enabled != enabled
+                    || previous.selected != selected
+                    || previous.icon != icon
+                {
                     previous.enabled = enabled;
                     previous.selected = selected;
+                    previous.icon = icon;
                     changed = true;
                 }
             } else {
@@ -2240,10 +2258,8 @@ mod tests {
         }
         assert_hidden(chrome(&mut s, ChromeEvent::Leave { touch: false }, facts));
         assert_hidden(s.input(UiInput::Blur).unwrap());
-        for name in ["Tab", "Escape"] {
-            assert_hidden(key(&mut s, name, true, false, false));
-            assert_hidden(key(&mut s, name, false, false, false));
-        }
+        assert_hidden(key(&mut s, "Escape", true, false, false));
+        assert_hidden(key(&mut s, "Escape", false, false, false));
         assert!(
             assert_hidden(pointer(
                 &mut s,
@@ -2348,13 +2364,13 @@ mod tests {
         for index in [1, 0] {
             let menu = s.context_menu(target).unwrap();
             assert_eq!(menu.title, "Zen mode");
-            assert_eq!(menu.sections.len(), 2);
+            assert_eq!(menu.sections.len(), 3);
             assert_eq!(
                 menu.sections[0]
                     .iter()
                     .map(|i| i.label.as_str())
                     .collect::<Vec<_>>(),
-                ["At edges", "With button"]
+                ["Reveal at screen edges", "Reveal with Zen button"]
             );
             let change = s
                 .dispatch(menu.sections[0][index].action.clone().unwrap())
@@ -2390,9 +2406,129 @@ mod tests {
                 Some(visible)
             );
         }
+        let saved = s.state.settings.clone();
+        let requests = s.state.requests.len();
+        let menu = s.context_menu(target).unwrap();
+        assert_eq!(menu.sections[2][0].label, "Change icon…");
+        let change = s
+            .dispatch(menu.sections[2][0].action.clone().unwrap())
+            .unwrap();
+        assert!(s.state.settings_open);
+        let view = s.preferences().unwrap();
+        assert_eq!(view.page, SettingsPage::Appearance);
+        assert_eq!(view.reveal, Some(PreferenceId::ZenIcon));
+        assert_eq!(s.state.settings, saved);
+        assert_eq!(s.state.requests.len(), requests);
+        assert!(!change.canvas_wake && !s.state.workspace.zen_mode);
         for platform in [Platform::Web, Platform::Android] {
             s.set_platform(platform);
             assert!(s.context_menu(target).is_err());
+        }
+    }
+
+    #[test]
+    fn zen_icons_are_core_choices_with_live_icons_and_reset() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let id = PreferenceId::ZenIcon;
+        let field = |s: &Settings, platform| {
+            s.pages(platform)
+                .into_iter()
+                .flat_map(|p| p.groups)
+                .flat_map(|g| g.rows)
+                .find(|r| r.id == id)
+        };
+        let row = field(&s.state.settings, Platform::Gtk).unwrap();
+        assert!(matches!(row.kind, PreferenceKind::Choice {
+            presentation: ChoicePresentation::ImageTiles { columns: 4 }, selected: 0, ref options, ref icons,
+        } if options.len() == 4 && icons.len() == 4));
+        assert_eq!(row.reset.unwrap().value, "Looking up");
+        let camera = s.state.camera.clone();
+        for (index, (symbol, _)) in ZenIcon::CHOICES.into_iter().enumerate() {
+            let change = s
+                .dispatch(UiAction::Preferences {
+                    action: PreferenceAction::Edit {
+                        id,
+                        value: PreferenceValue::Choice(index as u32),
+                    },
+                })
+                .unwrap();
+            assert_eq!(s.command(CommandId::ZenMode).icon, Some(symbol.icon()));
+            assert_eq!(
+                s.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::ZenMode)
+                    .unwrap()
+                    .icon,
+                Some(symbol.icon())
+            );
+            assert_eq!(s.state.settings.zen_icon, symbol);
+            assert!(!s.state.workspace.zen_mode);
+            assert_eq!(s.state.camera, camera);
+            assert_eq!(change.regions & regions::CAMERA, 0);
+            let saved = serde_json::to_string(&s.state.settings).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Settings>(&saved).unwrap(),
+                s.state.settings
+            );
+            assert!(ui_catalog().icons.contains(&symbol.icon()));
+        }
+        let before = s.state.settings.clone();
+        preference(
+            &mut s,
+            PreferenceAction::Edit {
+                id,
+                value: PreferenceValue::Choice(4),
+            },
+        );
+        assert_eq!(s.state.settings, before);
+        assert!(s.state.preferences.error.is_some());
+        preference(&mut s, PreferenceAction::Reset { id });
+        assert_eq!(s.state.settings.zen_icon, ZenIcon::LookingUp);
+        assert!(
+            !field(&s.state.settings, Platform::Gtk)
+                .unwrap()
+                .reset
+                .unwrap()
+                .enabled
+        );
+        for platform in [Platform::Web, Platform::Android] {
+            s.set_platform(platform);
+            assert!(field(&s.state.settings, platform).is_none());
+            assert_eq!(
+                s.command(CommandId::ZenMode).icon,
+                Some(ZenIcon::LookingUp.icon())
+            );
+        }
+    }
+
+    #[test]
+    fn tab_toggles_zen_but_preserves_editor_navigation_and_custom_bindings() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            assert_eq!(s.command(CommandId::ZenMode).shortcut, "Tab");
+            assert!(!key(&mut s, "Tab", true, false, true).handled);
+            key(&mut s, "Tab", false, false, true);
+            assert!(!s.state.workspace.zen_mode);
+            invoke(&mut s, CommandId::Settings);
+            assert!(!key(&mut s, "Tab", true, false, false).handled);
+            key(&mut s, "Tab", false, false, false);
+            s.dispatch(UiAction::CloseSettings).unwrap();
+            assert!(key(&mut s, "Tab", true, false, false).handled);
+            assert!(s.state.workspace.zen_mode);
+            key(&mut s, "Tab", false, false, false);
+            assert!(key(&mut s, "Tab", true, false, false).handled);
+            assert!(!s.state.workspace.zen_mode);
+            key(&mut s, "Tab", false, false, false);
+            s.state.settings.shortcuts.insert(
+                CommandId::ZenMode.shortcut_id(),
+                vec![KeyChord::new("z", Modifiers::default())],
+            );
+            assert!(!key(&mut s, "Tab", true, false, false).handled);
+            assert!(key(&mut s, "z", true, false, false).handled);
+            assert!(s.state.workspace.zen_mode);
         }
     }
 
@@ -2430,7 +2566,7 @@ mod tests {
                 );
                 assert_eq!(reply.chrome_hidden, mode == ZenRevealMode::Button);
                 assert_eq!(reply.keep_zen_button, show_button);
-                let exit = key(&mut s, "z", true, false, false);
+                let exit = key(&mut s, "Tab", true, false, false);
                 assert!(exit.handled && !exit.chrome_hidden && !exit.hide_floating_panels);
                 assert!(!s.state.workspace.zen_mode);
             }
@@ -2543,7 +2679,8 @@ mod tests {
         s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(chrome(&mut s, ChromeEvent::Refresh, facts).chrome_hidden);
         assert!(!key(&mut s, "Tab", true, false, false).chrome_hidden);
-        assert!(chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
+        assert!(!s.state.workspace.zen_mode);
+        assert!(!chrome(&mut s, motion([600.0, 450.0]), facts).chrome_hidden);
     }
     #[test]
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
@@ -2664,12 +2801,12 @@ mod tests {
         key(&mut s, "e", false, false, true);
         assert!(key(&mut s, "E", true, false, false).handled);
         assert_eq!(s.state.brush.tool, Tool::Eraser);
-        assert!(key(&mut s, "z", true, false, false).handled);
+        assert!(key(&mut s, "Tab", true, false, false).handled);
         assert!(s.state.workspace.zen_mode);
-        key(&mut s, "z", true, false, false);
+        key(&mut s, "Tab", true, false, false);
         assert!(s.state.workspace.zen_mode, "repeat cannot retoggle Zen");
-        key(&mut s, "z", false, false, false);
-        key(&mut s, "z", true, false, false);
+        key(&mut s, "Tab", false, false, false);
+        key(&mut s, "Tab", true, false, false);
         assert!(!s.state.workspace.zen_mode);
         chrome(
             &mut s,
@@ -5382,7 +5519,9 @@ mod tests {
             "Escape only closes the recording sheet"
         );
         record_shortcut(&mut s, &target, "tab", false);
-        assert!(s.preferences().unwrap().capture.unwrap().error.is_some());
+        let capture = s.preferences().unwrap().capture.unwrap();
+        assert!(capture.error.is_none());
+        assert_eq!(capture.conflict.as_deref(), Some("Zen mode"));
         preference(
             &mut s,
             PreferenceAction::EditShortcut { id: target.clone() },
@@ -5519,7 +5658,6 @@ mod tests {
                 );
                 let view = s.preferences().unwrap();
                 for command in [
-                    CommandId::ZenMode,
                     CommandId::Undo,
                     CommandId::Redo,
                     CommandId::UndoWorkspace,

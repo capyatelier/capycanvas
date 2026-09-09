@@ -28,6 +28,7 @@ impl KeyChord {
         let named = matches!(
             self.key.as_str(),
             "enter"
+                | "tab"
                 | "backspace"
                 | "delete"
                 | "insert"
@@ -48,7 +49,7 @@ impl KeyChord {
             || self.key.len() > 32
             || self.key != self.key.to_lowercase()
             || Self::modifier(&self.key)
-            || matches!(self.key.as_str(), "escape" | "tab")
+            || self.key == "escape"
         {
             return Err("Choose another key for this shortcut.".into());
         }
@@ -173,7 +174,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Brush" => key("b", false, false),
         "command.Eraser" => key("e", false, false),
         "command.FitCanvas" => key("f", false, false),
-        "command.ZenMode" => key("z", false, false),
+        "command.ZenMode" => key("tab", false, false),
         "command.Undo" => key("z", true, false),
         "command.Redo" => return vec![key("z", true, true), key("y", true, false)],
         "command.UndoWorkspace" | "command.RedoWorkspace" => {

@@ -35,8 +35,37 @@ pub enum ZenRevealMode {
     Button,
 }
 impl ZenRevealMode {
-    const CHOICES: [(Self, &'static str); 2] =
-        [(Self::Edges, "At edges"), (Self::Button, "With button")];
+    // Compact settings value and standalone context-menu label.
+    const CHOICES: [(Self, &'static str, &'static str); 2] = [
+        (Self::Edges, "Screen edges", "Reveal at screen edges"),
+        (Self::Button, "Zen button", "Reveal with Zen button"),
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZenIcon {
+    #[default]
+    LookingUp,
+    FacingForward,
+    Bathing,
+    Sleeping,
+}
+impl ZenIcon {
+    pub const CHOICES: [(Self, &'static str); 4] = [
+        (Self::LookingUp, "Looking up"),
+        (Self::FacingForward, "Facing forward"),
+        (Self::Bathing, "Bathing"),
+        (Self::Sleeping, "Sleeping"),
+    ];
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::LookingUp => "zen-looking-up",
+            Self::FacingForward => "zen-facing-forward",
+            Self::Bathing => "zen-bathing",
+            Self::Sleeping => "zen-sleeping",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -49,6 +78,7 @@ pub struct Settings {
     #[serde(alias = "zen_behavior")]
     pub zen_reveal_mode: ZenRevealMode,
     pub zen_show_button: bool,
+    pub zen_icon: ZenIcon,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
     pub pan_speed: f32,
@@ -71,6 +101,7 @@ impl Default for Settings {
             light_base: Theme::Light.default_base(),
             zen_reveal_mode: ZenRevealMode::default(),
             zen_show_button: true,
+            zen_icon: ZenIcon::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
             pan_speed: 1.0,
@@ -184,6 +215,7 @@ pub enum PreferenceId {
     #[serde(alias = "zen_behavior")]
     ZenRevealMode,
     ZenShowButton,
+    ZenIcon,
     DarkBase,
     LightBase,
     Cursor,
@@ -206,6 +238,7 @@ impl PreferenceId {
             Self::Theme => "theme",
             Self::ZenRevealMode => "zen-reveal-mode",
             Self::ZenShowButton => "zen-show-button",
+            Self::ZenIcon => "zen-icon",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
             Self::Cursor => "cursor",
@@ -251,6 +284,14 @@ impl PreferenceValue {
             .map(|v| v as u32)
     }
 }
+/// Presentation only; both styles share choice validation, persistence and reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChoicePresentation {
+    Dropdown,
+    ImageTiles { columns: u32 },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceKind {
@@ -264,6 +305,7 @@ pub enum PreferenceKind {
         options: Vec<String>,
         selected: u32,
         icons: Vec<String>,
+        presentation: ChoicePresentation,
     },
     Number {
         control: NumericControl,
@@ -355,6 +397,7 @@ pub struct PreferencePage {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct PreferencesState {
     pub page: SettingsPage,
+    pub reveal: Option<PreferenceId>,
     pub query: String,
     pub searching: bool,
     pub search_focus: u64,
@@ -367,6 +410,8 @@ pub struct PreferencesState {
 pub struct PreferencesView {
     pub pages: Vec<PreferencePage>,
     pub page: SettingsPage,
+    /// Bring this row into view after opening or navigating preferences.
+    pub reveal: Option<PreferenceId>,
     pub query: String,
     pub searching: bool,
     /// Changes when typing outside an editor should reveal and focus search.
@@ -398,6 +443,9 @@ pub struct ShortcutEditor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PreferenceAction {
+    Reveal {
+        id: PreferenceId,
+    },
     Page {
         page: SettingsPage,
     },
@@ -591,6 +639,7 @@ impl Settings {
                         "Color theme",
                         "Match your system theme, or choose light or dark.",
                         PreferenceKind::Choice {
+                            presentation: ChoicePresentation::Dropdown,
                             icons: Vec::new(),
                             options: vec!["System".into(), "Light".into(), "Dark".into()],
                             selected: match self.theme {
@@ -632,6 +681,7 @@ impl Settings {
                         "Canvas cursor",
                         "Choose how the pointer looks over the canvas.",
                         PreferenceKind::Choice {
+                            presentation: ChoicePresentation::Dropdown,
                             options: CursorMode::CHOICES.iter().map(|c| c.1.into()).collect(),
                             icons: [
                                 "cursor-brush",
@@ -742,6 +792,7 @@ impl Settings {
                         "Show controls",
                         "Choose how to bring controls back into view.",
                         PreferenceKind::Choice {
+                            presentation: ChoicePresentation::Dropdown,
                             icons: Vec::new(),
                             options: crate::ZenRevealMode::CHOICES
                                 .iter()
@@ -759,6 +810,23 @@ impl Settings {
                         "Keep the button visible while controls are hidden.",
                         PreferenceKind::Switch {
                             active: self.zen_show_button,
+                        },
+                    ),
+                    row(
+                        PreferenceId::ZenIcon,
+                        "Button icon",
+                        "Choose the icon on the Zen button.",
+                        PreferenceKind::Choice {
+                            presentation: ChoicePresentation::ImageTiles { columns: 4 },
+                            options: crate::ZenIcon::CHOICES.iter().map(|c| c.1.into()).collect(),
+                            icons: crate::ZenIcon::CHOICES
+                                .iter()
+                                .map(|c| c.0.icon().into())
+                                .collect(),
+                            selected: crate::ZenIcon::CHOICES
+                                .iter()
+                                .position(|c| c.0 == self.zen_icon)
+                                .unwrap() as u32,
                         },
                     ),
                 ],
@@ -797,6 +865,11 @@ impl Settings {
                     .into_iter()
                     .enumerate()
                     .map(|(i, label)| {
+                        let label = if id == PreferenceId::ZenRevealMode {
+                            crate::ZenRevealMode::CHOICES[i].2.into()
+                        } else {
+                            label
+                        };
                         item(
                             label,
                             PreferenceValue::Choice(i as u32),
@@ -810,6 +883,14 @@ impl Settings {
                 _ => unreachable!("Zen menu fields must be choices or switches"),
             });
         }
+        sections.push(vec![ContextMenuItem::command(
+            "Change icon…",
+            UiAction::Preferences {
+                action: PreferenceAction::Reveal {
+                    id: PreferenceId::ZenIcon,
+                },
+            },
+        )]);
         Ok(ContextMenu {
             title: CommandId::ZenMode.label().into(),
             sections,
@@ -877,6 +958,7 @@ impl Settings {
                     crate::ZenRevealMode::CHOICES[value.choice().unwrap() as usize].0
             }
             ZenShowButton => self.zen_show_button = matches!(value, PreferenceValue::Bool(true)),
+            ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
                     unreachable!()
@@ -1009,6 +1091,7 @@ impl PreferencesState {
             empty: !query.is_empty() && search_results.is_empty(),
             pages,
             page: self.page,
+            reveal: self.reveal,
             query: self.query.clone(),
             // Android keeps its search field visible; an empty query shows
             // categories. Desktop/web retain their explicit search toggle.
@@ -1047,8 +1130,19 @@ impl PreferencesState {
         platform: Platform,
     ) -> Result<(), String> {
         match action {
+            PreferenceAction::Reveal { id } => {
+                let page = settings
+                    .pages(platform)
+                    .into_iter()
+                    .find(|p| p.groups.iter().flat_map(|g| &g.rows).any(|r| r.id == id))
+                    .ok_or("This setting isn't available on this device.")?
+                    .id;
+                self.try_edit(settings, PreferenceAction::Page { page }, platform)?;
+                self.reveal = Some(id);
+            }
             PreferenceAction::Page { page } => {
                 self.page = page;
+                self.reveal = None;
                 self.query.clear();
                 self.searching = false;
                 self.editing_shortcut = None;
@@ -1230,7 +1324,11 @@ mod copy_tests {
             .unwrap();
         assert_eq!(
             group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
-            [PreferenceId::ZenRevealMode, PreferenceId::ZenShowButton]
+            [
+                PreferenceId::ZenRevealMode,
+                PreferenceId::ZenShowButton,
+                PreferenceId::ZenIcon
+            ]
         );
         let legacy: Settings = serde_json::from_str(r#"{"zen_behavior":"button_only"}"#).unwrap();
         assert_eq!(legacy.zen_reveal_mode, ZenRevealMode::Button);
@@ -1239,7 +1337,7 @@ mod copy_tests {
         let row = settings.field(id, Platform::Gtk).unwrap();
         assert!(
             matches!(row.kind, PreferenceKind::Choice { selected: 0, options, .. }
-            if options == ["At edges", "With button"])
+            if options == ["Screen edges", "Zen button"])
         );
         assert!(!row.reset.unwrap().enabled);
         settings
@@ -1248,7 +1346,7 @@ mod copy_tests {
         assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Button);
         let reset = settings.field(id, Platform::Gtk).unwrap().reset.unwrap();
         assert!(reset.enabled);
-        assert_eq!(reset.value, "At edges");
+        assert_eq!(reset.value, "Screen edges");
         assert!(
             settings
                 .edit(id, PreferenceValue::Choice(2), Platform::Gtk)

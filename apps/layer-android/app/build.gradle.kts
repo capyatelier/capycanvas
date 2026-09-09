@@ -48,7 +48,7 @@ tasks.named("preBuild") { dependsOn(rustBuild) }
 // Adapt the existing brand path to Android's maskable launcher format. No second
 // artwork source or checked-in raster exports.
 val generateBrand by tasks.registering {
-    val source = rootDir.resolve("../layer-web/icons/layer-zen-symbolic.svg")
+    val source = rootDir.resolve("../layer-web/icons/layer-zen-looking-up-symbolic.svg")
     val output = layout.buildDirectory.dir("generated/capy/res").get().asFile
     inputs.file(source)
     outputs.dir(output)

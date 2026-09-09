@@ -38,10 +38,10 @@ pub use numeric::{
 };
 pub use session::UiSession;
 pub use settings::{
-    HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup, PreferenceId,
-    PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow, PreferenceSearchResult,
-    PreferenceValue, PreferencesState, PreferencesView, Settings, SettingsPage, ShortcutEditor,
-    TextConstraint, ZenRevealMode,
+    ChoicePresentation, HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup,
+    PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
+    PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
+    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, ZenRevealMode,
 };
 pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
 pub use theme::{HexColor, Theme, ThemePalette};
@@ -177,7 +177,7 @@ pub const MENUS: &[MenuSpec] = &[
     },
 ];
 pub const WORKSPACE_MENU_LABEL: &str = "Workspace";
-pub const ZEN_ICON_SIZE: u32 = 24;
+pub const ZEN_ICON_SIZE: u32 = 28;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelChoice {
@@ -237,7 +237,10 @@ pub fn ui_catalog() -> UiCatalog {
             "grip",
             "check",
             "fit",
-            "zen",
+            const { ZenIcon::LookingUp.icon() },
+            const { ZenIcon::FacingForward.icon() },
+            const { ZenIcon::Bathing.icon() },
+            const { ZenIcon::Sleeping.icon() },
             "settings",
             "menu",
             "size",
@@ -322,7 +325,7 @@ impl CommandId {
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
-            Self::ZenMode => "zen",
+            Self::ZenMode => ZenIcon::LookingUp.icon(),
             Self::Settings => "settings",
             Self::AddLayer => "plus",
             Self::DeleteLayer => "minus",

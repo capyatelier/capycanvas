@@ -39,6 +39,13 @@ export async function checkPreferences({ call, evaluate, settle }) {
     assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 28);
   }
   assert.equal(await evaluate("document.querySelector('#header-start [data-command=zen_mode] svg').getBoundingClientRect().width"), await evaluate("layerApp.app.catalog().zen_icon_size"));
+  assert.equal(await evaluate("document.querySelector('#header-start [data-command=zen_mode] svg').dataset.asset"), 'zen-looking-up');
+  assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='zen_mode').shortcut"), 'Tab');
+  await evaluate("document.activeElement?.blur()");
+  await key('Tab');
+  assert.equal(await evaluate("layerApp.state().workspace.zen_mode"), true);
+  await key('Tab');
+  assert.equal(await evaluate("layerApp.state().workspace.zen_mode"), false);
   await capture('typography');
   assert.equal(await evaluate("getComputedStyle(document.querySelector('#size-number .number-labels')).paddingLeft"), '6px', 'panel labels mirror the value inset');
   assert.ok(await evaluate(`(() => {
@@ -235,7 +242,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await action({ type: "open_settings", page: "shortcuts" });
   assert.equal(await evaluate("layerApp.state().settings.pressure_gamma"), 1.5, "deep link preserves accepted settings");
   await evaluate("document.querySelector('#shortcuts-search').value='z';document.querySelector('#shortcuts-search').dispatchEvent(new Event('input'))");
-  for (const id of ["ZenMode", "Undo", "Redo", "UndoWorkspace", "RedoWorkspace"]) {
+  for (const id of ["Undo", "Redo", "UndoWorkspace", "RedoWorkspace"]) {
     assert.equal(await evaluate(`document.querySelector('[data-shortcut="command.${id}"]').hidden`), false, `Z finds ${id}`);
   }
   await preference({ type: "search_shortcuts", query: "ctrl+z" });

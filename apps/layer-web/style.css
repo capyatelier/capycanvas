@@ -63,6 +63,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 :where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
 #header-start > button[aria-pressed="true"] { background: var(--selected); }
+#header-start > button[data-command="zen_mode"][aria-pressed="true"] { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav { display: flex; align-items: center; gap: 6px; z-index: 1; }
 #document-title { position: absolute; left: 50%; transform: translateX(-50%); font-weight: 600; white-space: nowrap; padding: 4px 8px; height: 36px; line-height: 28px; }
 .header-menu { position: relative; }
