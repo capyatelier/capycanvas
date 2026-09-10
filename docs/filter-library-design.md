@@ -161,10 +161,17 @@ compilation. Row image and pipeline caches survive category/search changes.
 
 See [forty-filter validation](filter-library-validation.md) for all measured
 latencies, incremental correctness, memory, artwork and remaining platform gates.
-The web categorized preview picker now passes the forty-filter browser integration
-test, including search, generated properties, visible preview pixels and animation
-markers. Android's picker port and expanded platform performance benchmarks remain
-to be done; compiling its shared Rust catalog is not a completed port.
+The categorized preview picker passes forty-filter integration tests on GTK,
+web and Android, including search, generated properties, visible preview pixels
+and animation markers. The obsolete tile-grid sizing field is removed.
+
+Android uses a native lazy list, the existing IME-safe text control, and retained
+row bitmaps across tab switches. Visible rows request a bounded GPU atlas through
+the same Rust policy as GTK/web. JNI transfers one packed RGBA byte array plus
+small metadata, never JSON numbers for each channel. Conversion to Android's
+premultiplied bitmap format runs on a background dispatcher, not the UI or render
+Looper. Revision checks discard stale responses. This is picker-only readback,
+not a canvas rendering path.
 
 ## Validation gates
 

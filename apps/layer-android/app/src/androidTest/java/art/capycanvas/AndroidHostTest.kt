@@ -79,9 +79,31 @@ class AndroidHostTest {
             canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x+.03f,.6f)), MotionEvent.TOOL_TYPE_STYLUS)
         }
         val choices=state().array("adjustments").objects().map { it.getString("id") }
-        for((i,id) in choices.withIndex()) {
+        assertEquals(40, choices.size)
+        action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
+        compose.waitUntil(20_000) { host.filterPreviewCache.images[choices.first()] != null }
+        compose.onNodeWithTag("filter-preview-${choices.first()}", useUnmergedTree=true).assertHeightIsEqualTo(40.dp)
+        val preview = host.filterPreviewCache.images.getValue(choices.first()).image.toPixelMap()
+        assertTrue("GPU preview has opaque artwork", (0 until preview.width).any { preview[it,preview.height/2].alpha>.5f })
+        assertEquals("Silhouette has transparent corners", 0f, preview[0,0].alpha, .01f)
+        capture("adjustments-picker")
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to "distort")))
+        compose.onNodeWithTag("filter-search-toggle").performClick()
+        val filterSearch = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("filter-search")))
+        filterSearch.performTextInput("glass")
+        waitState { it.array("adjustments").objects().map { c -> c.getString("id") }==listOf("glass","rainy_glass") }
+        compose.waitUntil(20_000) { host.filterPreviewCache.images["rainy_glass"] != null }
+        filterSearch.assertTextContains("glass").performImeAction()
+        SystemClock.sleep(300)
+        filterSearch.assertTextContains("glass")
+        compose.onNodeWithTag("adjustment-chromatic_aberration").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Rainy Glass · Animated", useUnmergedTree=true).assertExists()
+        capture("adjustments-glass-search")
+        compose.onNodeWithTag("filter-search-toggle").performClick()
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+        for(id in choices) {
             action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
-            if(i==0)capture("adjustments-grid")
+            compose.onNodeWithTag("filter-list").performScrollToNode(hasTestTag("adjustment-$id"))
             compose.onNodeWithTag("adjustment-$id").performClick()
             waitState { it.getJSONObject("layer_properties").getString("description") == it.array("adjustments").objects().first { c->c.getString("id")==id }.getString("label") }
             compose.onNodeWithTag("layer-properties").assertIsDisplayed()
@@ -113,6 +135,62 @@ class AndroidHostTest {
         action(obj("type" to "set_theme", "theme" to "light"));capture("adjustments-stats-light")
     }
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
+    /** Opt-in platform sweep; normal correctness tests don't run a benchmark. */
+    @Test fun measureFilterLibrary() {
+        org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("capyFilterBenchmark") == "true")
+        fun stats(): JSONObject {
+            val done=CountDownLatch(1);var result:JSONObject?=null
+            host.query(obj("type" to "renderer_stats")) {result=it as JSONObject;done.countDown()}
+            assertTrue(done.await(10,TimeUnit.SECONDS));return result!!
+        }
+        fun frames(view:JSONObject)=view.array("rows").objects().first {it.getString("label")=="Frames"}.getString("value").toLong()
+        fun effect(a:JSONObject)=action(obj("type" to "effect","action" to a))
+        customize(obj("type" to "set_panel_visible","panel" to "stats","visible" to true))
+        action(obj("type" to "set_brush_size","value" to 24))
+        penStroke(40)
+        val choices=state().array("adjustments").objects().map {it.getString("id")}
+        val expensive=listOf("motion_blur","gaussian_blur","domain_warp","painterly","denoise")
+        val cases=listOf("Baseline" to emptyList<String>())+choices.map {it to listOf(it)}+listOf("Five expensive" to expensive)
+        val report=JSONArray()
+        for((name,filters) in cases) {
+            val ids=mutableListOf<Long>()
+            for(id in filters) {
+                effect(obj("op" to "insert","effect" to id))
+                val view=state().getJSONObject("layer_properties");val layer=view.getLong("layer");ids.add(layer)
+                val controls=view.array("controls").objects()
+                if(controls.any {it.getString("key")=="animate"}) effect(obj("op" to "set","layer" to layer,"key" to "animate","value" to obj("kind" to "toggle","value" to false)))
+                if(id=="curves") effect(obj("op" to "curve_point","layer" to layer,"key" to "curve_0","index" to null,"point" to JSONArray(listOf(.45,.65)),"remove" to false))
+                else controls.firstOrNull {it.getJSONObject("kind").getString("kind")=="number" && it.getJSONObject("value").number("value")==0f && it.getString("key")!="time"}?.let {c ->
+                    effect(obj("op" to "set","layer" to layer,"key" to c.getString("key"),"value" to obj("kind" to "number","value" to c.getJSONObject("kind").getJSONObject("numeric").number("max")*.25)))
+                }
+            }
+            for(mode in if(name=="Five expensive") listOf("local","full","animation") else listOf("local")) {
+                if(mode=="animation") effect(obj("op" to "set","layer" to ids[2],"key" to "animate","value" to obj("kind" to "toggle","value" to true)))
+                action(obj("type" to "select_layer","id" to 1))
+                val before=frames(stats());var count=0;var after=before
+                while(after-before<180 && count<1200) {
+                    if(mode=="local") canvasEvent(if(count==0) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE,
+                        listOf(androidx.compose.ui.geometry.Offset(.5f+kotlin.math.sin(count*.1f)*.04f,.5f+kotlin.math.cos(count*.15f)*.03f)),MotionEvent.TOOL_TYPE_STYLUS)
+                    if(mode=="full") host.dispatch(obj("type" to "set_layer_opacity","id" to 1,"opacity" to .7+(count%20)*.01))
+                    SystemClock.sleep(9);count++
+                    if(count%30==0)after=frames(stats())
+                }
+                if(mode=="local")canvasEvent(MotionEvent.ACTION_UP,listOf(androidx.compose.ui.geometry.Offset(.5f,.5f)),MotionEvent.TOOL_TYPE_STYLUS)
+                assertTrue("$name $mode produced at least 180 updates",after-before>=180)
+                val result=obj("filter" to name,"mode" to mode,"stats" to stats(),"frames" to after-before)
+                report.put(result);android.util.Log.i("CapyFilterBenchmark",result.toString())
+            }
+            for(id in ids.reversed()) {action(obj("type" to "select_layer","id" to id));action(obj("type" to "layer","action" to obj("op" to "delete_selected")))}
+            action(obj("type" to "select_layer","id" to 1))
+        }
+        val resolver=compose.activity.contentResolver
+        val uri=resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME,"filter-android.json");put(MediaStore.Downloads.MIME_TYPE,"application/json")
+            put(MediaStore.Downloads.RELATIVE_PATH,"Download/CapyCanvasValidation/$runId");put(MediaStore.Downloads.IS_PENDING,1)
+        })!!
+        resolver.openOutputStream(uri)!!.bufferedWriter().use {it.write(report.toString(2))}
+        resolver.update(uri,ContentValues().apply {put(MediaStore.Downloads.IS_PENDING,0)},null,null)
+    }
     private fun groups() = host.snapshot!!.getJSONObject("layout").array("groups").objects()
     private fun group(panel: String) = groups().first { panel in it.array("panels").values() }
     private fun viewport(): JSONArray {

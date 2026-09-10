@@ -1,9 +1,8 @@
 # Forty-filter validation
 
 2026-09-10. The original ten plus thirty additional original WGSL filters are
-registered in the shared core and validated in GTK and web. Both have categorized,
-searchable GPU-preview rows. Android's categorized preview-picker port and expanded
-device tests remain outstanding at this milestone.
+registered in the shared core and validated in GTK, web and Android. All three
+have categorized, searchable GPU-preview rows and generated property controls.
 
 ## Correctness and UI
 
@@ -29,7 +28,11 @@ device tests remain outstanding at this milestone.
   markers and live telemetry. Preview rows share one typed-byte atlas transfer;
   lightweight bitmap views display only their row, not an entire atlas per item.
 - Shared core/engine/UI tests pass, native clippy is clean and wasm compiles.
-  These are not yet Android device or end-to-end refresh-rate claims.
+- Android's API 35 tablet emulator inserts and renders all forty filters, edits
+  their controls, checks preview alpha/size, search results, animated markers,
+  and live Stats. Screenshot review caught an IME acknowledgement race; the
+  picker now reuses the existing IME-safe text field with persistent-search tests.
+  This is not physical-mobile-device or end-to-end refresh-rate evidence.
 - The [clipped-animation regression](filter-clipping-regression.md) documents the
   cached-stack compositor fix, independent tiled-reference tests and benchmark.
 
@@ -37,6 +40,7 @@ Generated images, not checked into git:
 `artifacts/filter-library/contact-sheet.png` (five columns, eight rows; names in
 `order.txt`), individual named PNGs alongside it, and GTK screenshots in
 `artifacts/ui/adjustments-gtk/` and `artifacts/ui/adjustments-web/`.
+Android's reviewed set is `artifacts/ui/adjustments-android/1789032480221/`.
 
 ## Work avoided and overhead
 
@@ -159,8 +163,8 @@ input and output (128 MiB); a two-pass effect adds one reusable intermediate
 Adjacent compatible stages alias outputs as inputs. The five-filter stack uses
 448 MiB for these caches/scratch, rather than separate input/output pairs for
 every filter. Masks add R8 images only when needed. Preview/cache and paint
-storage are additional, reported by Stats. Mobile memory and device performance
-still need the expanded platform validation; this does not introduce per-frame
+storage are additional, reported by Stats. Physical mobile memory limits still
+need device testing; the emulator sweep below does not introduce per-frame
 allocation of those images.
 
 ### Reproduce
@@ -173,3 +177,57 @@ cargo test --release -p layer-render-wgpu filter_library_latency -- --ignored --
 Run benchmarks alone. Raw output is generated/ignored at
 `artifacts/benchmarks/filter-library.csv` (CPU, completion and GPU percentiles,
 image pass-pixels, cache bytes and cold setup).
+
+## Platform sweeps
+
+The packaged Chrome/WebGPU app also runs all forty filters and the five-filter
+stack through its ordinary Wasm drawing/frame API at 2048×1536. Each case has
+180 updates; Stats reports the last 120, excluding initial compilation/setup.
+Pointwise neutral defaults receive a non-neutral parameter/curve edit. Local
+updates paint with a 24px brush; full updates change the base layer's opacity;
+animation changes time with no painting. No benchmark-only rendering API is added.
+
+| Chrome/WebGPU case | CPU median / p95 / p99 (ms) | GPU median / p95 / p99 (ms) |
+| --- | --- | --- |
+| Baseline, local | .10 / .30 / .40 | .01 / .01 / .02 |
+| Five expensive, local | .20 / .50 / .50 | .10 / .23 / .36 |
+| Five expensive, full | .30 / .50 / .50 | .49 / .52 / .59 |
+| Five expensive, animated | .20 / .40 / .50 | .35 / .37 / .39 |
+
+Every individual filter's local CPU p99 is at most .60 ms; GPU p99 is at most
+.26 ms. The entire Wasm frame call, including viewport presentation submission,
+has a p99 of .60 / .70 / .60 ms for the three stress cases. Browser clocks are
+coarsely quantized; CPU/GPU values overlap in time and should not be added to
+claim end-to-end display latency. Raw results: `artifacts/benchmarks/filter-web.json`.
+
+```sh
+node apps/layer-web/test.mjs --package --filter-bench
+```
+
+Android's API 35 x86-64 tablet emulator runs the same forty-filter sweep at
+2048×1536 through native stylus input and the ordinary render Looper. Each case
+produces at least 180 updates; the existing Stats ring retains the last 120.
+ARM64 and x86-64 builds pass. The emulator's virtual Vulkan GPU is backed by the
+workstation GPU; it is not representative of an ARM tablet's GPU or CPU.
+
+| Android emulator case | CPU median / p95 / p99 (ms) | GPU median / p95 / p99 (ms) |
+| --- | --- | --- |
+| Baseline, local | .73 / .93 / 1.53 | .01 / .02 / .02 |
+| Five expensive, local | 2.97 / 4.24 / 8.62 | .17 / .27 / .30 |
+| Five expensive, full | 3.10 / 3.59 / 3.82 | .55 / .65 / .66 |
+| Five expensive, animated | 1.24 / 1.59 / 1.73 | .39 / .39 / .40 |
+
+Individual-filter local GPU p99 is at most .24 ms. CPU tails are substantially
+larger than the workstation/browser, with a maximum p99 of 11.57 ms (Crosshatch).
+These CPU-side outliers and the stress local p99 exceed the 8.33 ms budget; they
+are retained in the report, not called a shader success or an end-to-end 120 Hz
+guarantee. GPU timing alone does not identify their CPU-side cause. Physical
+Android/iPad hardware and other browsers are untested in this milestone.
+Raw results: `artifacts/benchmarks/filter-android.json`.
+
+```sh
+bash apps/layer-android/gradlew -p apps/layer-android :app:connectedDebugAndroidTest \
+  -PcapyAbi=x86_64 \
+  -Pandroid.testInstrumentationRunnerArguments.class=art.capycanvas.AndroidHostTest#measureFilterLibrary \
+  -Pandroid.testInstrumentationRunnerArguments.capyFilterBenchmark=true --offline
+```

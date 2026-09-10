@@ -83,6 +83,10 @@ import kotlin.math.roundToInt
         LayerPanel(host, state, modifier)
         return
     }
+    if (panel.getString("id") == "adjustments") {
+        AdjustmentPanel(host, state, modifier)
+        return
+    }
     Box(modifier) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -98,7 +102,7 @@ import kotlin.math.roundToInt
                     }
                     "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
                     "layers" -> LayerPanel(host, state, Modifier.heightIn(min = 240.dp, max = 480.dp))
-                    "adjustments" -> AdjustmentPanel(host, state)
+                    "adjustments" -> AdjustmentPanel(host, state, Modifier.height(480.dp))
                     "properties" -> LayerPropertiesPanel(host, state)
                     "stats" -> RendererStatsPanel(host)
                     "layer_actions" -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

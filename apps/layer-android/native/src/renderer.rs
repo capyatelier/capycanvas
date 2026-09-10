@@ -21,6 +21,17 @@ impl CanvasRenderer for Renderer {
         self.0.as_ref().map(|g| g.telemetry()).unwrap_or_default()
     }
     type Error = GpuRasterError;
+    fn request_filter_previews(
+        &mut self,
+        request: layer_render::FilterPreviewRequest,
+    ) -> Result<bool, Self::Error> {
+        self.gpu()?.request_filter_previews(request)
+    }
+    fn take_filter_previews(
+        &mut self,
+    ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
+        self.0.as_mut()?.take_filter_previews()
+    }
     fn request_thumbnail(
         &mut self,
         id: u64,

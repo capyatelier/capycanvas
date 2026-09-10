@@ -6,6 +6,7 @@ use jni::{
     objects::{JClass, JDoubleArray, JObject, JString},
     sys::{jboolean, jfloat, jint, jlong, jstring},
 };
+use layer_render::CanvasRenderer;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
 use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
@@ -402,6 +403,45 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
         .and_then(|query| unsafe { app(handle) }.query(query))
         .map(|v| v.to_string());
     string(&mut env, result)
+}
+
+/// One small metadata record and one packed RGBA array, not JSON per channel.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jni::sys::jobjectArray {
+    let result = (|| {
+        let renderer = unsafe { app(handle) }.session.renderer_mut();
+        if let Some(gpu) = &renderer.0 {
+            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
+        }
+        let Some(image) = renderer.take_filter_previews() else {
+            return Ok(std::ptr::null_mut());
+        };
+        let atlas = image.map_err(error)?;
+        let image = atlas.image;
+        let header =
+            serde_json::json!([image.request_id, image.width, image.height, atlas.filters]);
+        let values = env
+            .new_object_array(2, "java/lang/Object", JObject::null())
+            .map_err(error)?;
+        let header = env.new_string(header.to_string()).map_err(error)?;
+        let pixels = env.byte_array_from_slice(&image.bytes).map_err(error)?;
+        env.set_object_array_element(&values, 0, header)
+            .map_err(error)?;
+        env.set_object_array_element(&values, 1, pixels)
+            .map_err(error)?;
+        Ok(values.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(e) => {
+            fail(&mut env, Err(e));
+            std::ptr::null_mut()
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

@@ -47,6 +47,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val worker = Handler(thread.looper)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
     private var handle = 0L
+    internal val filterPreviewCache = FilterPreviewCache()
     private var choreographer: Choreographer? = null
     private var attached = false
     private var scheduled = false
@@ -114,6 +115,17 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun query(query: JSONObject, reply: (Any?) -> Unit) = post {
         val value = org.json.JSONTokener(Native.query(handle, query.toString())).nextValue()
         main.post { reply(if (value == JSONObject.NULL) null else value) }
+    }
+    internal fun filterPreviews(query: JSONObject, reply: (FilterPreviewReply?) -> Unit) = post {
+        try {
+            val status = JSONObject(Native.query(handle, query.toString()))
+            val atlas = Native.takeFilterPreviews(handle)
+            val response = FilterPreviewReply(status, atlas?.let { JSONArray(it[0] as String) }, atlas?.get(1) as? ByteArray)
+            main.post { reply(response) }
+        } catch (e: Exception) {
+            Log.w("CapyCanvas", "Filter previews unavailable", e)
+            main.post { reply(null) }
+        }
     }
     fun input(input: JSONObject, reply: ((JSONObject) -> Unit)? = null) = post {
         val value = JSONObject(Native.input(handle, input.toString()))

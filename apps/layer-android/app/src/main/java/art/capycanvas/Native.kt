@@ -18,6 +18,7 @@ internal object Native {
     @JvmStatic external fun frameCost(handle: Long, output: LongArray)
     @JvmStatic external fun snapshot(handle: Long): String?
     @JvmStatic external fun query(handle: Long, query: String): String
+    @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
     @JvmStatic external fun importLayer(handle: Long, name: String, width: Int, height: Int, rgba: ByteArray)
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String

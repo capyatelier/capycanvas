@@ -1,11 +1,15 @@
 package art.capycanvas
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,38 +21,136 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 
 private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effect", "action" to action))
 
-/** The catalog and all parameter semantics come from Rust. These views know
- * control kinds, never the individual filters. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable internal fun AdjustmentPanel(host: CanvasHost, state: JSONObject) {
+internal data class FilterPreviewReply(val status: JSONObject, val header: JSONArray?, val bytes: ByteArray?)
+internal data class FilterPreviewTile(val key: String, val image: ImageBitmap)
+/** Retained across tab switches, bounded by the shared filter catalog. */
+internal class FilterPreviewCache {
+    var request = 0L
+    val images = mutableStateMapOf<String, FilterPreviewTile>()
+}
+private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewReply? = suspendCancellableCoroutine { continuation ->
+    filterPreviews(request) { if (continuation.isActive) continuation.resume(it) }
+}
+
+/** Category/search decisions and preview sampling are shared Rust policy. Only
+ * visible row geometry and native bitmap presentation belong to this view. */
+@Composable internal fun AdjustmentPanel(host: CanvasHost, state: JSONObject, modifier: Modifier = Modifier) {
     val colors = LocalPalette.current
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        state.array("adjustments").objects().forEach { choice ->
-            val cells = choice.getJSONArray("tile_cells")
-            Column(Modifier.size((cells.getInt(0)*36).dp, (cells.getInt(1)*36).dp)
-                .testTag("adjustment-${choice.getString("id")}").clip(RoundedCornerShape(6.dp))
-                .clickable { host.dispatch(choice.getJSONObject("action")) }.padding(4.dp),
-                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                SharedIcon(choice.getString("icon"), null, Modifier.size(24.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (choice.getBoolean("animated")) SharedIcon("animation", choice.getString("tooltip"), Modifier.size(12.dp).alpha(.55f))
-                    Text(choice.getString("label"), maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        color = colors.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    val density = LocalDensity.current.density
+    val picker = state.getJSONObject("filter_picker")
+    val choices = state.array("adjustments").objects()
+    val categories = state.array("filter_categories").objects()
+    val currentChoices by rememberUpdatedState(choices)
+    val list = rememberLazyListState()
+    val focus = remember { FocusRequester() }
+    val cache = host.filterPreviewCache
+    var width by remember { mutableIntStateOf(0) }
+    val currentSize by rememberUpdatedState(listOf((width - 12*density).roundToInt().coerceIn(80,512), (40*density).roundToInt().coerceIn(1,128)))
+    val search = picker.takeUnless { it.isNull("search") }?.getString("search")
+    fun send(action: JSONObject) = host.dispatch(obj("type" to "filter_picker", "action" to action))
+    LaunchedEffect(search != null) { if (search != null) focus.requestFocus() }
+    LaunchedEffect(host) {
+        var revision: JSONArray? = null
+        var pending: Pair<Long,String>? = null
+        while (isActive) {
+            delay(200)
+            val size = currentSize
+            val key = "${revision}:$size"
+            val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
+            val filters = if (pending != null) emptyList() else currentChoices.map { it.getString("id") }
+                .filter { it in visible && cache.images[it]?.key != key }.take(8)
+            val request = ++cache.request
+            val response = host.previewReply(obj("type" to "filter_previews", "request" to request,
+                "revision" to revision, "filters" to JSONArray(filters), "size" to JSONArray(size))) ?: continue
+            revision = response.status.getJSONArray("revision")
+            if (response.status.getBoolean("accepted")) pending = request to key
+            val header = response.header ?: continue
+            val job = pending?.takeIf { it.first == header.getLong(0) } ?: continue
+            pending = null
+            if (job.second != "${revision}:$currentSize") continue
+            val bytes = response.bytes ?: continue
+            val ids = header.getJSONArray(3).values().map { it.toString() }
+            val atlasWidth = header.getInt(1); val rowHeight = header.getInt(2)/ids.size
+            val rows = withContext(Dispatchers.Default) {
+                val pixels = IntArray(atlasWidth*rowHeight)
+                ids.mapIndexed { i,id ->
+                    // The atlas is straight RGBA; Bitmap's color-int API performs
+                    // its required premultiplication. Keep conversion off the UI
+                    // and render Loopers, with one scratch row for the batch.
+                    for(p in pixels.indices) {
+                        val b = (i*pixels.size+p)*4
+                        pixels[p] = ((bytes[b+3].toInt() and 255) shl 24) or ((bytes[b].toInt() and 255) shl 16) or
+                            ((bytes[b+1].toInt() and 255) shl 8) or (bytes[b+2].toInt() and 255)
+                    }
+                    val bitmap = Bitmap.createBitmap(pixels,atlasWidth,rowHeight,Bitmap.Config.ARGB_8888)
+                    id to FilterPreviewTile(job.second, bitmap.asImageBitmap())
                 }
             }
+            cache.images.putAll(rows)
+        }
+    }
+    Column(modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.weight(1f)) {
+                if (search != null) CoreTextField(search, { send(obj("op" to "search", "query" to it)) },
+                    Modifier.fillMaxWidth().focusRequester(focus).testTag("filter-search"), height = 34.dp, maxLength = 120,
+                    placeholder = { Text(picker.getString("search_label"), maxLines = 1) })
+                else PropertyChoice("Category", categories.map { it.getString("label") },
+                    categories.indexOfFirst { it.optString("id") == picker.optString("category") }.coerceAtLeast(0)) {
+                    send(obj("op" to "category", "category" to categories[it].get("id")))
+                }
+            }
+            Box(Modifier.size(48.dp,34.dp).clip(RoundedCornerShape(6.dp)).testTag("filter-search-toggle")
+                .clickable { send(obj("op" to "toggle_search")) }, contentAlignment = Alignment.Center) {
+                SharedIcon("search", picker.getString("search_label"))
+            }
+        }
+        LazyColumn(Modifier.weight(1f).fillMaxWidth().onSizeChanged { width = it.width }.testTag("filter-list"),
+            state = list, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            var category: String? = null
+            choices.forEach { choice ->
+                val id = choice.getString("id")
+                if(category != choice.getString("category")) {
+                    category = choice.getString("category")
+                    item("category-$category") { Text(choice.getString("category_label"), Modifier.padding(8.dp), color = colors.secondary, fontWeight = FontWeight.Bold) }
+                }
+                item(id) {
+                    HoverTip(choice.getString("tooltip"), Modifier.fillMaxWidth()) {
+                        Column(Modifier.fillMaxWidth().testTag("adjustment-$id").clip(RoundedCornerShape(6.dp))
+                            .clickable { host.dispatch(choice.getJSONObject("action")) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
+                            val image = cache.images[id]?.image
+                            if(image != null) Image(image, null, Modifier.fillMaxWidth().height(40.dp).testTag("filter-preview-$id"), contentScale = ContentScale.FillBounds)
+                            else Spacer(Modifier.fillMaxWidth().height(40.dp))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                                if(choice.getBoolean("animated")) SharedIcon("animation", choice.getString("tooltip"), Modifier.padding(end = 4.dp).size(12.dp).alpha(.55f))
+                                Text(choice.getString("label"), maxLines = 1, overflow = TextOverflow.Ellipsis, color = colors.text)
+                            }
+                        }
+                    }
+                }
+            }
+            if(choices.isEmpty()) item { Text(picker.getString("empty_label"), Modifier.padding(8.dp), color = colors.secondary) }
         }
     }
 }

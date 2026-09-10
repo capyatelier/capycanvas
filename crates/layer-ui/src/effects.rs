@@ -155,7 +155,6 @@ pub struct AdjustmentChoice {
     pub label: &'static str,
     pub icon: &'static str,
     pub action: UiAction,
-    pub tile_cells: [u32; 2],
     pub category: layer_core::FilterCategory,
     pub category_label: &'static str,
     /// Capability, independent of whether a particular layer has frozen time.
@@ -184,7 +183,6 @@ pub(super) fn catalog(picker: &FilterPickerState) -> Vec<AdjustmentChoice> {
             action: UiAction::Effect {
                 action: EffectAction::Insert { effect: id },
             },
-            tile_cells: [3, 2],
             category: id.category(),
             category_label: id.category().label(),
             animated: id.program().time,

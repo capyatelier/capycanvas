@@ -265,6 +265,12 @@ impl App {
         enum Query {
             Catalog,
             RendererStats,
+            FilterPreviews {
+                request: u64,
+                revision: Option<(u64, u64)>,
+                filters: Vec<layer_core::BuiltinEffect>,
+                size: [u32; 2],
+            },
             ActionTooltip {
                 label: String,
                 action: UiAction,
@@ -302,6 +308,20 @@ impl App {
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::RendererStats => json!(self.session.renderer_stats()),
+            Query::FilterPreviews {
+                request,
+                revision,
+                filters,
+                size,
+            } => {
+                let current = self.session.filter_preview_revision();
+                let accepted = revision == Some(current)
+                    && !filters.is_empty()
+                    && self
+                        .session
+                        .request_filter_previews(request, filters, size)?;
+                json!({ "revision": current, "accepted": accepted })
+            }
             Query::ActionTooltip { label, action } => {
                 let state = self.session.state();
                 json!(
@@ -385,6 +405,20 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_filter_preview_requests_do_not_touch_the_renderer() {
+        let mut app = App::new().unwrap();
+        let response = app
+            .query(json!({"type":"filter_previews", "request":1,
+            "revision":null, "filters":["curves"], "size":[240,40]}))
+            .unwrap();
+        assert_eq!(response["accepted"], false);
+        assert_eq!(
+            response["revision"],
+            json!(app.session.filter_preview_revision())
+        );
+        assert!(app.session.renderer_mut().0.is_none());
+    }
     #[test]
     fn workspace_views_expose_shared_actions_and_transient_measurements() {
         let mut app = App::new().unwrap();

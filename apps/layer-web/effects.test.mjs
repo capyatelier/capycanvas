@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+// The ordinary Wasm renderer API, driven once per browser frame. No benchmark
+// GPU path or production instrumentation; GPU timings are the existing Stats.
+export async function benchmarkFilters({evaluate}) {
+  const choices=await evaluate("layerApp.app.state().adjustments.map(c=>c.id)");
+  const expensive=["motion_blur","gaussian_blur","domain_warp","painterly","denoise"];
+  const cases=[["Baseline",[]],...choices.map(id=>[id,[id]]),["Five expensive",expensive]];
+  const report=[];
+  for(const [label,filters] of cases) {
+    const modes=label==="Five expensive"?["local","full","animation"]:["local"];
+    for(const mode of modes) {
+      const result=await evaluate(`(${async function(filters,mode){
+        const app=layerApp.app,send=a=>app.dispatch(a),effect=a=>send({type:"effect",action:a}),ids=[];
+        send({type:"customize",action:{type:"set_panel_visible",panel:"stats",visible:true}});
+        send({type:"select_layer",id:1});
+        send({type:"set_brush_size",value:24});send({type:"set_color",rgba:[.2,.5,.7,1]});
+        for(const id of filters){
+          effect({op:"insert",effect:id});const view=app.state().layer_properties;ids.push(view.layer);
+          if(view.controls.some(c=>c.key==="animate"))effect({op:"set",layer:view.layer,key:"animate",value:{kind:"toggle",value:mode==="animation"}});
+          // Exercise non-neutral pointwise defaults as well as neighborhood work.
+          if(id==="curves")effect({op:"curve_point",layer:view.layer,key:"curve_0",index:null,point:[.45,.65],remove:false});
+          else {const c=view.controls.find(c=>c.kind.kind==="number"&&c.value.value===0&&c.key!=="time");
+            if(c)effect({op:"set",layer:view.layer,key:c.key,value:{kind:"number",value:c.kind.numeric.max*.25}});}
+        }
+        send({type:"select_layer",id:1});
+        const revision=app.state().camera.revision,frame=()=>new Promise(requestAnimationFrame),wall=[];
+        const before=app.renderer_stats().rows.find(r=>r.label==="Frames").value;
+        for(let i=0;i<180;i++){
+          const now=await frame();
+          if(mode==="local")app.pen(new Float64Array([777,i===0?1:i===179?3:2,600+i%80,500+Math.sin(i*.1)*35,.8,0,0,0,now,2,0]),revision);
+          if(mode==="full")send({type:"set_layer_opacity",id:1,opacity:.7+(i%20)*.01});
+          const start=performance.now();app.frame(now,now+1000/120);if(i>=60)wall.push(performance.now()-start);
+        }
+        await frame();const stats=app.renderer_stats();
+        for(const id of ids.reverse()){send({type:"select_layer",id});send({type:"layer",action:{op:"delete_selected"}});}
+        send({type:"select_layer",id:1});
+        wall.sort((a,b)=>a-b);
+        return {stats,frames:Number(stats.rows.find(r=>r.label==="Frames").value)-Number(before),frame_cpu: [.5,.95,.99].map(q=>wall[Math.round((wall.length-1)*q)])};
+      }})(${JSON.stringify(filters)},${JSON.stringify(mode)})`);
+      assert.ok(result.frames>=150,`${label}: insufficient rendered updates (${result.frames})`);
+      report.push({filter:label,mode,...result});
+      console.log(`${label} ${mode}: ${result.stats.rows.slice(0,2).map(r=>r.label+" "+r.value).join("; ")}`);
+      await mkdir("artifacts/benchmarks",{recursive:true});
+      await writeFile("artifacts/benchmarks/filter-web.json",JSON.stringify(report,null,2));
+    }
+  }
+}
+
 export async function checkAdjustments({call,evaluate,settle}) {
   const directory="artifacts/ui/adjustments-web";
   await mkdir(directory,{recursive:true});
