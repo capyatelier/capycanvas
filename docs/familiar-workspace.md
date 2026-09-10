@@ -17,8 +17,9 @@ models and behavior must remain portable.
   separate six-tile minimum. Settings controls must remain usable at minimum width.
 - Top, between sidebars: New, Open, Save; divider; Undo, Redo; divider; Clear,
   Fill selection, Scale/rotate selection; divider; Flip horizontal.
-- Right: Navigator (Diagnostics as its next tab), Properties, Layers (Filters as
-  its next tab), vertically stacked. Properties remains layer properties today;
+- Right: Navigator (Diagnostics as its next tab), Properties (Filters as its
+  next tab), then Layers in its own group, vertically stacked. This supersedes
+  the earlier request to group Filters with Layers. Properties remains layer properties today;
   its name also suits future selected-object properties.
 - Text, Comic and Correct line are explicitly excluded. Do not add inert buttons.
 
@@ -99,6 +100,39 @@ Validation must cover selectable/direct-open tiles, repeated presses, outside
 dismissal, switching tools, zen, all dock edges, floating toolbars, live content
 height changes, overflow scrolling, built-in-panel tiles and simultaneous docked
 and drawer projections of the same panel.
+
+## Zen modes (replacement requirement)
+
+Replace the independent Show controls / Keep Zen button visible settings with
+one **Total zen** toggle, off by default, in Appearance's Zen section and the
+Zen button context menu. Retain the icon chooser. Remove superseded settings,
+options and behavioral branches; the two modes below are the only choices.
+
+- **Partial Zen** (Total zen off): hide the regular editor chrome, but keep the
+  Zen button at the top left and standalone edge-docked toolbars visible.
+  Toolbars in tab groups and ordinary floating panels are not additional retained
+  chrome. Edge reveal is disabled; clicking the Zen button or its shortcut exits
+  Zen to show the editor again.
+- Project each retained toolbar as one row/column at its configured tile size.
+  Split at actual toolbar dividers, showing each non-empty section as a separate
+  floating-style bar. These are transient projections, not new floating workspace
+  panels. Preserve tile identities, order, actions and the normal saved layout.
+- Distribute sections evenly along their available edge, with the first and last
+  aligned to its ends. A single section is centered. Move the partial-Zen top
+  toolbar to the physical window top edge, with no menu/title-bar inset.
+  Reserve the top-left Zen button and other occupied corners so bars cannot
+  cover them. Core geometry owns reservations, section sizing and placement.
+- **Total Zen** (toggle on): hide the Zen button and toolbars too. Reveal the UI
+  by approaching occupied dock edges, using the existing fixed distances and
+  entry guard. The Tab shortcut continues toggling Zen in either mode.
+
+This supersedes earlier independent reveal-mode and button-visibility requests.
+Implement with the toolbar-divider work and shared layout/input model, GTK first;
+no per-host implementations of reveal policy or section distribution. Validate
+all edges and tile sizes, single/multiple sections, empty/adjacent dividers,
+multiple toolbars, corner collisions, entry/exit, tool drawers, and unchanged
+normal workspace persistence. The existing Zen settings are still the current
+implementation until this replacement milestone lands.
 
 ## Collapsible panel columns (added to this milestone)
 
@@ -268,15 +302,37 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - Tool Set's group buttons measure 112×36px (three tiles by one), with two-pixel
   gaps. They and subtool buttons use the existing selected-tool tint. GTK uses
   the shared symbolic SVG bank and existing cached brush previews.
-- Validation so far: 161 shared UI tests, 23 engine tests, workspace and Wasm compile,
+- Tool/panel drawers now have shared selection, direct-open, dismissal and
+  geometry rules with 272–320px per-panel drawer widths. GTK projects independent
+  panel bodies using the existing native controls, without reparenting docked
+  widgets. Dynamic contents animate; each column scrolls overflow. Every current
+  built-in panel is available as a dedicated drawer tile on GTK.
+- Layer/filter previews have one producer across dock and drawer views. Native
+  tests verify identical filter texture objects in both views, no new preview
+  requests when unchanged drawers reopen, and native context-menu ownership.
+  Opening Diagnostics in a drawer enables shared renderer telemetry too.
+  Shortcut handling stays available outside text editors; entering Zen closes
+  the drawer without accidentally revealing chrome again.
+- Validation so far: 165 shared UI tests, 23 engine tests, workspace and Wasm compile,
   strict UI/GTK Clippy, and isolated Wayland/GPU checks of all 24 brush control
   schemas at 128px. Native expression editors and color buttons exercised;
   GTK family tests activate all eight tools and every group/subtool using native
   buttons in both themes, checking selection, dimensions and applied brush state.
   Dark/light tool-family, HSV/HLS and narrow-panel captures are in the ignored
   `artifacts/familiar-workspace/` directory.
+- Native drawer checks cover eleven tool/panel tiles in both themes, all dock
+  edges, live numeric editing, diagnostics and shared preview reuse. Captures
+  use the `drawer-` prefix in the same directory. Existing side-panel expansion
+  regression also passes. Floating/constrained placement and stacked-column
+  measurements have shared geometry tests; collapsed-column UI is not built yet.
+- Release Wayland G-Pen smoke benchmark (384px, 6 seconds): 722 submitted frames,
+  721 displayed, approximately 119.7Hz. CPU worker median/p95/p99:
+  0.263/0.575/0.693ms; GPU: 0.138/0.522/3.037ms; GTK frame handler:
+  0.012/0.032/0.045ms. This synthetic-input run checks the normal drawing path,
+  not physical tablet delivery or a before/after drawer-open comparison. Raw
+  output is `/tmp/capy-tool-drawer-pacing.json`, not a checked-in artifact.
 - Still to implement: the new default layout,
-  toolbar dividers and tool/panel drawers above, missing canvas tools/commands,
+  toolbar dividers and replacement Zen modes above, missing canvas tools/commands,
   collapsible columns, the full application menus, Navigator, rulers, shortcuts
   and full functional/performance validation.
 - The complete eight-tool ribbon is currently exercised by the GTK review test;

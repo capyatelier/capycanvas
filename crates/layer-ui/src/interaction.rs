@@ -37,6 +37,9 @@ pub struct ChromeFacts {
     /// Actual animated columns from shared layout, for outside contact.
     #[serde(default)]
     pub expanded_panel: Option<crate::PanelExpansion>,
+    /// Actual animated content drawer; origin hit-testing stays in Rust.
+    #[serde(default)]
+    pub content_drawer: Option<crate::Bounds>,
     /// Native/DOM tab hit for the current contact; labels have host-measured widths.
     #[serde(default)]
     pub contact_tab: Option<crate::Panel>,

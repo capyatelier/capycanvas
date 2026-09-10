@@ -18,6 +18,8 @@ pub use tools::{
 };
 mod cursor;
 mod customization;
+mod drawers;
+pub use drawers::{ContentDrawer, DrawerDismissal, DrawerPlacement, TileAnchor};
 mod interaction;
 mod layout;
 mod numeric;
@@ -101,6 +103,7 @@ pub enum ToolbarControl {
     Size { pixels: u16 },
     Color,
     Opacity,
+    Panel { panel: Panel },
 }
 pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
     ToolbarControl::Command {

@@ -15,6 +15,8 @@ use std::{
 
 #[path = "workspace_customization.rs"]
 mod customization;
+#[path = "workspace_drawer.rs"]
+mod drawers;
 
 mod allocation {
     use super::*;
@@ -184,6 +186,11 @@ mod allocation {
                 .borrow()
                 .upgrade()
                 .and_then(|w| w.customization.geometry(&w));
+            let drawer = self
+                .owner
+                .borrow()
+                .upgrade()
+                .and_then(|w| w.drawer.geometry(&w));
             for (slot, child) in self.children.borrow().iter() {
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
@@ -206,6 +213,7 @@ mod allocation {
                         height: TILE_SIZE,
                     }),
                     Slot::Status => Some(resolved.status),
+                    Slot::Drawer => drawer.as_ref().map(|d| d.bounds),
                     Slot::Group(id) => {
                         let expanded = expansion.filter(|e| e.group == *id);
                         child
@@ -357,12 +365,23 @@ enum Slot {
     Group(u32),
     Divider(u32),
     FloatingResize(u32, ResizeEdge),
+    Drawer,
 }
 glib::wrapper! {
     pub struct DockSurface(ObjectSubclass<allocation::DockSurface>)
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl DockSurface {
+    fn raise_drawer(&self) {
+        let mut children = self.imp().children.borrow_mut();
+        if let Some(index) = children.iter().position(|(s, _)| *s == Slot::Drawer)
+            && index + 1 != children.len()
+        {
+            let item = children.remove(index);
+            item.1.insert_after(self, children.last().map(|(_, w)| w));
+            children.push(item);
+        }
+    }
     fn raise_group(&self, id: u32) {
         let mut children = self.imp().children.borrow_mut();
         let slots: Vec<_> = children
@@ -390,7 +409,7 @@ impl DockSurface {
         self.remove_slots(|slot| {
             !matches!(
                 slot,
-                Slot::Canvas | Slot::Header | Slot::ZenButton | Slot::Status
+                Slot::Canvas | Slot::Header | Slot::ZenButton | Slot::Status | Slot::Drawer
             )
         });
     }
@@ -636,12 +655,13 @@ pub struct Workspace {
     tool_settings: crate::tool_panels::ToolSettings,
     color_panel: crate::tool_panels::ColorPanel,
     pub(crate) layer_panel: crate::layers::LayerPanel,
-    pub(crate) effects: crate::effects::EffectPanels,
+    pub(crate) effects: Rc<crate::effects::EffectPanels>,
     tab: gtk::Label,
     view_info: gtk::Label,
     status: gtk::Label,
     pub(crate) preferences: crate::preferences::Preferences,
     customization: customization::Customization,
+    pub(crate) drawer: drawers::Drawer,
     refreshing: Cell<bool>,
     ticking: Cell<bool>,
     frame_deadline: Cell<u64>,
@@ -721,7 +741,7 @@ impl Workspace {
         let color_panel = crate::tool_panels::ColorPanel::new();
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layer_panel = crate::layers::LayerPanel::new();
-        let effects = crate::effects::EffectPanels::new();
+        let effects = Rc::new(crate::effects::EffectPanels::new());
         let size_number = crate::number_control::NumberControl::new(
             NumericControl::brush_size(),
             "Brush size",
@@ -786,6 +806,7 @@ impl Workspace {
             status,
             preferences: crate::preferences::Preferences::new(),
             customization: customization::Customization::new(),
+            drawer: drawers::Drawer::new(),
             refreshing: Cell::new(false),
             ticking: Cell::new(false),
             frame_deadline: Cell::new(0),
@@ -836,48 +857,8 @@ impl Workspace {
         sizes.append(&row);
         self.customization
             .track(Panel::Sizes, PanelControl::BrushSize, &row);
-        let grid = gtk::FlowBox::builder()
-            .homogeneous(true)
-            .min_children_per_line(2)
-            .max_children_per_line(4)
-            .selection_mode(gtk::SelectionMode::None)
-            .column_spacing(2)
-            .row_spacing(4)
-            .build();
-        for &value in BRUSH_SIZES {
-            let button = self.action_button("", UiAction::SetBrushSize { value });
-            button.add_css_class("flat");
-            button.add_css_class("size-preset");
-            button.set_tooltip_text(Some(&format!("{value} px")));
-            let labels = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            // A fixed-height native UI glyph, not a canvas/brush raster path.
-            // Font-size-dependent glyph ascent otherwise inflates every row.
-            let dot = gtk::DrawingArea::builder().height_request(28).build();
-            dot.set_draw_func(move |area, cr, width, height| {
-                let color = area.color();
-                cr.set_source_rgba(
-                    color.red() as f64,
-                    color.green() as f64,
-                    color.blue() as f64,
-                    color.alpha() as f64,
-                );
-                cr.arc(
-                    width as f64 * 0.5,
-                    height as f64 * 0.5,
-                    (2.0 + value.sqrt() * 1.2).min(27.0) as f64 * 0.5,
-                    0.0,
-                    std::f64::consts::TAU,
-                );
-                let _ = cr.fill();
-            });
-            labels.append(&dot);
-            let label = gtk::Label::new(Some(&value.to_string()));
-            label.add_css_class("caption");
-            labels.append(&label);
-            button.set_child(Some(&labels));
-            grid.insert(&button, -1);
-            self.size_buttons.borrow_mut().push((value, button));
-        }
+        let (grid, buttons) = crate::tool_panels::size_grid(self);
+        *self.size_buttons.borrow_mut() = buttons;
         sizes.append(&grid);
         self.customization
             .track(Panel::Sizes, PanelControl::SizePresets, &grid);
@@ -1191,7 +1172,7 @@ impl Workspace {
         menu
     }
 
-    fn watch_popover(self: &Rc<Self>, popover: &gtk::Popover) {
+    pub(crate) fn watch_popover(self: &Rc<Self>, popover: &gtk::Popover) {
         self.popovers.borrow_mut().retain(|p| p.upgrade().is_some());
         self.popovers.borrow_mut().push(popover.downgrade());
         popover.connect_visible_notify(glib::clone!(
@@ -1227,6 +1208,7 @@ impl Workspace {
         let facts = ChromeFacts {
             contact_tab,
             expanded_panel: self.customization.placement(),
+            content_drawer: self.drawer.placement().map(|p| p.bounds),
             held: self.chrome_held.get(),
             dragging: self.dragging.get(),
             popup_open: self
@@ -1692,6 +1674,7 @@ impl Workspace {
             != 0
         {
             self.customization.refresh(self);
+            self.drawer.refresh(self, &state, regions);
         }
         self.refreshing.set(false);
         if regions & (regions::LAYOUT | regions::SETTINGS) != 0 {

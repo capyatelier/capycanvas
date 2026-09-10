@@ -635,7 +635,7 @@ impl Bounds {
     pub fn contains(self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
-    fn intersection(self, other: Self) -> Option<Self> {
+    pub(crate) fn intersection(self, other: Self) -> Option<Self> {
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
         let width = (self.x + self.width).min(other.x + other.width) - x;

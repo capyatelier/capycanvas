@@ -63,10 +63,8 @@ fn button(icon: &str, tooltip: &str) -> gtk::Button {
     b.set_tooltip_text(Some(tooltip));
     b
 }
-fn action(w: &Workspace, action: A) {
-    if let Some(w) = w.layer_panel.owner.borrow().upgrade() {
-        w.dispatch(UiAction::Layer { action });
-    }
+fn action(w: &Rc<Workspace>, action: A) {
+    w.dispatch(UiAction::Layer { action });
 }
 fn row_state(item: &gtk::ListItem) -> Option<LayerState> {
     Some(
@@ -273,10 +271,17 @@ fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
     }
 }
 impl LayerPanel {
+    #[cfg(test)]
+    pub fn preview_requests(&self) -> u64 {
+        self.next_preview.get() - 1
+    }
     pub fn new() -> Self {
         let owner: Rc<RefCell<Weak<Workspace>>> = Rc::default();
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("layers-panel");
+        let context = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
+        context.set_parent(&root);
+        context.set_has_arrow(false);
         let header = gtk::Box::new(gtk::Orientation::Vertical, 2);
         header.add_css_class("layer-header");
         root.append(&header);
@@ -331,6 +336,8 @@ impl LayerPanel {
         let factory = gtk::SignalListItemFactory::new();
         let rows: Rc<RefCell<HashMap<usize, Row>>> = Rc::default();
         factory.connect_setup(glib::clone!(
+            #[strong]
+            context,
             #[strong]
             rows,
             #[strong]
@@ -546,6 +553,8 @@ impl LayerPanel {
                     let click = gtk::GestureClick::new();
                     click.set_button(3);
                     click.connect_pressed(glib::clone!(
+                        #[strong]
+                        context,
                         #[weak]
                         item,
                         #[strong]
@@ -556,14 +565,15 @@ impl LayerPanel {
                                 return;
                             };
                             g.set_state(gtk::EventSequenceState::Claimed);
-                            w.layer_panel
-                                .menu(&w, &g.widget().unwrap(), row.id, is_mask, x, y);
+                            menu(&w, &context, &g.widget().unwrap(), row.id, is_mask, [x, y]);
                         }
                     ));
                     widget.add_controller(click);
                     let hold = gtk::GestureLongPress::new();
                     hold.set_touch_only(true);
                     hold.connect_pressed(glib::clone!(
+                        #[strong]
+                        context,
                         #[weak]
                         item,
                         #[strong]
@@ -574,8 +584,7 @@ impl LayerPanel {
                                 return;
                             };
                             g.set_state(gtk::EventSequenceState::Claimed);
-                            w.layer_panel
-                                .menu(&w, &g.widget().unwrap(), row.id, is_mask, x, y);
+                            menu(&w, &context, &g.widget().unwrap(), row.id, is_mask, [x, y]);
                         }
                     ));
                     widget.add_controller(hold);
@@ -727,9 +736,6 @@ impl LayerPanel {
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         footer.add_css_class("layer-footer");
         root.append(&footer);
-        let context = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
-        context.set_parent(&root);
-        context.set_has_arrow(false);
         Self {
             root,
             header,
@@ -759,19 +765,23 @@ impl LayerPanel {
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
         *self.owner.borrow_mut() = Rc::downgrade(w);
-        glib::timeout_add_local(
-            std::time::Duration::from_millis(120),
-            glib::clone!(
-                #[weak]
-                w,
-                #[upgrade_or]
-                glib::ControlFlow::Break,
-                move || {
-                    w.layer_panel.update_previews(&w);
-                    glib::ControlFlow::Continue
-                }
-            ),
-        );
+        w.watch_popover(self.context.upcast_ref());
+        if self.root == w.layer_panel.root {
+            glib::timeout_add_local(
+                std::time::Duration::from_millis(120),
+                glib::clone!(
+                    #[weak]
+                    w,
+                    #[upgrade_or]
+                    glib::ControlFlow::Break,
+                    move || {
+                        w.layer_panel
+                            .update_previews(&w, w.drawer.layers().as_deref());
+                        glib::ControlFlow::Continue
+                    }
+                ),
+            );
+        }
         for (icon, label, a) in [
             (
                 "layer-plus-symbolic",
@@ -917,13 +927,13 @@ impl LayerPanel {
         let more = button("layer-more-symbolic", "Layer actions");
         more.set_hexpand(true);
         more.set_halign(gtk::Align::End);
+        let context = &self.context;
         more.connect_clicked(glib::clone!(
+            #[weak]
+            context,
             #[weak]
             w,
             move |b| {
-                if w.layer_panel.updating.get() {
-                    return;
-                }
                 if let Some(id) = active(&w) {
                     let mask = w.gpu.borrow().as_ref().is_some_and(|g| {
                         g.session
@@ -932,8 +942,14 @@ impl LayerPanel {
                             .iter()
                             .any(|l| l.id == id && l.mask_selected)
                     });
-                    w.layer_panel
-                        .menu(&w, b.upcast_ref(), id, mask, 0., b.height() as f64);
+                    menu(
+                        &w,
+                        &context,
+                        b.upcast_ref(),
+                        id,
+                        mask,
+                        [0., b.height() as f64],
+                    );
                 }
             }
         ));
@@ -1088,22 +1104,27 @@ impl LayerPanel {
         }
         self.updating.set(false);
     }
-    fn update_previews(&self, w: &Workspace) {
-        if !self.root.is_mapped() {
+    fn update_previews(&self, w: &Workspace, extra: Option<&Self>) {
+        let rows: Vec<_> = std::iter::once(self)
+            .chain(extra)
+            .filter(|v| v.root.is_mapped())
+            .flat_map(|view| {
+                view.rows
+                    .borrow()
+                    .values()
+                    .filter(|r| {
+                        r.id.get() != 0
+                            && r.root.compute_bounds(&view.list).is_some_and(|b| {
+                                b.y() + b.height() > 0. && b.y() < view.list.height() as f32
+                            })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if rows.is_empty() {
             return;
         }
-        let rows: Vec<_> = self
-            .rows
-            .borrow()
-            .values()
-            .filter(|r| {
-                r.id.get() != 0
-                    && r.root.compute_bounds(&self.list).is_some_and(|b| {
-                        b.y() + b.height() > 0. && b.y() < self.list.height() as f32
-                    })
-            })
-            .cloned()
-            .collect();
         let mut gpu = w.gpu.borrow_mut();
         let Some(g) = gpu.as_mut() else { return };
         if g.session.renderer_mut().ready().is_err() {
@@ -1178,27 +1199,29 @@ impl LayerPanel {
             }
         }
     }
-    fn menu(&self, w: &Rc<Workspace>, anchor: &gtk::Widget, id: u64, mask: bool, x: f64, y: f64) {
-        action(w, A::Context { id, mask });
-        let menu = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .and_then(|g| g.session.layer_menu(id, mask).ok());
-        let Some(menu) = menu else { return };
-        w.populate_workspace_menu(&self.context, menu);
-        if let Some(p) =
-            anchor.compute_point(&self.root, &gtk::graphene::Point::new(x as f32, y as f32))
-        {
-            self.context.set_pointing_to(Some(&gdk::Rectangle::new(
-                p.x() as i32,
-                p.y() as i32,
-                1,
-                1,
-            )));
-        }
-        self.context.popup();
+}
+fn menu(
+    w: &Rc<Workspace>,
+    context: &gtk::PopoverMenu,
+    anchor: &gtk::Widget,
+    id: u64,
+    mask: bool,
+    [x, y]: [f64; 2],
+) {
+    action(w, A::Context { id, mask });
+    let menu = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .and_then(|g| g.session.layer_menu(id, mask).ok());
+    let Some(menu) = menu else { return };
+    w.populate_workspace_menu(context, menu);
+    if let Some(p) = context.parent().and_then(|root| {
+        anchor.compute_point(&root, &gtk::graphene::Point::new(x as f32, y as f32))
+    }) {
+        context.set_pointing_to(Some(&gdk::Rectangle::new(p.x() as i32, p.y() as i32, 1, 1)));
     }
+    context.popup();
 }
 impl Drop for LayerPanel {
     fn drop(&mut self) {

@@ -342,6 +342,32 @@ impl<R: CanvasRenderer> UiSession<R> {
                         std::mem::take(&mut self.interaction.keep_chrome_until_contact);
                 }
                 if let ChromeEvent::Contact { position, .. } = event
+                    && let Some(drawer) = &self.state.customization.drawer
+                    && drawer.dismissal == DrawerDismissal::OutsideContact
+                    && !self.button_zen()
+                    && !facts.popup_open
+                    && !facts
+                        .content_drawer
+                        .is_some_and(|b| b.contains(position[0], position[1]))
+                    && !drawer
+                        .placement(
+                            &self.state.workspace.layout,
+                            viewport,
+                            &vec![0.0; drawer.columns.len()],
+                        )
+                        .is_some_and(|p| p.anchor.contains(position[0], position[1]))
+                {
+                    reply.change = self.dispatch(UiAction::Customize {
+                        action: CustomizationAction::CloseExpanded,
+                    })?;
+                    // Another tile should select/open on this same click. A
+                    // bare canvas contact only dismisses and must not paint.
+                    reply.handled = self
+                        .layout(viewport)
+                        .tile_at(&self.state.workspace.layout, position)
+                        .is_none();
+                }
+                if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
                     && !self.button_zen()
                     && !facts.popup_open
@@ -425,7 +451,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.dismiss_popups = true;
                     }
                     if key == "escape"
-                        && self.state.customization.expanded.is_some()
+                        && self.state.customization.has_drawer()
                         && !self.interaction.facts.popup_open
                     {
                         reply.change = self.dispatch(UiAction::Customize {
@@ -435,7 +461,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     let blocked = editing
                         || self.state.settings_open
-                        || self.state.customization.is_open()
+                        || self.state.customization.blocks_shortcuts()
                         || self.interaction.facts.popup_open;
                     if !blocked {
                         if let Some(id) = divider.filter(|_| {
@@ -955,7 +981,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
         use regions::*;
         let revision = self.engine.document().revision;
-        let was_expanded = self.state.customization.expanded.is_some();
+        let was_expanded = self.state.customization.has_drawer();
+        let was_zen = self.state.workspace.zen_mode;
+        let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
         let workspace_before = matches!(
             &action,
             UiAction::Customize { .. }
@@ -1133,7 +1161,30 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .find(|t| t.id == tile)
                     .ok_or("The tool no longer exists")?
                     .control;
-                return self.dispatch(control.action());
+                let selected = self
+                    .panel_view(panel)?
+                    .tiles
+                    .iter()
+                    .find(|t| t.id == tile)
+                    .is_some_and(|t| t.choice.selected && t.enabled);
+                if matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                    && control.drawer_columns().is_some()
+                    && (!control.selectable()
+                        || selected
+                        || self
+                            .state
+                            .customization
+                            .drawer
+                            .as_ref()
+                            .is_some_and(|d| d.anchor == (TileAnchor { panel, tile })))
+                {
+                    return self.dispatch(UiAction::Customize {
+                        action: CustomizationAction::ToggleToolDrawer {
+                            anchor: TileAnchor { panel, tile },
+                        },
+                    });
+                }
+                return self.dispatch(control.action().ok_or("This panel drawer is unavailable")?);
             }
             UiAction::RestoreWorkspace { workspace } => {
                 workspace.validate()?;
@@ -1494,7 +1545,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .expanded
                 .and_then(|panel| layout.active_panel(panel));
         }
-        if was_expanded && self.state.customization.expanded.is_none() {
+        if self.state.customization.drawer.is_some()
+            && (tool_before != (self.state.brush.tool, self.layer_interaction.tool)
+                || self.state.customization.expanded.is_some()
+                || (changed & LAYOUT != 0
+                    && self.state.customization.drawer.as_ref().is_some_and(|d| {
+                        let layout = &self.state.workspace.layout;
+                        layout.active_panel(d.anchor.panel) != Some(d.anchor.panel)
+                            || layout
+                                .panel(d.anchor.panel)
+                                .map_or(true, |p| !p.tiles().iter().any(|t| t.id == d.anchor.tile))
+                    })))
+        {
+            self.state.customization.drawer = None;
+            changed |= CUSTOMIZATION;
+        }
+        if was_expanded && !self.state.customization.has_drawer() && was_zen {
             self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
         }
         if save_settings {
@@ -1830,6 +1896,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::ZenMode => {
                 self.state.workspace.zen_mode = !self.state.workspace.zen_mode;
+                if self.state.workspace.zen_mode {
+                    self.state.customization.drawer = None;
+                }
                 self.interaction.zen_entry_guard = self.state.workspace.zen_mode
                     && self.interaction.hover.is_some_and(|[x, y]| {
                         (0.0..ZEN_CORNER_GUARD).contains(&x) && (0.0..ZEN_CORNER_GUARD).contains(&y)
@@ -1837,7 +1906,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.interaction.hidden = self.state.workspace.zen_mode;
                 self.interaction.keep_chrome_until_contact = false;
                 self.interaction.keyboard_chrome = false;
-                Ok((LAYOUT, false))
+                Ok((LAYOUT | CUSTOMIZATION, false))
             }
         }
     }
@@ -1933,9 +2002,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
-        if regions & regions::LAYOUT != 0 {
+        if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.engine.backend_mut().set_telemetry_enabled(
-                self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats),
+                self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
+                    || self
+                        .state
+                        .customization
+                        .drawer
+                        .as_ref()
+                        .is_some_and(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
             );
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
@@ -6529,6 +6604,191 @@ mod tests {
         .unwrap();
         assert!(app.state.customization.expanded.is_none());
     }
+    #[test]
+    fn tool_drawer_selection_dismissal_and_configuration_are_core_policy() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let viewport = [1200.0, 900.0];
+        chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
+        let tiles = s
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .to_vec();
+        let activate = |s: &mut UiSession<Recorder>, index: usize| {
+            s.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile: tiles[index].id,
+            })
+            .unwrap();
+        };
+        // Brush is not the initial Pen tool. First selects, second opens.
+        activate(&mut s, 0);
+        assert!(s.state.customization.drawer.is_none());
+        assert_eq!(s.state.brush.tool, Tool::Brush);
+        activate(&mut s, 0);
+        assert_eq!(
+            s.state.customization.drawer.as_ref().unwrap().columns,
+            [vec![Panel::Brushes], vec![Panel::ToolSettings]]
+        );
+        s.dispatch(UiAction::SetBrushSize { value: 123.0 }).unwrap();
+        assert!(s.state.customization.drawer.is_some());
+        let placement = s
+            .state
+            .customization
+            .drawer
+            .as_ref()
+            .unwrap()
+            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0])
+            .unwrap();
+        let facts = ChromeFacts {
+            content_drawer: Some(placement.bounds),
+            ..Default::default()
+        };
+        let point = |b: Bounds| [b.x + 10.0, b.y + 10.0];
+        assert!(
+            !chrome(
+                &mut s,
+                ChromeEvent::Contact {
+                    position: point(placement.anchor),
+                    canvas: false
+                },
+                facts
+            )
+            .handled
+        );
+        activate(&mut s, 0);
+        assert!(s.state.customization.drawer.is_none());
+        activate(&mut s, 0);
+        // Another tool selects and closes; it does not open its drawer yet.
+        let other = ContentDrawer::for_tile(
+            &s.state.workspace.layout,
+            TileAnchor {
+                panel: Panel::Toolbar,
+                tile: tiles[1].id,
+            },
+        )
+        .unwrap()
+        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0])
+        .unwrap();
+        assert!(
+            !chrome(
+                &mut s,
+                ChromeEvent::Contact {
+                    position: point(other.anchor),
+                    canvas: false
+                },
+                facts
+            )
+            .handled
+        );
+        activate(&mut s, 1);
+        assert!(s.state.customization.drawer.is_none());
+        assert_eq!(s.state.brush.tool, Tool::Eraser);
+        let tool = s.state.brush.tool;
+        activate(&mut s, 6); // Color is a direct-open, non-selectable tile.
+        assert_eq!(s.state.brush.tool, tool);
+        assert_eq!(
+            s.state.customization.drawer.as_ref().unwrap().columns,
+            [vec![Panel::Color]]
+        );
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ShowAllControls {
+                panel: Panel::Sizes,
+            },
+        })
+        .unwrap();
+        assert!(s.state.customization.drawer.is_none());
+        activate(&mut s, 6);
+        assert!(s.state.customization.expanded.is_none());
+        let reply = chrome(
+            &mut s,
+            ChromeEvent::Contact {
+                position: [900.0, 800.0],
+                canvas: true,
+            },
+            ChromeFacts::default(),
+        );
+        assert!(reply.handled && !reply.paint);
+        assert!(s.state.customization.drawer.is_none());
+        // Explicit policy is for persistent column drawers: outside does not
+        // dismiss, without a per-platform special case.
+        activate(&mut s, 6);
+        s.state.customization.drawer.as_mut().unwrap().dismissal = DrawerDismissal::Explicit;
+        chrome(
+            &mut s,
+            ChromeEvent::Contact {
+                position: [900.0, 800.0],
+                canvas: true,
+            },
+            ChromeFacts::default(),
+        );
+        assert!(s.state.customization.drawer.is_some());
+        activate(&mut s, 6);
+        invoke(&mut s, CommandId::ZenMode);
+        activate(&mut s, 6);
+        chrome(
+            &mut s,
+            ChromeEvent::Contact {
+                position: [900.0, 800.0],
+                canvas: true,
+            },
+            ChromeFacts::default(),
+        );
+        assert!(!chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden);
+        // Removing the originating tile also closes the transient drawer.
+        activate(&mut s, 6);
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::RemoveTool {
+                panel: Panel::Toolbar,
+                tile: tiles[6].id,
+            },
+        })
+        .unwrap();
+        assert!(s.state.customization.drawer.is_none());
+    }
+
+    #[test]
+    fn tool_drawer_shortcuts_select_tools_and_zen_entry_stays_hidden() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
+        let tile = s
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()[6]
+            .id;
+        let open = UiAction::ActivateTile {
+            panel: Panel::Toolbar,
+            tile,
+        };
+        let press = |s: &mut UiSession<Recorder>, key: &str| {
+            s.input(UiInput::Key {
+                key: key.into(),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::default(),
+                editing: false,
+                divider: None,
+            })
+            .unwrap()
+        };
+        s.dispatch(open.clone()).unwrap();
+        assert!(press(&mut s, "b").handled);
+        assert_eq!(s.state.brush.tool, Tool::Brush);
+        assert!(s.state.customization.drawer.is_none());
+        s.dispatch(open).unwrap();
+        assert!(press(&mut s, "tab").chrome_hidden);
+        assert!(s.state.customization.drawer.is_none());
+        assert!(chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default()).chrome_hidden);
+    }
+
     #[test]
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
         let mut app = session();

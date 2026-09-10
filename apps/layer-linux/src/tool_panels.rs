@@ -208,6 +208,89 @@ impl ToolSettings {
     }
 }
 
+pub fn size_grid(workspace: &Rc<Workspace>) -> (gtk::FlowBox, Vec<(f32, gtk::Button)>) {
+    let mut buttons = Vec::new();
+    let grid = gtk::FlowBox::builder()
+        .homogeneous(true)
+        .min_children_per_line(2)
+        .max_children_per_line(4)
+        .selection_mode(gtk::SelectionMode::None)
+        .column_spacing(2)
+        .row_spacing(4)
+        .build();
+    for &value in layer_ui::BRUSH_SIZES {
+        let button = workspace.action_button("", UiAction::SetBrushSize { value });
+        button.add_css_class("flat");
+        button.add_css_class("size-preset");
+        button.set_tooltip_text(Some(&format!("{value} px")));
+        let labels = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        // A fixed-height native UI glyph, not a canvas/brush raster path.
+        // Font-size-dependent glyph ascent otherwise inflates every row.
+        let dot = gtk::DrawingArea::builder().height_request(28).build();
+        dot.set_draw_func(move |area, cr, width, height| {
+            let color = area.color();
+            cr.set_source_rgba(
+                color.red() as f64,
+                color.green() as f64,
+                color.blue() as f64,
+                color.alpha() as f64,
+            );
+            cr.arc(
+                width as f64 * 0.5,
+                height as f64 * 0.5,
+                (2.0 + value.sqrt() * 1.2).min(27.0) as f64 * 0.5,
+                0.0,
+                std::f64::consts::TAU,
+            );
+            let _ = cr.fill();
+        });
+        labels.append(&dot);
+        let label = gtk::Label::new(Some(&value.to_string()));
+        label.add_css_class("caption");
+        labels.append(&label);
+        button.set_child(Some(&labels));
+        grid.insert(&button, -1);
+        buttons.push((value, button));
+    }
+    (grid, buttons)
+}
+
+pub struct SizePanel {
+    pub root: gtk::Box,
+    number: NumberControl,
+    buttons: Vec<(f32, gtk::Button)>,
+}
+impl SizePanel {
+    pub fn new(workspace: &Rc<Workspace>) -> Self {
+        let root = body();
+        root.set_spacing(12);
+        let number = NumberControl::new(layer_ui::NumericControl::brush_size(), "Brush size", "");
+        number.connect_value_changed(glib::clone!(
+            #[weak]
+            workspace,
+            move |i| {
+                workspace.dispatch(UiAction::SetBrushSize {
+                    value: i.value() as f32,
+                });
+            }
+        ));
+        let (grid, buttons) = size_grid(workspace);
+        root.append(&number);
+        root.append(&grid);
+        Self {
+            root,
+            number,
+            buttons,
+        }
+    }
+    pub fn refresh(&self, brush: &layer_ui::BrushState) {
+        self.number.set_value(brush.diameter as f64);
+        for (value, button) in &self.buttons {
+            selected(button, *value == brush.diameter);
+        }
+    }
+}
+
 fn body() -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let inset = layer_ui::PANEL_CONTENT_INSET as i32;

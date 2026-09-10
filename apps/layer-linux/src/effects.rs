@@ -8,7 +8,7 @@ use layer_ui::{
 };
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     rc::Rc,
 };
 
@@ -32,7 +32,7 @@ pub struct EffectPanels {
     picker_visible: RefCell<Vec<std::sync::Arc<str>>>,
     picker_rows: RefCell<HashMap<std::sync::Arc<str>, (gtk::Button, gtk::Picture)>>,
     preview_key: Cell<Option<PreviewKey>>,
-    preview_loaded: RefCell<HashSet<std::sync::Arc<str>>>,
+    preview_loaded: RefCell<HashMap<std::sync::Arc<str>, gtk::gdk::MemoryTexture>>,
     preview_request: Cell<u64>,
     preview_pending: Cell<Option<(u64, PreviewKey)>>,
     pub properties: gtk::Box,
@@ -54,6 +54,10 @@ enum Field {
     Gradient(GradientEditor),
 }
 impl EffectPanels {
+    #[cfg(test)]
+    pub fn preview_requests(&self) -> u64 {
+        self.preview_request.get()
+    }
     pub fn new() -> Self {
         let adjustments = gtk::Box::new(gtk::Orientation::Vertical, 6);
         adjustments.add_css_class("filter-picker");
@@ -136,7 +140,7 @@ impl EffectPanels {
             picker_visible: RefCell::new(Vec::new()),
             picker_rows: RefCell::new(HashMap::new()),
             preview_key: Cell::new(None),
-            preview_loaded: RefCell::new(HashSet::new()),
+            preview_loaded: RefCell::new(HashMap::new()),
             preview_request: Cell::new(0),
             preview_pending: Cell::new(None),
             properties,
@@ -150,21 +154,27 @@ impl EffectPanels {
             stats_samples,
         }
     }
-    pub fn bind(&self, w: &Rc<Workspace>, state: &UiState) {
+    pub fn bind(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {
         if self.picker_bound.replace(true) {
             return;
         }
-        let weak = Rc::downgrade(w);
-        glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
-            let Some(w) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            if w.effects.stats.is_mapped() {
-                w.effects.refresh_stats(&w);
-            }
-            w.effects.refresh_previews(&w);
-            glib::ControlFlow::Continue
-        });
+        // One producer services every projection, including open drawers.
+        if Rc::ptr_eq(self, &w.effects) {
+            let weak = Rc::downgrade(w);
+            glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                let Some(w) = weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
+                let extra = w.drawer.effects();
+                for view in std::iter::once(&w.effects).chain(extra.iter()) {
+                    if view.stats.is_mapped() {
+                        view.refresh_stats(&w);
+                    }
+                }
+                w.effects.refresh_previews(&w, extra.as_deref());
+                glib::ControlFlow::Continue
+            });
+        }
         self.category.set_model(Some(&gtk::StringList::new(
             &state
                 .filter_categories
@@ -175,12 +185,13 @@ impl EffectPanels {
         self.category.connect_selected_notify(glib::clone!(
             #[weak]
             w,
+            #[weak(rename_to = this)]
+            self,
             move |drop| {
-                if w.effects.picker_updating.get() {
+                if this.picker_updating.get() {
                     return;
                 }
-                let choice = w
-                    .effects
+                let choice = this
                     .picker_categories
                     .borrow()
                     .get(drop.selected() as usize)
@@ -201,12 +212,14 @@ impl EffectPanels {
         self.search_button.connect_clicked(glib::clone!(
             #[weak]
             w,
+            #[weak(rename_to = this)]
+            self,
             move |_| {
                 w.dispatch(UiAction::FilterPicker {
                     action: FilterPickerAction::ToggleSearch,
                 });
-                if w.effects.search_entry.is_visible() {
-                    w.effects.search_entry.grab_focus();
+                if this.search_entry.is_visible() {
+                    this.search_entry.grab_focus();
                 }
             }
         ));
@@ -327,7 +340,7 @@ impl EffectPanels {
         }
         *self.picker_visible.borrow_mut() = ids;
     }
-    fn refresh_previews(&self, w: &Workspace) {
+    fn refresh_previews(&self, w: &Workspace, extra: Option<&Self>) {
         let mut gpu = w.gpu.borrow_mut();
         let Some(gpu) = gpu.as_mut() else {
             return;
@@ -349,57 +362,72 @@ impl EffectPanels {
             let height = result.image.height / count as u32;
             let stride = result.image.stride as usize;
             let bytes = glib::Bytes::from_owned(result.image.bytes);
-            let rows = self.picker_rows.borrow();
             for (i, id) in result.filters.into_iter().enumerate() {
-                if let Some((_, picture)) = rows.get(&id) {
-                    let start = i * height as usize * stride;
-                    let row =
-                        glib::Bytes::from_bytes(&bytes, start..start + height as usize * stride);
-                    let texture = gtk::gdk::MemoryTexture::new(
-                        result.image.width as i32,
-                        height as i32,
-                        gtk::gdk::MemoryFormat::R8g8b8a8,
-                        &row,
-                        stride,
-                    );
-                    picture.set_paintable(Some(&texture));
-                    self.preview_loaded.borrow_mut().insert(id);
-                }
+                let start = i * height as usize * stride;
+                let row = glib::Bytes::from_bytes(&bytes, start..start + height as usize * stride);
+                let texture = gtk::gdk::MemoryTexture::new(
+                    result.image.width as i32,
+                    height as i32,
+                    gtk::gdk::MemoryFormat::R8g8b8a8,
+                    &row,
+                    stride,
+                );
+                self.preview_loaded.borrow_mut().insert(id, texture);
             }
         }
-        if !self.adjustments.is_mapped() || self.preview_pending.get().is_some() {
+        if self.preview_pending.get().is_some() {
             return;
         }
-        let rows = self.picker_rows.borrow();
-        let on_screen: Vec<_> = self
-            .picker_visible
-            .borrow()
-            .iter()
-            .filter_map(|id| {
-                let (_, picture) = rows.get(id)?;
-                let rect = picture.compute_bounds(&self.picker_scroller)?;
-                (rect.y() + rect.height() > 0. && rect.y() < self.picker_scroller.height() as f32)
-                    .then_some((id.clone(), picture))
+        let on_screen: Vec<_> = std::iter::once(self)
+            .chain(extra)
+            .filter(|v| v.adjustments.is_mapped())
+            .flat_map(|view| {
+                let rows = view.picker_rows.borrow();
+                view.picker_visible
+                    .borrow()
+                    .iter()
+                    .filter_map(|id| {
+                        let (_, picture) = rows.get(id)?;
+                        let rect = picture.compute_bounds(&view.picker_scroller)?;
+                        (rect.y() + rect.height() > 0.
+                            && rect.y() < view.picker_scroller.height() as f32)
+                            .then_some((id.clone(), picture.clone()))
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
-        let Some((_, first)) = on_screen.first() else {
+        if on_screen.is_empty() {
             return;
-        };
-        let scale = first.scale_factor() as u32;
-        let size = [
-            (first.width().max(1) as u32 * scale).clamp(80, 512),
-            (40 * scale).min(128),
-        ];
+        }
+        // A wider drawer can upgrade the cache; closing it must not render
+        // again merely to make already sufficient thumbnails smaller.
+        let minimum = self
+            .preview_key
+            .get()
+            .filter(|key| key.revision == revision)
+            .map_or([80, 40], |key| key.size);
+        let size = on_screen.iter().fold(minimum, |size, (_, picture)| {
+            let scale = picture.scale_factor() as u32;
+            [
+                size[0].max((picture.width().max(1) as u32 * scale).clamp(80, 512)),
+                size[1].max((40 * scale).min(128)),
+            ]
+        });
         let key = PreviewKey { revision, size };
         if self.preview_key.get() != Some(key) {
             self.preview_loaded.borrow_mut().clear();
             self.preview_key.set(Some(key));
         }
-        let filters = on_screen
-            .into_iter()
-            .filter_map(|(id, _)| (!self.preview_loaded.borrow().contains(&id)).then_some(id))
-            .take(8)
-            .collect::<Vec<_>>();
+        let mut filters = Vec::new();
+        for (id, picture) in on_screen {
+            if let Some(texture) = self.preview_loaded.borrow().get(&id) {
+                if picture.paintable().as_ref() != Some(texture.upcast_ref()) {
+                    picture.set_paintable(Some(texture));
+                }
+            } else if filters.len() < 8 && !filters.contains(&id) {
+                filters.push(id);
+            }
+        }
         if filters.is_empty() {
             return;
         }
@@ -413,9 +441,14 @@ impl EffectPanels {
             self.preview_pending.set(Some((id, key)));
         }
     }
-    pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
+    pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {
         self.bind(w, state);
-        self.refresh_picker(w, state);
+        if self.adjustments.parent().is_some() {
+            self.refresh_picker(w, state);
+        }
+        if self.properties.parent().is_none() {
+            return;
+        }
         let view = &state.layer_properties;
         self.title.set_text(&view.title);
         self.title.set_tooltip_text(Some(&view.description));

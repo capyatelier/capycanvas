@@ -25,6 +25,8 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
+.content-drawer { box-shadow: 0 8px 24px alpha(black, .4); }
+.content-drawer > scrolledwindow + scrolledwindow { border-left: 1px solid alpha(var(--window-fg-color), .12); }
 .panel-context-menu { font-size: var(--ui-text-size); }
 .workspace-menu-item { font-weight: 400; }
 .dock-tabs { background: var(--tabbar-bg); font-size: inherit; }

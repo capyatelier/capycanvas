@@ -282,8 +282,10 @@ pub(crate) fn validate_toolbar_name(name: &str) -> Result<(), String> {
 }
 
 impl ToolbarControl {
-    pub fn action(self) -> UiAction {
-        match self {
+    /// Immediate action, if any. Dedicated panel tiles are opened through
+    /// ActivateTile, whose identity also anchors their drawer.
+    pub fn action(self) -> Option<UiAction> {
+        Some(match self {
             Self::Command { command } => UiAction::Invoke { command },
             Self::Brush { id } => UiAction::SelectBrush { id },
             Self::Size { pixels } => UiAction::SetBrushSize {
@@ -298,7 +300,8 @@ impl ToolbarControl {
                     },
                 },
             },
-        }
+            Self::Panel { .. } => return None,
+        })
     }
     pub fn validate(self) -> Result<(), String> {
         match self {
@@ -307,6 +310,9 @@ impl ToolbarControl {
             }
             Self::Size { pixels } => {
                 NumericControl::brush_size().validate(pixels as f32, "Brush size")?;
+            }
+            Self::Panel { panel } if panel.kind() != PanelKind::Content => {
+                return Err("Choose a built-in panel".into());
             }
             _ => (),
         }
@@ -368,6 +374,9 @@ pub enum CustomizationAction {
     },
     ShowAllControls {
         panel: Panel,
+    },
+    ToggleToolDrawer {
+        anchor: TileAnchor,
     },
     CloseExpanded,
     SetControlVisible {
@@ -809,6 +818,11 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             "Adjust the strength of the current brush".into(),
             "opacity",
         ),
+        ToolbarControl::Panel { panel } => (
+            format!("{} panel", panel.label()),
+            "Open this panel in a drawer".into(),
+            panel.icon(),
+        ),
     };
     ToolChoice {
         control,
@@ -824,6 +838,16 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
+        .chain(
+            Panel::ALL
+                .into_iter()
+                .filter(move |p| {
+                    p.kind() == PanelKind::Content
+                        && p.available_on(platform)
+                        && matches!(platform, Platform::Gtk | Platform::Generic)
+                })
+                .map(|panel| ToolbarControl::Panel { panel }),
+        )
         .chain(brush_catalog().map(|b| ToolbarControl::Brush { id: b.id }))
         .chain(
             BRUSH_SIZES
@@ -917,18 +941,28 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                         false
                     }
                 }
-                ToolbarControl::Brush { id } => state.brush.preset == id,
+                ToolbarControl::Brush { id } => {
+                    state.brush.preset == id && state.layer_tools.tool == LayerCanvasTool::Paint
+                }
                 ToolbarControl::Size { pixels } => {
                     (state.brush.diameter - pixels as f32).abs() < 0.01
+                }
+                ToolbarControl::Panel { panel } => {
+                    enabled = panel.available_on(state.platform)
+                        && matches!(state.platform, Platform::Gtk | Platform::Generic);
+                    false
                 }
                 _ => false,
             };
             TileView {
                 id: tile.id,
-                tooltip: state.settings.action_tooltip(
-                    &choice.label,
-                    &tile.control.action(),
-                    state.platform,
+                tooltip: tile.control.action().map_or_else(
+                    || choice.label.clone(),
+                    |action| {
+                        state
+                            .settings
+                            .action_tooltip(&choice.label, &action, state.platform)
+                    },
                 ),
                 choice,
                 enabled,
@@ -1169,13 +1203,20 @@ impl ToolbarManager {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CustomizationState {
     pub expanded: Option<Panel>,
+    pub drawer: Option<ContentDrawer>,
     pub picker: Option<ToolPicker>,
     pub control: Option<PanelControl>,
     pub toolbar_prompt: Option<ToolbarPrompt>,
     pub toolbar_manager: Option<ToolbarManager>,
 }
 impl CustomizationState {
+    pub fn has_drawer(&self) -> bool {
+        self.expanded.is_some() || self.drawer.is_some()
+    }
     pub fn is_open(&self) -> bool {
+        self.drawer.is_some() || self.blocks_shortcuts()
+    }
+    pub(crate) fn blocks_shortcuts(&self) -> bool {
         self.expanded.is_some()
             || self.picker.is_some()
             || self.control.is_some()
@@ -1201,6 +1242,17 @@ impl CustomizationState {
             return Err("This panel is not available on this platform yet".into());
         }
         let mut changed = regions::CUSTOMIZATION;
+        if matches!(
+            action,
+            NewToolbar { .. }
+                | InsertTools { .. }
+                | OpenControl { .. }
+                | RenameToolbar { .. }
+                | DuplicateToolbar { .. }
+                | DeleteToolbar { .. }
+        ) {
+            self.drawer = None;
+        }
         match action {
             ManageToolbars => {
                 *self = Self {
@@ -1324,9 +1376,30 @@ impl CustomizationState {
                 self.control = None;
                 self.toolbar_manager = None;
                 self.expanded = Some(panel);
+                self.drawer = None;
                 changed |= regions::LAYOUT;
             }
-            CloseExpanded => self.expanded = None,
+            ToggleToolDrawer { anchor } => {
+                if !matches!(platform, Platform::Gtk | Platform::Generic) {
+                    return Err("Tool drawers are not available on this platform yet".into());
+                }
+                let drawer = ContentDrawer::for_tile(layout, anchor)?;
+                if drawer
+                    .placement(layout, viewport, &vec![0.0; drawer.columns.len()])
+                    .is_none()
+                {
+                    return Err("The originating tile is not visible".into());
+                }
+                let close = self.drawer.as_ref().is_some_and(|d| d.anchor == anchor);
+                *self = Self {
+                    drawer: (!close).then_some(drawer),
+                    ..Self::default()
+                };
+            }
+            CloseExpanded => {
+                self.expanded = None;
+                self.drawer = None;
+            }
             SetControlVisible {
                 panel,
                 control,
@@ -1942,13 +2015,24 @@ mod tests {
     fn catalog_is_platform_filtered_and_all_controls_execute_typed_actions() {
         let native = tool_catalog(Platform::Gtk);
         let web = tool_catalog(Platform::Web);
-        assert_eq!(native.len(), web.len() + 1);
+        assert_eq!(
+            native.len(),
+            web.len()
+                + 1
+                + Panel::ALL
+                    .iter()
+                    .filter(|p| p.kind() == PanelKind::Content)
+                    .count()
+        );
         assert!(native.iter().all(|c| !c.label.is_empty()
             && !c.description.is_empty()
             && ui_catalog().icons.contains(&c.icon)));
         for choice in native {
             choice.control.validate().unwrap();
-            let action = choice.control.action();
+            let Some(action) = choice.control.action() else {
+                assert!(choice.control.drawer_columns().is_some());
+                continue;
+            };
             assert_eq!(
                 serde_json::from_value::<UiAction>(serde_json::to_value(&action).unwrap()).unwrap(),
                 action

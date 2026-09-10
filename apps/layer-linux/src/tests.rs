@@ -56,6 +56,246 @@ fn native_test_app(id: &str) -> NativeTestApp {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_tool_drawers() {
+    let app = native_test_app("art.capycanvas.ToolDrawers");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(800);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut workspace = state(&w).workspace;
+    let old = workspace
+        .layout
+        .panel(Panel::Toolbar)
+        .unwrap()
+        .tiles()
+        .to_vec();
+    for tile in old {
+        workspace
+            .layout
+            .remove_tool(Panel::Toolbar, tile.id)
+            .unwrap();
+    }
+    let controls = [
+        ToolbarControl::Command {
+            command: CommandId::Pen,
+        },
+        ToolbarControl::Command {
+            command: CommandId::Pencil,
+        },
+        ToolbarControl::Color,
+    ]
+    .into_iter()
+    .chain(
+        Panel::ALL
+            .into_iter()
+            .filter(|p| p.kind() == PanelKind::Content)
+            .map(|panel| ToolbarControl::Panel { panel }),
+    )
+    .collect::<Vec<_>>();
+    workspace
+        .layout
+        .insert_tools(Panel::Toolbar, None, &controls)
+        .unwrap();
+    let ids = workspace
+        .layout
+        .panel(Panel::Toolbar)
+        .unwrap()
+        .tiles()
+        .iter()
+        .map(|t| t.id)
+        .collect::<Vec<_>>();
+    workspace
+        .layout
+        .move_panel(
+            viewport,
+            Panel::Toolbar,
+            DockTarget::Edge {
+                edge: Edge::Left,
+                outer: true,
+            },
+        )
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(200);
+    let output = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(output).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for id in &ids {
+            let button = find_named(w.surface.upcast_ref(), &format!("tile-{id}"))
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap();
+            click(&button);
+            if state(&w).customization.drawer.is_none() {
+                click(&button);
+            }
+            pump(300);
+            assert!(state(&w).customization.drawer.is_some(), "tile {id}");
+            let drawer = find_named(w.surface.upcast_ref(), "tool-drawer").unwrap();
+            assert!(drawer.is_mapped());
+            let b = drawer.compute_bounds(&w.surface).unwrap();
+            assert!(b.width() > 100.0 && b.height() > 30.0, "tile {id}: {b:?}");
+            assert!(b.x() >= 0.0 && b.y() >= HEADER_HEIGHT);
+            assert!(b.x() + b.width() <= viewport[0] && b.y() + b.height() <= viewport[1]);
+            if *id == ids[0] {
+                let size = find_named(&drawer, "tool-setting-size")
+                    .unwrap()
+                    .downcast::<crate::number_control::NumberControl>()
+                    .unwrap();
+                edit_number(&size, "12*3");
+                assert_eq!(state(&w).brush.diameter, 36.0);
+                assert_eq!(w.size_number.value(), 36.0);
+            }
+            if *id == *ids.last().unwrap() {
+                w.dispatch(UiAction::SetLayerOpacity {
+                    id: None,
+                    opacity: if theme == Theme::Dark { 0.9 } else { 1.0 },
+                });
+                pump(250);
+                let telemetry = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+                assert_ne!(
+                    telemetry
+                        .rows
+                        .iter()
+                        .find(|r| r.label == "GPU · ms")
+                        .unwrap()
+                        .value,
+                    "Unavailable"
+                );
+                assert_ne!(
+                    telemetry
+                        .rows
+                        .iter()
+                        .find(|r| r.label == "Frames")
+                        .unwrap()
+                        .value,
+                    "0"
+                );
+            }
+            // The original dock still owns its own live panel body.
+            for (panel, widget) in &w.panels {
+                if state(&w).workspace.layout.panel_group(*panel).is_some() {
+                    assert!(widget.parent().is_some());
+                }
+            }
+            capture_reference(&w, &format!("{output}/drawer-{id}-{theme:?}.png"), 1.0);
+            click(&button);
+            pump(240);
+            assert!(state(&w).customization.drawer.is_none());
+            assert!(find_named(w.surface.upcast_ref(), "tool-drawer").is_none());
+        }
+    }
+    // Two live filter projections share one GPU producer and the same textures.
+    w.dispatch(UiAction::SelectPanelTab {
+        group: 8,
+        panel: Panel::Adjustments,
+    });
+    pump(1000);
+    let filter_button = find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[8]))
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap();
+    click(&filter_button);
+    pump(1200);
+    let filter_texture = |root: &gtk::Widget| {
+        find_css(root, "filter-row")
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+            .child()
+            .unwrap()
+            .first_child()
+            .unwrap()
+            .downcast::<gtk::Picture>()
+            .unwrap()
+            .paintable()
+            .unwrap()
+    };
+    assert_eq!(
+        filter_texture(w.effects.adjustments.upcast_ref()),
+        filter_texture(w.drawer.effects().unwrap().adjustments.upcast_ref())
+    );
+    let requests = w.effects.preview_requests();
+    assert!(requests > 0);
+    click(&filter_button);
+    pump(500);
+    click(&filter_button);
+    pump(800);
+    assert_eq!(
+        w.effects.preview_requests(),
+        requests,
+        "closing/reopening must reuse the preview cache"
+    );
+    click(&filter_button);
+    pump(250);
+    let layers = find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[7]))
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap();
+    let requests = w.layer_panel.preview_requests();
+    click(&layers);
+    pump(500);
+    assert_eq!(
+        w.layer_panel.preview_requests(),
+        requests,
+        "unchanged layers reuse cached thumbnails"
+    );
+    let layer_view = w.drawer.layers().unwrap();
+    click(
+        &layer_view
+            .footer
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap(),
+    );
+    pump(80);
+    let menu = w
+        .popovers
+        .borrow()
+        .iter()
+        .filter_map(|p| p.upgrade())
+        .find(|p| p.is_visible())
+        .unwrap();
+    assert_eq!(menu.parent().as_ref(), Some(layer_view.root.upcast_ref()));
+    assert!(
+        menu.is_mapped(),
+        "the menu belongs to its drawer projection, not the hidden dock"
+    );
+    menu.popdown();
+    pump(50);
+    click(&layers);
+    pump(250);
+    for edge in [Edge::Top, Edge::Bottom, Edge::Right] {
+        w.dispatch(UiAction::MovePanel {
+            panel: Panel::Toolbar,
+            target: DockTarget::Edge { edge, outer: false },
+            viewport,
+        });
+        pump(150);
+        let button = find_named(w.surface.upcast_ref(), &format!("tile-{}", ids[2]))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        click(&button);
+        pump(300);
+        assert!(state(&w).customization.drawer.is_some());
+        capture_reference(&w, &format!("{output}/drawer-color-{edge:?}.png"), 1.0);
+        let dismissed = w.chrome_event(ChromeEvent::Contact {
+            position: [1100.0, 700.0],
+            canvas: true,
+        });
+        assert!(dismissed.handled);
+        assert!(state(&w).customization.drawer.is_none());
+        pump(250);
+    }
+    w.window.close();
+    pump(50);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_tool_families() {
     let app = native_test_app("art.capycanvas.ToolFamilies");
     let w = Workspace::new(&app);
@@ -114,6 +354,12 @@ fn native_tool_families() {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for tool in layer_ui::Tool::ALL {
             click(&command(&w, tool.command()));
+            if state(&w).customization.drawer.is_some() {
+                w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::CloseExpanded,
+                });
+                pump(220);
+            }
             pump(80);
             assert_eq!(state(&w).brush.tool, tool);
             let groups = state(&w).tool_set.groups;
@@ -1445,7 +1691,7 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
         if let Some(tile) = panel
             .tiles()
             .iter()
-            .find(|t| t.control.action() == (UiAction::Invoke { command: id }))
+            .find(|t| t.control.action() == Some(UiAction::Invoke { command: id }))
             && let Some(button) =
                 find_named(&w.panel_widget(panel.id), &format!("tile-{}", tile.id))
         {
