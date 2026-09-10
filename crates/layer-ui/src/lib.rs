@@ -19,7 +19,9 @@ pub use tools::{
 mod cursor;
 mod customization;
 mod drawers;
-pub use drawers::{ContentDrawer, DrawerDismissal, DrawerPlacement, TileAnchor};
+mod zen;
+pub use drawers::{ContentDrawer, DrawerConnection, DrawerDismissal, DrawerPlacement, TileAnchor};
+pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
 mod layout;
 mod numeric;
@@ -55,7 +57,7 @@ pub use layout::{
 };
 pub use layout::{
     DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
-    TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout,
+    TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_tile_layout,
 };
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
@@ -65,7 +67,7 @@ pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup,
     PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
-    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, ZenRevealMode,
+    SettingsPage, ShortcutEditor, TextConstraint, ZenIcon,
 };
 pub use shortcuts::{
     KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
@@ -104,6 +106,7 @@ pub enum ToolbarControl {
     Color,
     Opacity,
     Panel { panel: Panel },
+    Divider,
 }
 pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
     ToolbarControl::Command {

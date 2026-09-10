@@ -69,15 +69,16 @@ and will be updated with the implementation. No renderer changes are required.
   Rust owns handle eligibility and the double-click action for every
   host; tab labels keep their separate activation behavior.
 - One Rust 80px constant governs tear-off, snap reach, Zen edge reveal and the
-  keep-visible margin. In the default Reveal at screen edges mode, float dragging does not reveal hidden docks until an
+  keep-visible margin. In Total Zen, float dragging does not reveal hidden docks until an
   occupied screen edge is reached; revelation lasts through that drag. Every
   drop returns to ordinary cursor proximity, with no post-drop pin. While hidden,
   docks and screen edges cannot capture a drop; only other floating tab groups
   remain targets. Floating groups never accept side-by-side split drops.
-- GTK additionally previews Reveal with Zen button Zen, hiding floats too, and an independent
-  Keep Zen button visible switch. Defaults are Reveal at screen edges with the button visible.
-  Rust owns both settings and the button context menu; other hosts retain their
-  existing edge-reveal/hidden-button behavior until approved.
+- Total zen is now one shared toggle, off by default. Partial Zen keeps the Zen
+  button and, on GTK, standalone edge toolbars split into evenly spaced sections
+  at their dividers. Edge reveal is disabled in Partial Zen. Total Zen hides the
+  button and uses existing edge reveal. Rust owns policy, section geometry and
+  context menu; web/Android section presentation is pending GTK review.
 - The GTK Zen icon selector offers four owner-supplied vector capys, with Looking
   up as the default. A generic Rust image-choice presentation drives centered
   native tiles; the context menu opens that preference via a shared reveal action.

@@ -27,23 +27,6 @@ impl Platform {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ZenRevealMode {
-    #[default]
-    #[serde(alias = "reveal_at_edges")]
-    Edges,
-    #[serde(alias = "button_only")]
-    Button,
-}
-impl ZenRevealMode {
-    // Compact settings value and standalone context-menu label.
-    const CHOICES: [(Self, &'static str, &'static str); 2] = [
-        (Self::Edges, "Screen edges", "Reveal at screen edges"),
-        (Self::Button, "Zen button", "Reveal with Zen button"),
-    ];
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ZenIcon {
     #[default]
     LookingUp,
@@ -75,9 +58,7 @@ pub struct Settings {
     pub theme: Option<Theme>,
     pub dark_base: HexColor,
     pub light_base: HexColor,
-    #[serde(alias = "zen_behavior")]
-    pub zen_reveal_mode: ZenRevealMode,
-    pub zen_show_button: bool,
+    pub total_zen: bool,
     pub zen_icon: ZenIcon,
     pub pressure_gamma: f32,
     pub cursor: CursorMode,
@@ -99,8 +80,7 @@ impl Default for Settings {
             theme: None,
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
-            zen_reveal_mode: ZenRevealMode::default(),
-            zen_show_button: true,
+            total_zen: false,
             zen_icon: ZenIcon::default(),
             pressure_gamma: 1.0,
             cursor: CursorMode::default(),
@@ -126,6 +106,9 @@ impl Settings {
             fields.remove("panel_text_pt");
             fields.remove("zen_hide");
             fields.remove("zen_reveal");
+            fields.remove("zen_behavior");
+            fields.remove("zen_reveal_mode");
+            fields.remove("zen_show_button");
             if let Some(shortcuts) = fields.get_mut("shortcuts").and_then(|v| v.as_object_mut()) {
                 shortcuts.remove("command.TogglePanels");
             }
@@ -212,9 +195,7 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
-    #[serde(alias = "zen_behavior")]
-    ZenRevealMode,
-    ZenShowButton,
+    TotalZen,
     ZenIcon,
     DarkBase,
     LightBase,
@@ -236,8 +217,7 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
-            Self::ZenRevealMode => "zen-reveal-mode",
-            Self::ZenShowButton => "zen-show-button",
+            Self::TotalZen => "total-zen",
             Self::ZenIcon => "zen-icon",
             Self::DarkBase => "dark-base",
             Self::LightBase => "light-base",
@@ -799,28 +779,11 @@ impl Settings {
             title: CommandId::ZenMode.label().into(),
             rows: vec![
                 row(
-                    PreferenceId::ZenRevealMode,
-                    "Show controls",
-                    "",
-                    PreferenceKind::Choice {
-                        presentation: ChoicePresentation::Dropdown,
-                        icons: Vec::new(),
-                        options: crate::ZenRevealMode::CHOICES
-                            .iter()
-                            .map(|c| c.1.into())
-                            .collect(),
-                        selected: crate::ZenRevealMode::CHOICES
-                            .iter()
-                            .position(|c| c.0 == self.zen_reveal_mode)
-                            .unwrap() as u32,
-                    },
-                ),
-                row(
-                    ZenShowButton,
-                    "Keep Zen button visible",
-                    "",
+                    TotalZen,
+                    "Total zen",
+                    "Hide docked controls; reveal them at screen edges.",
                     PreferenceKind::Switch {
-                        active: self.zen_show_button,
+                        active: self.total_zen,
                     },
                 ),
                 row(
@@ -854,56 +817,35 @@ impl Settings {
             .collect()
     }
     pub(crate) fn zen_menu(&self, platform: Platform) -> Result<ContextMenu, String> {
-        let mut sections = Vec::new();
-        for id in [PreferenceId::ZenRevealMode, PreferenceId::ZenShowButton] {
-            let row = self.field(id, platform)?;
-            let item = |label, value, selected| {
-                let mut item = ContextMenuItem::command(
-                    label,
-                    UiAction::Preferences {
-                        action: PreferenceAction::Edit { id, value },
-                    },
-                );
-                item.enabled = row.enabled;
-                item.selected = Some(selected);
-                item
-            };
-            sections.push(match row.kind {
-                PreferenceKind::Choice {
-                    options, selected, ..
-                } => options
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, label)| {
-                        let label = if id == PreferenceId::ZenRevealMode {
-                            crate::ZenRevealMode::CHOICES[i].2.into()
-                        } else {
-                            label
-                        };
-                        item(
-                            label,
-                            PreferenceValue::Choice(i as u32),
-                            i as u32 == selected,
-                        )
-                    })
-                    .collect(),
-                PreferenceKind::Switch { active } => {
-                    vec![item(row.title, PreferenceValue::Bool(!active), active)]
-                }
-                _ => unreachable!("Zen menu fields must be choices or switches"),
-            });
-        }
-        sections.push(vec![ContextMenuItem::command(
-            "Change icon…",
+        let id = PreferenceId::TotalZen;
+        let row = self.field(id, platform)?;
+        let PreferenceKind::Switch { active } = row.kind else {
+            unreachable!("Total zen is a switch");
+        };
+        let mut toggle = ContextMenuItem::command(
+            row.title,
             UiAction::Preferences {
-                action: PreferenceAction::Reveal {
-                    id: PreferenceId::ZenIcon,
+                action: PreferenceAction::Edit {
+                    id,
+                    value: PreferenceValue::Bool(!active),
                 },
             },
-        )]);
+        );
+        toggle.enabled = row.enabled;
+        toggle.selected = Some(active);
         Ok(ContextMenu {
             title: CommandId::ZenMode.label().into(),
-            sections,
+            sections: vec![
+                vec![toggle],
+                vec![ContextMenuItem::command(
+                    "Change icon…",
+                    UiAction::Preferences {
+                        action: PreferenceAction::Reveal {
+                            id: PreferenceId::ZenIcon,
+                        },
+                    },
+                )],
+            ],
         })
     }
 
@@ -963,11 +905,7 @@ impl Settings {
                 }
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
-            ZenRevealMode => {
-                self.zen_reveal_mode =
-                    crate::ZenRevealMode::CHOICES[value.choice().unwrap() as usize].0
-            }
-            ZenShowButton => self.zen_show_button = matches!(value, PreferenceValue::Bool(true)),
+            TotalZen => self.total_zen = matches!(value, PreferenceValue::Bool(true)),
             ZenIcon => self.zen_icon = crate::ZenIcon::CHOICES[value.choice().unwrap() as usize].0,
             DarkBase | LightBase => {
                 let PreferenceValue::Text(text) = value else {
@@ -1322,8 +1260,7 @@ mod copy_tests {
     #[test]
     fn zen_preferences_are_persistent_resettable_on_all_platforms() {
         let mut settings: Settings = serde_json::from_str("{}").unwrap();
-        assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Edges);
-        assert!(settings.zen_show_button);
+        assert!(!settings.total_zen);
         let group = settings
             .pages(Platform::Gtk)
             .into_iter()
@@ -1335,74 +1272,45 @@ mod copy_tests {
             .unwrap();
         assert_eq!(
             group.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
-            [
-                PreferenceId::ZenRevealMode,
-                PreferenceId::ZenShowButton,
-                PreferenceId::ZenIcon
-            ]
+            [PreferenceId::TotalZen, PreferenceId::ZenIcon]
         );
-        let legacy: Settings = serde_json::from_str(r#"{"zen_behavior":"button_only"}"#).unwrap();
-        assert_eq!(legacy.zen_reveal_mode, ZenRevealMode::Button);
-        assert!(legacy.zen_show_button);
-        let id = PreferenceId::ZenRevealMode;
+        let id = PreferenceId::TotalZen;
         let row = settings.field(id, Platform::Gtk).unwrap();
-        assert!(
-            matches!(row.kind, PreferenceKind::Choice { selected: 0, options, .. }
-            if options == ["Screen edges", "Zen button"])
-        );
+        assert!(matches!(row.kind, PreferenceKind::Switch { active: false }));
         assert!(!row.reset.unwrap().enabled);
-        settings
-            .edit(id, PreferenceValue::Choice(1), Platform::Gtk)
-            .unwrap();
-        assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Button);
-        let reset = settings.field(id, Platform::Gtk).unwrap().reset.unwrap();
-        assert!(reset.enabled);
-        assert_eq!(reset.value, "Screen edges");
-        assert!(
-            settings
-                .edit(id, PreferenceValue::Choice(2), Platform::Gtk)
-                .is_err()
-        );
-        assert_eq!(settings.zen_reveal_mode, ZenRevealMode::Button);
-        let saved = serde_json::to_string(&settings).unwrap();
-        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
-        assert!(serde_json::from_str::<Settings>(r#"{"zen_reveal_mode":"unknown"}"#).is_err());
         for platform in [
             Platform::Generic,
+            Platform::Gtk,
             Platform::Web,
             Platform::Android,
             Platform::Mac,
             Platform::Ios,
             Platform::Windows,
         ] {
-            assert!(settings.field(id, platform).is_ok());
+            settings
+                .edit(id, PreferenceValue::Bool(true), platform)
+                .unwrap();
+            assert!(settings.total_zen);
+            assert!(settings.field(id, platform).unwrap().reset.unwrap().enabled);
             assert!(
                 settings
-                    .edit(id, PreferenceValue::Choice(1), platform)
-                    .is_ok()
+                    .edit(id, PreferenceValue::Choice(2), platform)
+                    .is_err()
             );
         }
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
+        assert!(!saved.contains("zen_reveal_mode") && !saved.contains("zen_show_button"));
         let mut state = PreferencesState::default();
         state.edit(&mut settings, PreferenceAction::Reset { id }, Platform::Gtk);
         assert!(state.error.is_none());
         assert_eq!(settings, Settings::default());
-        settings
-            .edit(
-                PreferenceId::ZenShowButton,
-                PreferenceValue::Bool(false),
-                Platform::Gtk,
-            )
-            .unwrap();
-        let saved = serde_json::to_string(&settings).unwrap();
-        assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
-        state.edit(
-            &mut settings,
-            PreferenceAction::Reset {
-                id: PreferenceId::ZenShowButton,
-            },
-            Platform::Gtk,
+        let mut reader = serde_json::Deserializer::from_str(
+            r#"{"zen_reveal_mode":"button","zen_show_button":false,"pan_speed":2.0}"#,
         );
-        assert_eq!(settings, Settings::default());
+        let retired = Settings::deserialize_saved(&mut reader).unwrap();
+        assert!(!retired.total_zen);
+        assert_eq!(retired.pan_speed, 2.0);
     }
 
     #[test]
@@ -1513,8 +1421,6 @@ mod copy_tests {
                 PreferenceId::PanSpeed,
                 PreferenceId::ZoomSpeed,
                 PreferenceId::Renderer,
-                PreferenceId::ZenRevealMode,
-                PreferenceId::ZenShowButton,
                 PreferenceId::ZenIcon,
             ] {
                 assert!(settings.field(id, platform).unwrap().description.is_empty());

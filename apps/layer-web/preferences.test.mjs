@@ -91,7 +91,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
       await capture(`zen-icons-${theme}-${index}`);
     }
     await click('#close-settings');
-    await zenMenu(); await chooseMenu('Reveal with Zen button');
+    await preference({ type: 'edit', id: 'total_zen', value: false });
     await click('#zen-button');
     assert.ok(await zenVisible());
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
@@ -111,11 +111,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await click('#close-settings');
     await capture(`zen-button-only-${theme}`);
     for (const show of [false, true]) {
-      await preference({ type: 'edit', id: 'zen_show_button', value: show });
+      await preference({ type: 'edit', id: 'total_zen', value: !show });
       assert.equal(await zenVisible(), show);
     }
     await click('#zen-button');
-    await preference({ type: 'edit', id: 'zen_reveal_mode', value: 0 });
+    await preference({ type: 'edit', id: 'total_zen', value: true });
     await click('#zen-button');
     await evaluate("window.dispatchEvent(new PointerEvent('pointermove',{clientX:600,clientY:450,bubbles:true}));window.dispatchEvent(new PointerEvent('pointermove',{clientX:24,clientY:24,bubbles:true}))");
     await settle();
@@ -125,6 +125,7 @@ export async function checkPreferences({ call, evaluate, settle }) {
     await click('#zen-button');
   }
   await preference({ type: 'reset', id: 'zen_icon' });
+  await preference({ type: 'reset', id: 'total_zen' });
   await action({ type: 'restore_workspace', workspace: originalWorkspace });
   assert.ok(await evaluate("document.elementFromPoint(24,24).closest('#zen-button') !== null"), 'the visible header must not intercept the persistent button');
   await call('Input.setIgnoreInputEvents', { ignore: false });

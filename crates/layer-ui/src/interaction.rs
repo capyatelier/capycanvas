@@ -40,6 +40,8 @@ pub struct ChromeFacts {
     /// Actual animated content drawer; origin hit-testing stays in Rust.
     #[serde(default)]
     pub content_drawer: Option<crate::Bounds>,
+    #[serde(default)]
+    pub drawer_connection: Option<crate::Bounds>,
     /// Native/DOM tab hit for the current contact; labels have host-measured widths.
     #[serde(default)]
     pub contact_tab: Option<crate::Panel>,
@@ -101,6 +103,7 @@ pub struct InputReply {
     pub hide_floating_panels: bool,
     /// Keep the Zen button visible, in its inactive style, when chrome is hidden.
     pub keep_zen_button: bool,
+    pub partial_zen: bool,
     pub pan_cursor: bool,
 }
 

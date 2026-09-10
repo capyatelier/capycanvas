@@ -302,9 +302,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// are only queued when `paint` is true, without serializing UiState.
     pub fn input(&mut self, input: UiInput) -> Result<InputReply, String> {
         let mut reply = InputReply {
-            chrome_hidden: self.button_zen(),
-            hide_floating_panels: self.button_zen(),
-            keep_zen_button: self.state.settings.zen_show_button,
+            chrome_hidden: self.state.partial_zen(),
+            hide_floating_panels: self.state.partial_zen(),
+            keep_zen_button: !self.state.settings.total_zen,
+            partial_zen: self.state.partial_zen(),
             ..Default::default()
         };
         let mut contact = None;
@@ -344,16 +345,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let ChromeEvent::Contact { position, .. } = event
                     && let Some(drawer) = &self.state.customization.drawer
                     && drawer.dismissal == DrawerDismissal::OutsideContact
-                    && !self.button_zen()
                     && !facts.popup_open
                     && !facts
                         .content_drawer
+                        .is_some_and(|b| b.contains(position[0], position[1]))
+                    && !facts
+                        .drawer_connection
                         .is_some_and(|b| b.contains(position[0], position[1]))
                     && !drawer
                         .placement(
                             &self.state.workspace.layout,
                             viewport,
                             &vec![0.0; drawer.columns.len()],
+                            self.state.partial_zen(),
                         )
                         .is_some_and(|p| p.anchor.contains(position[0], position[1]))
                 {
@@ -362,14 +366,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                     })?;
                     // Another tile should select/open on this same click. A
                     // bare canvas contact only dismisses and must not paint.
-                    reply.handled = self
-                        .layout(viewport)
-                        .tile_at(&self.state.workspace.layout, position)
-                        .is_none();
+                    reply.handled = if self.state.partial_zen() {
+                        self.state
+                            .workspace
+                            .layout
+                            .zen_toolbars(viewport)
+                            .tile_at(position)
+                            .is_none()
+                    } else {
+                        self.layout(viewport)
+                            .tile_at(&self.state.workspace.layout, position)
+                            .is_none()
+                    };
                 }
                 if let ChromeEvent::Contact { position, .. } = event
                     && self.state.customization.expanded.is_some()
-                    && !self.button_zen()
+                    && !self.state.partial_zen()
                     && !facts.popup_open
                     && !facts.expanded_panel.is_some_and(|e| {
                         // Tabs activate on release. Leave the press available
@@ -585,21 +597,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (released_chrome_pin && self.interaction.hidden);
         }
         reply.chrome_hidden = self.interaction.hidden;
-        reply.hide_floating_panels = self.button_zen();
-        reply.keep_zen_button = self.state.settings.zen_show_button;
+        reply.hide_floating_panels = self.state.partial_zen();
+        reply.keep_zen_button = !self.state.settings.total_zen;
+        reply.partial_zen = self.state.partial_zen();
         reply.pan_cursor = self.interaction.pan_key.is_some();
         Ok(reply)
-    }
-
-    fn button_zen(&self) -> bool {
-        self.state.workspace.zen_mode
-            && self.state.settings.zen_reveal_mode == ZenRevealMode::Button
     }
 
     fn refresh_chrome(&mut self) {
         // Explicit exit only: proximity, first contact, keyboard chrome hints
         // and drag/popup pins must not reveal the editor in this mode.
-        if self.button_zen() {
+        if self.state.partial_zen() {
             self.interaction.hidden = true;
             self.interaction.zen_entry_guard = false;
             self.interaction.keep_chrome_until_contact = false;
@@ -808,7 +816,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return None;
         }
-        if self.button_zen() {
+        if self.state.partial_zen() {
             return None;
         }
         let mut resolved = self.layout(viewport);
@@ -837,7 +845,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut group = resolved.groups.remove(index);
             group.bounds = preview;
             if group.tiles.is_some() {
-                group.tiles = Some(tile_layout(
+                group.tiles = Some(toolbar_tile_layout(
                     preview.width,
                     preview.height
                         - if group.tabs_visible {
@@ -851,8 +859,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .layout
                         .panel(group.active)
                         .ok()?
-                        .tiles()
-                        .len(),
+                        .tiles(),
                     !group.tabs_visible,
                     self.state
                         .workspace
@@ -1128,11 +1135,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .logical_viewport
                     .or(self.interaction.viewport)
                     .unwrap_or(self.state.camera.viewport.map(|v| v as f32));
+                let partial_zen = self.state.partial_zen();
                 let changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
                     action,
                     self.state.platform,
                     viewport,
+                    partial_zen,
                 )?;
                 if changed & LAYOUT != 0
                     && let Some(before) = workspace_before.as_ref()
@@ -1161,6 +1170,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .find(|t| t.id == tile)
                     .ok_or("The tool no longer exists")?
                     .control;
+                if control == ToolbarControl::Divider {
+                    return Ok(UiChange::default());
+                }
                 let selected = self
                     .panel_view(panel)?
                     .tiles
@@ -1354,6 +1366,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         CustomizationAction::ShowAllControls { panel }
                     };
+                    let partial_zen = self.state.partial_zen();
                     self.state.customization.edit(
                         &mut self.state.workspace.layout,
                         action,
@@ -1361,6 +1374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.logical_viewport
                             .or(self.interaction.viewport)
                             .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
+                        partial_zen,
                     )?;
                 } else if let Some(previous) = self.state.customization.expanded {
                     self.state.customization.expanded =
@@ -1880,6 +1894,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
             CommandId::NewToolbar | CommandId::ManageToolbars => {
+                let partial_zen = self.state.partial_zen();
                 let changed = self.state.customization.edit(
                     &mut self.state.workspace.layout,
                     if command == CommandId::ManageToolbars {
@@ -1891,6 +1906,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.logical_viewport
                         .or(self.interaction.viewport)
                         .unwrap_or(self.state.camera.viewport.map(|v| v as f32)),
+                    partial_zen,
                 )?;
                 Ok((changed, false))
             }
@@ -3626,18 +3642,15 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn button_only_zen_never_reveals_on_proximity_or_consumes_drawing() {
+    fn partial_zen_never_reveals_on_proximity_or_consumes_drawing() {
         let mut s = session();
+        s.state.settings.total_zen = true;
         s.set_platform(Platform::Gtk);
         invoke(&mut s, CommandId::Settings);
-        edit_preference(
-            &mut s,
-            PreferenceId::ZenRevealMode,
-            PreferenceValue::Choice(1),
-        );
+        edit_preference(&mut s, PreferenceId::TotalZen, PreferenceValue::Bool(false));
         assert!(matches!(s.state.requests.last().unwrap().kind,
             HostRequestKind::SaveSettings { ref settings }
-                if settings.zen_reveal_mode == ZenRevealMode::Button));
+                if !settings.total_zen));
         s.dispatch(UiAction::CloseSettings).unwrap();
         let viewport = [1200.0, 900.0];
         s.dispatch(UiAction::MovePanel {
@@ -3695,7 +3708,7 @@ mod tests {
                     None
                 )
                 .is_none(),
-                "all docking targets are hidden with button-only reveal"
+                "normal docking targets are hidden in partial Zen"
             );
         }
         for facts in [
@@ -3771,7 +3784,7 @@ mod tests {
     }
 
     #[test]
-    fn button_only_zen_has_the_same_policy_on_all_hosts() {
+    fn partial_zen_has_the_same_policy_on_all_hosts() {
         for platform in [
             Platform::Generic,
             Platform::Gtk,
@@ -3785,7 +3798,7 @@ mod tests {
             s.set_platform(platform);
             s.dispatch(UiAction::RestoreSettings {
                 settings: Settings {
-                    zen_reveal_mode: ZenRevealMode::Button,
+                    total_zen: false,
                     ..Settings::default()
                 },
             })
@@ -3819,25 +3832,21 @@ mod tests {
         let mut s = session();
         s.set_platform(Platform::Gtk);
         let target = ContextTarget::ZenMode;
-        for index in [1, 0] {
+        for total in [true, false] {
             let menu = s.context_menu(target).unwrap();
             assert_eq!(menu.title, "Zen mode");
-            assert_eq!(menu.sections.len(), 3);
-            assert_eq!(
-                menu.sections[0]
-                    .iter()
-                    .map(|i| i.label.as_str())
-                    .collect::<Vec<_>>(),
-                ["Reveal at screen edges", "Reveal with Zen button"]
-            );
+            assert_eq!(menu.sections.len(), 2);
+            assert_eq!(menu.sections[0].len(), 1);
+            assert_eq!(menu.sections[0][0].label, "Total zen");
             let change = s
-                .dispatch(menu.sections[0][index].action.clone().unwrap())
+                .dispatch(menu.sections[0][0].action.clone().unwrap())
                 .unwrap();
+            assert_eq!(s.state.settings.total_zen, total);
             assert!(!s.state.settings_open && !s.state.workspace.zen_mode);
             assert_ne!(change.regions & regions::SETTINGS, 0);
             assert_eq!(
-                s.context_menu(target).unwrap().sections[0][index].selected,
-                Some(true)
+                s.context_menu(target).unwrap().sections[0][0].selected,
+                Some(total)
             );
             assert!(matches!(
                 s.state.requests.last().unwrap().kind,
@@ -3847,37 +3856,22 @@ mod tests {
         assert!(
             s.dispatch(UiAction::Preferences {
                 action: PreferenceAction::Search {
-                    query: "Zen".into(),
-                }
+                    query: "Zen".into()
+                },
             })
-            .is_err(),
-            "navigation still requires an open dialog"
+            .is_err()
         );
-        for visible in [false, true] {
-            let menu = s.context_menu(target).unwrap();
-            assert_eq!(menu.sections[1][0].label, "Keep Zen button visible");
-            s.dispatch(menu.sections[1][0].action.clone().unwrap())
-                .unwrap();
-            assert_eq!(s.state.settings.zen_show_button, visible);
-            assert_eq!(
-                s.context_menu(target).unwrap().sections[1][0].selected,
-                Some(visible)
-            );
-        }
         let saved = s.state.settings.clone();
         let requests = s.state.requests.len();
         let menu = s.context_menu(target).unwrap();
-        assert_eq!(menu.sections[2][0].label, "Change icon…");
-        let change = s
-            .dispatch(menu.sections[2][0].action.clone().unwrap())
+        assert_eq!(menu.sections[1][0].label, "Change icon…");
+        s.dispatch(menu.sections[1][0].action.clone().unwrap())
             .unwrap();
-        assert!(s.state.settings_open);
         let view = s.preferences().unwrap();
         assert_eq!(view.page, SettingsPage::Appearance);
         assert_eq!(view.reveal, Some(PreferenceId::ZenIcon));
         assert_eq!(s.state.settings, saved);
         assert_eq!(s.state.requests.len(), requests);
-        assert!(!change.canvas_wake && !s.state.workspace.zen_mode);
         for platform in [Platform::Web, Platform::Android] {
             s.set_platform(platform);
             assert_eq!(
@@ -4001,44 +3995,49 @@ mod tests {
     }
 
     #[test]
-    fn zen_reveal_and_button_visibility_are_independent() {
+    fn total_and_partial_zen_have_one_shared_policy() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
-            for mode in [ZenRevealMode::Edges, ZenRevealMode::Button] {
-                for show_button in [true, false] {
-                    let mut s = session();
-                    s.set_platform(platform);
-                    s.dispatch(UiAction::RestoreSettings {
-                        settings: Settings {
-                            zen_reveal_mode: mode,
-                            zen_show_button: show_button,
-                            ..Settings::default()
-                        },
-                    })
-                    .unwrap();
-                    invoke(&mut s, CommandId::ZenMode);
-                    let reply = chrome(
-                        &mut s,
-                        ChromeEvent::Motion {
-                            position: [600.0, 450.0],
-                        },
-                        ChromeFacts::default(),
-                    );
-                    assert!(reply.chrome_hidden);
-                    assert_eq!(reply.keep_zen_button, show_button);
-                    assert_eq!(reply.hide_floating_panels, mode == ZenRevealMode::Button);
-                    let reply = chrome(
-                        &mut s,
-                        ChromeEvent::Motion {
-                            position: [6.0, 6.0],
-                        },
-                        ChromeFacts::default(),
-                    );
-                    assert_eq!(reply.chrome_hidden, mode == ZenRevealMode::Button);
-                    assert_eq!(reply.keep_zen_button, show_button);
-                    let exit = key(&mut s, "Tab", true, false, false);
-                    assert!(exit.handled && !exit.chrome_hidden && !exit.hide_floating_panels);
-                    assert!(!s.state.workspace.zen_mode);
-                }
+            for total in [false, true] {
+                let mut s = session();
+                s.set_platform(platform);
+                s.dispatch(UiAction::RestoreSettings {
+                    settings: Settings {
+                        total_zen: total,
+                        ..Settings::default()
+                    },
+                })
+                .unwrap();
+                let layout = s.state.workspace.layout.clone();
+                invoke(&mut s, CommandId::ZenMode);
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [600.0, 450.0],
+                    },
+                    ChromeFacts::default(),
+                );
+                assert!(reply.chrome_hidden);
+                assert_eq!(reply.hide_floating_panels, !total);
+                assert_eq!(reply.keep_zen_button, !total);
+                assert_eq!(reply.partial_zen, !total);
+                let reply = chrome(
+                    &mut s,
+                    ChromeEvent::Motion {
+                        position: [6.0, 6.0],
+                    },
+                    ChromeFacts::default(),
+                );
+                assert_eq!(reply.chrome_hidden, !total);
+                assert_eq!(reply.keep_zen_button, !total);
+                let exit = key(&mut s, "Tab", true, false, false);
+                assert!(
+                    exit.handled
+                        && !exit.chrome_hidden
+                        && !exit.hide_floating_panels
+                        && !exit.partial_zen
+                );
+                assert!(!s.state.workspace.zen_mode);
+                assert_eq!(s.state.workspace.layout, layout);
             }
         }
     }
@@ -4102,6 +4101,7 @@ mod tests {
     #[test]
     fn zen_visibility_pinning_and_first_contact_are_core_state() {
         let mut s = session();
+        s.state.settings.total_zen = true;
         invoke(&mut s, CommandId::ZenMode);
         let motion = |p| ChromeEvent::Motion { position: p };
         let touch = |p| ChromeEvent::Contact {
@@ -4156,6 +4156,7 @@ mod tests {
     fn enabling_zen_hides_immediately_and_guards_the_activation_corner() {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session();
+            s.state.settings.total_zen = true;
             s.set_platform(platform);
             let facts = ChromeFacts::default();
             chrome(
@@ -4221,6 +4222,7 @@ mod tests {
     #[test]
     fn zen_stays_visible_through_drag_focus_loss_until_drag_end() {
         let mut s = session();
+        s.state.settings.total_zen = true;
         invoke(&mut s, CommandId::ZenMode);
         let dragging = ChromeFacts {
             dragging: true,
@@ -5531,6 +5533,7 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
+            app.state.settings.total_zen = true;
             app.set_platform(platform);
             let panel = Panel::Toolbar;
             let item = DockItem::Panel { panel };
@@ -5642,6 +5645,7 @@ mod tests {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
+            app.state.settings.total_zen = true;
             app.set_platform(platform);
             app.dispatch(UiAction::MovePanel {
                 panel: Panel::Sizes,
@@ -6386,6 +6390,7 @@ mod tests {
     #[test]
     fn expanded_panel_dismissal_is_core_policy_and_never_paints() {
         let mut app = session();
+        app.state.settings.total_zen = true;
         invoke(&mut app, CommandId::ZenMode);
         let open = |app: &mut UiSession<Recorder>| {
             app.dispatch(UiAction::Customize {
@@ -6607,6 +6612,7 @@ mod tests {
     #[test]
     fn tool_drawer_selection_dismissal_and_configuration_are_core_policy() {
         let mut s = session();
+        s.state.settings.total_zen = true;
         s.set_platform(Platform::Gtk);
         let viewport = [1200.0, 900.0];
         chrome(&mut s, ChromeEvent::Refresh, ChromeFacts::default());
@@ -6642,7 +6648,7 @@ mod tests {
             .drawer
             .as_ref()
             .unwrap()
-            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0])
+            .placement(&s.state.workspace.layout, viewport, &[400.0, 600.0], false)
             .unwrap();
         let facts = ChromeFacts {
             content_drawer: Some(placement.bounds),
@@ -6672,7 +6678,7 @@ mod tests {
             },
         )
         .unwrap()
-        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0])
+        .placement(&s.state.workspace.layout, viewport, &[0.0, 0.0], false)
         .unwrap();
         assert!(
             !chrome(

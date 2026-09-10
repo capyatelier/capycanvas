@@ -17,6 +17,8 @@ use std::{
 mod customization;
 #[path = "workspace_drawer.rs"]
 mod drawers;
+#[path = "workspace_zen.rs"]
+mod zen;
 
 mod allocation {
     use super::*;
@@ -176,6 +178,10 @@ mod allocation {
                 HEADER_HEIGHT,
                 STATUS_HEIGHT,
             );
+            if let Some(w) = self.owner.borrow().upgrade() {
+                w.zen
+                    .allocate(&self.layout.borrow(), [width as f32, height as f32]);
+            }
             if let Some((id, from, progress)) = self.transition.get()
                 && let Some(group) = resolved.groups.iter_mut().find(|g| g.id == id)
             {
@@ -194,7 +200,7 @@ mod allocation {
             for (slot, child) in self.children.borrow().iter() {
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
-                    Slot::Canvas => Some(Bounds {
+                    Slot::Canvas | Slot::ZenToolbars => Some(Bounds {
                         x: 0.0,
                         y: 0.0,
                         width: width as f32,
@@ -214,6 +220,9 @@ mod allocation {
                     }),
                     Slot::Status => Some(resolved.status),
                     Slot::Drawer => drawer.as_ref().map(|d| d.bounds),
+                    Slot::DrawerConnection => drawer
+                        .as_ref()
+                        .and_then(|d| d.connection().map(|c| c.bounds)),
                     Slot::Group(id) => {
                         let expanded = expansion.filter(|e| e.group == *id);
                         child
@@ -366,6 +375,8 @@ enum Slot {
     Divider(u32),
     FloatingResize(u32, ResizeEdge),
     Drawer,
+    DrawerConnection,
+    ZenToolbars,
 }
 glib::wrapper! {
     pub struct DockSurface(ObjectSubclass<allocation::DockSurface>)
@@ -374,12 +385,23 @@ glib::wrapper! {
 impl DockSurface {
     fn raise_drawer(&self) {
         let mut children = self.imp().children.borrow_mut();
-        if let Some(index) = children.iter().position(|(s, _)| *s == Slot::Drawer)
-            && index + 1 != children.len()
+        if children
+            .iter()
+            .rev()
+            .take(2)
+            .map(|(slot, _)| *slot)
+            .eq([Slot::DrawerConnection, Slot::Drawer])
         {
-            let item = children.remove(index);
-            item.1.insert_after(self, children.last().map(|(_, w)| w));
-            children.push(item);
+            return;
+        }
+        for slot in [Slot::Drawer, Slot::DrawerConnection] {
+            if let Some(index) = children.iter().position(|(s, _)| *s == slot)
+                && index + 1 != children.len()
+            {
+                let item = children.remove(index);
+                item.1.insert_after(self, children.last().map(|(_, w)| w));
+                children.push(item);
+            }
         }
     }
     fn raise_group(&self, id: u32) {
@@ -409,7 +431,13 @@ impl DockSurface {
         self.remove_slots(|slot| {
             !matches!(
                 slot,
-                Slot::Canvas | Slot::Header | Slot::ZenButton | Slot::Status | Slot::Drawer
+                Slot::Canvas
+                    | Slot::Header
+                    | Slot::ZenButton
+                    | Slot::Status
+                    | Slot::Drawer
+                    | Slot::DrawerConnection
+                    | Slot::ZenToolbars
             )
         });
     }
@@ -642,6 +670,7 @@ pub struct Workspace {
     measuring_panels: Cell<bool>,
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
+    zen: zen::Zen,
     panels: [(Panel, gtk::Widget); Panel::ALL.len()],
     groups: RefCell<Vec<GroupView>>,
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
@@ -777,6 +806,7 @@ impl Workspace {
             drop_hint: RefCell::new(None),
             measuring_panels: Cell::new(false),
             toolbar: toolbar.clone(),
+            zen: zen::Zen::default(),
             groups: RefCell::new(Vec::new()),
             panels: [
                 (Panel::Toolbar, toolbar.clone().upcast()),
@@ -1209,6 +1239,10 @@ impl Workspace {
             contact_tab,
             expanded_panel: self.customization.placement(),
             content_drawer: self.drawer.placement().map(|p| p.bounds),
+            drawer_connection: self
+                .drawer
+                .placement()
+                .and_then(|p| p.connection().map(|c| c.bounds)),
             held: self.chrome_held.get(),
             dragging: self.dragging.get(),
             popup_open: self
@@ -1287,6 +1321,7 @@ impl Workspace {
             reply.chrome_hidden,
             reply.hide_floating_panels,
             reply.keep_zen_button,
+            reply.partial_zen,
         );
         let cursor = Some(if reply.pan_cursor { "grab" } else { "none" });
         if self.area.cursor().and_then(|c| c.name()).as_deref() != cursor {
@@ -1334,10 +1369,20 @@ impl Workspace {
         .handled
     }
 
-    fn set_chrome_hidden(&self, hidden: bool, hide_floating_panels: bool, keep_zen_button: bool) {
+    fn set_chrome_hidden(
+        &self,
+        hidden: bool,
+        hide_floating_panels: bool,
+        keep_zen_button: bool,
+        partial_zen: bool,
+    ) {
         for (slot, widget) in self.surface.imp().children.borrow().iter() {
             if !matches!(slot, Slot::Canvas) {
-                let hidden = if *slot == Slot::ZenButton {
+                let hidden = if *slot == Slot::ZenToolbars {
+                    !partial_zen
+                } else if matches!(slot, Slot::Drawer | Slot::DrawerConnection) && partial_zen {
+                    false
+                } else if *slot == Slot::ZenButton {
                     if hidden && keep_zen_button {
                         widget.add_css_class("zen-button-neutral");
                     } else {
@@ -1675,6 +1720,10 @@ impl Workspace {
         {
             self.customization.refresh(self);
             self.drawer.refresh(self, &state, regions);
+        }
+        if regions & (regions::LAYOUT | regions::SETTINGS | regions::BRUSH | regions::COMMANDS) != 0
+        {
+            self.zen.refresh(self, &state);
         }
         self.refreshing.set(false);
         if regions & (regions::LAYOUT | regions::SETTINGS) != 0 {

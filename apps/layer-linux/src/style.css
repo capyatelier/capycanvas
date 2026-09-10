@@ -26,6 +26,19 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
 .content-drawer { box-shadow: 0 8px 24px alpha(black, .4); }
+.drawer-connection { color: var(--panel-bg); }
+.content-drawer.join-nw { border-top-left-radius: 0; }
+.content-drawer.join-ne { border-top-right-radius: 0; }
+.content-drawer.join-se { border-bottom-right-radius: 0; }
+.content-drawer.join-sw { border-bottom-left-radius: 0; }
+.toolbar-controls button.drawer-origin-top { background: var(--panel-bg); border-top-left-radius: 0; border-top-right-radius: 0; }
+.toolbar-controls button.drawer-origin-bottom { background: var(--panel-bg); border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.toolbar-controls button.drawer-origin-left { background: var(--panel-bg); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.toolbar-controls button.drawer-origin-right { background: var(--panel-bg); border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.toolbar-divider { padding: 0; min-width: 0; min-height: 0; background: transparent; }
+.toolbar-divider separator { min-width: 1px; min-height: 18px; margin: 0; }
+.toolbar-controls.vertical .toolbar-divider separator { min-width: 18px; min-height: 1px; }
+.zen-section { border-radius: 8px; }
 .content-drawer > scrolledwindow + scrolledwindow { border-left: 1px solid alpha(var(--window-fg-color), .12); }
 .panel-context-menu { font-size: var(--ui-text-size); }
 .workspace-menu-item { font-weight: 400; }

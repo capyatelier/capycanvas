@@ -210,8 +210,8 @@ GTK observes the default `AdwStyleManager` and applies overrides to the display
 manager; web observes `prefers-color-scheme`. OS changes never overwrite a user
 override. Returning to System uses the latest OS value.
 
-`ZenMode` toggles shared `UiState.workspace.zen_mode`. In the default **Reveal at screen edges**
-mode, the shared `near_chrome` rule reveals
+`ZenMode` toggles shared `UiState.workspace.zen_mode`. With **Total zen** enabled,
+the shared `near_chrome` rule reveals
 hidden controls only within a fixed 80 logical pixels of an occupied window edge,
 not by approaching a hidden toolbar/panel. The top always reveals the header;
 left/right/bottom reveal only when a visible dock band occupies that edge. The
@@ -235,15 +235,23 @@ On touch, the last contact keeps revealed controls available after finger lift;
 another contact away from controls can hide them. The reveal contact cannot
 also activate a newly exposed button.
 
-GTK, web and Android expose Preferences → Appearance → Zen mode:
-**Show controls** selects **Screen edges** (default) or **Zen button**. Zen button
-hides all editor controls, including floats; edge proximity, contact and
-drag/menu pins cannot reveal them. **Keep Zen button visible** defaults on and
-keeps the same top-left button in its inactive style while controls are hidden,
-in either reveal mode. Clicking it disables Zen. Turning it off hides the button
-with the controls; Zen button then requires the Zen shortcut (Tab by default) or
-an explicit Preferences shortcut to recover controls. Explicit settings dialogs
-remain usable. The button never disappears while Zen is off.
+Preferences → Appearance → Zen mode now has one **Total zen** toggle, off by
+default. Partial Zen keeps the top-left button and directly edge-docked toolbars;
+edge proximity, contact and drag/menu pins cannot reveal the normal chrome.
+Clicking the button or pressing Tab exits Zen. Total Zen hides the button and
+uses the edge-reveal policy above. Explicit settings dialogs remain usable.
+The existing Total/edge-mode treatment of floating panels is retained pending
+the user's clarification; Partial Zen hides ordinary floating panels.
+
+`DockLayout::zen_toolbars` splits toolbars at dividers, preserving tile identities
+and configured sizes in single-row/column sections. It splits top sections into
+left/right clusters at the tile-count midpoint (crossing sections go right),
+spreads bottom sections, centers side sections with tile-height gaps, reserves
+occupied corners and the Zen button, and clips overflow
+without changing the saved dock layout. Top sections use the window edge rather
+than the header inset. GTK projects these shared rectangles; equivalent web and
+Android section presentation is pending GTK review. Their generic settings views
+already consume the shared replacement toggle.
 
 **Button icon** offers Looking up (default), Facing forward, Bathing and Sleeping.
 Rust stores `Settings.zen_icon` and supplies each command's icon. The generic
@@ -262,16 +270,15 @@ libadwaita behavior without custom outside-click dismissal. Errors appear below
 the header only while present. Detailed shortcut dialogs retain their own actions.
 Android retains its full-screen settings overlay and pane-level Done button.
 
-Rust owns these decisions through `Settings.zen_reveal_mode`, `zen_show_button`
-and `InputReply`'s `chrome_hidden`, `hide_floating_panels`, `keep_zen_button` flags.
+Rust owns these decisions through `Settings.total_zen` and `InputReply`'s
+`chrome_hidden`, `hide_floating_panels`, `keep_zen_button`, `partial_zen` flags.
 Hosts only apply visibility, hit-testing and styling. Android carries all three
 flags in its change-detected snapshot, including updates without a document revision.
 The button is a sibling of the header with a same-sized spacer, preserving its
 36×36px size and 6px inset. Its active background is subtle grey while the full UI
 is visible, but neutral when only the button remains.
-Right-clicking or touch-holding the Zen button opens the two reveal choices,
-a divider, the button visibility toggle, then a separate **Change icon…** entry.
-Current reveal/visibility values are checked.
+Right-clicking or touch-holding the Zen button opens the **Total zen** toggle,
+a divider, then **Change icon…**. The current toggle value is checked.
 Rust generates the menu from the same preference rows and applies their normal
 edit actions without opening Preferences.
 

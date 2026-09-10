@@ -52,7 +52,7 @@ validation and palette generation are shared Rust behavior. See the
 
 | Page | Working controls |
 | --- | --- |
-| Appearance | System/Light/Dark; dark/light base hex colors; separate Zen mode section: Show controls (Screen edges / Zen button), Keep Zen button visible, Button icon (four centered image tiles) |
+| Appearance | System/Light/Dark; dark/light base hex colors; separate Zen mode section: Total zen, Button icon (four centered image tiles) |
 | Canvas | Five cursor modes; scroll pan/zoom speeds |
 | Pen & Input | Pressure response; live stroke preview, prediction time up to 64 ms and pen tip tracking; device pen prediction where supplied |
 | Keyboard Shortcuts | Search commands, brushes, size presets and momentary pan; open details to add/remove/reset alternatives and resolve conflicts |
@@ -60,14 +60,14 @@ validation and palette generation are shared Rust behavior. See the
 
 Feedback-dependent fields are disabled in the core when feedback is off.
 GTK does not advertise predicted platform samples it does not provide.
-Defaults: System theme, Screen edges Zen,
+Defaults: System theme, Partial Zen (Total zen off),
 fixed 80px reveal/keep-visible distances, linear pressure, normal scroll speeds,
-8ms prediction. All hosts keep the Zen button visible by default when controls
-hide, with an independent switch to hide it too. Zen button disables edge
-reveal; without a visible button, use Tab (the default Zen shortcut) to exit.
-All three Zen settings are persisted, validated and resettable through the Rust row model.
-The Zen button also exposes reveal/visibility choices on right-click or touch-hold, with
-dividers before the visibility toggle and Change icon… settings link. Rust generates the menu from the rows, using
+8ms prediction. Partial Zen keeps the Zen button visible and disables edge
+reveal. GTK also projects split edge-toolbars; web/Android section views await
+GTK review. Total Zen hides the button and enables edge reveal. Tab exits either.
+Both Zen settings are persisted, validated and resettable through the Rust row model.
+The Zen button exposes Total zen on right-click or touch-hold, with a
+divider before the Change icon… settings link. Rust generates the menu from the rows, using
 the same validated, persisted edit action as the settings page. Individual
 preference edits/resets can execute without a settings dialog; navigation and
 shortcut recording still require it to be open.
@@ -81,7 +81,8 @@ font-size setting. Text controls and inline step symbols use font-relative sizes
 tool icons, brush previews, sliders and checkboxes retain their dimensions.
 The core ignores the retired `panel_text_pt`, `zen_hide` and `zen_reveal` fields when loading saved settings,
 without dropping other preferences or relaxing validation of unknown fields.
-Older `zen_behavior` saves migrate to `zen_reveal_mode`. Retired Show panels
+Retired `zen_behavior`, `zen_reveal_mode` and `zen_show_button` fields are ignored;
+the replacement Total zen preference starts at its default. Retired Show panels
 toolbar actions migrate to Zen, obsolete shortcut overrides are discarded, and
 the old global `panels_visible` field is ignored. Individual panel placement is
 preserved; there is no separate global hide state or command.

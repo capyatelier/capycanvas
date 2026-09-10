@@ -2,6 +2,83 @@
 //! GTK owns gestures/widgets; catalogs, selection, validation and edits are Rust UI policy.
 use super::*;
 
+pub(super) fn drawer_origin(button: &gtk::Button, direction: Option<Edge>) {
+    for (edge, class) in [
+        (Edge::Top, "drawer-origin-top"),
+        (Edge::Bottom, "drawer-origin-bottom"),
+        (Edge::Left, "drawer-origin-left"),
+        (Edge::Right, "drawer-origin-right"),
+    ] {
+        if direction == Some(edge) {
+            button.add_css_class(class);
+        } else {
+            button.remove_css_class(class);
+        }
+    }
+}
+
+pub(super) fn tile_button(
+    w: &Rc<Workspace>,
+    config: &PanelConfig,
+    tile: &ToolbarTile,
+    palette: &gtk::CssProvider,
+) -> gtk::Button {
+    let choice = tool_choice(tile.control);
+    let panel = config.id;
+    let id = tile.id;
+    let button = gtk::Button::builder().tooltip_text(&choice.label).build();
+    let icon = gtk::Image::from_icon_name(&format!("layer-{}-symbolic", choice.icon));
+    icon.set_pixel_size(config.tile_style.icon_size() as i32);
+    if config.tile_style == TileStyle::Labeled {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        icon.set_size_request(TILE_SIZE as i32, -1);
+        let label = gtk::Label::new(Some(&choice.label));
+        label.set_hexpand(true);
+        label.set_wrap(true);
+        label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_lines(3);
+        label.set_max_width_chars(1);
+        label.set_xalign(0.0);
+        label.set_valign(gtk::Align::Center);
+        row.append(&icon);
+        row.append(&label);
+        button.set_child(Some(&row));
+    } else {
+        button.set_child(Some(&icon));
+    }
+    button.add_css_class("flat");
+    button.set_widget_name(&format!("tile-{id}"));
+    button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
+    button.connect_clicked(glib::clone!(
+        #[weak]
+        w,
+        move |button| {
+            if let Some(b) = button.compute_bounds(&w.surface) {
+                w.customization
+                    .anchor
+                    .set([b.x() + b.width() * 0.5, b.y() + b.height()]);
+            }
+            w.dispatch(UiAction::ActivateTile { panel, tile: id });
+        }
+    ));
+    if tile.control == ToolbarControl::Color {
+        button.add_css_class("brush-color");
+        #[allow(deprecated)]
+        button
+            .style_context()
+            .add_provider(palette, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    if tile.control == ToolbarControl::Divider {
+        let line = gtk::Separator::new(gtk::Orientation::Horizontal);
+        line.set_halign(gtk::Align::Center);
+        line.set_valign(gtk::Align::Center);
+        button.set_child(Some(&line));
+        button.add_css_class("toolbar-divider");
+    }
+    button
+}
+
 pub(super) struct ToolbarView {
     pub id: Panel,
     pub strip: TileStrip,
@@ -740,52 +817,9 @@ impl Customization {
             toolbar.style = config.tile_style;
             toolbar.buttons.clear();
             for tile in config.tiles() {
-                let choice = tool_choice(tile.control);
                 let panel = config.id;
                 let id = tile.id;
-                let button = gtk::Button::builder().tooltip_text(&choice.label).build();
-                let icon = gtk::Image::from_icon_name(&format!("layer-{}-symbolic", choice.icon));
-                icon.set_pixel_size(config.tile_style.icon_size() as i32);
-                if config.tile_style == TileStyle::Labeled {
-                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-                    icon.set_size_request(TILE_SIZE as i32, -1);
-                    let label = gtk::Label::new(Some(&choice.label));
-                    label.set_hexpand(true);
-                    label.set_wrap(true);
-                    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                    label.set_lines(3);
-                    label.set_max_width_chars(1);
-                    label.set_xalign(0.0);
-                    label.set_valign(gtk::Align::Center);
-                    row.append(&icon);
-                    row.append(&label);
-                    button.set_child(Some(&row));
-                } else {
-                    button.set_child(Some(&icon));
-                }
-                button.add_css_class("flat");
-                button.set_widget_name(&format!("tile-{id}"));
-                button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
-                button.connect_clicked(glib::clone!(
-                    #[weak]
-                    w,
-                    move |button| {
-                        if let Some(b) = button.compute_bounds(&w.surface) {
-                            w.customization
-                                .anchor
-                                .set([b.x() + b.width() * 0.5, b.y() + b.height()]);
-                        }
-                        w.dispatch(UiAction::ActivateTile { panel, tile: id });
-                    }
-                ));
-                if tile.control == ToolbarControl::Color {
-                    button.add_css_class("brush-color");
-                    #[allow(deprecated)]
-                    button
-                        .style_context()
-                        .add_provider(&toolbar.palette, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-                }
+                let button = tile_button(w, config, tile, &toolbar.palette);
                 // The wrapper stays targetable even when the command button is
                 // disabled, so an unavailable command can still be moved/removed.
                 let tile_root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -799,6 +833,20 @@ impl Customization {
                 toolbar.buttons.push(button);
             }
             toolbar.tiles = config.tiles().to_vec();
+            toolbar.strip.set_tiles(config.tiles());
+        }
+    }
+
+    pub fn mark_drawer_origin(&self, origin: Option<(TileAnchor, Edge)>) {
+        for bar in self.toolbars.borrow().iter() {
+            for (tile, button) in bar.tiles.iter().zip(&bar.buttons) {
+                drawer_origin(
+                    button,
+                    origin
+                        .filter(|(a, _)| a.panel == bar.id && a.tile == tile.id)
+                        .map(|(_, d)| d),
+                );
+            }
         }
     }
 

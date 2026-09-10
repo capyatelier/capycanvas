@@ -67,6 +67,12 @@ independently decide when a tool is selected or a drawer opens.
   dismissal is not also a drawing stroke or a second request to hide all UI.
   Reuse the existing expansion lifecycle and animation duration; do not create
   competing open drawers or separate per-host visibility logic.
+- The drawer connects to its originating tile across the normal panel gap,
+  instead of appearing as an unrelated floating box. Extend that tile toward
+  the drawer and use concave, tab-like joins into the body. Rust determines
+  the connector geometry and suppresses concave joins near an aligned body
+  edge; round only the exposed corners. Apply this to normal and Zen tiles,
+  every opening direction, viewport clamping, resizing and animation.
 - Every actual tool/preset gets two columns: Tool Set, then Tool Settings.
   Color gets one Color panel. Opacity gets Tool Settings, exposing the editable
   value and its related controls. Size preset tiles remain immediate value
@@ -117,8 +123,13 @@ options and behavioral branches; the two modes below are the only choices.
   Split at actual toolbar dividers, showing each non-empty section as a separate
   floating-style bar. These are transient projections, not new floating workspace
   panels. Preserve tile identities, order, actions and the normal saved layout.
-- Distribute sections evenly along their available edge, with the first and last
-  aligned to its ends. A single section is centered. Move the partial-Zen top
+- On top, anchor two clusters to the left/right ends, split near half the tile
+  count. Never split a section: one crossing the midpoint belongs to the right
+  cluster. Within each cluster use one tile-width gap. On bottom, distribute
+  sections evenly with the first/last at the ends; a single section is centered. On left/right,
+  center the sections together as one stack with one tile-height gap between
+  sections (largest configured height on that edge). Reduce gaps before clipping
+  overflow on short viewports. Move the partial-Zen top
   toolbar to the physical window top edge, with no menu/title-bar inset.
   Reserve the top-left Zen button and other occupied corners so bars cannot
   cover them. Core geometry owns reservations, section sizing and placement.
@@ -131,8 +142,10 @@ Implement with the toolbar-divider work and shared layout/input model, GTK first
 no per-host implementations of reveal policy or section distribution. Validate
 all edges and tile sizes, single/multiple sections, empty/adjacent dividers,
 multiple toolbars, corner collisions, entry/exit, tool drawers, and unchanged
-normal workspace persistence. The existing Zen settings are still the current
-implementation until this replacement milestone lands.
+normal workspace persistence. The shared toggle and GTK split-bar presentation
+are implemented and validated. Connected tile drawers share their geometry and
+corner decisions in Rust, including during animation; GTK paints the same
+panel-colored stem and concave joins as the existing panel configuration design.
 
 ## Collapsible panel columns (added to this milestone)
 
@@ -331,8 +344,39 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   0.012/0.032/0.045ms. This synthetic-input run checks the normal drawing path,
   not physical tablet delivery or a before/after drawer-open comparison. Raw
   output is `/tmp/capy-tool-drawer-pacing.json`, not a checked-in artifact.
-- Still to implement: the new default layout,
-  toolbar dividers and replacement Zen modes above, missing canvas tools/commands,
+- Toolbar dividers now take eight logical pixels, retaining stable tile IDs and
+  insertion slots. Ribbon measurement, wrapping and drop markers share compact
+  extents. Partial Zen reuses the same tile actions in separate native sections;
+  side sections stay centered with one tile-height gap; top sections form
+  left/right clusters split on section boundaries, bottom sections spread out.
+  Geometry and hit tests are core-owned; no saved panels are moved or cloned.
+- Tool drawers connect only to their originating tile across the 6px panel gap.
+  The source tile's facing corners flatten; concave joins shrink away near a
+  drawer corner, and aligned body corners flatten to maintain a continuous edge.
+  Opening/closing grows from the attached side. The connection is part of the
+  drawer's hit region, never a canvas drawing target or outside-dismiss contact.
+- Current milestone validation: 171 shared UI tests; workspace/Wasm checks;
+  strict UI/GTK Clippy; GTK `native_tool_drawers`, `native_zen_behaviors` and
+  `native_panel_expansion` on the private Wayland GPU display. Zen tests cover
+  four dock edges in both themes, exact tile bounds and picking, connection
+  contacts, outside dismissal and unchanged normal layout. Reviewed images use
+  `zen-` and `drawer-` prefixes in `artifacts/familiar-workspace/` (ignored).
+  Web/Android test fixtures use the replacement setting ID, but their native
+  section/drawer presentation is not rolled out or device-tested this milestone.
+- Paired release Wayland G-Pen benchmark after the final changes (384px brush,
+  six seconds of synthetic input; real child-surface presentation feedback):
+
+  | UI | CPU worker median/p95/p99 ms | GPU median/p95/p99 ms | GTK handler median/p95/p99 ms | Displayed Hz |
+  | --- | --- | --- | --- | --- |
+  | Normal | 0.258 / 0.541 / 0.743 | 0.103 / 0.266 / 0.415 | 0.014 / 0.036 / 0.044 | 119.75 |
+  | Partial Zen | 0.289 / 0.538 / 0.699 | 0.122 / 0.331 / 2.084 | 0.013 / 0.033 / 0.042 | 119.98 |
+
+  Both sustain the 120Hz display target. GPU tails vary between runs: the earlier
+  pair had normal/partial p99 of 1.936/0.737ms, respectively. The final partial
+  p99 is higher, still below 8.33ms; these short runs do not establish a fixed
+  GPU overhead or measure physical tablet latency. Reports are the temporary
+  `capy-zen-normal-pacing.json` and `capy-zen-partial-pacing.json` files.
+- Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, Navigator, rulers, shortcuts
   and full functional/performance validation.
 - The complete eight-tool ribbon is currently exercised by the GTK review test;

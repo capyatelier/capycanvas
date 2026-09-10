@@ -104,11 +104,36 @@ impl Body {
 }
 struct View {
     root: Columns,
+    connection: gtk::DrawingArea,
+    connection_geometry: Rc<Cell<Option<DrawerConnection>>>,
     columns: Vec<gtk::Box>,
     bodies: Vec<Body>,
 }
 impl View {
     fn new(w: &Rc<Workspace>, drawer: &ContentDrawer) -> Self {
+        let connection = gtk::DrawingArea::new();
+        connection.set_widget_name("drawer-connection");
+        connection.add_css_class("drawer-connection");
+        let connection_geometry = Rc::new(Cell::new(None::<DrawerConnection>));
+        let geometry = connection_geometry.clone();
+        connection.set_draw_func(move |area, cr, _, _| {
+            let Some(c) = geometry.get() else {
+                return;
+            };
+            let color = area.color();
+            cr.set_source_rgba(
+                color.red().into(),
+                color.green().into(),
+                color.blue().into(),
+                color.alpha().into(),
+            );
+            let [xx, yx, xy, yy, x, y] = c.transform.map(f64::from);
+            cr.transform(gtk::cairo::Matrix::new(xx, yx, xy, yy, x, y));
+            cr.rectangle(0.0, 0.0, c.length.into(), c.depth.into());
+            concave_foot(cr, 0.0, c.depth.into(), c.radii[0].into(), -1.0);
+            concave_foot(cr, c.length.into(), c.depth.into(), c.radii[1].into(), 1.0);
+            let _ = cr.fill();
+        });
         let root: Columns = glib::Object::new();
         root.set_widget_name("tool-drawer");
         root.add_css_class("dock-panel");
@@ -162,6 +187,8 @@ impl View {
         }
         Self {
             root,
+            connection,
+            connection_geometry,
             columns,
             bodies,
         }
@@ -217,14 +244,19 @@ impl Drawer {
         let view = view.as_ref()?;
         let layout = w.surface.imp().layout.borrow();
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-        let sizing = state.placement(&layout, viewport, &vec![0.0; view.columns.len()])?;
+        let partial = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .is_some_and(|g| g.session.state().partial_zen());
+        let sizing = state.placement(&layout, viewport, &vec![0.0; view.columns.len()], partial)?;
         let heights: Vec<_> = view
             .columns
             .iter()
             .zip(&sizing.columns)
             .map(|(body, b)| body.measure(gtk::Orientation::Vertical, b.width as i32).1 as f32)
             .collect();
-        state.placement(&layout, viewport, &heights)
+        state.placement(&layout, viewport, &heights, partial)
     }
     pub fn geometry(&self, w: &Workspace) -> Option<DrawerPlacement> {
         let target = self.target(w)?;
@@ -239,7 +271,27 @@ impl Drawer {
         );
         if let Some(view) = self.view.borrow().as_ref() {
             *view.root.imp().geometry.borrow_mut() = result.columns.clone();
+            let connection = result.connection();
+            view.connection_geometry.set(connection);
+            view.connection.queue_draw();
+            for (index, class) in ["join-nw", "join-ne", "join-se", "join-sw"]
+                .into_iter()
+                .enumerate()
+            {
+                if connection.is_some_and(|c| c.square_corners[index]) {
+                    view.root.add_css_class(class);
+                } else {
+                    view.root.remove_css_class(class);
+                }
+            }
         }
+        let origin = self
+            .state
+            .borrow()
+            .as_ref()
+            .map(|s| (s.anchor, result.direction));
+        w.customization.mark_drawer_origin(origin);
+        w.zen.mark_drawer_origin(origin);
         *self.presented.borrow_mut() = Some(result.clone());
         Some(result)
     }
@@ -268,7 +320,10 @@ impl Drawer {
             move |_| {
                 w.drawer.from.borrow_mut().take();
                 if w.drawer.closing.get() {
-                    w.surface.remove_slots(|slot| slot == Slot::Drawer);
+                    w.surface
+                        .remove_slots(|slot| matches!(slot, Slot::Drawer | Slot::DrawerConnection));
+                    w.customization.mark_drawer_origin(None);
+                    w.zen.mark_drawer_origin(None);
                     w.drawer.view.borrow_mut().take();
                     w.drawer.state.borrow_mut().take();
                     w.drawer.presented.borrow_mut().take();
@@ -294,9 +349,11 @@ impl Drawer {
             .as_ref()
             .is_none_or(|old| old.columns != next.columns);
         if rebuild {
-            w.surface.remove_slots(|slot| slot == Slot::Drawer);
+            w.surface
+                .remove_slots(|slot| matches!(slot, Slot::Drawer | Slot::DrawerConnection));
             let view = Rc::new(View::new(w, next));
             w.surface.add(Slot::Drawer, &view.root);
+            w.surface.add(Slot::DrawerConnection, &view.connection);
             *self.view.borrow_mut() = Some(view);
         }
         *self.state.borrow_mut() = Some(next.clone());

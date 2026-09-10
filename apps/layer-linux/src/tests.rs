@@ -54,6 +54,35 @@ fn native_test_app(id: &str) -> NativeTestApp {
     NativeTestApp(app)
 }
 
+fn assert_drawer_connected(w: &Workspace) {
+    let p = w.drawer.placement().unwrap();
+    let c = p.connection().unwrap();
+    let connection = find_named(w.surface.upcast_ref(), "drawer-connection").unwrap();
+    assert!(connection.is_mapped() && connection.can_target());
+    let actual = connection.compute_bounds(&w.surface).unwrap();
+    assert!((actual.x() - c.bounds.x).abs() <= 1.0);
+    assert!((actual.y() - c.bounds.y).abs() <= 1.0);
+    assert!((actual.width() - c.bounds.width).abs() <= 1.0);
+    assert!((actual.height() - c.bounds.height).abs() <= 1.0);
+    let center = [
+        c.bounds.x + c.bounds.width * 0.5,
+        c.bounds.y + c.bounds.height * 0.5,
+    ];
+    assert_eq!(
+        w.surface
+            .pick(center[0] as f64, center[1] as f64, gtk::PickFlags::DEFAULT),
+        Some(connection)
+    );
+    w.chrome_event(ChromeEvent::Contact {
+        position: center,
+        canvas: false,
+    });
+    assert!(
+        state(w).customization.drawer.is_some(),
+        "the connecting stem is part of the drawer, not an outside click"
+    );
+}
+
 #[test]
 #[ignore = "private Wayland display and GPU"]
 fn native_tool_drawers() {
@@ -132,6 +161,7 @@ fn native_tool_drawers() {
             }
             pump(300);
             assert!(state(&w).customization.drawer.is_some(), "tile {id}");
+            assert_drawer_connected(&w);
             let drawer = find_named(w.surface.upcast_ref(), "tool-drawer").unwrap();
             assert!(drawer.is_mapped());
             let b = drawer.compute_bounds(&w.surface).unwrap();
@@ -281,6 +311,7 @@ fn native_tool_drawers() {
         click(&button);
         pump(300);
         assert!(state(&w).customization.drawer.is_some());
+        assert_drawer_connected(&w);
         capture_reference(&w, &format!("{output}/drawer-color-{edge:?}.png"), 1.0);
         let dismissed = w.chrome_event(ChromeEvent::Contact {
             position: [1100.0, 700.0],
@@ -2172,7 +2203,7 @@ fn native_zen_icons() {
             position: [600.0, 1.0],
         });
         pump(250);
-        assert!(!zen.has_css_class("zen-button-neutral"));
+        assert!(zen.has_css_class("zen-button-neutral"));
         capture_reference(&w, &format!("{dir}/gtk-active-{name}.png"), 1.0);
         click(&zen);
         pump(250);
@@ -2417,180 +2448,119 @@ fn native_settings_typography() {
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_behaviors() {
-    let app = native_test_app("dev.layer.ZenBehaviorsTest");
+    let app = native_test_app("art.capycanvas.ZenSectionsTest");
     let w = Workspace::new(&app);
     w.window.present();
     pump(700);
-    let dir = "../../artifacts/ui/zen";
+    let dir = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(dir).unwrap();
     let zen = command(&w, CommandId::ZenMode);
-    let bounds = zen.compute_bounds(&w.surface).unwrap();
-    assert_eq!(
-        [bounds.x(), bounds.y(), bounds.width(), bounds.height()],
-        [WORKSPACE_SPACING, WORKSPACE_SPACING, TILE_SIZE, TILE_SIZE]
-    );
-    // The independent button leaves a same-sized spacer in the native header.
-    let edit: gtk::MenuButton = find_css(w.header.upcast_ref(), "chrome-control")
-        .unwrap()
-        .downcast()
-        .unwrap();
-    assert_eq!(edit.label().as_deref(), Some("Edit"));
-    assert_eq!(
-        edit.compute_bounds(&w.surface).unwrap().x(),
-        bounds.x() + bounds.width() + WORKSPACE_SPACING
-    );
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    w.dispatch(UiAction::MovePanel {
-        panel: Panel::Sizes,
-        viewport,
-        target: DockTarget::Float {
-            position: [600.0, 400.0],
-        },
-    });
-    pump(250);
-    let layout = state(&w).workspace.layout;
-    let choose = |selected| {
-        w.dispatch(UiAction::OpenSettings {
-            page: SettingsPage::Appearance,
-        });
-        pump(250);
-        let row: adw::ComboRow =
-            find_named(w.preferences.dialog.upcast_ref(), "setting-zen-reveal-mode")
-                .unwrap()
-                .downcast()
-                .unwrap();
-        row.set_selected(selected);
-        pump(100);
-        assert_eq!(
-            state(&w).settings.zen_reveal_mode,
-            if selected == 0 {
-                layer_ui::ZenRevealMode::Edges
-            } else {
-                layer_ui::ZenRevealMode::Button
-            }
-        );
-    };
-    choose(1);
-    capture_reference(&w, &format!("{dir}/gtk-preference.png"), 1.0);
-    click(
-        &find_css(
-            &find_named(w.preferences.dialog.upcast_ref(), "preferences-content").unwrap(),
-            "close",
-        )
-        .unwrap()
-        .downcast()
-        .unwrap(),
-    );
-    pump(300);
-    let open_zen_menu = || {
-        let controllers = zen.observe_controllers();
-        let hold = (0..controllers.n_items())
-            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
-            .find(|g| g.name().as_deref() == Some("workspace-context-hold"))
-            .unwrap();
-        hold.emit_by_name::<()>("pressed", &[&18.0f64, &18.0f64]);
-        pump(150);
-        let popup = w
-            .popovers
-            .borrow()
-            .iter()
-            .filter_map(|p| p.upgrade())
-            .find(|p| p.is_visible() && p.has_css_class("panel-context-menu"))
-            .unwrap()
-            .downcast::<gtk::PopoverMenu>()
-            .unwrap();
-        let menu = popup.menu_model().unwrap();
-        assert!(menu_action(&menu, "Reveal at screen edges").is_some());
-        assert!(menu_action(&menu, "Reveal with Zen button").is_some());
-        assert!(menu_action(&menu, "Keep Zen button visible").is_some());
-        assert!(menu_action(&menu, "Change icon…").is_some());
-        assert_eq!(
-            menu.n_items(),
-            3,
-            "dividers separate reveal mode, button visibility and icon settings"
-        );
-        popup
-    };
-    let popup = open_zen_menu();
-    capture_popover(
-        popup.upcast_ref(),
-        "../../artifacts/ui/zen-icons/gtk-context-menu.png",
-    );
-    popup
-        .activate_action(
-            &menu_action(&popup.menu_model().unwrap(), "Change icon…").unwrap(),
-            None,
+    let mut workspace = state(&w).workspace;
+    workspace.zen_mode = false;
+    workspace
+        .layout
+        .move_panel(
+            viewport,
+            Panel::Toolbar,
+            DockTarget::Edge {
+                edge: Edge::Left,
+                outer: true,
+            },
         )
         .unwrap();
-    pump(350);
-    assert!(state(&w).settings_open && !state(&w).workspace.zen_mode);
-    assert_eq!(state(&w).preferences.reveal, Some(PreferenceId::ZenIcon));
-    let selector = find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").unwrap();
-    let field_bounds = selector.compute_bounds(&w.window).unwrap();
-    let content = find_named(w.preferences.dialog.upcast_ref(), "preferences-content")
-        .unwrap()
-        .compute_bounds(&w.window)
-        .unwrap();
-    assert!(
-        field_bounds.y() >= content.y()
-            && field_bounds.y() + field_bounds.height() <= content.y() + content.height()
-    );
-    capture_reference(
-        &w,
-        "../../artifacts/ui/zen-icons/gtk-context-open-selector.png",
-        1.0,
-    );
-    click(
-        &find_css(
-            &find_named(w.preferences.dialog.upcast_ref(), "preferences-content").unwrap(),
-            "close",
-        )
-        .unwrap()
-        .downcast()
-        .unwrap(),
-    );
-    pump(300);
-    assert!(!state(&w).settings_open);
-    for (label, mode) in [
-        ("Reveal at screen edges", layer_ui::ZenRevealMode::Edges),
-        ("Reveal with Zen button", layer_ui::ZenRevealMode::Button),
-    ] {
-        let popup = open_zen_menu();
-        popup
-            .activate_action(
-                &menu_action(&popup.menu_model().unwrap(), label).unwrap(),
+    for edge in [Edge::Top, Edge::Bottom, Edge::Right] {
+        let toolbar = workspace
+            .layout
+            .add_toolbar(
                 None,
+                &format!("{edge:?}"),
+                &[
+                    ToolbarControl::Command {
+                        command: CommandId::Pen,
+                    },
+                    ToolbarControl::Color,
+                    ToolbarControl::Divider,
+                    ToolbarControl::Command {
+                        command: CommandId::Eraser,
+                    },
+                    ToolbarControl::Divider,
+                    ToolbarControl::Opacity,
+                ],
             )
             .unwrap();
-        pump(150);
-        assert_eq!(state(&w).settings.zen_reveal_mode, mode);
-        assert!(!state(&w).settings_open && !state(&w).workspace.zen_mode);
+        workspace
+            .layout
+            .move_panel(viewport, toolbar, DockTarget::Edge { edge, outer: true })
+            .unwrap();
     }
+    workspace
+        .layout
+        .insert_tools(Panel::Toolbar, Some(2), &[ToolbarControl::Divider])
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::RestoreSettings {
+        settings: Settings::default(),
+    });
+    pump(200);
+    let saved = state(&w).workspace.layout;
     for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        pump(250);
-        capture_reference(&w, &format!("{dir}/gtk-normal-{name}.png"), 1.0);
+        pump(200);
+        capture_reference(&w, &format!("{dir}/zen-normal-{name}.png"), 1.0);
         click(&zen);
-        pump(250);
-        assert!(state(&w).workspace.zen_mode);
-        assert!(zen.has_css_class("selected-tool"));
+        pump(300);
+        assert!(state(&w).partial_zen());
+        assert!(zen.can_target() && zen.has_css_class("zen-button-neutral"));
         for (slot, widget) in w.surface.imp().children.borrow().iter() {
-            let visible = matches!(slot, Slot::Canvas | Slot::ZenButton);
-            assert_eq!(
-                !widget.has_css_class("zen-hidden"),
-                visible,
-                "{}",
-                widget.widget_name()
+            let visible = matches!(
+                slot,
+                Slot::Canvas
+                    | Slot::ZenButton
+                    | Slot::ZenToolbars
+                    | Slot::Drawer
+                    | Slot::DrawerConnection
             );
-            assert_eq!(widget.can_target(), visible, "{}", widget.widget_name());
+            assert_eq!(!widget.has_css_class("zen-hidden"), visible);
+            assert_eq!(widget.can_target(), visible);
         }
-        assert_eq!(
-            w.surface
-                .pick(24.0, 24.0, gtk::PickFlags::DEFAULT)
-                .unwrap()
-                .ancestor(gtk::Button::static_type())
-                .unwrap(),
-            zen.clone().upcast::<gtk::Widget>()
+        let model = saved.zen_toolbars(viewport);
+        let root = find_named(w.surface.upcast_ref(), "zen-toolbars").unwrap();
+        for section in &model.sections {
+            for (id, _) in &section.tiles {
+                let Some(expected) = section.tile_bounds(*id) else {
+                    continue;
+                };
+                let tile: gtk::Button = find_named(&root, &format!("zen-tile-{id}"))
+                    .unwrap()
+                    .downcast()
+                    .unwrap();
+                let actual = tile.compute_bounds(&w.surface).unwrap();
+                assert!((actual.x() - expected.x).abs() <= 1.0);
+                assert!((actual.y() - expected.y).abs() <= 1.0);
+                assert_eq!(actual.width(), section.style.size()[0]);
+                assert_eq!(actual.height(), section.style.size()[1]);
+                let center = [
+                    expected.x + expected.width * 0.5,
+                    expected.y + expected.height * 0.5,
+                ];
+                let picked = w
+                    .surface
+                    .pick(center[0] as f64, center[1] as f64, gtk::PickFlags::DEFAULT)
+                    .unwrap();
+                if tile.is_sensitive() {
+                    assert!(
+                        picked == tile.clone().upcast::<gtk::Widget>() || picked.is_ancestor(&tile),
+                        "{edge:?} tile {id} picked {}",
+                        picked.widget_name(),
+                        edge = section.edge
+                    );
+                }
+            }
+        }
+        assert!(
+            !root.contains(600.0, 450.0),
+            "section gaps must let drawing input through"
         );
         for position in [
             [6.0, 6.0],
@@ -2600,49 +2570,84 @@ fn native_zen_behaviors() {
             [600.0, viewport[1] - 1.0],
         ] {
             let reply = w.chrome_event(ChromeEvent::Motion { position });
-            assert!(reply.chrome_hidden && reply.hide_floating_panels);
+            assert!(reply.chrome_hidden && reply.partial_zen);
             assert!(!w.reveal_chrome_at(position[0], position[1]));
         }
-        capture_reference(&w, &format!("{dir}/gtk-button-only-{name}.png"), 1.0);
-        let popup = open_zen_menu();
-        assert!(
-            w.header.has_css_class("zen-hidden"),
-            "opening the menu doesn't reveal Reveal with Zen button chrome"
-        );
-        capture_popover(
-            popup.upcast_ref(),
-            &format!("{dir}/gtk-button-menu-{name}.png"),
-        );
-        popup
-            .activate_action(
-                &menu_action(&popup.menu_model().unwrap(), "Reveal with Zen button").unwrap(),
-                None,
-            )
-            .unwrap();
-        pump(150);
-        assert!(
-            state(&w).workspace.zen_mode,
-            "context selection must not click the Zen toggle"
-        );
-        // It remains a working button, not a disabled control or a duplicate.
+        capture_reference(&w, &format!("{dir}/zen-partial-{name}.png"), 1.0);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            let section = model
+                .sections
+                .iter()
+                .find(|s| {
+                    s.edge == edge
+                        && s.tiles.iter().any(|(id, _)| {
+                            saved
+                                .panel(s.panel)
+                                .unwrap()
+                                .tiles()
+                                .iter()
+                                .any(|t| t.id == *id && t.control == ToolbarControl::Color)
+                        })
+                })
+                .unwrap();
+            let id = section
+                .tiles
+                .iter()
+                .find(|(id, _)| {
+                    saved
+                        .panel(section.panel)
+                        .unwrap()
+                        .tiles()
+                        .iter()
+                        .any(|t| t.id == *id && t.control == ToolbarControl::Color)
+                })
+                .unwrap()
+                .0;
+            let tile = find_named(&root, &format!("zen-tile-{id}"))
+                .unwrap()
+                .downcast()
+                .unwrap();
+            click(&tile);
+            pump(250);
+            assert!(state(&w).customization.drawer.is_some());
+            let drawer = find_named(w.surface.upcast_ref(), "tool-drawer").unwrap();
+            assert!(!drawer.has_css_class("zen-hidden") && drawer.can_target());
+            let placement = w.drawer.placement().unwrap();
+            assert_drawer_connected(&w);
+            let anchor = section.tile_bounds(id).unwrap();
+            assert_eq!(
+                [placement.anchor.x, placement.anchor.y],
+                [anchor.x, anchor.y]
+            );
+            capture_reference(&w, &format!("{dir}/zen-drawer-{edge:?}-{name}.png"), 1.0);
+            let dismissed = w.chrome_event(ChromeEvent::Contact {
+                position: [600.0, 450.0],
+                canvas: true,
+            });
+            assert!(dismissed.handled && dismissed.chrome_hidden);
+            pump(250);
+            assert!(state(&w).customization.drawer.is_none());
+        }
         click(&zen);
         pump(250);
         assert!(!state(&w).workspace.zen_mode);
-        assert!(!zen.has_css_class("selected-tool"));
-        assert!(
-            w.surface
-                .imp()
-                .children
-                .borrow()
-                .iter()
-                .all(|(_, widget)| !widget.has_css_class("zen-hidden") && widget.can_target())
-        );
-        assert_eq!(zen.compute_bounds(&w.surface).unwrap(), bounds);
-        assert_eq!(state(&w).workspace.layout, layout);
+        assert_eq!(state(&w).workspace.layout, saved);
     }
-    choose(0);
+    w.dispatch(UiAction::OpenSettings {
+        page: SettingsPage::Appearance,
+    });
+    pump(250);
+    let row: adw::SwitchRow = find_named(w.preferences.dialog.upcast_ref(), "setting-total-zen")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    row.set_active(true);
+    pump(100);
+    assert!(state(&w).settings.total_zen);
+    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-reveal-mode").is_none());
+    capture_reference(&w, &format!("{dir}/zen-preferences.png"), 1.0);
     w.dispatch(UiAction::CloseSettings);
-    pump(300);
+    pump(250);
     click(&zen);
     assert!(
         w.chrome_event(ChromeEvent::Motion {
@@ -2650,73 +2655,41 @@ fn native_zen_behaviors() {
         })
         .chrome_hidden
     );
+    assert!(!zen.can_target());
     pump(250);
-    assert!(!zen.has_css_class("zen-hidden") && zen.can_target());
-    assert!(zen.has_css_class("selected-tool"));
-    let floating = w
-        .groups
-        .borrow()
-        .iter()
-        .find(|g| g.root.has_css_class("floating-panel"))
-        .unwrap()
-        .root
-        .clone();
-    assert!(floating.can_target() && !floating.has_css_class("zen-hidden"));
-    let reply = w.chrome_event(ChromeEvent::Motion {
-        position: [6.0, 6.0],
-    });
-    assert!(!reply.chrome_hidden && !reply.hide_floating_panels);
-    assert!(zen.can_target() && zen.has_css_class("selected-tool"));
-    click(&zen);
-    for mode in [0, 1] {
-        choose(mode);
-        let show: adw::SwitchRow =
-            find_named(w.preferences.dialog.upcast_ref(), "setting-zen-show-button")
-                .unwrap()
-                .downcast()
-                .unwrap();
-        assert!(show.is_active(), "show button is on by default");
-        show.set_active(false);
-        assert!(!state(&w).settings.zen_show_button);
-        w.dispatch(UiAction::CloseSettings);
-        pump(300);
-        click(&zen);
-        assert!(
-            w.chrome_event(ChromeEvent::Motion {
-                position: [600.0, 450.0]
-            })
-            .chrome_hidden
-        );
-        assert!(zen.has_css_class("zen-hidden") && !zen.can_target());
-        pump(250);
-        capture_reference(&w, &format!("{dir}/gtk-mode-{mode}-hidden-button.png"), 1.0);
-        let reply = w.chrome_event(ChromeEvent::Motion {
-            position: [6.0, 6.0],
+    capture_reference(&w, &format!("{dir}/zen-total.png"), 1.0);
+    assert!(
+        !w.chrome_event(ChromeEvent::Motion {
+            position: [6.0, 6.0]
+        })
+        .chrome_hidden
+    );
+    for pressed in [true, false] {
+        w.interact(UiInput::Key {
+            key: "Tab".into(),
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::default(),
+            editing: false,
+            divider: None,
         });
-        assert_eq!(reply.chrome_hidden, mode == 1);
-        for pressed in [true, false] {
-            w.interact(UiInput::Key {
-                key: "Tab".into(),
-                pressed,
-                repeat: false,
-                modifiers: layer_ui::Modifiers::default(),
-                editing: false,
-                divider: None,
-            });
-        }
-        assert!(!state(&w).workspace.zen_mode);
-        assert!(zen.can_target() && !zen.has_css_class("zen-hidden"));
-        // Both dimensions can also be changed through the context menu.
-        let popup = open_zen_menu();
-        popup
-            .activate_action(
-                &menu_action(&popup.menu_model().unwrap(), "Keep Zen button visible").unwrap(),
-                None,
-            )
-            .unwrap();
-        pump(150);
-        assert!(state(&w).settings.zen_show_button);
     }
+    assert!(!state(&w).workspace.zen_mode);
+    let menu = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .context_menu(ContextTarget::ZenMode)
+        .unwrap();
+    assert_eq!(menu.sections[0][0].label, "Total zen");
+    w.dispatch(menu.sections[0][0].action.clone().unwrap());
+    assert!(!state(&w).settings.total_zen);
+    w.dispatch(menu.sections[1][0].action.clone().unwrap());
+    pump(300);
+    assert_eq!(state(&w).preferences.reveal, Some(PreferenceId::ZenIcon));
+    assert!(find_named(w.preferences.dialog.upcast_ref(), "setting-zen-icon").is_some());
     w.window.close();
     pump(100);
 }
@@ -2728,6 +2701,12 @@ fn native_zen_floating_targets() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(700);
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit {
+            id: PreferenceId::TotalZen,
+            value: layer_ui::PreferenceValue::Bool(true),
+        },
+    });
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Toolbar,
@@ -2828,6 +2807,12 @@ fn native_floating_gestures() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(700);
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit {
+            id: PreferenceId::TotalZen,
+            value: layer_ui::PreferenceValue::Bool(true),
+        },
+    });
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     w.dispatch(UiAction::MovePanel {
         panel: Panel::Sizes,
@@ -3646,6 +3631,12 @@ fn native_workspace_management() {
         send(CustomizationAction::SetTabStyle {
             group: floated,
             style: TabStyle::Name,
+        });
+        w.dispatch(UiAction::Preferences {
+            action: PreferenceAction::Edit {
+                id: PreferenceId::TotalZen,
+                value: layer_ui::PreferenceValue::Bool(true),
+            },
         });
         w.dispatch(UiAction::Invoke {
             command: CommandId::ZenMode,
@@ -4580,6 +4571,12 @@ fn native_panel_expansion() {
         tap_tab(Panel::Layers);
         assert!(state(&w).customization.expanded.is_none());
     }
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit {
+            id: PreferenceId::TotalZen,
+            value: layer_ui::PreferenceValue::Bool(true),
+        },
+    });
     w.dispatch(UiAction::Invoke {
         command: CommandId::ZenMode,
     });
@@ -6354,6 +6351,36 @@ fn native_frame_pacing() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1500);
+    if let Ok(mode) = std::env::var("LAYER_PACING_ZEN") {
+        assert!(matches!(mode.as_str(), "normal" | "partial"));
+        let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+        let mut workspace = state(&w).workspace;
+        workspace.zen_mode = mode == "partial";
+        workspace
+            .layout
+            .insert_tools(Panel::Toolbar, Some(2), &[ToolbarControl::Divider])
+            .unwrap();
+        workspace
+            .layout
+            .insert_tools(Panel::Toolbar, Some(5), &[ToolbarControl::Divider])
+            .unwrap();
+        workspace
+            .layout
+            .move_panel(
+                viewport,
+                Panel::Toolbar,
+                DockTarget::Edge {
+                    edge: Edge::Left,
+                    outer: true,
+                },
+            )
+            .unwrap();
+        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::RestoreSettings {
+            settings: Settings::default(),
+        });
+        pump(300);
+    }
     assert!(
         w.gpu.borrow().is_some(),
         "hardware Vulkan canvas must initialize"
@@ -7396,6 +7423,12 @@ fn native_workspace_controls_docking_and_ink() {
     });
     pump(100);
     let camera = state(&w).camera;
+    w.dispatch(UiAction::Preferences {
+        action: PreferenceAction::Edit {
+            id: PreferenceId::TotalZen,
+            value: layer_ui::PreferenceValue::Bool(true),
+        },
+    });
     w.chrome_event(ChromeEvent::Motion {
         position: [600.0, 450.0],
     });

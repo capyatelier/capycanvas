@@ -24,7 +24,123 @@ fn ribbon_lanes(length: f32, count: usize, along: f32) -> usize {
     count.max(1).div_ceil(slots)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+fn toolbar_extent(tile: &ToolbarTile, along: f32) -> f32 {
+    if tile.control == ToolbarControl::Divider {
+        8.0
+    } else {
+        along
+    }
+}
+fn toolbar_span(tiles: &[ToolbarTile], along: f32) -> f32 {
+    tiles.iter().map(|t| toolbar_extent(t, along) + 2.0).sum()
+}
+fn toolbar_lanes(length: f32, tiles: &[ToolbarTile], along: f32) -> usize {
+    let capacity = (length - 20.0).max(along + 2.0);
+    let (mut lanes, mut used) = (1, 0.0);
+    for tile in tiles {
+        let size = toolbar_extent(tile, along) + 2.0;
+        if used > 0.0 && used + size > capacity {
+            lanes += 1;
+            used = 0.0;
+        }
+        used += size;
+    }
+    lanes
+}
+
+/// Dividers retain stable insertion slots but occupy eight logical pixels.
+/// The same compact extents determine ribbon thickness and actual wrapping.
+pub fn toolbar_tile_layout(
+    width: f32,
+    height: f32,
+    axis: Axis,
+    tiles: &[ToolbarTile],
+    standalone: bool,
+    style: TileStyle,
+) -> TileLayout {
+    if !tiles.iter().any(|t| t.control == ToolbarControl::Divider) {
+        return tile_layout(width, height, axis, tiles.len(), standalone, style);
+    }
+    let horizontal = axis == Axis::Horizontal;
+    let [w, h] = style.size();
+    let (length, cross, along_size, cross_size) = if horizontal {
+        (width, height, w, h)
+    } else {
+        (height, width, h, w)
+    };
+    let padding = if standalone { 0.0 } else { 4.0 };
+    let lanes = (((cross - padding * 2.0 + 2.0) / (cross_size + 2.0)).floor() as usize)
+        .max(1)
+        .max(if standalone {
+            toolbar_lanes(length, tiles, along_size)
+        } else {
+            1
+        });
+    let capacity =
+        (length - padding * 2.0 - if standalone { 20.0 } else { 0.0 }).max(along_size + 2.0);
+    // Next-fit with a balanced target uses at most the available lanes: each
+    // finished lane exceeds total/lanes unless the viewport itself is limiting.
+    let target = capacity.min(toolbar_span(tiles, along_size) / lanes as f32 + along_size + 2.0);
+    let inset = ((cross - (lanes as f32 * (cross_size + 2.0) - 2.0)) * 0.5).max(padding);
+    let (mut lane, mut used) = (0, 0.0);
+    let mut bounds = Vec::with_capacity(tiles.len());
+    for tile in tiles {
+        let size = toolbar_extent(tile, along_size);
+        if used > 0.0 && used + size + 2.0 > target {
+            lane += 1;
+            used = 0.0;
+        }
+        let along = padding + used;
+        let across = inset + lane as f32 * (cross_size + 2.0);
+        bounds.push(Bounds {
+            x: if horizontal { along } else { across },
+            y: if horizontal { across } else { along },
+            width: if horizontal { size } else { w },
+            height: if horizontal { h } else { size },
+        });
+        used += size + 2.0;
+    }
+    let line = |b: Bounds, after: bool| {
+        if horizontal {
+            Bounds {
+                x: (b.x + if after { b.width } else { 0.0 } - 1.5).max(0.0),
+                y: b.y,
+                width: 3.0,
+                height: b.height,
+            }
+        } else {
+            Bounds {
+                x: b.x,
+                y: (b.y + if after { b.height } else { 0.0 } - 1.5).max(0.0),
+                width: b.width,
+                height: 3.0,
+            }
+        }
+    };
+    let mut insertion: Vec<_> = bounds.iter().map(|&b| line(b, false)).collect();
+    insertion.push(line(*bounds.last().expect("at least one divider"), true));
+    TileLayout {
+        tiles: bounds,
+        insertion,
+        grip: standalone.then_some(if horizontal {
+            Bounds {
+                x: width - 20.0,
+                y: 0.0,
+                width: 20.0,
+                height,
+            }
+        } else {
+            Bounds {
+                x: 0.0,
+                y: height - 20.0,
+                width,
+                height: 20.0,
+            }
+        }),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TileLayout {
     pub tiles: Vec<Bounds>,
     pub grip: Option<Bounds>,
@@ -486,11 +602,13 @@ impl FloatingToolbarLayout {
             Self::Horizontal => Self::Compact,
         }
     }
-    fn width(self, style: TileStyle, count: usize) -> f32 {
+    fn width(self, style: TileStyle, tiles: &[ToolbarTile]) -> f32 {
         match self {
             Self::Compact => style.floating_width(),
             Self::Vertical => style.size()[0],
-            Self::Horizontal => count.max(1) as f32 * (style.size()[0] + 2.0) + 20.0,
+            Self::Horizontal => {
+                toolbar_span(tiles, style.size()[0]).max(style.size()[0] + 2.0) + 20.0
+            }
         }
     }
 }
@@ -2248,14 +2366,15 @@ impl DockLayout {
                 let [tile_width, tile_height] = config.tile_style.size();
                 let count = config.tiles().len().max(1);
                 if axis == Axis::Horizontal {
-                    ribbon_lanes(width, count, tile_width) as f32 * (tile_height + 2.0) - 2.0
+                    toolbar_lanes(width, config.tiles(), tile_width) as f32 * (tile_height + 2.0)
+                        - 2.0
                 } else {
                     // Long vertical defaults wrap only when the viewport cannot
                     // contain one column. Compact grids use the same allocator.
                     if floating.height.is_none() {
                         width = width
                             .max(
-                                ribbon_lanes(max_height, count, tile_height) as f32
+                                toolbar_lanes(max_height, config.tiles(), tile_height) as f32
                                     * (tile_width + 2.0)
                                     - 2.0,
                             )
@@ -2629,7 +2748,7 @@ impl DockLayout {
         let toolbar = panels.len() == 1 && active.kind() == PanelKind::Tiles;
         let width = if toolbar {
             let config = self.panel(*active)?;
-            layout.width(config.tile_style, config.tiles().len())
+            layout.width(config.tile_style, config.tiles())
         } else {
             floating.default_width.unwrap_or(floating.width)
         };
@@ -2990,9 +3109,9 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
         {
             let config = layout.panel(*active).unwrap();
             let [w, h] = config.tile_style.size();
-            ribbon_lanes(
+            toolbar_lanes(
                 length,
-                config.tiles().len(),
+                config.tiles(),
                 if ribbon_axis == Axis::Horizontal {
                     w
                 } else {
@@ -3195,11 +3314,11 @@ fn resolve_node(
                 floating: false,
                 resize_handles: Vec::new(),
                 tiles: (active.kind() == PanelKind::Tiles).then(|| {
-                    tile_layout(
+                    toolbar_tile_layout(
                         bounds.width,
                         bounds.height - if tabs_visible { TAB_BAR_HEIGHT } else { 0.0 },
                         orientation,
-                        layout.panel(*active).map(|p| p.tiles().len()).unwrap_or(0),
+                        config.tiles(),
                         standalone,
                         layout
                             .panel(*active)
@@ -3276,6 +3395,63 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_dividers_share_wrap_geometry_and_stable_drop_slots() {
+        let tiles: Vec<_> = (0..9)
+            .map(|id| ToolbarTile {
+                id,
+                control: if id % 3 == 2 {
+                    ToolbarControl::Divider
+                } else {
+                    ToolbarControl::Color
+                },
+            })
+            .collect();
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            for style in [TileStyle::Small, TileStyle::Large, TileStyle::Labeled] {
+                let [w, h] = style.size();
+                let (along, cross) = if axis == Axis::Horizontal {
+                    (w, h)
+                } else {
+                    (h, w)
+                };
+                for length in [along + 22.0, along * 3.0 + 40.0, 1000.0] {
+                    let lanes = toolbar_lanes(length, &tiles, along);
+                    let thickness = lanes as f32 * (cross + 2.0) - 2.0;
+                    let (width, height) = if axis == Axis::Horizontal {
+                        (length, thickness)
+                    } else {
+                        (thickness, length)
+                    };
+                    let layout = toolbar_tile_layout(width, height, axis, &tiles, true, style);
+                    assert_eq!(layout.tiles.len(), tiles.len());
+                    assert_eq!(layout.insertion.len(), tiles.len() + 1);
+                    for (index, (tile, b)) in tiles.iter().zip(&layout.tiles).enumerate() {
+                        assert!(
+                            b.x >= 0.0
+                                && b.y >= 0.0
+                                && b.x + b.width <= width
+                                && b.y + b.height <= height,
+                            "{axis:?} {style:?} {b:?}"
+                        );
+                        assert!(b.intersection(layout.grip.unwrap()).is_none());
+                        assert_eq!(
+                            if axis == Axis::Horizontal {
+                                b.width
+                            } else {
+                                b.height
+                            },
+                            toolbar_extent(tile, along)
+                        );
+                        let line = layout.insertion[index];
+                        let point = [line.x + line.width * 0.5, line.y + line.height * 0.5];
+                        assert_eq!(layout.drop_slot(point, width, height).unwrap().0, index);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn tool_panels_fit_three_tiles_and_cannot_shrink_below_them() {
@@ -3829,10 +4005,7 @@ mod tests {
                         assert_eq!(layout.floating[0].toolbar_layout, mode);
                         assert_eq!(
                             layout.floating[0].width,
-                            mode.width(
-                                new_style,
-                                layout.panel(Panel::Toolbar).unwrap().tiles().len()
-                            )
+                            mode.width(new_style, layout.panel(Panel::Toolbar).unwrap().tiles())
                         );
                         assert!(layout.floating[0].height.is_none());
                     }

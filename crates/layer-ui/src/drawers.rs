@@ -32,7 +32,85 @@ pub struct DrawerPlacement {
     /// Column bounds are local to the drawer; scroll overflow within each one.
     pub columns: Vec<Bounds>,
 }
+
+/// A tab-like bridge between the tile and drawer. The affine transform maps
+/// normalized (along-tile, toward-drawer) coordinates into connection-local
+/// coordinates; hosts can draw the same rectangle and two concave quarter arcs.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DrawerConnection {
+    pub bounds: Bounds,
+    pub transform: [f32; 6],
+    pub length: f32,
+    pub depth: f32,
+    pub radii: [f32; 2],
+    /// NW, NE, SE, SW: the body corner is joined, not exposed.
+    pub square_corners: [bool; 4],
+}
 impl DrawerPlacement {
+    pub fn connection(&self) -> Option<DrawerConnection> {
+        let a = self.anchor;
+        let b = self.bounds;
+        let vertical = matches!(self.direction, Edge::Top | Edge::Bottom);
+        let (start, end, body_start, body_end) = if vertical {
+            (
+                a.x.max(b.x),
+                (a.x + a.width).min(b.x + b.width),
+                b.x,
+                b.x + b.width,
+            )
+        } else {
+            (
+                a.y.max(b.y),
+                (a.y + a.height).min(b.y + b.height),
+                b.y,
+                b.y + b.height,
+            )
+        };
+        let (near, far, corners) = match self.direction {
+            Edge::Bottom => (a.y + a.height, b.y, [0, 1]),
+            Edge::Top => (b.y + b.height, a.y, [3, 2]),
+            Edge::Right => (a.x + a.width, b.x, [0, 3]),
+            Edge::Left => (b.x + b.width, a.x, [1, 2]),
+        };
+        let depth = far - near;
+        let length = end - start;
+        if depth <= 0.0 || depth > WORKSPACE_SPACING + 0.5 || length <= 0.0 {
+            return None;
+        }
+        let distances = [start - body_start, body_end - end];
+        let radii = distances.map(|d| (d - 8.0).clamp(0.0, WORKSPACE_SPACING.min(depth)));
+        let mut square_corners = [false; 4];
+        for (corner, distance) in corners.into_iter().zip(distances) {
+            square_corners[corner] = distance < 8.0;
+        }
+        Some(DrawerConnection {
+            bounds: if vertical {
+                Bounds {
+                    x: start - radii[0],
+                    y: near,
+                    width: length + radii[0] + radii[1],
+                    height: depth,
+                }
+            } else {
+                Bounds {
+                    x: near,
+                    y: start - radii[0],
+                    width: depth,
+                    height: length + radii[0] + radii[1],
+                }
+            },
+            transform: match self.direction {
+                Edge::Bottom => [1.0, 0.0, 0.0, 1.0, radii[0], 0.0],
+                Edge::Top => [1.0, 0.0, 0.0, -1.0, radii[0], depth],
+                Edge::Right => [0.0, 1.0, 1.0, 0.0, 0.0, radii[0]],
+                Edge::Left => [0.0, 1.0, -1.0, 0.0, depth, radii[0]],
+            },
+            length,
+            depth,
+            radii,
+            square_corners,
+        })
+    }
     pub fn interpolate_from(&self, from: &Self, progress: f32) -> Self {
         Self {
             bounds: self.bounds.interpolate_from(from.bounds, progress),
@@ -40,8 +118,31 @@ impl DrawerPlacement {
         }
     }
     pub fn closed(&self) -> Self {
+        let a = self.anchor;
+        let bounds = match self.direction {
+            Edge::Bottom => Bounds {
+                y: a.y + a.height + WORKSPACE_SPACING,
+                height: 0.0,
+                ..a
+            },
+            Edge::Top => Bounds {
+                y: a.y - WORKSPACE_SPACING,
+                height: 0.0,
+                ..a
+            },
+            Edge::Right => Bounds {
+                x: a.x + a.width + WORKSPACE_SPACING,
+                width: 0.0,
+                ..a
+            },
+            Edge::Left => Bounds {
+                x: a.x - WORKSPACE_SPACING,
+                width: 0.0,
+                ..a
+            },
+        };
         Self {
-            bounds: self.anchor,
+            bounds,
             ..self.clone()
         }
     }
@@ -140,6 +241,7 @@ impl ContentDrawer {
         layout: &DockLayout,
         viewport: [f32; 2],
         heights: &[f32],
+        partial_zen: bool,
     ) -> Option<DrawerPlacement> {
         if heights.len() != self.columns.len()
             || self.columns.is_empty()
@@ -164,7 +266,7 @@ impl ContentDrawer {
             .iter()
             .position(|t| t.id == self.anchor.tile)?;
         let tile = *group.tiles.as_ref()?.tiles.get(index)?;
-        let anchor = Bounds {
+        let normal_anchor = Bounds {
             x: group.bounds.x + tile.x,
             y: group.bounds.y
                 + tile.y
@@ -175,18 +277,33 @@ impl ContentDrawer {
                 },
             ..tile
         }
-        .intersection(group.bounds)?;
+        .intersection(group.bounds);
+        let zen_anchor = partial_zen
+            .then(|| layout.zen_toolbars(viewport).anchor(self.anchor))
+            .flatten();
+        let anchor = if partial_zen {
+            zen_anchor?.0
+        } else {
+            normal_anchor?
+        };
+        let top = if partial_zen {
+            WORKSPACE_SPACING
+        } else {
+            HEADER_HEIGHT
+        };
         let available = Bounds {
             x: WORKSPACE_SPACING,
-            y: HEADER_HEIGHT,
+            y: top,
             width: viewport[0] - WORKSPACE_SPACING * 2.0,
-            height: viewport[1] - HEADER_HEIGHT - WORKSPACE_SPACING,
+            height: viewport[1] - top - WORKSPACE_SPACING,
         };
-        let edge = layout
-            .bands
-            .iter()
-            .find(|b| b.root.group_for(self.anchor.panel).is_some())
-            .map(|b| b.edge);
+        let edge = zen_anchor.map(|a| a.1).or_else(|| {
+            layout
+                .bands
+                .iter()
+                .find(|b| b.root.group_for(self.anchor.panel).is_some())
+                .map(|b| b.edge)
+        });
         let direction = match edge {
             Some(Edge::Top) => Edge::Bottom,
             Some(Edge::Bottom) => Edge::Top,
@@ -322,7 +439,7 @@ mod tests {
             assert_eq!(d.column_widths(), [272.0, 320.0]);
             for viewport in [VIEWPORT, [640.0, 480.0], [320.0, 240.0]] {
                 for heights in [[80.0, 120.0], [700.0, 3000.0]] {
-                    let Some(p) = d.placement(&layout, viewport, &heights) else {
+                    let Some(p) = d.placement(&layout, viewport, &heights, false) else {
                         let resolved = layout.workspace(
                             viewport[0],
                             viewport[1],
@@ -352,12 +469,109 @@ mod tests {
                             }
                         }
                     }
-                    assert_eq!(p.interpolate_from(&p.closed(), 0.0).bounds, p.anchor);
+                    assert_eq!(
+                        p.interpolate_from(&p.closed(), 0.0).bounds,
+                        p.closed().bounds
+                    );
                     assert_eq!(p.interpolate_from(&p.closed(), 1.0).bounds, p.bounds);
+                    if viewport == VIEWPORT {
+                        for progress in [0.0, 0.1, 0.5, 1.0] {
+                            let connection = p
+                                .interpolate_from(&p.closed(), progress)
+                                .connection()
+                                .unwrap();
+                            assert!((connection.depth - WORKSPACE_SPACING).abs() < 0.001);
+                        }
+                    }
                 }
             }
-            assert!(d.placement(&layout, VIEWPORT, &[f32::NAN, 10.0]).is_none());
-            assert!(d.placement(&layout, VIEWPORT, &[]).is_none());
+            assert!(
+                d.placement(&layout, VIEWPORT, &[f32::NAN, 10.0], false)
+                    .is_none()
+            );
+            assert!(d.placement(&layout, VIEWPORT, &[], false).is_none());
+        }
+    }
+    #[test]
+    fn drawer_joins_rotate_and_avoid_body_corners() {
+        for direction in [Edge::Bottom, Edge::Top, Edge::Right, Edge::Left] {
+            for inset in [0.0_f32, 4.0, 8.0, 11.0, 14.0, 32.0] {
+                let vertical = matches!(direction, Edge::Bottom | Edge::Top);
+                let anchor = Bounds {
+                    x: 100.0,
+                    y: 100.0,
+                    width: 36.0,
+                    height: 36.0,
+                };
+                let body_start = 100.0 - inset;
+                let bounds = match direction {
+                    Edge::Bottom => Bounds {
+                        x: body_start,
+                        y: 142.0,
+                        width: 200.0,
+                        height: 150.0,
+                    },
+                    Edge::Top => Bounds {
+                        x: body_start,
+                        y: 4.0,
+                        width: 200.0,
+                        height: 90.0,
+                    },
+                    Edge::Right => Bounds {
+                        x: 142.0,
+                        y: body_start,
+                        width: 150.0,
+                        height: 200.0,
+                    },
+                    Edge::Left => Bounds {
+                        x: 4.0,
+                        y: body_start,
+                        width: 90.0,
+                        height: 200.0,
+                    },
+                };
+                let p = DrawerPlacement {
+                    bounds,
+                    anchor,
+                    direction,
+                    columns: vec![],
+                };
+                let c = p.connection().unwrap();
+                assert_eq!(c.depth, 6.0);
+                assert_eq!(c.length, 36.0);
+                assert_eq!(c.radii, [(inset - 8.0).clamp(0.0, 6.0), 6.0]);
+                assert_eq!(
+                    c.square_corners.iter().filter(|v| **v).count(),
+                    usize::from(inset < 8.0)
+                );
+                let [xx, yx, xy, yy, tx, ty] = c.transform;
+                let world = |u, v| {
+                    [
+                        c.bounds.x + xx * u + xy * v + tx,
+                        c.bounds.y + yx * u + yy * v + ty,
+                    ]
+                };
+                let near = world(18.0, 0.0);
+                let far = world(18.0, c.depth);
+                let axis = usize::from(vertical);
+                let (expected_near, expected_far) = match direction {
+                    Edge::Bottom | Edge::Right => (136.0, 142.0),
+                    Edge::Top | Edge::Left => (100.0, 94.0),
+                };
+                assert_eq!(near[axis], expected_near);
+                assert_eq!(far[axis], expected_far);
+                assert_eq!(near[1 - axis], 118.0);
+                assert_eq!(far[1 - axis], 118.0);
+                // Mirror the cross-axis alignment: the other join must disappear.
+                let mut mirrored = p.clone();
+                if vertical {
+                    mirrored.bounds.x = 136.0 + inset - bounds.width;
+                } else {
+                    mirrored.bounds.y = 136.0 + inset - bounds.height;
+                }
+                let opposite = mirrored.connection().unwrap();
+                assert_eq!(opposite.radii, [6.0, c.radii[0]]);
+            }
         }
     }
     #[test]
@@ -370,7 +584,9 @@ mod tests {
             let mut d = drawer(&layout);
             d.columns = vec![vec![Panel::Sizes, Panel::Layers], vec![Panel::Color]];
             assert_eq!(d.column_widths(), [320.0, 280.0]);
-            let p = d.placement(&layout, VIEWPORT, &[500.0, 200.0]).unwrap();
+            let p = d
+                .placement(&layout, VIEWPORT, &[500.0, 200.0], false)
+                .unwrap();
             contained(&p, VIEWPORT);
             if matches!(p.direction, Edge::Left | Edge::Top) {
                 assert_eq!(position[0], 960.0);

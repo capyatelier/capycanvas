@@ -1,6 +1,6 @@
 //! Native square controls; layout and wrapping belong to layer-ui.
 use gtk::{glib, prelude::*, subclass::prelude::*};
-use layer_ui::{Axis, TileStyle, tile_layout};
+use layer_ui::{Axis, TileStyle, ToolbarTile, toolbar_tile_layout};
 use std::cell::{Cell, RefCell};
 
 mod imp {
@@ -12,6 +12,8 @@ mod imp {
         pub vertical: Cell<bool>,
         pub tabbed: Cell<bool>,
         pub style: Cell<TileStyle>,
+        pub tiles: RefCell<Vec<ToolbarTile>>,
+        pub projection: RefCell<Option<layer_ui::TileLayout>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for TileStrip {
@@ -44,14 +46,16 @@ mod imp {
                 Axis::Horizontal
             };
             let children = self.children.borrow();
-            let layout = tile_layout(
-                width as f32,
-                height as f32,
-                axis,
-                children.len(),
-                !self.tabbed.get(),
-                self.style.get(),
-            );
+            let layout = self.projection.borrow().clone().unwrap_or_else(|| {
+                toolbar_tile_layout(
+                    width as f32,
+                    height as f32,
+                    axis,
+                    &self.tiles.borrow(),
+                    !self.tabbed.get(),
+                    self.style.get(),
+                )
+            });
             let allocate = |child: &gtk::Widget, b: layer_ui::Bounds| {
                 child.allocate(
                     b.width as i32,
@@ -87,6 +91,16 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl TileStrip {
+    pub fn set_projection(&self, layout: layer_ui::TileLayout) {
+        if self.imp().projection.borrow().as_ref() != Some(&layout) {
+            *self.imp().projection.borrow_mut() = Some(layout);
+            self.queue_allocate();
+        }
+    }
+    pub fn set_tiles(&self, tiles: &[ToolbarTile]) {
+        *self.imp().tiles.borrow_mut() = tiles.to_vec();
+        self.queue_allocate();
+    }
     pub fn set_style(&self, style: TileStyle) {
         if self.imp().style.replace(style) != style {
             self.queue_resize();

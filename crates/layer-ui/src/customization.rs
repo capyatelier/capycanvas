@@ -300,7 +300,7 @@ impl ToolbarControl {
                     },
                 },
             },
-            Self::Panel { .. } => return None,
+            Self::Panel { .. } | Self::Divider => return None,
         })
     }
     pub fn validate(self) -> Result<(), String> {
@@ -823,6 +823,11 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             "Open this panel in a drawer".into(),
             panel.icon(),
         ),
+        ToolbarControl::Divider => (
+            "Divider".into(),
+            "Separate groups of toolbar items".into(),
+            "minus",
+        ),
     };
     ToolChoice {
         control,
@@ -838,6 +843,10 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .filter(|id| id.available_on(platform))
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
+        .chain(
+            matches!(platform, Platform::Gtk | Platform::Generic)
+                .then_some(ToolbarControl::Divider),
+        )
         .chain(
             Panel::ALL
                 .into_iter()
@@ -1229,6 +1238,7 @@ impl CustomizationState {
         action: CustomizationAction,
         platform: Platform,
         viewport: [f32; 2],
+        partial_zen: bool,
     ) -> Result<u32, String> {
         use CustomizationAction::*;
         if let SetPanelVisible {
@@ -1385,7 +1395,12 @@ impl CustomizationState {
                 }
                 let drawer = ContentDrawer::for_tile(layout, anchor)?;
                 if drawer
-                    .placement(layout, viewport, &vec![0.0; drawer.columns.len()])
+                    .placement(
+                        layout,
+                        viewport,
+                        &vec![0.0; drawer.columns.len()],
+                        partial_zen,
+                    )
                     .is_none()
                 {
                     return Err("The originating tile is not visible".into());
@@ -1736,7 +1751,7 @@ mod tests {
         let mut state = CustomizationState::default();
         let edit = |state: &mut CustomizationState, layout: &mut DockLayout, action| {
             state
-                .edit(layout, action, Platform::Gtk, [1200.0, 900.0])
+                .edit(layout, action, Platform::Gtk, [1200.0, 900.0], false)
                 .unwrap()
         };
         let original = layout.clone();
@@ -1885,7 +1900,7 @@ mod tests {
                     panic!("Missing group style action")
                 };
                 state
-                    .edit(&mut layout, action, platform, [1200.0, 900.0])
+                    .edit(&mut layout, action, platform, [1200.0, 900.0], false)
                     .unwrap();
                 let encoded = serde_json::to_string(&layout).unwrap();
                 layout = serde_json::from_str(&encoded).unwrap();
@@ -1927,6 +1942,7 @@ mod tests {
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
+                false,
             )
             .unwrap();
         assert_eq!(layout.group_tab_style(8).unwrap(), TabStyle::Icon);
@@ -1948,6 +1964,7 @@ mod tests {
                 },
                 Platform::Gtk,
                 [1200.0, 900.0],
+                false,
             )
             .unwrap();
         assert!(
@@ -2018,7 +2035,7 @@ mod tests {
         assert_eq!(
             native.len(),
             web.len()
-                + 1
+                + 2
                 + Panel::ALL
                     .iter()
                     .filter(|p| p.kind() == PanelKind::Content)
@@ -2030,7 +2047,10 @@ mod tests {
         for choice in native {
             choice.control.validate().unwrap();
             let Some(action) = choice.control.action() else {
-                assert!(choice.control.drawer_columns().is_some());
+                assert!(
+                    choice.control.drawer_columns().is_some()
+                        || choice.control == ToolbarControl::Divider
+                );
                 continue;
             };
             assert_eq!(

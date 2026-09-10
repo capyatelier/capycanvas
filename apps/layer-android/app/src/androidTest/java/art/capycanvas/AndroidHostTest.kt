@@ -944,7 +944,7 @@ class AndroidHostTest {
         val saved = JSONObject(state().getJSONObject("settings").toString())
         fun edit(id: String, value: Any) = action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to id, "value" to value)))
         try {
-            edit("zen_show_button", true)
+            edit("total_zen", false)
             floatPanel("sizes")
             val floating = group("sizes").getInt("id")
             for (theme in listOf("dark", "light")) {
@@ -970,7 +970,7 @@ class AndroidHostTest {
                 }
                 compose.onNodeWithTag("settings-done").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
-                edit("zen_reveal_mode", 1)
+                edit("total_zen", false)
                 compose.onNodeWithTag("zen-button").performTouchInput { click() }
                 compose.waitUntil(10_000) { host.snapshot!!.optBoolean("hide_floating_panels") }
                 compose.onNodeWithTag("zen-button").assertIsDisplayed()
@@ -984,13 +984,13 @@ class AndroidHostTest {
                 compose.onNodeWithTag("image-choice-3").assertIsDisplayed()
                 compose.onNodeWithTag("settings-done").performClick()
                 compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
-                edit("zen_show_button", false)
+                edit("total_zen", true)
                 compose.onNodeWithTag("zen-button").assertDoesNotExist()
-                edit("zen_show_button", true)
+                edit("total_zen", false)
                 compose.onNodeWithTag("zen-button").performTouchInput { click() }
                 compose.waitUntil(10_000) { !host.snapshot!!.optBoolean("chrome_hidden") }
                 compose.onNodeWithTag("group-$floating").assertIsDisplayed()
-                edit("zen_reveal_mode", 0)
+                edit("total_zen", true)
                 compose.onNodeWithTag("zen-button").performTouchInput { click() }
                 compose.waitUntil(10_000) { host.snapshot!!.optBoolean("chrome_hidden") }
                 compose.onNodeWithTag("group-$floating").assertIsDisplayed()
