@@ -269,7 +269,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     }
                 },contentAlignment=Alignment.Center) {
                 if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open","Expand or collapse group",Modifier.size(28.dp))
-                else if(!mask && !layer.isNull("content_icon")) SharedIcon(layer.getString("content_icon"),null,Modifier.size(24.dp))
+                else if(!mask && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp))
                 else images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
             }
             }

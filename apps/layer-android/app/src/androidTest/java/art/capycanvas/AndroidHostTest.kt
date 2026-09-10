@@ -68,6 +68,25 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun filterLayerIconsUsePackagedNames() {
+        waitState { it.getLong("filter_catalog_revision") > 0 && !it.getJSONObject("filter_load").getBoolean("pending") }
+        for (id in listOf("domain_warp", "curves", "color_balance")) {
+            val choice = state().array("adjustments").objects().first { it.getString("id") == id }
+            action(choice.getJSONObject("action"))
+            val layer = state().getJSONObject("layer_properties").getLong("layer")
+            // Insertion selects Properties; explicitly show Layers, where the
+            // qualified core icon used to be prefixed/suffixed a second time.
+            action(obj("type" to "select_panel_tab", "group" to group("layers").getLong("id"), "panel" to "layers"))
+            compose.onNodeWithTag("layer-rows").assertIsDisplayed()
+            compose.onNodeWithText(choice.getString("label")).assertIsDisplayed()
+            val row = state().array("layers").objects().first { it.getLong("id") == layer }
+            val icon = row.getString("content_icon")
+            assertTrue(icon.startsWith("layer-") && icon.endsWith("-symbolic"))
+            instrumentation.targetContext.assets.open("$icon.svg").use { assertTrue(it.read() >= 0) }
+            assertNull(host.failure)
+            action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to layer)))
+        }
+    }
     @Test fun runtimeFilterPackages() {
         waitState { it.getLong("filter_catalog_revision") > 0 && !it.getJSONObject("filter_load").getBoolean("pending") }
         assertTrue(state().getJSONObject("filter_load").isNull("error"))
