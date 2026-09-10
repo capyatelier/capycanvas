@@ -60,7 +60,23 @@ fn blend(s: vec3<f32>, d: vec3<f32>, mode: u32) -> vec3<f32> {
     }
     let raw = textureSample(front,sampling,v.uv);
     if op == 8u { return vec4<f32>(raw.rgb * raw.a, raw.a); }
-    if op == 6u { let a = raw.r*settings.color.a; return vec4<f32>(settings.color.rgb*a,a); }
+    if op == 6u {
+        // Constant fills are the degenerate case (equal endpoint colors).
+        let p = settings.extent.zw + v.uv * settings.rect.zw;
+        let delta = settings.backdrop.zw - settings.backdrop.xy;
+        let length2 = max(dot(delta, delta), .000001);
+        let relative = p - settings.backdrop.xy;
+        let t = clamp(select(dot(relative, delta) / length2,
+            length(relative) * inverseSqrt(length2), settings.options.z > .5), 0., 1.);
+        let first = vec4<f32>(settings.color.rgb * settings.color.a, settings.color.a);
+        let last = vec4<f32>(settings.source_over.rgb * settings.source_over.a, settings.source_over.a);
+        let src = mix(first, last, t) * raw.r;
+        let dst = textureSample(back, sampling, v.uv);
+        if settings.options.w > .5 {
+            return vec4<f32>(src.rgb * dst.a + dst.rgb * (1. - src.a), dst.a);
+        }
+        return src + dst * (1. - src.a);
+    }
     if op == 1u { return raw*settings.options.y; }
     if op == 2u { let m = mix(raw.r,1.-raw.r,settings.options.z); return vec4<f32>(m,m,m,1.); }
     let dst = textureSample(back,sampling,v.uv);

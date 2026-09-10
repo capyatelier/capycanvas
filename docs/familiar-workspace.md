@@ -472,6 +472,50 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   CPU median/p95/p99 0.277/0.601/0.758ms, canvas GPU 0.137/0.284/0.562ms,
   GTK handler 0.011/0.028/0.041ms. This is within the prior drawing measurements,
   not evidence of a speedup. Report: `/tmp/capy-navigation-tools-drawing.json`.
+- Gradient (G) now has four shared subtools: linear/radial, foreground to
+  background/transparent. Tool Settings exposes opacity. A two-point drag guide
+  appears during input; pigment commits on release, not as a live color preview.
+  Escape, cancelled contact and focus loss discard the guide without editing.
+  The operation respects selection inversion, target offset, alpha lock and
+  ordinary layer clipping/masks. Locked, Paper and mask targets are not painted.
+- Gradient and constant Fill share one GPU paint/composite pass per affected
+  tile, followed by the existing copy into persistent paint. The engine appends
+  an ordered operation without replaying old strokes. Undo/device recovery still
+  reconstruct the same stored operation. Allocation/dirty bounds account for
+  translated/inverted coverage; small selections do not redraw every tile.
+- Gradient validation: 180 shared UI, 24 engine, 21 core and 12 GPU layer tests;
+  strict Clippy, workspace/Wasm checks, and real GTK subtool/opacity/input/undo
+  tests. GPU checks cover 16 color/transparency/alpha-lock/selection combinations,
+  tile seams, translated/inverted masks, queued versus separate submissions and
+  full replay. Eight dark/light captures were visually inspected at
+  `artifacts/familiar-workspace/gradient-*.png` (ignored); this also caught and
+  fixed symbolic CSS on the new shared icon.
+- Release renderer measurements on the workstation, 2048×1536, warm 120-sample
+  windows; each triplet is median/p95/p99 milliseconds. Completion includes an
+  explicit **test-only** GPU wait, not compositor/display latency:
+
+  | Operation | CPU | GPU | Completed |
+  | --- | --- | --- | --- |
+  | Fill, full canvas | 0.714 / 1.329 / 1.728 | 0.682 / 0.683 / 0.698 | 1.482 / 2.199 / 2.538 |
+  | Linear, full canvas | 0.885 / 1.646 / 1.942 | 0.682 / 0.685 / 0.721 | 1.703 / 2.587 / 2.820 |
+  | Radial, full canvas | 0.763 / 1.421 / 1.798 | 0.682 / 0.683 / 0.720 | 1.541 / 2.178 / 2.377 |
+  | Fill, 64×128 selection | 0.032 / 0.050 / 0.116 | 0.024 / 0.024 / 0.024 | 0.091 / 0.114 / 0.176 |
+  | Linear, 64×128 selection | 0.035 / 0.042 / 0.079 | 0.024 / 0.024 / 0.024 | 0.095 / 0.117 / 0.157 |
+  | Radial, 64×128 selection | 0.031 / 0.061 / 0.211 | 0.024 / 0.024 / 0.024 | 0.089 / 0.165 / 0.270 |
+
+  First-use full-canvas Fill completion was 21.5ms (46.0ms in the preceding run),
+  including cold resource/driver work. Subsequent cold Gradient cases were
+  2.4–2.6ms. Warm results meet the frame budget; they do not establish a cold
+  120Hz guarantee. GPU arithmetic costs are indistinguishable here; CPU tails
+  varied between repetitions, so no CPU speedup is claimed.
+- Normal 384px G-Pen drawing after these changes delivered 119.75Hz (one
+  discarded presentation) and 119.97Hz (none) in two six-second Wayland runs.
+  Worker CPU median/p95/p99 was 0.274/0.614/0.783ms, then
+  0.282/0.535/0.734ms. GPU was 0.135/0.316/2.183ms, then
+  0.127/0.238/0.369ms. The first GPU tail was higher than the earlier baseline;
+  it did not repeat. GTK input p99 was 0.040/0.039ms. Reports are
+  `/tmp/capy-gradient-drawing{,-repeat}.json`; synthetic input and compositor
+  feedback establish approximate 120Hz delivery, not physical pen latency.
 - Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, rulers, remaining shortcuts
   and full functional/performance validation.

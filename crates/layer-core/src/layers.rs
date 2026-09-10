@@ -243,7 +243,76 @@ pub struct LayerOperation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerOperationKind {
     ApplyMask,
-    Fill { color: [f32; 4], alpha_locked: bool },
+    Fill {
+        color: [f32; 4],
+        alpha_locked: bool,
+    },
+    Gradient {
+        start: Point,
+        end: Point,
+        colors: [[f32; 4]; 2],
+        radial: bool,
+        alpha_locked: bool,
+    },
+}
+impl LayerOperation {
+    /// Conservative affected area in layer coordinates. Inverted coverage and
+    /// applying a mask can change pixels outside the selection's geometry.
+    pub fn bounds(&self, extent: [u32; 2]) -> Rect {
+        if self.kind != LayerOperationKind::ApplyMask
+            && self.coverage.default_coverage == 0.0
+            && !self.coverage.inverted
+            && self.coverage.strokes.is_empty()
+            && let Some(selection) = &self.coverage.initial
+            && !selection.inverted
+        {
+            let mut bounds = Rect::EMPTY;
+            for p in selection.contours.iter().flat_map(|c| c.iter()) {
+                bounds.include_circle(
+                    Point {
+                        x: p.x + self.coverage.offset.x,
+                        y: p.y + self.coverage.offset.y,
+                    },
+                    1.0,
+                );
+            }
+            return bounds;
+        }
+        Rect {
+            min: Point::default(),
+            max: Point {
+                x: extent[0] as f32,
+                y: extent[1] as f32,
+            },
+        }
+    }
+    fn validate(&self) -> Result<(), DocumentError> {
+        let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v));
+        let valid = match &self.kind {
+            LayerOperationKind::ApplyMask => true,
+            LayerOperationKind::Fill { color, .. } => color_ok(color),
+            LayerOperationKind::Gradient {
+                start, end, colors, ..
+            } => {
+                let dx = end.x - start.x;
+                let dy = end.y - start.y;
+                let length2 = dx * dx + dy * dy;
+                [start.x, start.y, end.x, end.y]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    && length2.is_finite()
+                    && length2 >= 0.000001
+                    && colors.iter().all(color_ok)
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(DocumentError::InvalidLayerOperation(
+                "Invalid paint operation",
+            ))
+        }
+    }
 }
 impl LayerMask {
     pub fn reveal_all(id: LayerId, offset: Point) -> Self {
@@ -568,6 +637,9 @@ impl Document {
         target.is_some()
     }
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
+        for op in &layer.operations {
+            op.validate()?;
+        }
         if (layer.kind == LayerKind::Effect) != layer.effect.is_some() {
             return Err(DocumentError::InvalidLayerOperation("Invalid effect layer"));
         }

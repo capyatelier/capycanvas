@@ -15,6 +15,10 @@ pub enum LayerCanvasTool {
     Hand,
     PickVisible,
     PickLayer,
+    Gradient {
+        radial: bool,
+        transparent: bool,
+    },
 }
 impl LayerCanvasTool {
     pub fn picks_color(self) -> bool {
@@ -211,6 +215,7 @@ pub(super) struct LayerInteraction {
     original: Option<Layer>,
     solo: Option<Vec<(LayerId, bool)>>,
     pub changed: bool,
+    pub gradient: [bool; 2],
 }
 impl LayerInteraction {
     pub fn depth(&self, doc: &Document, l: &Layer) -> u32 {
@@ -549,6 +554,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if let LayerCanvasTool::Gradient {
+                    radial,
+                    transparent,
+                } = tool
+                {
+                    self.layer_interaction.gradient = [radial, transparent];
+                }
                 if tool.picks_color() {
                     self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
                 }
@@ -1343,6 +1355,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             .camera
             .input_transform()
             .map(event.surface_position);
+        if event.phase != PenPhase::Cancel && (!p.x.is_finite() || !p.y.is_finite()) {
+            return Err("Invalid canvas point".into());
+        }
         match event.phase {
             PenPhase::Down => {
                 self.layer_interaction.path.clear();
@@ -1352,16 +1367,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                 match self.layer_interaction.tool {
                     LayerCanvasTool::Move if !controls.move_layer => return Ok(()),
                     LayerCanvasTool::LassoFill if !controls.fill => return Ok(()),
+                    LayerCanvasTool::Gradient { .. } if !controls.fill || doc.active_mask => {
+                        return Ok(());
+                    }
                     _ => (),
                 }
                 self.layer_interaction.path.push(p);
-                self.layer_interaction.original = Some(layer.clone());
+                self.layer_interaction.original =
+                    (self.layer_interaction.tool == LayerCanvasTool::Move).then(|| layer.clone());
             }
             PenPhase::Move | PenPhase::Up => {
                 if self.layer_interaction.path.is_empty() {
                     return Ok(());
                 }
-                self.layer_interaction.path.push(p);
+                if matches!(
+                    self.layer_interaction.tool,
+                    LayerCanvasTool::Gradient { .. }
+                ) && self.layer_interaction.path.len() == 2
+                {
+                    self.layer_interaction.path[1] = p;
+                } else {
+                    self.layer_interaction.path.push(p);
+                }
                 if self.layer_interaction.tool == LayerCanvasTool::Move {
                     let start = self.layer_interaction.path[0];
                     let original = self.layer_interaction.original.as_ref().unwrap().clone();
@@ -1383,6 +1410,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                 }
                 if event.phase == PenPhase::Up {
+                    if let LayerCanvasTool::Gradient {
+                        radial,
+                        transparent,
+                    } = self.layer_interaction.tool
+                    {
+                        let start = self.layer_interaction.path[0];
+                        if (p.x - start.x).hypot(p.y - start.y) >= 0.5 / self.state.camera.zoom {
+                            self.gradient_fill(start, p, radial, transparent)?;
+                        }
+                    }
                     if self.layer_interaction.tool == LayerCanvasTool::Select {
                         let selection = Selection::polygon(self.layer_interaction.path.clone())
                             .map_err(error)?;
@@ -1398,12 +1435,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             PenPhase::Cancel => {
-                if let Some(original) = self.layer_interaction.original.take() {
-                    self.engine
-                        .preview_edit(Edit::ReplaceLayer(Box::new(original)))
-                        .map_err(error)?;
-                }
-                self.layer_interaction.path.clear();
+                self.cancel_layer_gesture()?;
             }
             PenPhase::Hover => {}
         }
@@ -1411,31 +1443,111 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
+    pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
+        if self.layer_interaction.path.is_empty() {
+            return Ok(false);
+        }
+        if let Some(original) = self.layer_interaction.original.take() {
+            self.engine
+                .preview_edit(Edit::ReplaceLayer(Box::new(original)))
+                .map_err(error)?;
+        }
+        self.layer_interaction.path.clear();
+        self.layer_interaction.changed = true;
+        Ok(true)
+    }
+
     fn fill_selection(&mut self, selection: Selection) -> Result<(), String> {
+        let brush = self.engine.brush();
+        let mut color = brush.color_rgba_linear;
+        color[3] *= brush.opacity;
+        self.paint_operation(
+            Some(selection),
+            layer_core::LayerOperationKind::Fill {
+                color,
+                alpha_locked: self
+                    .engine
+                    .document()
+                    .layer(self.engine.document().active_layer)
+                    .is_some_and(|l| l.properties.alpha_locked),
+            },
+        )
+    }
+
+    fn gradient_fill(
+        &mut self,
+        start: Point,
+        end: Point,
+        radial: bool,
+        transparent: bool,
+    ) -> Result<(), String> {
+        let doc = self.engine.document();
+        let offset = doc.layer_offset(doc.active_layer);
+        let local = |p: Point| Point {
+            x: p.x - offset.x,
+            y: p.y - offset.y,
+        };
+        let color = self.state.colors.foreground;
+        let mut colors = [
+            color,
+            if transparent {
+                color
+            } else {
+                self.state.colors.background
+            },
+        ];
+        for c in &mut colors {
+            for value in &mut c[..3] {
+                *value = srgb_to_linear(*value);
+            }
+            c[3] *= self.state.brush.opacity;
+        }
+        if transparent {
+            colors[1][3] = 0.0;
+        }
+        let kind = layer_core::LayerOperationKind::Gradient {
+            start: local(start),
+            end: local(end),
+            colors,
+            radial,
+            alpha_locked: doc
+                .layer(doc.active_layer)
+                .is_some_and(|l| l.properties.alpha_locked),
+        };
+        self.paint_operation(doc.selection.clone(), kind)
+    }
+
+    fn paint_operation(
+        &mut self,
+        selection: Option<Selection>,
+        kind: layer_core::LayerOperationKind,
+    ) -> Result<(), String> {
         let id = self.engine.document().active_layer;
-        let mut layer = self.editable_layer(id.0)?;
+        let layer = self.editable_layer(id.0)?;
         if layer.kind != LayerKind::Paint || self.engine.document().active_mask {
             return Err("Select a paint layer's content to fill".into());
         }
         let offset = self.engine.document().layer_offset(id);
         let mut coverage = LayerMask::reveal_all(self.engine.allocate_layer_id(), Point::default());
-        coverage.default_coverage = f32::from(selection.inverted);
-        coverage.initial = Some(selection.translated(Point {
-            x: -offset.x,
-            y: -offset.y,
-        }));
-        let brush = self.engine.brush();
-        let mut color = brush.color_rgba_linear;
-        color[3] *= brush.opacity;
-        layer.operations.push(layer_core::LayerOperation {
-            after_stroke: layer.strokes.len(),
-            coverage,
-            kind: layer_core::LayerOperationKind::Fill {
-                color,
-                alpha_locked: layer.properties.alpha_locked,
-            },
-        });
-        self.layer_edit(Edit::ReplaceLayer(Box::new(layer)))
+        if let Some(selection) = selection {
+            coverage.default_coverage = f32::from(selection.inverted);
+            coverage.initial = Some(selection.translated(Point {
+                x: -offset.x,
+                y: -offset.y,
+            }));
+        }
+        self.engine
+            .append_layer_operation(
+                id,
+                layer_core::LayerOperation {
+                    after_stroke: layer.strokes.len(),
+                    coverage,
+                    kind,
+                },
+            )
+            .map_err(error)?;
+        self.layer_interaction.changed = true;
+        Ok(())
     }
 
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
@@ -1479,7 +1591,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if matches!(
             self.layer_interaction.tool,
-            LayerCanvasTool::Select | LayerCanvasTool::LassoFill
+            LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }
         ) {
             path(&self.layer_interaction.path, false);
         }

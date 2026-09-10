@@ -258,6 +258,47 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
+    /// Append an ordered raster operation without replaying unchanged strokes.
+    /// Undo/device recovery still replay the same durable operation definition.
+    pub fn append_layer_operation(
+        &mut self,
+        id: LayerId,
+        mut operation: layer_core::LayerOperation,
+    ) -> Result<(), DocumentError> {
+        if self.has_active_stroke() {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Finish the stroke first",
+            ));
+        }
+        let mut layer = self
+            .document()
+            .layer(id)
+            .ok_or(DocumentError::MissingLayer(id))?
+            .clone();
+        if layer.kind != layer_core::LayerKind::Paint || self.document().is_locked(id) {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Select an unlocked paint layer",
+            ));
+        }
+        let index = layer.operations.len() as u32;
+        operation.after_stroke = layer.strokes.len();
+        let damage = operation.bounds([self.document().width, self.document().height]);
+        layer.operations.push(operation);
+        self.editor.perform(Edit::ReplaceLayer(Box::new(layer)))?;
+        self.batches.push(DabBatch {
+            stroke_id: StrokeId(0),
+            layer_id: id,
+            kind: DabBatchKind::LayerOperation(index),
+            stroke_start: false,
+            stroke_end: false,
+            first_dab: 0,
+            dab_count: 0,
+            style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
+            damage,
+        });
+        Ok(())
+    }
+
     pub fn remove_layer(&mut self, id: LayerId) -> Result<(), DocumentError> {
         self.apply_edit(Edit::RemoveLayer { id })
     }
@@ -273,7 +314,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// Readbacks must follow the frame that applies document edits, not capture
     /// old GPU pixels under the new document revision.
     pub fn has_pending_document_edits(&self) -> bool {
-        self.rebuild_all || self.composite_all
+        self.rebuild_all
+            || self.composite_all
+            || self
+                .batches
+                .iter()
+                .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
     }
     pub fn wants_continuous_frames(&self) -> bool {
         self.has_active_stroke() || self.editor.document().has_animated_effects()
@@ -1364,6 +1410,66 @@ mod tests {
         fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
             None
         }
+    }
+
+    #[test]
+    fn appended_raster_operations_are_incremental_ordered_and_replayed_after_undo() {
+        let (mut producer, consumer) = input_queue(32);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("gradient", 128, 128),
+            consumer,
+            view(128, 128),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        let id = engine.document().active_layer;
+        engine.render_frame().unwrap();
+        engine.backend.saw_reset = false;
+        producer.push(event(1, PenPhase::Down, 20.0)).unwrap();
+        producer.push(event(2, PenPhase::Up, 80.0)).unwrap();
+        engine.render_frame().unwrap();
+        let count = engine.backend.persistent_dabs;
+        let coverage =
+            layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
+        let op = layer_core::LayerOperation {
+            after_stroke: 0,
+            coverage,
+            kind: layer_core::LayerOperationKind::Gradient {
+                start: Point::default(),
+                end: Point { x: 128.0, y: 0.0 },
+                colors: [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
+                radial: false,
+                alpha_locked: false,
+            },
+        };
+        engine.append_layer_operation(id, op).unwrap();
+        assert!(engine.has_pending_document_edits());
+        assert_eq!(
+            engine.document().layer(id).unwrap().operations[0].after_stroke,
+            1
+        );
+        assert!(matches!(
+            engine.batches[0].kind,
+            DabBatchKind::LayerOperation(0)
+        ));
+        engine.render_frame().unwrap();
+        assert!(!engine.backend.saw_reset);
+        assert_eq!(
+            engine.backend.persistent_dabs, count,
+            "must not replay old strokes for a fill"
+        );
+        assert!(!engine.has_pending_document_edits());
+        engine.undo().unwrap();
+        assert!(engine.document().layer(id).unwrap().operations.is_empty());
+        engine.render_frame().unwrap();
+        assert!(engine.backend.saw_reset);
+        engine.redo().unwrap();
+        engine.render_frame().unwrap();
+        assert_eq!(engine.document().layer(id).unwrap().operations.len(), 1);
     }
 
     fn event(sequence: u64, phase: PenPhase, x: f32) -> PenEvent {

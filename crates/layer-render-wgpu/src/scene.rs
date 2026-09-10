@@ -825,12 +825,14 @@ impl Scene {
         self.used.fill(false);
         let layer = &packet.layers[layer_index];
         let op = &layer.operations[operation_index];
+        let damage = pixel_rect(op.bounds(packet.document_extent), packet.document_extent);
         let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) else {
             return Ok(());
         };
         let pages: Vec<_> = stored
             .pages
             .iter()
+            .filter(|p| !damage.page_local(p.coordinate).is_empty())
             .map(|p| {
                 (
                     p.coordinate,
@@ -872,43 +874,41 @@ impl Scene {
                         self.free(p);
                     }
                 }
-                LayerOperationKind::Fill {
-                    color,
-                    alpha_locked,
-                } => {
+                LayerOperationKind::Fill { .. } | LayerOperationKind::Gradient { .. } => {
+                    let (colors, endpoints, radial, alpha_locked) = match op.kind {
+                        LayerOperationKind::Fill {
+                            color,
+                            alpha_locked,
+                        } => ([color; 2], [0.0; 4], false, alpha_locked),
+                        LayerOperationKind::Gradient {
+                            start,
+                            end,
+                            colors,
+                            radial,
+                            alpha_locked,
+                        } => (
+                            colors,
+                            [start.x, start.y, end.x, end.y],
+                            radial,
+                            alpha_locked,
+                        ),
+                        _ => unreachable!(),
+                    };
                     self.draw(
                         r,
                         out,
                         self.pool[mask].view.clone(),
-                        None,
+                        Some(source),
                         [0., 0., 256., 256.],
-                        [6., 1., 0., 0.],
+                        [6., 1., f32::from(radial), f32::from(alpha_locked)],
                         false,
                     );
                     if let Some(Job::Draw { data, .. }) = self.jobs.last_mut() {
-                        data[12..16].copy_from_slice(&color);
+                        data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
+                        data[12..16].copy_from_slice(&colors[0]);
+                        data[16..20].copy_from_slice(&colors[1]);
+                        data[20..24].copy_from_slice(&endpoints);
                     }
-                    let combined = self.alloc(r, wgpu::Color::TRANSPARENT);
-                    self.draw(
-                        r,
-                        combined,
-                        self.pool[out].view.clone(),
-                        Some(source),
-                        [0., 0., 256., 256.],
-                        [4., 1., 0., f32::from(alpha_locked)],
-                        false,
-                    );
-                    self.jobs.push(Job::Copy {
-                        source: self.pool[combined].texture.clone(),
-                        destination,
-                        origin: [0, 0],
-                        width: 256,
-                        height: 256,
-                    });
-                    self.free(combined);
-                    self.free(out);
-                    self.free(mask);
-                    continue;
                 }
             }
             self.jobs.push(Job::Copy {

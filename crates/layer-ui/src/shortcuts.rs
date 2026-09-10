@@ -216,6 +216,7 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Move" => key("o", false, false),
         "command.Hand" => key("h", false, false),
         "command.Eyedropper" => key("i", false, false),
+        "command.Gradient" => key("g", false, false),
         "command.FitCanvas" => key("f", false, false),
         "command.ZoomIn" => key("=", true, false),
         "command.ZoomOut" => key("-", true, false),
@@ -324,6 +325,14 @@ impl Settings {
         fn canonical(action: &UiAction) -> UiAction {
             use LayerAction as L;
             match action {
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Gradient { .. },
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::Gradient,
+                },
                 UiAction::Layer {
                     action:
                         L::Tool {

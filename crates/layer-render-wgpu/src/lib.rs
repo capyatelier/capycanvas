@@ -3907,19 +3907,21 @@ impl CanvasRenderer for WgpuRasterizer {
                     }
                 }
             }
-            for op in &layer.operations {
-                if matches!(op.kind, layer_core::LayerOperationKind::Fill { .. }) {
-                    let coords: Vec<_> = if op.coverage.default_coverage > 0. {
-                        page_coordinates(PixelRect::full(packet.document_extent)).collect()
-                    } else {
-                        self.layer_masks
-                            .pages
-                            .keys()
-                            .filter(|(id, _)| *id == op.coverage.id)
-                            .map(|(_, c)| *c)
-                            .collect()
-                    };
-                    for c in coords {
+            for batch in original_batches.iter().filter(|b| b.layer_id == layer.id) {
+                let DabBatchKind::LayerOperation(operation_index) = batch.kind else {
+                    continue;
+                };
+                let op = &layer.operations[operation_index as usize];
+                if matches!(
+                    op.kind,
+                    layer_core::LayerOperationKind::Fill { .. }
+                        | layer_core::LayerOperationKind::Gradient { .. }
+                ) {
+                    // Coverage may be translated or inverted: its source mask
+                    // pages are not necessarily the destination paint pages.
+                    let bounds =
+                        pixel_rect(op.bounds(packet.document_extent), packet.document_extent);
+                    for c in page_coordinates(bounds) {
                         if self.paint_layers[index]
                             .pages
                             .iter()
@@ -4046,7 +4048,22 @@ impl CanvasRenderer for WgpuRasterizer {
                 scene.style_base = packet.dab_batches.len();
                 scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
                 self.scene = Some(scene);
-                dirty = PixelRect::full(packet.document_extent);
+                let bounds = packet.layers[layer_index].operations[op as usize]
+                    .bounds(packet.document_extent);
+                let offset = scene::world_offset(packet.layers, batch.layer_id, false);
+                dirty = dirty.union(pixel_rect(
+                    layer_core::Rect {
+                        min: layer_core::Point {
+                            x: bounds.min.x + offset.x,
+                            y: bounds.min.y + offset.y,
+                        },
+                        max: layer_core::Point {
+                            x: bounds.max.x + offset.x,
+                            y: bounds.max.y + offset.y,
+                        },
+                    },
+                    packet.document_extent,
+                ));
                 continue;
             }
             if batch.style.execution == BrushExecution::Watercolor

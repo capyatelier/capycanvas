@@ -228,6 +228,7 @@ impl ToolbarControl {
                             | CommandId::Move
                             | CommandId::Hand
                             | CommandId::Eyedropper
+                            | CommandId::Gradient
                     ) =>
             {
                 Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]])

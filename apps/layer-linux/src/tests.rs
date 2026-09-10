@@ -350,6 +350,161 @@ fn native_tool_drawers() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_gradient_tool() {
+    let app = native_test_app("art.capycanvas.GradientTool");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .insert_tools(
+            Panel::Toolbar,
+            None,
+            &[ToolbarControl::Command {
+                command: CommandId::Gradient,
+            }],
+        )
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.1, 0.25, 0.9, 1.0],
+    });
+    w.dispatch(UiAction::Color {
+        action: layer_ui::ColorAction::Select {
+            slot: layer_ui::ColorSlot::Background,
+        },
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [1.0, 0.6, 0.1, 1.0],
+    });
+    w.dispatch(UiAction::Color {
+        action: layer_ui::ColorAction::Select {
+            slot: layer_ui::ColorSlot::Foreground,
+        },
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Gradient,
+    });
+    pump(150);
+    assert_eq!(w.tool_set.buttons.borrow().len(), 4);
+    let opacity = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity")
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap();
+    edit_number(&opacity, "80");
+    assert!((state(&w).brush.opacity - 0.8).abs() < 0.001);
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for (index, name) in [
+        "linear-colors",
+        "linear-clear",
+        "radial-colors",
+        "radial-clear",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Clear { id: 1 },
+        });
+        pump(50);
+        let button = w.tool_set.buttons.borrow()[index].1.clone();
+        click(&button);
+        let camera = state(&w).camera;
+        let m = camera.document_to_surface();
+        for (i, (phase, p)) in [
+            (PenPhase::Down, [760.0, 620.0]),
+            (PenPhase::Move, [1220.0, 850.0]),
+            (PenPhase::Up, [1220.0, 850.0]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let e = PenEvent {
+                device_id: 1,
+                sequence: i as u64,
+                timestamp_ns: glib::monotonic_time() as u64 * 1000,
+                view_revision: camera.revision,
+                surface_position: Point {
+                    x: m[0] * p[0] + m[2] * p[1] + m[4],
+                    y: m[1] * p[0] + m[3] * p[1] + m[5],
+                },
+                pressure: 1.0,
+                tilt_radians: [0.0; 2],
+                twist_radians: 0.0,
+                distance: 0.0,
+                phase,
+                tool: ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            };
+            w.cursor_input(Some(e));
+            w.input.send(&w, e);
+            pump(25);
+        }
+        pump(200);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+        let color = |phase| {
+            let e = PenEvent {
+                device_id: 1,
+                sequence: 100,
+                timestamp_ns: glib::monotonic_time() as u64 * 1000,
+                view_revision: camera.revision,
+                surface_position: Point {
+                    x: m[0] * 760.0 + m[2] * 620.0 + m[4],
+                    y: m[1] * 760.0 + m[3] * 620.0 + m[5],
+                },
+                pressure: 1.0,
+                tilt_radians: [0.0; 2],
+                twist_radians: 0.0,
+                distance: 0.0,
+                phase,
+                tool: ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            };
+            w.input.send(&w, e);
+        };
+        // Probe rendered pigment using the real asynchronous GPU path.
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::PickLayer,
+            },
+        });
+        color(PenPhase::Down);
+        color(PenPhase::Up);
+        pump(150);
+        assert!(state(&w).colors.foreground[2] > 0.85 && state(&w).colors.foreground[0] < 0.2);
+        w.dispatch(UiAction::SetColor {
+            rgba: [0.1, 0.25, 0.9, 1.0],
+        });
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Gradient,
+        });
+        for theme in [Theme::Dark, Theme::Light] {
+            w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            pump(150);
+            capture_reference(&w, &format!("{dir}/gradient-{name}-{theme:?}.png"), 1.0);
+        }
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Undo,
+        });
+        pump(75);
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Redo,
+        });
+        pump(75);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_navigation_tools() {
     let app = native_test_app("art.capycanvas.NavigationTools");
     let w = Workspace::new(&app);

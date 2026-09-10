@@ -254,6 +254,7 @@ pub fn ui_catalog() -> UiCatalog {
             "navigator",
             "hand",
             "eyedropper",
+            "gradient",
             "rotate-left",
             "rotate-right",
             "flip-horizontal",
@@ -324,6 +325,7 @@ pub enum CommandId {
     Move,
     Hand,
     Eyedropper,
+    Gradient,
     Undo,
     Redo,
     UndoWorkspace,
@@ -379,6 +381,7 @@ impl CommandId {
             Self::Move => "move",
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
+            Self::Gradient => "gradient",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
@@ -397,7 +400,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -410,6 +413,7 @@ impl CommandId {
         Self::Move,
         Self::Hand,
         Self::Eyedropper,
+        Self::Gradient,
         Self::Undo,
         Self::Redo,
         Self::UndoWorkspace,
@@ -455,6 +459,7 @@ impl CommandId {
             Self::Move => "Move",
             Self::Hand => "Hand",
             Self::Eyedropper => "Eyedropper",
+            Self::Gradient => "Gradient",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::UndoWorkspace => "Undo Workspace Change",

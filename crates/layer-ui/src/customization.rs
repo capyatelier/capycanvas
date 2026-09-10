@@ -771,6 +771,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Move => "Move the editing layer or its mask",
                 CommandId::Hand => "Drag to move the canvas view",
                 CommandId::Eyedropper => "Pick a color from the canvas",
+                CommandId::Gradient => "Drag to fill with a gradient",
                 CommandId::Undo => "Undo the last change",
                 CommandId::Redo => "Restore the last undone change",
                 CommandId::UndoWorkspace => "Undo the last workspace change",

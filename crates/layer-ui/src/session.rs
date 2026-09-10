@@ -481,6 +481,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if key == "escape" {
                         self.interaction.keyboard_chrome = true;
                         reply.dismiss_popups = true;
+                        if !editing && self.cancel_layer_gesture()? {
+                            self.interaction.pointer = None;
+                            reply.cancel_paint = true;
+                            reply.change = self.changed(regions::DOCUMENT, true);
+                            reply.handled = true;
+                        }
                     }
                     if key == "escape"
                         && self.state.customization.has_drawer()
@@ -588,8 +594,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiInput::Blur => {
                 self.eyedropper.cancel();
+                if self.cancel_layer_gesture()? {
+                    reply.cancel_paint = true;
+                    reply.change = self.changed(regions::DOCUMENT, true);
+                }
                 self.cursor_input(None);
-                reply.cancel_paint = self.interaction.pointer.take().is_some_and(|p| p.paint)
+                reply.cancel_paint |= self.interaction.pointer.take().is_some_and(|p| p.paint)
                     || self.input_pending
                     || self.engine.has_active_stroke();
                 self.interaction.keys.clear();
@@ -972,7 +982,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .layers
             .get(index)
             .is_some_and(|layer| layer.kind == LayerKind::Paint);
-        let idle = !self.input_pending && !self.engine.has_active_stroke();
+        let idle = self.require_idle().is_ok();
         let paint_layers = document
             .layers
             .iter()
@@ -996,6 +1006,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::FitCanvas
             | CommandId::Hand
             | CommandId::Eyedropper
+            | CommandId::Gradient
             | CommandId::RotateLeft
             | CommandId::RotateRight
             | CommandId::FlipHorizontal
@@ -1011,6 +1022,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (CommandId::Lasso, LayerCanvasTool::Select)
                     | (CommandId::Move, LayerCanvasTool::Move)
                     | (CommandId::Hand, LayerCanvasTool::Hand)
+                    | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
                     | (
                         CommandId::Eyedropper,
                         LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer
@@ -1369,6 +1381,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::SetToolSetting { id, value } => {
+                if !self.state.tool_settings.iter().any(|c| c.id == id) {
+                    return Err("This setting is not used by the selected tool".into());
+                }
                 let brush = tool_settings::edit(self.engine.configured_brush(), &id, value)?;
                 self.state.brush.diameter = brush.diameter;
                 self.state.brush.opacity = brush.opacity;
@@ -1738,6 +1753,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if self.layer_interaction.tool != LayerCanvasTool::Paint {
             if let Err(error) = self.layer_pen(event) {
+                let _ = self.cancel_layer_gesture();
                 self.state.host_error = Some(error);
             }
             self.input_pending = true;
@@ -1750,7 +1766,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn touch(&mut self, id: u64, phase: PenPhase, position: [f32; 2]) -> UiChange {
-        if self.input_pending || self.engine.has_active_stroke() {
+        if self.input_pending
+            || self.engine.has_active_stroke()
+            || !self.layer_interaction.path.is_empty()
+        {
             self.touch.clear();
             return self.changed(0, false);
         }
@@ -1932,6 +1951,16 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Gradient => {
+                let [radial, transparent] = self.layer_interaction.gradient;
+                self.layer_action(LayerAction::Tool {
+                    tool: LayerCanvasTool::Gradient {
+                        radial,
+                        transparent,
+                    },
+                })?;
+                Ok((BRUSH | DOCUMENT, false))
+            }
             CommandId::Hand | CommandId::Eyedropper => {
                 self.layer_action(LayerAction::Tool {
                     tool: if command == CommandId::Hand {
@@ -2188,13 +2217,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
         self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
+        } else if matches!(
+            self.layer_interaction.tool,
+            LayerCanvasTool::Gradient { .. }
+        ) {
+            tool_settings::controls(self.engine.configured_brush())
+                .into_iter()
+                .filter(|c| c.id == "opacity")
+                .collect()
         } else {
             Vec::new()
         };
     }
 
     fn require_idle(&self) -> Result<(), String> {
-        if self.input_pending || self.engine.has_active_stroke() {
+        if self.input_pending
+            || self.engine.has_active_stroke()
+            || !self.layer_interaction.path.is_empty()
+        {
             Err("Finish the canvas interaction first".into())
         } else {
             Ok(())
@@ -2564,6 +2604,132 @@ mod tests {
             assert!(change.canvas_wake && change.regions & regions::CAMERA != 0);
         }
         assert_eq!(s.engine.document().revision, doc_revision);
+    }
+
+    #[test]
+    fn gradient_tools_commit_once_with_local_selection_and_cancel_cleanly() {
+        use layer_core::{Edit, LayerOperationKind, Selection};
+        let mut s = session();
+        assert!(key(&mut s, "g", true, false, false).handled);
+        key(&mut s, "g", false, false, false);
+        assert_eq!(s.state.tool_set.subtools.len(), 4);
+        assert_eq!(s.state.tool_settings.len(), 1);
+        assert_eq!(s.state.tool_settings[0].id, "opacity");
+        let action = s.state.tool_set.subtools[3].action.clone();
+        s.dispatch(action).unwrap();
+        let tool = s.layer_interaction.tool;
+        invoke(&mut s, CommandId::Hand);
+        invoke(&mut s, CommandId::Gradient);
+        assert_eq!(s.layer_interaction.tool, tool, "remember gradient variant");
+        s.dispatch(UiAction::SetColor {
+            rgba: [1.0, 0.0, 0.0, 1.0],
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "opacity".into(),
+            value: 0.4,
+        })
+        .unwrap();
+        assert!(
+            s.dispatch(UiAction::SetToolSetting {
+                id: "size".into(),
+                value: 20.0
+            })
+            .is_err()
+        );
+        let id = s.engine.document().active_layer;
+        let mut layer = s.engine.document().layer(id).unwrap().clone();
+        layer.properties.offset = Point { x: 10.0, y: 20.0 };
+        layer.properties.alpha_locked = true;
+        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        let selection = Selection::polygon(vec![
+            Point { x: 10.0, y: 20.0 },
+            Point { x: 100.0, y: 20.0 },
+            Point { x: 100.0, y: 100.0 },
+        ])
+        .unwrap();
+        s.layer_edit(Edit::SetSelection(Some(selection))).unwrap();
+        s.state.camera.rotation = 0.4;
+        s.state.camera.flipped = [true, false];
+        s.frame(1, 1).unwrap();
+        let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+            let m = s.state.camera.document_to_surface();
+            let mut e = event(s, 1, phase, 1.0);
+            e.surface_position = Point {
+                x: m[0] * p[0] + m[2] * p[1] + m[4],
+                y: m[1] * p[0] + m[3] * p[1] + m[5],
+            };
+            s.pen(e).unwrap();
+        };
+        send(&mut s, PenPhase::Down, [30.0, 40.0]);
+        for i in 0..100 {
+            send(&mut s, PenPhase::Move, [50.0 + i as f32, 70.0]);
+        }
+        s.frame(2, 2).unwrap();
+        assert_eq!(
+            s.layer_interaction.path.len(),
+            2,
+            "guide stores endpoints, not a stroke path"
+        );
+        assert!(!s.command(CommandId::Undo).enabled);
+        assert!(s.engine.document().layer(id).unwrap().operations.is_empty());
+        send(&mut s, PenPhase::Up, [130.0, 140.0]);
+        s.frame(3, 3).unwrap();
+        let operations = &s.engine.document().layer(id).unwrap().operations;
+        assert_eq!(operations.len(), 1);
+        let LayerOperationKind::Gradient {
+            start,
+            end,
+            colors,
+            radial,
+            alpha_locked,
+        } = operations[0].kind
+        else {
+            panic!("gradient")
+        };
+        assert!((start.x - 20.0).abs() < 0.001 && (start.y - 20.0).abs() < 0.001);
+        assert!((end.x - 120.0).abs() < 0.001 && (end.y - 120.0).abs() < 0.001);
+        assert!(radial && alpha_locked);
+        assert_eq!(colors, [[1.0, 0.0, 0.0, 0.4], [1.0, 0.0, 0.0, 0.0]]);
+        assert_eq!(
+            operations[0].coverage.initial.as_ref().unwrap().contours[0][0],
+            Point::default()
+        );
+        assert!(s.layer_interaction.path.is_empty());
+        assert_eq!(s.renderer_mut().dabs, 0);
+        invoke(&mut s, CommandId::Undo);
+        s.frame(4, 4).unwrap();
+        assert!(s.engine.document().layer(id).unwrap().operations.is_empty());
+        invoke(&mut s, CommandId::Redo);
+        s.frame(5, 5).unwrap();
+        assert_eq!(s.engine.document().layer(id).unwrap().operations.len(), 1);
+        for cancel in [0, 1, 2] {
+            send(&mut s, PenPhase::Down, [30.0, 40.0]);
+            send(&mut s, PenPhase::Move, [90.0, 100.0]);
+            match cancel {
+                0 => send(&mut s, PenPhase::Cancel, [90.0, 100.0]),
+                1 => {
+                    assert!(key(&mut s, "escape", true, false, false).handled);
+                    key(&mut s, "escape", false, false, false);
+                }
+                _ => {
+                    s.input(UiInput::Blur).unwrap();
+                }
+            }
+            send(&mut s, PenPhase::Up, [90.0, 100.0]);
+            s.frame(6, 6).unwrap();
+            assert!(s.layer_interaction.path.is_empty());
+            assert_eq!(s.engine.document().layer(id).unwrap().operations.len(), 1);
+        }
+        send(&mut s, PenPhase::Down, [30.0, 40.0]);
+        send(&mut s, PenPhase::Up, [30.0, 40.0]);
+        s.frame(7, 7).unwrap();
+        assert_eq!(
+            s.engine.document().layer(id).unwrap().operations.len(),
+            1,
+            "tap is not a whole-layer fill"
+        );
+        assert!(s.state.host_error.is_none());
     }
 
     #[test]
@@ -8104,7 +8270,7 @@ mod tests {
         record_shortcut(&mut s, "custom.size-42", "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         record_shortcut(&mut s, "canvas.pan", "g", false);
-        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
+        preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
         s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(
             !key(&mut s, "k", true, false, true).handled,

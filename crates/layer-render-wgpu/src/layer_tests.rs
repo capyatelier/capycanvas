@@ -198,6 +198,242 @@ fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
 }
 
 #[test]
+fn gradients_share_fill_compositing_and_respect_coverage_and_alpha_lock() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    for radial in [false, true] {
+        for transparent in [false, true] {
+            for alpha_locked in [false, true] {
+                for selected in [false, true] {
+                    let mut layer = Layer::paint(LayerId(1), "gradient");
+                    let start = [1.0, 0.1, 0.0, 0.7];
+                    let end = [0.0, 0.2, 1.0, if transparent { 0.0 } else { 0.7 }];
+                    let coverage = if selected {
+                        left_mask(9)
+                    } else {
+                        LayerMask::reveal_all(LayerId(9), Point::default())
+                    };
+                    layer.operations.push(LayerOperation {
+                        after_stroke: 1,
+                        coverage,
+                        kind: LayerOperationKind::Gradient {
+                            start: Point { x: 16.0, y: 64.0 },
+                            end: Point { x: 112.0, y: 64.0 },
+                            colors: [start, end],
+                            radial,
+                            alpha_locked,
+                        },
+                    });
+                    let mut operation = batch(1);
+                    operation.kind = DabBatchKind::LayerOperation(0);
+                    operation.dab_count = 0;
+                    submit(
+                        &mut r,
+                        &[layer],
+                        &[dab([0.1, 0.2, 0.3, 0.6])],
+                        &[batch(1), operation],
+                        true,
+                    );
+                    for (x, y) in [(40, 64), (80, 64), (64, 32), (0, 0)] {
+                        let p = [x as f32 + 0.5 - 16.0, y as f32 + 0.5 - 64.0];
+                        let t = (if radial {
+                            p[0].hypot(p[1]) / 96.0
+                        } else {
+                            p[0] / 96.0
+                        })
+                        .clamp(0.0, 1.0);
+                        let mask = f32::from(!selected || x < 64);
+                        let a = ((1.0 - t) * start[3] + t * end[3]) * mask;
+                        let old_alpha = if x == 0 { 0.0 } else { 0.6 };
+                        let alpha = if alpha_locked {
+                            old_alpha
+                        } else {
+                            a + old_alpha * (1.0 - a)
+                        };
+                        let encode = |v: f32| {
+                            if v <= 0.0031308 {
+                                v * 12.92
+                            } else {
+                                1.055 * v.powf(1.0 / 2.4) - 0.055
+                            }
+                        };
+                        let mut expected = [0u8; 4];
+                        for i in 0..3 {
+                            let pigment =
+                                ((1.0 - t) * start[i] * start[3] + t * end[i] * end[3]) * mask;
+                            let rgb = pigment * if alpha_locked { old_alpha } else { 1.0 }
+                                + [0.1, 0.2, 0.3][i] * old_alpha * (1.0 - a);
+                            expected[i] = (encode(rgb / alpha.max(0.000001)) * 255.0).round() as u8;
+                        }
+                        expected[3] = (alpha * 255.0).round() as u8;
+                        let actual = pixel(&mut r, x, y);
+                        for i in 0..4 {
+                            assert!(
+                                actual[i].abs_diff(expected[i]) <= 4,
+                                "radial {radial} clear {transparent} lock {alpha_locked} selection {selected} at {x},{y}: {actual:?} vs {expected:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn gradient_respects_layer_mask_and_clipping_base_alpha() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let mut gradient = Layer::paint(LayerId(1), "gradient");
+    gradient.properties.clipped = true;
+    gradient.mask = Some(left_mask(8));
+    gradient.operations.push(LayerOperation {
+        after_stroke: 0,
+        coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
+        kind: LayerOperationKind::Gradient {
+            start: Point::default(),
+            end: Point { x: 128., y: 0. },
+            colors: [[1., 0., 0., 0.8], [0., 0., 1., 0.8]],
+            radial: false,
+            alpha_locked: false,
+        },
+    });
+    let op = DabBatch {
+        kind: DabBatchKind::LayerOperation(0),
+        dab_count: 0,
+        ..batch(1)
+    };
+    submit(
+        &mut r,
+        &[gradient, Layer::paint(LayerId(2), "base")],
+        &[dab([0., 0., 1., 0.5])],
+        &[batch(2), op],
+        true,
+    );
+    let tinted = pixel(&mut r, 32, 64);
+    for (actual, expected) in tinted.into_iter().zip([203_u8, 0, 170, 128]) {
+        assert!(
+            actual.abs_diff(expected) <= 3,
+            "masked clipped gradient: {tinted:?}"
+        );
+    }
+    let masked_out = pixel(&mut r, 96, 64);
+    assert_eq!(&masked_out[..3], &[0, 0, 255]);
+    assert!(masked_out[3].abs_diff(128) <= 1);
+    assert_eq!(pixel(&mut r, 0, 0)[3], 0);
+}
+
+#[test]
+fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let extent = [512, 384];
+    let v = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    for inverted in [false, true] {
+        let mut layer = Layer::paint(LayerId(1), "gradient");
+        let mut coverage = LayerMask::reveal_all(LayerId(9), Point { x: -20., y: 12. });
+        coverage.default_coverage = 0.;
+        coverage.inverted = inverted;
+        coverage.initial = Some(
+            Selection::polygon(vec![
+                Point { x: 250., y: 50. },
+                Point { x: 410., y: 50. },
+                Point { x: 410., y: 280. },
+                Point { x: 250., y: 280. },
+            ])
+            .unwrap(),
+        );
+        layer.operations.push(LayerOperation {
+            after_stroke: 1,
+            coverage,
+            kind: LayerOperationKind::Gradient {
+                start: Point { x: 160., y: 64. },
+                end: Point { x: 400., y: 64. },
+                colors: [[1., 0., 0., 0.8], [0., 0., 1., 0.8]],
+                radial: false,
+                alpha_locked: false,
+            },
+        });
+        let mut second = layer.operations[0].clone();
+        second.coverage.id = LayerId(10);
+        second.coverage.offset.x -= 35.;
+        second.kind = LayerOperationKind::Fill {
+            color: [0., 1., 0., 0.3],
+            alpha_locked: false,
+        };
+        layer.operations.push(second);
+        let dabs = [dab([0.1, 0.1, 0.1, 0.5])];
+        let operations: Vec<_> = (0..2)
+            .map(|i| DabBatch {
+                kind: DabBatchKind::LayerOperation(i),
+                dab_count: 0,
+                damage: layer.operations[i as usize].bounds(extent),
+                ..batch(1)
+            })
+            .collect();
+        let render = |r: &mut WgpuRasterizer, layers: &[Layer], batches: &[DabBatch], reset| {
+            r.submit(FramePacket {
+                view: v,
+                document_extent: extent,
+                layers,
+                dabs: &dabs,
+                dab_batches: batches,
+                reset_layers: reset,
+                time_seconds: 0.,
+                composite_all: false,
+            })
+            .unwrap();
+        };
+        render(
+            &mut r,
+            &[Layer::paint(LayerId(1), "gradient")],
+            &[batch(1)],
+            true,
+        );
+        render(&mut r, &[layer.clone()], &operations, false);
+        let queued = r.readback_srgb_rgba8().unwrap();
+        // A translated selection crosses the tile boundary, while its inverse
+        // also has coverage in tiles with no original mask or paint page.
+        for (x, y, inside) in [
+            (240, 200, true),
+            (256, 200, true),
+            (340, 200, true),
+            (480, 320, false),
+        ] {
+            let a = queued[(y * extent[0] as usize + x) * 4 + 3];
+            assert_eq!(
+                a > 0,
+                inside != inverted,
+                "coverage {inverted} at {x},{y}: {a}"
+            );
+        }
+        let mut first_only = layer.clone();
+        first_only.operations.truncate(1);
+        render(
+            &mut r,
+            &[Layer::paint(LayerId(1), "gradient")],
+            &[batch(1)],
+            true,
+        );
+        render(&mut r, &[first_only], &operations[..1], false);
+        render(&mut r, &[layer.clone()], &operations[1..], false);
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            queued,
+            "split frames must match queued operations"
+        );
+        let replay = [vec![batch(1)], operations].concat();
+        render(&mut r, &[layer], &replay, true);
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            queued,
+            "full replay must match incremental rendering"
+        );
+    }
+}
+
+#[test]
 fn navigator_preview_reuses_composition_and_tracks_paint_mask_and_camera() {
     let mut r = WgpuRasterizer::new().unwrap();
     let mut layer = Layer::paint(LayerId(1), "paint");
@@ -491,6 +727,105 @@ fn mask_scene_destination_preview_preserves_untouched_color() {
     submit(&mut r, &[l], &[d], &[b], false);
     assert_eq!(pixel(&mut r, 32, 64), [0, 0, 255, 255]);
     assert_eq!(pixel(&mut r, 50, 64), [255, 0, 0, 255]);
+}
+
+#[test]
+#[ignore = "hardware GPU latency benchmark; run serially in release mode"]
+fn paint_operation_latency() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    r.set_telemetry_enabled(true);
+    let extent = [2048, 1536];
+    let v = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    for selected in [false, true] {
+        for (name, kind) in [
+            (
+                "fill",
+                LayerOperationKind::Fill {
+                    color: [0.3, 0.4, 0.8, 0.5],
+                    alpha_locked: false,
+                },
+            ),
+            (
+                "linear",
+                LayerOperationKind::Gradient {
+                    start: Point { x: 500., y: 500. },
+                    end: Point { x: 1200., y: 900. },
+                    colors: [[1., 0., 0., 0.5], [0., 0., 1., 0.5]],
+                    radial: false,
+                    alpha_locked: false,
+                },
+            ),
+            (
+                "radial",
+                LayerOperationKind::Gradient {
+                    start: Point { x: 500., y: 500. },
+                    end: Point { x: 1200., y: 900. },
+                    colors: [[1., 0., 0., 0.5], [0., 0., 1., 0.5]],
+                    radial: true,
+                    alpha_locked: false,
+                },
+            ),
+        ] {
+            let mut layer = Layer::paint(LayerId(1), "paint operation");
+            let coverage = if selected {
+                left_mask(9)
+            } else {
+                LayerMask::reveal_all(LayerId(9), Point::default())
+            };
+            layer.operations.push(LayerOperation {
+                after_stroke: 0,
+                coverage,
+                kind,
+            });
+            let op = DabBatch {
+                kind: DabBatchKind::LayerOperation(0),
+                dab_count: 0,
+                damage: layer.operations[0].bounds(extent),
+                ..batch(1)
+            };
+            let mut completed = Vec::new();
+            let mut cold = 0.;
+            for i in 0..160 {
+                let start = std::time::Instant::now();
+                r.submit(FramePacket {
+                    view: v,
+                    document_extent: extent,
+                    layers: std::slice::from_ref(&layer),
+                    dabs: &[],
+                    dab_batches: std::slice::from_ref(&op),
+                    reset_layers: i == 0,
+                    time_seconds: 0.,
+                    composite_all: false,
+                })
+                .unwrap();
+                r.wait_idle().unwrap(); // Test only; production never waits.
+                let ms = start.elapsed().as_secs_f64() * 1000.;
+                if i == 0 {
+                    cold = ms;
+                }
+                if i >= 40 {
+                    completed.push(ms);
+                }
+            }
+            let stats = r.telemetry();
+            assert!(stats.gpu_timestamps);
+            let summary = |mut values: Vec<f32>| {
+                values.sort_by(f32::total_cmp);
+                [values[60], values[114], values[118]]
+            };
+            let cpu = summary(stats.cpu.ordered());
+            let gpu = summary(stats.gpu.ordered());
+            completed.sort_by(f64::total_cmp);
+            eprintln!(
+                "{name} selection={selected}: cold completed={cold:.3}ms; CPU {cpu:.3?}; GPU {gpu:.3?}; completed p50/p95/p99={:.3}/{:.3}/{:.3}ms",
+                completed[60], completed[114], completed[118]
+            );
+        }
+    }
 }
 
 #[test]

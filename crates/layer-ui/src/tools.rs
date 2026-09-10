@@ -289,6 +289,42 @@ pub struct ToolSetView {
     pub subtools: Vec<ToolSetItem>,
 }
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
+    if let LayerCanvasTool::Gradient { .. } = canvas_tool {
+        return ToolSetView {
+            groups: vec![ToolSetItem {
+                label: "Gradient",
+                icon: "gradient",
+                action: UiAction::Invoke {
+                    command: CommandId::Gradient,
+                },
+                selected: true,
+                preview: None,
+            }],
+            subtools: [
+                ("Linear: color to color", false, false),
+                ("Linear: color to clear", false, true),
+                ("Radial: color to color", true, false),
+                ("Radial: color to clear", true, true),
+            ]
+            .into_iter()
+            .map(|(label, radial, transparent)| {
+                let tool = LayerCanvasTool::Gradient {
+                    radial,
+                    transparent,
+                };
+                ToolSetItem {
+                    label,
+                    icon: "gradient",
+                    action: UiAction::Layer {
+                        action: LayerAction::Tool { tool },
+                    },
+                    selected: canvas_tool == tool,
+                    preview: None,
+                }
+            })
+            .collect(),
+        };
+    }
     if canvas_tool.picks_color() {
         return ToolSetView {
             groups: vec![ToolSetItem {
@@ -324,6 +360,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
             LayerCanvasTool::Move => ("Move layer", "move"),
             LayerCanvasTool::Hand => ("Hand", "hand"),
             LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
+            LayerCanvasTool::Gradient { .. } => unreachable!(),
             LayerCanvasTool::Paint => unreachable!(),
         };
         let item = ToolSetItem {
