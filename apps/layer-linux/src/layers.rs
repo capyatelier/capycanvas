@@ -76,7 +76,7 @@ fn row_state(item: &gtk::ListItem) -> Option<LayerState> {
     )
 }
 fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::DrawingArea) {
-    let button = button("image-x-generic-symbolic", tooltip);
+    let button = button("layer-image-symbolic", tooltip);
     button.add_css_class("layer-thumbnail");
     button.set_valign(gtk::Align::Center);
     let picture = gtk::Picture::new();
@@ -314,7 +314,7 @@ impl LayerPanel {
         header.append(&options);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         let alpha = toggle("layer-alpha-lock-symbolic", "Alpha lock");
-        let lock = toggle("changes-prevent-symbolic", "Lock editing");
+        let lock = toggle("layer-lock-symbolic", "Lock editing");
         let clip = toggle("layer-clip-symbolic", "Clip to layer below");
         let reference = toggle(
             "layer-reference-symbolic",
@@ -338,7 +338,7 @@ impl LayerPanel {
                 let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 root.add_css_class("layer-row");
                 root.add_css_class("customizable-target");
-                let eye = button("view-reveal-symbolic", "Show layer");
+                let eye = button("layer-eye-symbolic", "Show layer");
                 eye.add_css_class("layer-column");
                 root.append(&eye);
                 let selection = button(
@@ -354,7 +354,7 @@ impl LayerPanel {
                 let (content, content_image, content_preview, content_frame) =
                     thumbnail("Edit layer content");
                 thumbnails.append(&content);
-                let link = button("insert-link-symbolic", "Link mask to layer");
+                let link = button("layer-link-symbolic", "Link mask to layer");
                 link.add_css_class("layer-link");
                 thumbnails.append(&link);
                 let (mask, mask_image, _, mask_frame) = thumbnail("Edit layer mask");
@@ -734,7 +734,7 @@ impl LayerPanel {
             alpha,
             lock,
             mask_action: button(
-                "image-x-generic-symbolic",
+                "layer-mask-symbolic",
                 "Add mask from selection, or reveal all",
             ),
             reference,
@@ -766,7 +766,7 @@ impl LayerPanel {
         );
         for (icon, label, a) in [
             (
-                "list-add-symbolic",
+                "layer-plus-symbolic",
                 "New layer",
                 A::New {
                     group: false,
@@ -774,7 +774,7 @@ impl LayerPanel {
                 },
             ),
             (
-                "folder-new-symbolic",
+                "layer-folder-symbolic",
                 "New group",
                 A::New {
                     group: true,
@@ -838,7 +838,7 @@ impl LayerPanel {
             }
         ));
         self.footer.append(mask);
-        let import = button("document-open-symbolic", "Import image as layer");
+        let import = button("layer-image-symbolic", "Import image as layer");
         import.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -893,7 +893,7 @@ impl LayerPanel {
             }
         ));
         self.footer.append(&import);
-        let more = button("view-more-symbolic", "Layer actions");
+        let more = button("layer-more-symbolic", "Layer actions");
         more.set_hexpand(true);
         more.set_halign(gtk::Align::End);
         more.connect_clicked(glib::clone!(
@@ -1229,9 +1229,9 @@ impl Row {
             }));
         self.clipping.set_opacity(if s.clipped { 1. } else { 0. });
         self.eye.set_icon_name(if s.visible {
-            "view-reveal-symbolic"
+            "layer-eye-symbolic"
         } else {
-            "view-conceal-symbolic"
+            "layer-eye-hidden-symbolic"
         });
         self.eye.set_tooltip_text(Some(if s.visible {
             "Hide layer"
@@ -1240,7 +1240,7 @@ impl Row {
         }));
         self.link.set_visible(s.has_mask);
         self.mask.set_visible(s.has_mask);
-        self.link.set_icon_name("insert-link-symbolic");
+        self.link.set_icon_name("layer-link-symbolic");
         self.link.set_opacity(if s.mask_linked { 1. } else { 0.35 });
         self.link.set_tooltip_text(Some(if s.mask_linked {
             "Unlink mask from layer"
@@ -1253,9 +1253,9 @@ impl Row {
         if s.group {
             self.content.add_css_class("layer-folder");
             self.content.set_icon_name(if s.collapsed {
-                "folder-symbolic"
+                "layer-folder-symbolic"
             } else {
-                "folder-open-symbolic"
+                "layer-folder-open-symbolic"
             });
             self.content.set_tooltip_text(Some(if s.collapsed {
                 "Expand group"
@@ -1272,7 +1272,7 @@ impl Row {
             }));
         }
         self.lock.set_icon_name(Some(if s.locked {
-            "changes-prevent-symbolic"
+            "layer-lock-symbolic"
         } else {
             "layer-alpha-lock-symbolic"
         }));

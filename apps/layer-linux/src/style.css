@@ -32,7 +32,6 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
 .dock-panel button { border-radius: 6px; min-height: 1.66em; padding: 4px 12px; }
 .dock-panel image { -gtk-icon-size: 14px; }
-.dock-panel .layer-tools button { min-width: 16px; min-height: 20px; }
 .number-control { font-size: var(--ui-text-size); }
 .layers-panel { padding: 0; }
 .layer-header, .layer-footer { padding: 4px 6px; }

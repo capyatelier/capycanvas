@@ -236,7 +236,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-header,.layer-footer { padding: 4px 6px; flex: none; }
 .layer-header { display: flex; flex-direction: column; gap: 2px; }
 .layer-options { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 6px; align-items: center; }
-.panel .layer-options select { width: 100%; min-width: 0; height: 26px; min-height: 26px; padding: 0 6px; text-overflow: ellipsis; }
+.panel .layer-options select { width: 100%; min-width: 0; height: 24px; min-height: 24px; padding: 0 6px; font-weight: 700; text-overflow: ellipsis; }
 .layer-flags,.layer-footer { display: flex; gap: 2px; }
 .panel .layer-icon { width: 24px; height: 24px; min-height: 24px; padding: 0; flex: none; display: grid; place-items: center; border-radius: 4px; background: transparent; }
 .layer-icon svg { width: 16px; height: 16px; }
@@ -244,13 +244,11 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel .layer-reference[aria-pressed="true"] { background: color-mix(in srgb,var(--text) 12%,transparent); }
 .layer-footer { margin-top: auto; }
 .layer-more { margin-left: auto; }
-.layer-tools { display: flex; gap: 4px; }
-.panel .layer-tools button { width: 40px; height: 28px; min-height: 28px; padding-inline: 0; display: grid; place-items: center; }
-.panel .layer-tools svg { width: 14px; height: 14px; }
 .toolbar-controls .success { fill: var(--paint-color); }
 .layer-rows { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; flex: 1; }
 .layer-row { display: flex; align-items: center; gap: 2px; min-height: 40px; padding: 2px 6px; flex: none; border-radius: 0; }
 .layer-row.selected { background: var(--selected); }
+.layer-row > .layer-icon { height: auto; align-self: stretch; }
 .layer-thumbnails { display: flex; align-items: center; gap: 2px; flex: none; }
 .layer-clipping { width: 3px; height: 28px; background: #e999a5; border-radius: 1px; }
 .panel .layer-thumbnail { width: 30px; height: 30px; border: 1px solid transparent; border-radius: 3px; background: var(--input); position: relative; }

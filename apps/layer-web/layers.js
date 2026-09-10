@@ -160,7 +160,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.name.textContent = layer.label; r.name.title = layer.label;
       r.meta.textContent = [layer.blend ? layer.blend_label : "", layer.opacity < 1 ? `${Math.round(layer.opacity*100)}%` : ""].filter(Boolean).join(" · ");
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;
-      r.grip.style.visibility = layer.editable || layer.group ? "visible" : "hidden";
+      r.grip.hidden = !(layer.editable || layer.group);
       if (view.rename_layer === layer.id && !r.entry) {
         const input = element("input", "layer-name-entry"); input.value = layer.label; input.maxLength = 128; r.entry = input; r.name.hidden = true; r.text.prepend(input);
         let finished = false;

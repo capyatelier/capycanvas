@@ -19,7 +19,7 @@ export async function checkParity({ call, evaluate, settle }) {
     await evaluate(
       `[...document.querySelectorAll('.toolbar-controls > .tile-button svg')].map(s=>s.dataset.asset)`,
     ),
-    ["brush", "eraser", "undo", "redo", "color", "opacity"],
+    ["brush", "eraser", "lasso", "move", "undo", "redo", "color", "opacity"],
   );
   assert.deepEqual(
     await evaluate(
@@ -57,9 +57,9 @@ export async function checkParity({ call, evaluate, settle }) {
     fire('keydown','b');
     const bare = layerApp.state().brush.tool;
     fire('keyup','b');
-    fire('keydown','z'); fire('keydown','z',{repeat:true});
+    fire('keydown','Tab'); fire('keydown','Tab',{repeat:true});
     const repeated = layerApp.state().workspace.zen_mode;
-    fire('keyup','z'); fire('keydown','z'); fire('keyup','z');
+    fire('keyup','Tab'); fire('keydown','Tab'); fire('keyup','Tab');
     return [modified,bare,repeated,layerApp.state().workspace.zen_mode];
   })()`),
     ["eraser", "brush", true, false],
@@ -108,7 +108,7 @@ export async function checkParity({ call, evaluate, settle }) {
     await action({ type: "system_theme_changed", theme });
     await capture(theme);
     metrics[theme] = await evaluate(`(() => {
-      const selectors = ['#document-title','#header-start > button','.header-menu > summary','.brush-list h3','.brush-choice','.size-controls','.size-controls .number-control','.size-button','.layer-tools','.layer-row','.layer-row input','#layer-opacity','#view-info','.dock-group','.dock-tab'];
+      const selectors = ['#document-title','#zen-button','.header-menu > summary','.brush-list h3','.brush-choice','.size-controls','.size-controls .number-control','.size-button','.layer-row','.layer-row > button','.layer-name','.layer-thumbnail:not([hidden])','#layer-opacity','#view-info','.dock-group','.dock-tab'];
       return Object.fromEntries(selectors.map(s=>[s,[...document.querySelectorAll(s)].map(n=>{const b=n.getBoundingClientRect(),c=getComputedStyle(n);return {bounds:[b.x,b.y,b.width,b.height],font:c.font,color:c.color,background:c.backgroundColor}})]));
     })()`);
     await click('[data-command="settings"]');
@@ -117,9 +117,9 @@ export async function checkParity({ call, evaluate, settle }) {
       await evaluate(
         `(() => {const b=document.querySelector('#settings').getBoundingClientRect();return [b.x,b.y,b.width,b.height]})()`,
       ),
-      [100, 140, 1000, 620],
+      [100, 78, 1000, 744],
     );
-    await click(".dialog-close");
+    await click("#close-settings");
     assert.equal(
       await evaluate("layerApp.state().settings_open"),
       false,
@@ -137,9 +137,10 @@ export async function checkParity({ call, evaluate, settle }) {
     n.children.forEach(flatten);
   };
   flatten(native);
-  const nativeHeader = nodes.filter((n) => n.css.includes("chrome-control") && n.bounds[0] < 600);
+  const nativeHeader = nodes.filter((n) => n.css.includes("chrome-control") && n.bounds[0] < 600)
+    .sort((a, b) => a.bounds[0] - b.bounds[0]);
   const webHeader = [
-    ...metrics.dark["#header-start > button"],
+    ...metrics.dark["#zen-button"],
     ...metrics.dark[".header-menu > summary"],
   ];
   for (const header of [nativeHeader, webHeader]) {
@@ -199,21 +200,24 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.ok(webFonts.headings.every((font) => font === webFonts.tab));
   const toolSizes = await evaluate(`(() => {
     const size=n=>{const b=n.getBoundingClientRect();return [b.width,b.height]};
-    return {tiles:[...document.querySelectorAll('.toolbar-controls > .tile-button')].map(size), icons:[...document.querySelectorAll('.toolbar-controls > .tile-button svg')].map(size), checks:[...document.querySelectorAll('.layer-row input')].map(size)};
+    return {tiles:[...document.querySelectorAll('.toolbar-controls > .tile-button')].map(size), icons:[...document.querySelectorAll('.toolbar-controls > .tile-button svg')].map(size), columns:[...document.querySelectorAll('.layer-row > button')].map(size)};
   })()`);
   for (const size of toolSizes.tiles) assert.deepEqual(size, [36, 36]);
   for (const size of toolSizes.icons) assert.deepEqual(size, [16, 16]);
-  for (const size of toolSizes.checks) assert.deepEqual(size, [16, 16]);
-  const nativeChecks = nodes.filter((n) => n.type === "GtkCheckButton");
-  for (const n of nativeChecks)
-    assert.deepEqual(n.children[0].bounds.slice(2), [16, 16]);
+  assert.ok(toolSizes.columns.length > 0);
+  for (const size of toolSizes.columns) assert.deepEqual(size, [24, 36]);
+  const nativeColumns = nodes.filter((n) => n.css.includes("layer-column"));
+  assert.equal(nativeColumns.length, toolSizes.columns.length);
+  for (const n of nativeColumns) assert.deepEqual(n.bounds.slice(2), [24, 36]);
   const comparisons = [
     [".brush-list h3", (n) => n.css.includes("heading")],
     [".brush-choice", (n) => n.css.includes("brush-choice")],
     [".size-controls .number-control", (n) => n.name === "brush-size"],
     [".size-button", (n) => n.css.includes("size-preset")],
-    [".layer-row", (n) => n.type === "GtkCheckButton"],
-    [".layer-row input", (n) => nativeChecks.some((c) => c.children[0] === n)],
+    [".layer-row", (n) => n.css.includes("layer-row")],
+    [".layer-row > button", (n) => n.css.includes("layer-column")],
+    [".layer-name", (n) => n.css.includes("layer-name")],
+    [".layer-thumbnail:not([hidden])", (n) => n.css.includes("layer-thumbnail")],
     ["#layer-opacity", (n) => n.type === "CapyNumberControl" && n.bounds[0] > 900],
     ["#view-info", (n) => n.css.includes("status-bubble")],
   ];
@@ -224,7 +228,6 @@ export async function checkParity({ call, evaluate, settle }) {
     assert.equal(actual.length, expected.length, selector);
     actual.forEach((n, i) =>
       n.bounds.forEach((value, axis) => {
-        if (selector === ".layer-row" && axis === 2) return; // checkbox is part of the row
         const difference = Math.abs(value - expected[i].bounds[axis]);
         if (difference > 1)
           differences.push({
@@ -395,7 +398,7 @@ export async function checkParity({ call, evaluate, settle }) {
   );
   assert.ok(
     Math.abs(
-      (await evaluate("layerApp.state().layers.find(l=>l.selected).opacity")) -
+      (await evaluate("layerApp.state().layer_tools.editing_layer.opacity")) -
         0.4,
     ) < 0.001,
   );
@@ -606,7 +609,7 @@ export async function checkParity({ call, evaluate, settle }) {
   assert.equal((await fitTiles()).fits, true);
   assert.deepEqual(
     await evaluate(`(() => {
-    const zen=document.querySelector('#header-start > button').getBoundingClientRect();
+    const zen=document.querySelector('#zen-button').getBoundingClientRect();
     const tile=document.querySelector('.toolbar-controls > .tile-button').getBoundingClientRect();
     return [zen.x, tile.x, zen.width, tile.width, zen.x+zen.width/2, tile.x+tile.width/2];
   })()`),
