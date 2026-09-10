@@ -537,6 +537,7 @@ struct Pipelines {
     reservoir: wgpu::RenderPipeline,
     stroke_edge: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
+    background_empty: wgpu::BindGroup,
     composite: wgpu::RenderPipeline,
     watercolor_composite: wgpu::RenderPipeline,
     export: wgpu::RenderPipeline,
@@ -4406,6 +4407,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 &[background_offset as u32 * self.style_stride as u32],
             );
             pass.set_bind_group(2, &self.target_bind_group, &[0]);
+            pass.set_bind_group(1, &self.pipelines.background_empty, &[]);
             pass.draw(0..3, 0..1);
             let mut composited_pixels = 0_u64;
             for (layer_index, layer) in packet
@@ -5704,9 +5706,24 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
             ],
             immediate_size: 0,
         });
+    // Older WebGPU implementations reject null slots in pipeline layouts.
+    // Keep the shared shader's group numbering, with an explicit empty group.
+    let empty_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("layer background empty layout"),
+        entries: &[],
+    });
+    let background_empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("layer background empty binding"),
+        layout: &empty_layout,
+        entries: &[],
+    });
     let background_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("layer background pipeline layout"),
-        bind_group_layouts: &[Some(layouts.style), None, Some(layouts.target)],
+        bind_group_layouts: &[
+            Some(layouts.style),
+            Some(&empty_layout),
+            Some(layouts.target),
+        ],
         immediate_size: 0,
     });
     let export_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -5942,6 +5959,7 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
         reservoir,
         stroke_edge,
         background,
+        background_empty,
         composite,
         watercolor_composite,
         export,

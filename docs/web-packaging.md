@@ -89,6 +89,9 @@ node apps/layer-web/test.mjs --package
 # Inject unavailable API/adapter/device and delayed startup; verify UI + reload.
 node apps/layer-web/test.mjs --package --gpu-startup
 
+# Chrome 131-compatible pipeline layouts and exceptions escaping Wasm startup.
+node apps/layer-web/test.mjs --package --gpu-compatibility
+
 # Native-pointer workspace menus, floating panels, resize, presets and Zen.
 node apps/layer-web/test.mjs --package --workspace
 node apps/layer-web/test.mjs --package --customization

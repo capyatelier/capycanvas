@@ -1133,7 +1133,7 @@ async function startGpu() {
   try {
     if (!isSecureContext) throw new Error("WebGPU requires HTTPS or localhost.");
     if (!navigator.gpu) throw new Error("navigator.gpu is unavailable.");
-    app.attach_gpu(await WebGpu.create(canvas));
+    app.attach_gpu(await createGpu());
     gpuReady = true;
     document.body.dataset.gpu = "ready";
     notice.hidden = true;
@@ -1147,6 +1147,22 @@ async function startGpu() {
     console.warn("GPU canvas unavailable:", error);
   } finally {
     gpuStarting = false;
+  }
+}
+
+async function createGpu() {
+  // A browser API exception can escape a Wasm future without rejecting its
+  // Promise. Only during GPU creation, turn those errors into startup failure
+  // as well. Do not leave global handlers installed over the working editor.
+  const events = new AbortController();
+  try {
+    const failure = new Promise((_, reject) => {
+      window.addEventListener("error", e => reject(e.error || new Error(e.message)), { signal: events.signal });
+      window.addEventListener("unhandledrejection", e => reject(e.reason), { signal: events.signal });
+    });
+    return await Promise.race([failure, WebGpu.create(canvas)]);
+  } finally {
+    events.abort();
   }
 }
 

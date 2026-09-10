@@ -1,6 +1,77 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+// Reproduce Chrome 131's layout validation on the current browser, and an API
+// exception escaping the actual Wasm initialization future (not a mock app).
+export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixels, url, errors }) {
+  const waitFor = condition => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve();else if(performance.now()-start>20000)reject(new Error('Startup stuck: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
+  for (const mode of ["strict-layout", "pipeline-throw", "escaped-rejection"]) {
+    assert.deepEqual(errors, []);
+    await call("Page.navigate", { url: "about:blank" });
+    const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
+      window.layoutChecks=0; window.emptyBindings=0;
+      const emptyGroups=new WeakSet();
+      const setGroup=GPURenderPassEncoder.prototype.setBindGroup;
+      GPURenderPassEncoder.prototype.setBindGroup=function(index,group,...rest){
+        if(index===1&&emptyGroups.has(group)) window.emptyBindings++;
+        return setGroup.call(this,index,group,...rest);
+      };
+      const requestAdapter=navigator.gpu.requestAdapter.bind(navigator.gpu);
+      navigator.gpu.requestAdapter=async (...args)=>{
+        const adapter=await requestAdapter(...args), requestDevice=adapter.requestDevice.bind(adapter);
+        adapter.requestDevice=async (...args)=>{
+          if(${JSON.stringify(mode)}==='escaped-rejection') return new Promise(()=>{
+            Promise.reject(new Error('capy-test: escaped rejection'));
+          });
+          const device=await requestDevice(...args), createLayout=device.createPipelineLayout.bind(device), createGroup=device.createBindGroup.bind(device);
+          device.createBindGroup=descriptor=>{
+            const group=createGroup(descriptor);
+            if(!descriptor.entries.length)emptyGroups.add(group);
+            return group;
+          };
+          device.createPipelineLayout=descriptor=>{
+            window.layoutChecks++;
+            if(${JSON.stringify(mode)}==='pipeline-throw') throw new TypeError('capy-test: pipeline exception');
+            if(descriptor.bindGroupLayouts.some(layout=>layout==null)) throw new TypeError('Null pipeline layout rejected by Chrome 131');
+            return createLayout(descriptor);
+          };
+          return device;
+        };
+        return adapter;
+      };
+    ` });
+    await call("Page.navigate", { url: url + "nested/capy/" });
+    const succeeds = mode === "strict-layout";
+    await waitFor(`!!window.layerApp && document.body.dataset.gpu === '${succeeds ? "ready" : "unavailable"}'`);
+    await settle();
+    assert.equal(await evaluate("window.layoutChecks > 0"), mode !== "escaped-rejection");
+    assert.equal(await evaluate("layerApp.app.gpu_ready()"), succeeds);
+    if (succeeds) {
+      assert.ok(await evaluate("window.emptyBindings > 0"), "The empty layout has a matching binding when drawing");
+      const before = await canvasPixels();
+      await call("Input.dispatchMouseEvent", { type: "mousePressed", x: 650, y: 450, button: "left", buttons: 1, clickCount: 1 });
+      await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 850, y: 450, button: "left", buttons: 1 });
+      await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: 850, y: 450, button: "left", buttons: 0, clickCount: 1 });
+      await settle();
+      assert.ok((await canvasPixels()).white < before.white - 50, "Compatible pipeline renders paint");
+    } else {
+      assert.equal(await evaluate("document.querySelector('.gpu-help h1').textContent"), "Could not initialize canvas");
+      assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), false);
+      await evaluate("layerApp.dispatch({type:'open_settings',page:'appearance'})");
+      assert.ok(await evaluate("document.querySelector('#settings').open"), "Settings remain usable after startup failure");
+      await evaluate("layerApp.dispatch({type:'close_settings'})");
+      assert.ok(errors.length, "Injected exception was reported");
+      for (const error of errors.splice(0)) assert.match(error, /capy-test:/, "Only injected failures are expected");
+    }
+    await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+    await call("Page.reload");
+    await waitFor("!!window.layerApp && document.body.dataset.gpu === 'ready'");
+    await settle();
+    assert.deepEqual(errors, [], "Reload without injection recovers cleanly");
+    console.log(`GPU compatibility: ${mode} passed`);
+  }
+}
+
 // Failure injection happens at the browser API boundary, not in app code.
 // Every case executes the real packaged JS/Wasm and the actual native UI model.
 export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, url }) {

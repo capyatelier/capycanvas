@@ -9,7 +9,7 @@ import { checkLayers } from "./layers.test.mjs";
 import { checkAdjustments, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
-import { checkGpuStartup } from "./gpu.test.mjs";
+import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
@@ -193,6 +193,10 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--customization")) {
     await checkCustomization({ call, evaluate, settle, canvasPixels });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--gpu-compatibility")) {
+    assert.ok(packageHost, "Use --package --gpu-compatibility to test the built distribution");
+    await checkGpuCompatibility({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
