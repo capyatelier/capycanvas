@@ -121,8 +121,10 @@ impl App {
         }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
+        let previous = self.session.state().revision;
         let change = self.session.frame(now, presentation)?;
         self.dirty = change.canvas_wake;
+        self.apply_change(previous, change);
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;
         let scale = self.session.state().camera.viewport[0] as f32 / self.logical[0];
@@ -290,11 +292,12 @@ pub extern "system" fn Java_art_capycanvas_Native_scroll(
 ) {
     let app = unsafe { app(handle) };
     let dpi = app.session.state().camera.viewport[0] as f32 / app.logical[0];
+    let previous = app.session.state().revision;
     let result = app
         .session
         .scroll([x, y], [dx, dy], dpi, zoom != 0, horizontal != 0)
         .map(|change| {
-            app.dirty |= change.canvas_wake;
+            app.apply_change(previous, change);
         });
     fail(&mut env, result);
 }

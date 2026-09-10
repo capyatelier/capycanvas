@@ -1587,6 +1587,65 @@ class AndroidHostTest {
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("preferences") == null }
     }
 
+    @Test fun cameraNavigationPublishesOnlyReadoutUpdates() {
+        // Warm the camera path, including any initial fit/command changes.
+        var aspect = 1f
+        instrumentation.runOnMainSync {
+            val canvas = findCanvas(compose.activity.window.decorView)!!
+            aspect = canvas.width.toFloat() / canvas.height
+        }
+        fun points(step: Int): List<androidx.compose.ui.geometry.Offset> {
+            val angle = step * .008f
+            val radius = .07f + step * .00015f
+            val delta = androidx.compose.ui.geometry.Offset(kotlin.math.cos(angle) * radius, kotlin.math.sin(angle) * radius * aspect)
+            val center = androidx.compose.ui.geometry.Offset(.5f + step * .0001f, .5f)
+            return listOf(center - delta, center + delta)
+        }
+        canvasEvent(MotionEvent.ACTION_DOWN, points(0).take(1))
+        canvasEvent(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), points(0))
+        canvasEvent(MotionEvent.ACTION_MOVE, points(1))
+        compose.waitForIdle()
+        val reset = CountDownLatch(1)
+        host.measurements(true) { reset.countDown() }
+        assertTrue(reset.await(10, TimeUnit.SECONDS))
+        val structuralSnapshot = host.snapshot
+        val initialZoom = state().getJSONObject("camera").number("zoom")
+        val initialRotation = state().getJSONObject("camera").number("rotation")
+        for (i in 2..240) {
+            canvasEvent(MotionEvent.ACTION_MOVE, points(i))
+            SystemClock.sleep(8)
+        }
+        canvasEvent(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), points(240))
+        canvasEvent(MotionEvent.ACTION_UP, points(240).take(1))
+        waitState { it.getJSONObject("camera").number("zoom") > initialZoom * 1.2f }
+        compose.waitForIdle()
+        assertSame("Camera changes retain the structural Compose snapshot", structuralSnapshot, host.snapshot)
+        assertTrue(kotlin.math.abs(state().getJSONObject("camera").number("rotation") - initialRotation) > .5f)
+        val readout = host.cameraReadout
+        compose.onNodeWithTag("camera-readout").assertTextEquals("${readout.zoomPercent}% · ${readout.rotationDegrees}°")
+        val collected = CountDownLatch(1)
+        var report: JSONObject? = null
+        host.measurements { report = it; collected.countDown() }
+        assertTrue(collected.await(10, TimeUnit.SECONDS))
+        val data = report!!
+        assertEquals("No full UI snapshots during navigation", 0L, data.getLong("snapshots_published"))
+        assertTrue("Readout stays live throughout navigation", data.getLong("camera_updates_published") > 30)
+        assertTrue("Navigation produces canvas frames", data.array("frames").length() > 30)
+        // Keep device-dependent timing as measurements, not flaky fps assertions.
+        val frames = data.array("frames").values().map { it as JSONArray }
+        val intervals = frames.zipWithNext { a, b -> (b.getDouble(0) - a.getDouble(0)) / 1e6 }.sorted()
+        val callbacks = frames.map { it.getDouble(10) / 1e6 }.sorted()
+        android.util.Log.i("CapyGesture", obj("frames" to frames.size,
+            "full_snapshots" to data.getLong("snapshots_published"), "camera_updates" to data.getLong("camera_updates_published"),
+            "interval_p50_ms" to intervals[intervals.size / 2], "interval_p99_ms" to intervals[((intervals.size - 1) * .99).toInt()],
+            "callback_p50_ms" to callbacks[callbacks.size / 2], "callback_p99_ms" to callbacks[((callbacks.size - 1) * .99).toInt()]).toString())
+        action(obj("type" to "set_brush_size", "value" to 42))
+        assertEquals(42f, state().getJSONObject("brush").number("diameter"))
+        assertNotSame("Non-camera changes still publish the full state", structuralSnapshot, host.snapshot)
+        assertFalse(state().array("commands").objects().first { it.getString("id") == "undo" }.getBoolean("enabled"))
+        assertNull(host.failure)
+    }
+
     @Test fun touchNavigationHistoryCancellationAndSurfaceRecovery() {
         val a = androidx.compose.ui.geometry.Offset(0.45f, 0.5f)
         val b = androidx.compose.ui.geometry.Offset(0.55f, 0.5f)
@@ -1622,19 +1681,34 @@ class AndroidHostTest {
         penStroke(20)
         assertNull(host.failure)
         capture("15-surface-recovery")
-        assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_90))
-        compose.waitUntil(10_000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
-        capture("16-workspace-portrait")
-        compose.onNodeWithContentDescription("Settings").performClick()
-        capture("17-settings-portrait")
-        compose.onNodeWithText("Pen & Input").performClick()
-        compose.waitUntil(10_000) { preferences().getString("page") == "input" }
-        compose.onNodeWithText("Prediction time").assertExists()
-        capture("29-settings-portrait-detail")
-        compose.onNodeWithContentDescription("Back").performClick()
-        compose.onNodeWithText("Canvas").assertExists()
-        capture("30-settings-portrait-back")
-        assertTrue(instrumentation.uiAutomation.setRotation(android.app.UiAutomation.ROTATION_FREEZE_0))
+        // The emulator's natural orientation is landscape; the Wacom's is portrait.
+        val originalRotation = compose.activity.window.decorView.display.rotation
+        val portraitRotation = if (compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT)
+            originalRotation else (originalRotation + 1) % 4
+        try {
+            assertTrue(instrumentation.uiAutomation.setRotation(portraitRotation))
+            compose.waitUntil(10_000) { compose.activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT }
+            val settingsLabel = state().array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")
+            // Configuration changes precede the resized Compose hierarchy.
+            compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription(settingsLabel).fetchSemanticsNodes().size == 1 }
+            capture("16-workspace-portrait")
+            compose.onNodeWithContentDescription(settingsLabel).performClick()
+            capture("17-settings-portrait")
+            compose.onNodeWithText("Pen & Input").performClick()
+            compose.waitUntil(10_000) { preferences().getString("page") == "input" }
+            compose.onNodeWithText("Prediction time").assertExists()
+            capture("29-settings-portrait-detail")
+            if (compose.activity.resources.configuration.screenWidthDp < 840) {
+                compose.onNodeWithContentDescription("Back").performClick()
+            } else {
+                // Large portrait tablets retain the settings sidebar.
+                compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+            }
+            compose.onNodeWithText("Canvas").assertExists()
+            capture("30-settings-portrait-back")
+        } finally {
+            assertTrue(instrumentation.uiAutomation.setRotation(originalRotation))
+        }
     }
 
     @Test fun menusCursorChoicesAndAboutUseCoreMetadata() {

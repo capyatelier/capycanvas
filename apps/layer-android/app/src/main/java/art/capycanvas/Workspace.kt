@@ -222,11 +222,9 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 Box(Modifier.placed(rect, density).testTag("divider-${divider.getInt("id")}").workspaceSource(dock,
                     obj("type" to "drag_divider", "id" to divider.getInt("id")), priority = 4))
             }
-            val camera = state.getJSONObject("camera")
             if (!hidden) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {
-                    Text("${(camera.number("zoom", 1.0) * 100).roundToInt()}% · ${(camera.number("rotation") * 180 / Math.PI).roundToInt()}°",
-                        Modifier.clickable { host.invoke("fit_canvas") }.padding(horizontal = 10.dp, vertical = 3.dp))
+                    CameraStatus(host)
                 }
             }
         }
@@ -240,6 +238,14 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             }
         }
     }
+}
+
+/** Read camera state here so navigation never invalidates the workspace tree. */
+@Composable private fun CameraStatus(host: CanvasHost) {
+    val camera = host.cameraReadout
+    Text("${camera.zoomPercent}% · ${camera.rotationDegrees}°",
+        Modifier.testTag("camera-readout").clickable { host.invoke("fit_canvas") }
+            .padding(horizontal = 10.dp, vertical = 3.dp))
 }
 
 /** One outline/shadow for both columns, with the drawer below the tab strip. */

@@ -36,6 +36,7 @@ pub(crate) struct App {
     pub cursor: layer_ui::CanvasCursor,
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
+    last_camera_revision: Option<u64>,
     #[cfg(target_os = "android")]
     pub surface: Option<crate::android::Surface>,
     #[cfg(target_os = "android")]
@@ -65,6 +66,7 @@ impl App {
             cursor: layer_ui::CanvasCursor::default(),
             last_pen: None,
             last_snapshot: None,
+            last_camera_revision: None,
             #[cfg(target_os = "android")]
             surface: None,
             #[cfg(target_os = "android")]
@@ -81,15 +83,30 @@ impl App {
         Ok(())
     }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
-        self.dirty |= self.session.dispatch(action)?.canvas_wake;
+        let previous = self.session.state().revision;
+        let change = self.session.dispatch(action)?;
+        self.apply_change(previous, change);
         Ok(())
     }
+    /// Camera motion changes the core revision without changing the workspace
+    /// models. Only acknowledge it if no unpublished structural change precedes
+    /// it; otherwise the next snapshot must still include that pending change.
+    pub(crate) fn apply_change(&mut self, previous: u64, change: layer_ui::UiChange) {
+        self.dirty |= change.canvas_wake;
+        if change.regions == layer_ui::regions::CAMERA
+            && let Some(key) = &mut self.last_snapshot
+            && key.revision == previous
+        {
+            key.revision = change.revision;
+        }
+    }
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
+        let previous = self.session.state().revision;
         let reply = self.session.input(input)?;
         self.chrome_hidden = reply.chrome_hidden;
         self.hide_floating_panels = reply.hide_floating_panels;
         self.keep_zen_button = reply.keep_zen_button;
-        self.dirty |= reply.change.canvas_wake;
+        self.apply_change(previous, reply.change);
         if reply.cancel_paint {
             self.cancel_pen()?;
         }
@@ -225,6 +242,7 @@ impl App {
         Ok(())
     }
     /// Check the core revision before building any layout, panel models or JSON.
+    /// Camera-only changes return a small patch, without constructing UI models.
     /// Presentation-only state is included because it is not part of UiState.
     pub fn take_snapshot(&mut self) -> Option<Value> {
         let key = SnapshotKey {
@@ -237,9 +255,15 @@ impl App {
             error: self.error.clone(),
         };
         if self.last_snapshot.as_ref() == Some(&key) {
+            let camera = &self.session.state().camera;
+            if self.last_camera_revision != Some(camera.revision) {
+                self.last_camera_revision = Some(camera.revision);
+                return Some(json!({"camera": camera, "revision": key.revision}));
+            }
             return None;
         }
         self.last_snapshot = Some(key);
+        self.last_camera_revision = Some(self.session.state().camera.revision);
         Some(self.snapshot())
     }
     fn snapshot(&self) -> Value {
@@ -544,6 +568,41 @@ mod tests {
         app.resize(1600, 2560, 2.0).unwrap();
         assert!(app.take_snapshot().is_some());
     }
+    #[test]
+    fn camera_patches_preserve_pending_structural_updates() {
+        let mut app = App::new().unwrap();
+        app.resize(2560, 1600, 2.0).unwrap();
+        app.take_snapshot().unwrap();
+        let finger = |app: &mut App, id, x, phase| {
+            app.pointer(id, 3, 0, &[x, 300., 1., 0., 0., 0., 0., 1_000_000., phase], false).unwrap();
+        };
+        finger(&mut app, 1, 400., 1.);
+        finger(&mut app, 2, 600., 1.);
+        for i in 1..100 {
+            finger(&mut app, 2, 600. + i as f64, 2.);
+            let patch = app.take_snapshot().unwrap();
+            assert_eq!(patch["camera"], json!(app.session.state().camera));
+            assert_eq!(patch["revision"], app.session.state().revision);
+            assert!(patch.get("state").is_none(), "Camera motion must not build full UI models");
+            assert!(app.take_snapshot().is_none());
+        }
+        // A camera update must not acknowledge an unpublished brush change.
+        app.dispatch(UiAction::SetBrushSize { value: 42.0 }).unwrap();
+        finger(&mut app, 2, 710., 2.);
+        let full = app.take_snapshot().unwrap();
+        assert_eq!(full["state"]["brush"]["diameter"], 42.0);
+        assert_eq!(full["state"]["camera"], json!(app.session.state().camera));
+        // Also cover changes that bypass the host's dispatch wrapper.
+        app.session.dispatch(UiAction::SetBrushSize { value: 52.0 }).unwrap();
+        finger(&mut app, 2, 720., 2.);
+        assert_eq!(app.take_snapshot().unwrap()["state"]["brush"]["diameter"], 52.0);
+        app.error = Some("surface lost".into());
+        finger(&mut app, 2, 730., 2.);
+        assert_eq!(app.take_snapshot().unwrap()["error"], "surface lost");
+        app.resize(1600, 2560, 2.0).unwrap();
+        assert!(app.take_snapshot().unwrap().get("layout").is_some());
+    }
+
     #[test]
     fn malformed_input_is_rejected_before_changing_state() {
         let mut app = App::new().unwrap();

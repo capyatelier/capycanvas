@@ -19,6 +19,9 @@ import org.json.JSONObject
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
+
+internal data class CameraReadout(val zoomPercent: Int, val rotationDegrees: Int)
 
 internal fun obj(vararg pairs: Pair<String, Any?>) = JSONObject().apply {
     pairs.forEach { (key, value) -> put(key, value ?: JSONObject.NULL) }
@@ -33,6 +36,8 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
     var snapshot by mutableStateOf<JSONObject?>(null)
+        private set
+    internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
         private set
     var catalog by mutableStateOf(JSONObject())
         private set
@@ -63,6 +68,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var inputCount = 0
     private var snapshotAttempts = 0L
     private var snapshotsPublished = 0L
+    private var cameraUpdatesPublished = 0L
     // Buffers have one owner: input callback -> render task -> this bounded pool.
     // A backlog may allocate extra buffers, but no input is dropped or overwritten.
     private val pointerBuffers = ArrayBlockingQueue<DoubleArray>(8)
@@ -254,8 +260,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             val elapsed = System.nanoTime() - start
             if (frameCosts != null) Native.frameCost(handle, frameCosts)
             val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
-            publish(!again)
             if (again) wake()
+            publish(!again)
             if (measuredFrames != null && frameCount < 8192) {
                 val end = System.nanoTime()
                 val offset = frameCount++ * 11
@@ -278,10 +284,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val report = obj("frames" to rows(measuredFrames, frameCount, 11),
             "inputs" to rows(measuredInputs, inputCount, 5),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
+            "camera_updates_published" to cameraUpdatesPublished,
             "pointer_allocations" to pointerAllocations,
             "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns")),
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
-        if (reset) { frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0 }
+        if (reset) { frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0 }
         main.post { reply(report) }
     }
     private fun publish(force: Boolean) {
@@ -290,8 +297,21 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         snapshotAt = now
         if (BuildConfig.DEBUG) snapshotAttempts++
         val serialized = Native.snapshot(handle) ?: return
-        if (BuildConfig.DEBUG) snapshotsPublished++
         val next = JSONObject(serialized)
+        next.objectOrNull("camera")?.let { camera ->
+            if (BuildConfig.DEBUG) cameraUpdatesPublished++
+            main.post {
+                // Retain the structural snapshot's identity: only CameraStatus
+                // observes the readout. Keep imperative state queries current.
+                snapshot?.getJSONObject("state")?.apply {
+                    put("camera", camera)
+                    put("revision", next.getLong("revision"))
+                }
+                updateCameraReadout(camera)
+            }
+            return
+        }
+        if (BuildConfig.DEBUG) snapshotsPublished++
         val state = next.getJSONObject("state")
         val workspace = state.getJSONObject("workspace").toString()
         if (workspace != savedWorkspace) {
@@ -307,7 +327,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
-        main.post { snapshot = next }
+        main.post {
+            snapshot = next
+            updateCameraReadout(state.getJSONObject("camera"))
+        }
+    }
+    private fun updateCameraReadout(camera: JSONObject) {
+        cameraReadout = CameraReadout((camera.number("zoom", 1.0) * 100).roundToInt(),
+            (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }
     override fun onCleared() {
         worker.post {
