@@ -485,7 +485,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await send({ type: "restore_workspace", workspace: initial });
     await send({ type: "set_theme", theme }); await wait();
     await shot(`initial-${theme}`);
-    assert.deepEqual(await context(tab("sizes")), ["Hide tab", "Configure Brush size panel…", "Hide Brush size panel"]);
+    assert.deepEqual(await context(tab("sizes")), ["Show tab bar", "Configure Brush size panel…", "Hide Brush size panel"]);
     await shot(`panel-menu-${theme}`);
     await menuItem('Configure Brush size panel…');
     assert.equal(await evaluate(`!!document.querySelector('${tab("sizes")} svg')`), true);
@@ -520,7 +520,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
       await shot(`expanded-${edge}-${theme}`); await click(tab("sizes"));
     }
     await send({ type: "restore_workspace", workspace: initial }); await wait();
-    assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Automatic", "Icons and active tab name", "Icons and names", "Names only", "Icons only", "Hide tab", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
+    assert.deepEqual(await context('[data-panel="layers"] .dock-tabs > .panel-grip'), ["Automatic", "Icons and active tab name", "Icons and names", "Names only", "Icons only", "Show tab bar", "Add built-in panel", "Add Toolbar", "New Toolbar…"]);
     await shot(`group-menu-${theme}`); await click('.panel-context-menu button:last-child');
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), true);
     await evaluate("{const name=document.querySelector('#toolbar-name');name.value='Layers';name.dispatchEvent(new Event('input',{bubbles:true}));}");

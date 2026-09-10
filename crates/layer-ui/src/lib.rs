@@ -7,10 +7,15 @@
 mod camera;
 mod color;
 mod tool_settings;
+mod tools;
 pub use color::{
     ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart, hue_color,
 };
 pub use tool_settings::ToolSetting;
+use tools::preset;
+pub use tools::{
+    Tool, ToolFamily, ToolGroup, ToolSetItem, ToolSetView, brush_catalog, brush_categories,
+};
 mod cursor;
 mod customization;
 mod interaction;
@@ -75,7 +80,6 @@ pub const APP_NAME: &str = "Capy Canvas";
 /// Shared UI typography in points, including panels, menus and status text.
 pub const UI_TEXT_PT: u8 = 11;
 
-use layer_core::DefaultBrushPreset;
 use serde::{Deserialize, Serialize};
 
 pub const BRUSH_SIZES: &[f32] = &[
@@ -87,55 +91,6 @@ pub struct BrushChoice {
     pub id: u32,
     pub label: &'static str,
     pub category: &'static str,
-}
-
-// Preset identity and labels have one source for GTK, DOM, and future hosts.
-const BRUSHES: &[(DefaultBrushPreset, &str, &str)] = &[
-    (DefaultBrushPreset::GPen, "G-Pen", "Draw"),
-    (DefaultBrushPreset::Pencil, "Pencil", "Draw"),
-    (DefaultBrushPreset::Paintbrush, "Paintbrush", "Paint"),
-    (DefaultBrushPreset::Airbrush, "Airbrush", "Paint"),
-    (DefaultBrushPreset::Chalk, "Chalk", "Draw"),
-    (DefaultBrushPreset::Marker, "Marker", "Draw"),
-    (DefaultBrushPreset::TexturedFlat, "Textured Flat", "Paint"),
-    (DefaultBrushPreset::DryScumble, "Dry Scumble", "Paint"),
-    (DefaultBrushPreset::PastelBlock, "Pastel Block", "Draw"),
-    (
-        DefaultBrushPreset::TransparentGlaze,
-        "Transparent Glaze",
-        "Paint",
-    ),
-    (DefaultBrushPreset::OpaqueGouache, "Opaque Gouache", "Paint"),
-    (
-        DefaultBrushPreset::WatercolorWash,
-        "Watercolor Wash",
-        "Water",
-    ),
-    (DefaultBrushPreset::WetWatercolor, "Wet Watercolor", "Water"),
-    (DefaultBrushPreset::LoadedOil, "Loaded Oil", "Paint"),
-    (DefaultBrushPreset::PaletteKnife, "Palette Knife", "Paint"),
-    (
-        DefaultBrushPreset::NaturalBlender,
-        "Natural Blender",
-        "Blend",
-    ),
-    (DefaultBrushPreset::Smudge, "Smudge", "Blend"),
-    (DefaultBrushPreset::WetRound, "Wet Round", "Paint"),
-    (DefaultBrushPreset::LiquifyPush, "Liquify Push", "Shape"),
-    (DefaultBrushPreset::LiquifyTwirl, "Liquify Twirl", "Shape"),
-    (DefaultBrushPreset::MultiplyGlaze, "Multiply Glaze", "Paint"),
-    (DefaultBrushPreset::Spray, "Spray", "Draw"),
-    (DefaultBrushPreset::DualTexture, "Dual Texture", "Draw"),
-    (DefaultBrushPreset::Eraser, "Eraser", "Draw"),
-];
-pub fn brush_catalog() -> impl Iterator<Item = BrushChoice> {
-    BRUSHES
-        .iter()
-        .map(|&(preset, label, category)| BrushChoice {
-            id: preset as u32,
-            label,
-            category,
-        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,14 +171,6 @@ pub struct BrushCategory {
     pub label: &'static str,
     pub brushes: Vec<BrushChoice>,
 }
-pub fn brush_categories() -> impl Iterator<Item = BrushCategory> {
-    ["Draw", "Paint", "Water", "Blend", "Shape"]
-        .into_iter()
-        .map(|label| BrushCategory {
-            label,
-            brushes: brush_catalog().filter(|b| b.category == label).collect(),
-        })
-}
 #[derive(Clone, Debug, Serialize)]
 pub struct UiCatalog {
     pub app_name: &'static str,
@@ -256,6 +203,12 @@ pub fn ui_catalog() -> UiCatalog {
             "properties",
             "stats",
             "brush",
+            "pen",
+            "pencil",
+            "airbrush",
+            "decoration",
+            "blend",
+            "liquify",
             "eraser",
             "lasso",
             "move",
@@ -338,26 +291,17 @@ pub fn ui_catalog() -> UiCatalog {
         pressure: NumericControl::pressure(),
     }
 }
-fn preset(id: u32) -> Result<DefaultBrushPreset, String> {
-    BRUSHES
-        .iter()
-        .find(|entry| entry.0 as u32 == id)
-        .map(|entry| entry.0)
-        .ok_or_else(|| "Unknown brush".into())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Tool {
-    Brush,
-    Eraser,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    Pen,
+    Pencil,
     Brush,
     Eraser,
+    Airbrush,
+    Decoration,
+    Blend,
+    Liquify,
     Lasso,
     Move,
     Undo,
@@ -394,8 +338,14 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::Pen => "pen",
+            Self::Pencil => "pencil",
             Self::Brush => "brush",
             Self::Eraser => "eraser",
+            Self::Airbrush => "airbrush",
+            Self::Decoration => "decoration",
+            Self::Blend => "blend",
+            Self::Liquify => "liquify",
             Self::Lasso => "lasso",
             Self::Move => "move",
             Self::Undo | Self::UndoWorkspace => "undo",
@@ -410,9 +360,15 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 28] = [
+        Self::Pen,
+        Self::Pencil,
         Self::Brush,
         Self::Eraser,
+        Self::Airbrush,
+        Self::Decoration,
+        Self::Blend,
+        Self::Liquify,
         Self::Lasso,
         Self::Move,
         Self::Undo,
@@ -442,8 +398,14 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Pen => "Pen",
+            Self::Pencil => "Pencil",
             Self::Brush => "Brush",
             Self::Eraser => "Eraser",
+            Self::Airbrush => "Airbrush",
+            Self::Decoration => "Decoration",
+            Self::Blend => "Blend",
+            Self::Liquify => "Liquify",
             Self::Lasso => "Lasso selection",
             Self::Move => "Move",
             Self::Undo => "Undo",
@@ -540,6 +502,7 @@ pub struct UiState {
     pub brush: BrushState,
     pub colors: ColorState,
     pub tool_settings: Vec<ToolSetting>,
+    pub tool_set: ToolSetView,
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,
     pub adjustments: Vec<AdjustmentChoice>,
@@ -616,6 +579,12 @@ pub enum UiAction {
     },
     SelectBrush {
         id: u32,
+    },
+    SelectToolGroup {
+        group: ToolGroup,
+    },
+    CycleTool {
+        family: ToolFamily,
     },
     SetBrushSize {
         value: f32,

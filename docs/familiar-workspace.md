@@ -26,6 +26,30 @@ Dividers are actual toolbar items with stable identities, compact axis-aware
 geometry, drag/reorder support and context customization, not disabled commands
 or full-sized blank tiles. Preserve existing floating/docking/zen interactions.
 
+## Application menus (added to this milestone)
+
+The title bar contains **File, Edit, Layer, Select, Filter, View, Window, Help**
+in that order. Rename Workspace to Window. Research customary actions in drawing
+applications and add the missing working actions appropriate to this milestone;
+do not fill menus with inert placeholders. Group related commands with separators
+and show current core-resolved shortcuts alongside their labels.
+
+- Layer projects the same actions, enabled states and selection semantics as
+  the layer context menu, rather than maintaining a second command list.
+- Filter projects the filter catalog with one submenu per category, including
+  runtime-loaded filters. Insertion follows the same clipping-stack and Properties
+  behavior as the Filter panel.
+- File owns document/window creation, open/save/export and their native flows.
+- Edit owns document undo/redo and other supported editing operations.
+- Select owns selection creation/modification, deselection and inversion.
+- View owns canvas/navigation and Zen display actions.
+- Window owns the existing workspace/panel/toolbar management operations.
+- Help owns shortcuts/help/about and relevant application links.
+
+All menu copy, sections, actions, availability and shortcut resolution belong to
+Rust; GTK renders the model. Validate against existing context/panel actions so
+enabling, selection and execution cannot diverge.
+
 ## Tool-tile drawers (added to this milestone)
 
 Drawers are part of the same GTK approval goal, not deferred follow-up work.
@@ -52,8 +76,10 @@ independently decide when a tool is selected or a drawer opens.
   to the shared toolbar picker; they need not appear in default toolbars.
 - Drawer composition is declarative columns of vertically stacked panel bodies,
   without tabs, grips or panel decoration. Columns have vertical separators.
-  Each panel keeps its default width (three tiles plus normal insets for Tool
-  Set/Tool Settings), respecting larger intrinsic minima such as Layers. Content
+  Each built-in panel declares a separate, more relaxed `drawer_width` in Rust,
+  wider than its ordinary dock default and respecting its intrinsic minimum.
+  Use this width in every drawer type, superseding the earlier three-tile drawer
+  width. Docked Tool Set/Tool Settings still retain their three-tile minimum. Content
   uses ordinary panel models and shared preview caches; opening a drawer must not
   detach an existing docked widget or duplicate GPU preview generation.
 - Top toolbar: open downward, left-aligned with the tile; shift left only as
@@ -73,6 +99,63 @@ Validation must cover selectable/direct-open tiles, repeated presses, outside
 dismissal, switching tools, zen, all dock edges, floating toolbars, live content
 height changes, overflow scrolling, built-in-panel tiles and simultaneous docked
 and drawer projections of the same panel.
+
+## Collapsible panel columns (added to this milestone)
+
+Collapsing is a state of a docked column, not conversion to a floating toolbar
+or destruction of its panel groups. Keep group identity, order, active tabs,
+contents and expanded column width. Rust owns state, geometry, thresholds,
+drop eligibility and drawer selection; GTK only renders and forwards input.
+
+- **Collapse column** is available from any panel-group context menu in the
+  column. Drag-resizing the column closed also collapses it; start with the
+  collapsed strip width as the threshold. Avoid threshold oscillation during
+  a resize gesture. Expansion restores the remembered ordinary width.
+- Double-clicking the **non-tab area of any docked panel group's tab bar** also
+  collapses its containing column, whether the group has one tab or several.
+  This replaces the existing docked single-panel header double-click toggle
+  for tab-bar visibility (now labeled **Show tab bar**). Actual tab buttons do not trigger collapse. Keep the distinct
+  floating-panel reset/toggle and standalone-toolbar double-click behaviors.
+- The collapsed column is a full-height docked strip, styled like a toolbar,
+  occupying its allocated dock area. It cannot become floating. A small, flat
+  expand button with a `<>`-style arrow sits at the top, with a gap below.
+- Each panel group is represented by a one-icon-wide vertical mini-toolbar,
+  with one icon per panel/toolbar tab and the active item indicated. Keep a gap
+  between groups; do not flatten the groups into a single list.
+- A flexible empty group region fills the remaining space after the final
+  group. A bottom grip moves the **whole collapsed column** to an eligible
+  viewport edge or between other columns. Preserve its groups and collapsed
+  state while moving; never leave it as a floating window on a canvas drop.
+- Each mini-toolbar is a drop target for panels, toolbars and whole panel
+  groups. Insert their tabs at the corresponding position in that collapsed
+  group, following ordinary group-merging semantics. Gaps insert a new collapsed
+  group at that location. The trailing empty region permits appending groups.
+- Clicking an icon opens the group's drawer with that item selected. This is
+  a content drawer, **not** the panel-configuration drawer. It displays all tabs
+  in that group. Switching tabs updates the selected icon in the collapsed
+  strip. **The drawer remains open on outside clicks**, including canvas input.
+  Close it by clicking its original opening icon, or replace it by opening
+  another drawer in that column. This supersedes the earlier outside-dismiss
+  requirement for collapsed-column drawers only; tool-tile drawers still close
+  on outside clicks. Model dismissal policy in Rust and reuse the shared drawer
+  lifecycle and animation, rather than introducing host-specific exceptions.
+- The group drawer uses the **maximum declared drawer width of its tabs**, so
+  changing the active tab does not change its width. All built-in panels use
+  their shared `drawer_width` here and in tool-tile drawers. Keep drawers within
+  the usable viewport, with content scrolling where needed.
+- Fit this into the existing recursive column layout, rather than creating a
+  second docking system. Preserve workspace save/restore and undo/redo behavior;
+  ordinary floating-panel tear-off rules must not turn collapsed columns into
+  floats. Derive valid locations through shared docking eligibility rules.
+
+Validation: context-menu, resize and empty-header double-click collapse;
+single/multi-tab groups and exclusion of actual tabs; expand/restore width,
+threshold stability, multiple/nested columns, whole-column movement, each kind of incoming
+drop, insertion between groups and at the end, tab/icon synchronization, sticky
+outside-click behavior, opening-icon dismissal, replacement within the column,
+Zen, constrained viewport/overflow, workspace persistence and undo.
+Verify a collapsed group drawer uses its widest tab's drawer width, and that
+all drawer variants consume the same per-panel width metadata.
 
 ## Interaction decisions
 
@@ -174,12 +257,30 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   break hosts whose view implementations have not yet been built.
 - GTK color ring uses a continuous [conic gradient](https://docs.gtk.org/gtk4/method.Snapshot.append_conic_gradient.html)
   clipped to a stroked circle, avoiding antialiased seams between color wedges.
-- Validation so far: 156 shared UI tests, 23 engine tests, workspace compile,
+- Painting-tool families now own their groups and subtools in shared Rust.
+  Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend and Liquify select actual
+  existing GPU presets. Switching tools/groups remembers the last subtool and
+  its edited parameters; color remains shared and active strokes retain their
+  original immutable snapshot. GTK projects only the active group's subtools.
+- P/B/J cycle their tool families in toolbar order; E/M/O select Eraser/Lasso/
+  Move. Separate direct command bindings remain programmable. Explicit saved
+  shortcuts take priority over new default keys when loading settings.
+- Tool Set's group buttons measure 112×36px (three tiles by one), with two-pixel
+  gaps. They and subtool buttons use the existing selected-tool tint. GTK uses
+  the shared symbolic SVG bank and existing cached brush previews.
+- Validation so far: 161 shared UI tests, 23 engine tests, workspace and Wasm compile,
   strict UI/GTK Clippy, and isolated Wayland/GPU checks of all 24 brush control
   schemas at 128px. Native expression editors and color buttons exercised;
-  dark/light HSV/HLS and narrow-panel captures in the ignored
+  GTK family tests activate all eight tools and every group/subtool using native
+  buttons in both themes, checking selection, dimensions and applied brush state.
+  Dark/light tool-family, HSV/HLS and narrow-panel captures are in the ignored
   `artifacts/familiar-workspace/` directory.
-- Still to implement: dynamic tool families/groups and the new default layout,
+- Still to implement: the new default layout,
   toolbar dividers and tool/panel drawers above, missing canvas tools/commands,
-  Navigator, rulers, shortcuts and full functional/performance validation.
+  collapsible columns, the full application menus, Navigator, rulers, shortcuts
+  and full functional/performance validation.
+- The complete eight-tool ribbon is currently exercised by the GTK review test;
+  the shipped default toolbar/layout will change when its remaining tools and
+  commands are implemented. Tool-family presentation on other hosts awaits GTK
+  review, while core models and Wasm remain compatible.
 - Implementation in progress; the requested default workspace is not yet shipped.

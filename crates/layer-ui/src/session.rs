@@ -1,7 +1,7 @@
 use crate::interaction::{Interaction, PointerContact};
 use crate::layout::ResizeDrag;
 use crate::*;
-use layer_core::{Document, LayerId, LayerKind, StrokeTool, default_brush};
+use layer_core::{DefaultBrushPreset, Document, LayerId, LayerKind, StrokeTool, default_brush};
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurve, input_queue};
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
@@ -60,6 +60,7 @@ pub struct UiSession<R: CanvasRenderer> {
     layer_interaction: art_layers::LayerInteraction,
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
+    tools: tools::ToolMemory,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -97,18 +98,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             cursor: cursor::Cursor::default(),
             next_request: 1,
             layer_interaction: Default::default(),
+            tools: tools::ToolMemory::default(),
             state: UiState {
                 revision: 0,
                 workspace: WorkspaceState::default(),
                 brush: BrushState {
                     preset: DefaultBrushPreset::GPen as u32,
-                    tool: Tool::Brush,
+                    tool: Tool::Pen,
                     diameter: brush.diameter,
                     opacity: brush.opacity,
                     color: [0.075, 0.075, 0.07, 1.0],
                 },
                 colors: ColorState::default(),
                 tool_settings: Vec::new(),
+                tool_set: ToolSetView::default(),
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
                 adjustments: effects::catalog(&effect_catalog, &Default::default()),
@@ -884,7 +887,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             ),
             enabled,
             selected,
-            bindings: self.state.settings.keys(&id.shortcut_id()),
+            bindings: self.state.settings.command_keys(id),
             shortcut: self
                 .state
                 .settings
@@ -937,10 +940,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             _ => true,
         };
         let selected = (self.layer_interaction.tool == LayerCanvasTool::Paint
-            && matches!(
-                (id, self.state.brush.tool),
-                (CommandId::Brush, Tool::Brush) | (CommandId::Eraser, Tool::Eraser)
-            ))
+            && id.paint_tool() == Some(self.state.brush.tool))
             || matches!(
                 (id, self.layer_interaction.tool),
                 (CommandId::Lasso, LayerCanvasTool::Select)
@@ -1155,20 +1155,48 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.invoke(command)?
             }
             UiAction::SelectBrush { id } => {
-                self.layer_interaction.tool = LayerCanvasTool::Paint;
-                self.state.layer_tools.tool = LayerCanvasTool::Paint;
-                let preset = preset(id)?;
-                let brush = default_brush(preset);
-                self.state.brush.preset = id;
-                self.state.brush.tool = if preset == DefaultBrushPreset::Eraser {
-                    Tool::Eraser
-                } else {
-                    Tool::Brush
-                };
-                self.state.brush.diameter = brush.diameter;
-                self.state.brush.opacity = brush.opacity;
-                self.engine.set_brush(brush).map_err(error)?;
-                self.apply_brush()?;
+                self.select_brush(id)?;
+                (BRUSH, false)
+            }
+            UiAction::CycleTool { family } => {
+                // Honor customized toolbar order, appending absent family tools
+                // in their catalog order. Duplicate tiles never repeat a tool.
+                let mut commands = Vec::new();
+                for control in self
+                    .state
+                    .workspace
+                    .layout
+                    .panels
+                    .iter()
+                    .flat_map(|p| p.tiles())
+                    .map(|t| t.control)
+                    .chain(
+                        family
+                            .commands()
+                            .iter()
+                            .map(|&command| ToolbarControl::Command { command }),
+                    )
+                {
+                    if let ToolbarControl::Command { command } = control
+                        && family.commands().contains(&command)
+                        && !commands.contains(&command)
+                    {
+                        commands.push(command);
+                    }
+                }
+                let next = commands
+                    .iter()
+                    .position(|&c| self.command_flags(c).1)
+                    .map_or(0, |i| (i + 1) % commands.len());
+                self.invoke(commands[next])?
+            }
+            UiAction::SelectToolGroup { group } => {
+                if self.layer_interaction.tool != LayerCanvasTool::Paint
+                    || group.tool() != self.state.brush.tool
+                {
+                    return Err("This group belongs to another tool".into());
+                }
+                self.select_brush(self.tools.group(group))?;
                 (BRUSH, false)
             }
             UiAction::SetBrushSize { value } => {
@@ -1687,15 +1715,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((BRUSH | DOCUMENT, true))
             }
-            CommandId::Brush | CommandId::Eraser => {
-                self.layer_interaction.tool = LayerCanvasTool::Paint;
-                self.state.layer_tools.tool = LayerCanvasTool::Paint;
-                self.state.brush.tool = if command == CommandId::Brush {
-                    Tool::Brush
-                } else {
-                    Tool::Eraser
-                };
-                self.apply_brush()?;
+            CommandId::Pen
+            | CommandId::Pencil
+            | CommandId::Brush
+            | CommandId::Eraser
+            | CommandId::Airbrush
+            | CommandId::Decoration
+            | CommandId::Blend
+            | CommandId::Liquify => {
+                self.select_brush(self.tools.tool(command.paint_tool().unwrap()))?;
                 Ok((BRUSH, false))
             }
             CommandId::Undo => {
@@ -1841,6 +1869,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
+    fn select_brush(&mut self, id: u32) -> Result<(), String> {
+        let preset = preset(id)?;
+        self.tools
+            .remember(self.state.brush.preset, self.engine.configured_brush());
+        let brush = self.tools.brush(preset);
+        self.engine.set_brush(brush.clone()).map_err(error)?;
+        self.layer_interaction.tool = LayerCanvasTool::Paint;
+        self.state.layer_tools.tool = LayerCanvasTool::Paint;
+        self.state.brush.preset = id;
+        self.state.brush.tool = tools::group(id).tool();
+        self.state.brush.diameter = brush.diameter;
+        self.state.brush.opacity = brush.opacity;
+        self.apply_brush()
+    }
+
     fn apply_brush(&mut self) -> Result<(), String> {
         self.cursor.hover.reset();
         let state = &self.state.brush;
@@ -1853,7 +1896,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             srgb_to_linear(state.color[2]),
             state.color[3],
         ];
-        self.state.tool_settings = tool_settings::controls(&brush);
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_tool(
             if state.tool == Tool::Eraser || self.state.colors.transparent() {
@@ -1862,7 +1904,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 StrokeTool::Brush
             },
         );
+        self.tools
+            .remember(self.state.brush.preset, self.engine.configured_brush());
+        self.refresh_tools();
         Ok(())
+    }
+
+    fn refresh_tools(&mut self) {
+        self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
+        self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
+            tool_settings::controls(self.engine.configured_brush())
+        } else {
+            Vec::new()
+        };
     }
 
     fn require_idle(&self) -> Result<(), String> {
@@ -1933,7 +1987,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 self.state.platform,
             );
-            command.bindings = self.state.settings.keys(&command.id.shortcut_id());
+            command.bindings = self.state.settings.command_keys(command.id);
             command.shortcut = self.state.settings.action_shortcut(
                 &UiAction::Invoke {
                     command: command.id,
@@ -2130,6 +2184,178 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn tool_groups_remember_subtools_edits_and_never_change_paint_color() {
+        let mut s = session();
+        let color = [0.2, 0.5, 0.8, 1.0];
+        s.dispatch(UiAction::SetColor { rgba: color }).unwrap();
+        let mut remembered = Vec::new();
+        for tool in Tool::ALL {
+            invoke(&mut s, tool.command());
+            assert_eq!(s.state.brush.tool, tool);
+            let groups = s.state.tool_set.groups.clone();
+            assert_eq!(groups.iter().filter(|g| g.selected).count(), 1);
+            for group in groups {
+                s.dispatch(group.action).unwrap();
+                let last = s.state.tool_set.subtools.last().unwrap().clone();
+                s.dispatch(last.action).unwrap();
+                let id = last.preview.unwrap();
+                assert_eq!(s.state.brush.preset, id);
+                let size = id as f32 + 10.0;
+                s.dispatch(UiAction::SetBrushSize { value: size }).unwrap();
+                s.dispatch(UiAction::SetToolSetting {
+                    id: "spacing".into(),
+                    value: 0.23,
+                })
+                .unwrap();
+                remembered.push((tool, tools::group(id), id, size));
+                assert_eq!(
+                    s.state
+                        .tool_set
+                        .subtools
+                        .iter()
+                        .filter(|b| b.selected)
+                        .count(),
+                    1
+                );
+                assert_eq!(s.state.brush.color, color);
+            }
+        }
+        for tool in Tool::ALL {
+            invoke(&mut s, tool.command());
+            assert_eq!(
+                s.state.brush.preset,
+                remembered.iter().rfind(|r| r.0 == tool).unwrap().2
+            );
+            assert!(s.command(tool.command()).selected);
+            assert_eq!(
+                Tool::ALL
+                    .iter()
+                    .filter(|t| s.command(t.command()).selected)
+                    .count(),
+                1
+            );
+            for &(_, group, id, size) in remembered.iter().filter(|r| r.0 == tool) {
+                s.dispatch(UiAction::SelectToolGroup { group }).unwrap();
+                assert_eq!(s.state.brush.preset, id);
+                assert_eq!(s.state.brush.diameter, size);
+                assert_eq!(s.engine.configured_brush().spacing, 0.23);
+            }
+        }
+        invoke(&mut s, CommandId::Lasso);
+        assert!(s.state.tool_settings.is_empty());
+        assert!(
+            s.state
+                .tool_set
+                .subtools
+                .iter()
+                .all(|b| b.preview.is_none())
+        );
+        let before = serde_json::to_value(s.state()).unwrap();
+        assert!(s.dispatch(UiAction::SelectBrush { id: u32::MAX }).is_err());
+        assert!(
+            s.dispatch(UiAction::SelectToolGroup {
+                group: ToolGroup::Pen
+            })
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(s.state()).unwrap(), before);
+        invoke(&mut s, CommandId::Pen);
+        assert!(!s.state.tool_settings.is_empty());
+        assert_eq!(s.state.brush.color, color);
+    }
+
+    #[test]
+    fn tool_switch_keeps_active_stroke_snapshot_and_restores_next_stroke_settings() {
+        let mut s = session();
+        let original = s.engine.configured_brush().clone();
+        s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        invoke(&mut s, CommandId::Liquify);
+        assert_eq!(s.engine.brush(), &original);
+        assert_eq!(
+            s.engine.configured_brush().execution_class(),
+            layer_core::BrushExecution::Liquify
+        );
+        s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert_eq!(
+            s.engine.document().strokes().last().unwrap().brush,
+            original
+        );
+        invoke(&mut s, CommandId::Pen);
+        assert_eq!(s.engine.configured_brush(), &original);
+    }
+
+    #[test]
+    fn tool_family_keys_cycle_in_toolbar_order_and_direct_bindings_stay_direct() {
+        let mut s = session();
+        for (letter, family) in [
+            ("p", ToolFamily::Ink),
+            ("b", ToolFamily::Paint),
+            ("j", ToolFamily::Blend),
+        ] {
+            invoke(&mut s, CommandId::Eraser);
+            for &command in family
+                .commands()
+                .iter()
+                .cycle()
+                .take(family.commands().len() * 2)
+            {
+                assert!(key(&mut s, letter, true, false, false).handled);
+                assert!(s.command(command).selected);
+                assert_eq!(s.command(command).shortcut, letter.to_uppercase());
+                key(&mut s, letter, false, false, false);
+            }
+        }
+        let panel = s.state.workspace.layout.panel_mut(Panel::Toolbar).unwrap();
+        let tiles = panel.tiles_mut().unwrap();
+        tiles.clear();
+        for (i, command) in [
+            CommandId::Decoration,
+            CommandId::Airbrush,
+            CommandId::Decoration,
+            CommandId::Brush,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            tiles.push(ToolbarTile {
+                id: i as u32 + 1,
+                control: ToolbarControl::Command { command },
+            });
+        }
+        invoke(&mut s, CommandId::Eraser);
+        for command in [
+            CommandId::Decoration,
+            CommandId::Airbrush,
+            CommandId::Brush,
+            CommandId::Decoration,
+        ] {
+            s.dispatch(UiAction::CycleTool {
+                family: ToolFamily::Paint,
+            })
+            .unwrap();
+            assert!(s.command(command).selected);
+        }
+        let mut settings = s.state.settings.clone();
+        settings.shortcuts.insert(
+            CommandId::Airbrush.shortcut_id(),
+            vec![KeyChord::new("k", Modifiers::default())],
+        );
+        s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+        for _ in 0..3 {
+            key(&mut s, "k", true, false, false);
+            assert!(s.command(CommandId::Airbrush).selected);
+            key(&mut s, "k", false, false, false);
+        }
+        key(&mut s, "b", true, false, true);
+        assert!(
+            s.command(CommandId::Airbrush).selected,
+            "typing in a field does not select tools"
+        );
     }
 
     #[test]
@@ -4677,7 +4903,7 @@ mod tests {
                                 if matches!(target, ContextTarget::Group { .. }) {
                                     TabStyle::ALL.map(TabStyle::label).to_vec()
                                 } else {
-                                    vec!["Hide tab"]
+                                    vec!["Show tab bar"]
                                 }
                             );
                             assert_eq!(
@@ -4688,16 +4914,16 @@ mod tests {
                                 if matches!(target, ContextTarget::Group { .. }) {
                                     1
                                 } else {
-                                    usize::from(hidden)
+                                    usize::from(!hidden)
                                 }
                             );
                             let hide = menu
                                 .sections
                                 .iter()
                                 .flatten()
-                                .find(|i| i.label == "Hide tab")
+                                .find(|i| i.label == "Show tab bar")
                                 .unwrap();
-                            assert_eq!(hide.selected, Some(hidden));
+                            assert_eq!(hide.selected, Some(!hidden));
                             if hidden {
                                 assert!(menu.sections.iter().flatten().any(|i| i.label
                                     == "Configure Brush size panel…"
@@ -4808,7 +5034,7 @@ mod tests {
                                     .sections
                                     .iter()
                                     .flatten()
-                                    .all(|i| i.label != "Hide tab")
+                                    .all(|i| i.label != "Show tab bar")
                             );
                             assert!(
                                 app.dispatch(UiAction::Customize {
@@ -6968,7 +7194,7 @@ mod tests {
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: true });
         assert_eq!(
             s.command(CommandId::Brush).shortcut,
-            "B / Ctrl+Y",
+            "Ctrl+Y / B",
             "confirmed bindings must take effect immediately"
         );
         assert_eq!(
@@ -6977,7 +7203,7 @@ mod tests {
             "preserve Redo's other accelerator"
         );
         s.dispatch(UiAction::CloseSettings).unwrap();
-        assert_eq!(s.command(CommandId::Brush).shortcut, "B / Ctrl+Y");
+        assert_eq!(s.command(CommandId::Brush).shortcut, "Ctrl+Y / B");
         for command in &s.state.commands {
             let current = s.command(command.id);
             assert_eq!(command.bindings, current.bindings);
@@ -7017,7 +7243,7 @@ mod tests {
                 .iter()
                 .any(|r| r.id == CommandId::NewWindow.shortcut_id())
         );
-        let target = CommandId::Brush.shortcut_id();
+        let target = ToolFamily::Paint.shortcut_id().to_string();
         record_shortcut(&mut s, &target, "control", false);
         assert!(s.preferences().unwrap().capture.unwrap().chord.is_none());
         record_shortcut(&mut s, &target, "w", true);
@@ -7067,17 +7293,17 @@ mod tests {
                 },
             },
         );
-        record_shortcut(&mut s, "custom.size-42", "j", false);
+        record_shortcut(&mut s, "custom.size-42", "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         record_shortcut(&mut s, "canvas.pan", "g", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         s.dispatch(UiAction::CloseSettings).unwrap();
         assert!(
-            !key(&mut s, "j", true, false, true).handled,
+            !key(&mut s, "k", true, false, true).handled,
             "native text editing wins"
         );
-        key(&mut s, "j", false, false, true);
-        assert!(key(&mut s, "j", true, false, false).handled);
+        key(&mut s, "k", false, false, true);
+        assert!(key(&mut s, "k", true, false, false).handled);
         assert_eq!(s.state.brush.diameter, 42.0);
         assert!(key(&mut s, " ", true, false, false).pan_cursor);
         key(&mut s, " ", false, false, false);
@@ -7204,11 +7430,11 @@ mod tests {
             );
             let id = CommandId::Brush.shortcut_id();
             preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
-            record_shortcut(&mut s, &id, "j", false);
+            record_shortcut(&mut s, &id, "q", false);
             preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
             preference(
                 &mut s,
-                PreferenceAction::SearchShortcuts { query: "j".into() },
+                PreferenceAction::SearchShortcuts { query: "q".into() },
             );
             assert!(
                 s.preferences()
@@ -7237,7 +7463,7 @@ mod tests {
     fn shortcut_modified_tracks_binding_sets_not_saved_override_presence() {
         let mut s = session();
         invoke(&mut s, CommandId::KeyboardShortcuts);
-        let id = CommandId::Brush.shortcut_id();
+        let id = ToolFamily::Paint.shortcut_id().to_string();
         preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
         let modified = |s: &UiSession<Recorder>| {
             let view = s.preferences().unwrap();
@@ -7246,7 +7472,7 @@ mod tests {
             modified
         };
         assert!(!modified(&s));
-        record_shortcut(&mut s, &id, "j", false);
+        record_shortcut(&mut s, &id, "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         assert!(modified(&s));
         preference(
@@ -7307,7 +7533,7 @@ mod tests {
             let mut s = session();
             s.set_platform(platform);
             invoke(&mut s, CommandId::KeyboardShortcuts);
-            let id = CommandId::Brush.shortcut_id();
+            let id = ToolFamily::Paint.shortcut_id().to_string();
             preference(&mut s, PreferenceAction::EditShortcut { id: id.clone() });
             let editor = s.preferences().unwrap().shortcut_editor.unwrap();
             assert_eq!(editor.bindings, ["B"]);

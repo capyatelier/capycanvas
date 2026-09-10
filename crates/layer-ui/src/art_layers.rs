@@ -543,6 +543,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerAction::Tool { tool } => {
                 self.layer_interaction.tool = tool;
                 self.state.layer_tools.tool = tool;
+                self.refresh_tools();
             }
             LayerAction::Deselect => self.layer_edit(Edit::SetSelection(None))?,
             LayerAction::InvertSelection => {
@@ -860,6 +861,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     LayerAction::AddMask { replace, .. } => {
                         self.layer_interaction.tool = LayerCanvasTool::Paint;
                         self.state.layer_tools.tool = LayerCanvasTool::Paint;
+                        self.refresh_tools();
                         if layer.mask.is_none() || replace {
                             let linked = layer.mask.as_ref().is_none_or(|m| m.linked);
                             let offset = layer

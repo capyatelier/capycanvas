@@ -46,9 +46,9 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   retain style; merges adopt the destination style, and splitting out a tab creates
   a new group with the default style. Per-tab overrides and their menu/API are removed;
   old per-panel style saves are not migrated.
-- A lone built-in panel also offers **Hide tab**, in a separate section, in
-  both its panel and group menus. This flag is independent of the group's display style.
-  Its content replaces the header with a 20px bottom-center drag strip using
+- A lone built-in panel also offers **Show tab bar**, checked when visible, in
+  a separate section in both its panel and group menus. This is independent of
+  the group's display style. Unchecking it replaces the header with a 20px bottom-center drag strip using
   the horizontal grip glyph. The strip's menu includes that panel's Configure
   and Hide actions; configuration opens the same live two-column drawer.
   Tearing off a single panel hides its tab immediately. Docking a lone floating
@@ -165,7 +165,7 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   only that tab. All eight resize hit regions sit 6px outside the border;
   inside the title bar is for moving, not resizing. Double-clicking the drag
   area of a custom-sized float first restores its default size. At default size,
-  a lone built-in panel toggles Hide tab; both the entire bottom grip strip and
+  a lone built-in panel toggles its tab bar; both the entire bottom grip strip and
   non-tab title-bar space activate this. Multi-tab groups only reset size.
   Standalone toolbars cycle compact grid → vertical column → horizontal row →
   compact grid; the horizontal grip is on the right. Additional lanes are used
@@ -174,7 +174,7 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   briefly and preserve the anchor where viewport bounds allow. Tab labels never
   activate this behavior. The cycle, size comparison, tab toggle and persistence
   belong to Rust (`DoubleClickPanelHandle`), not host click handlers. On a
-  docked lone built-in panel, the same drag areas toggle Hide tab immediately
+  docked lone built-in panel, the same drag areas toggle its tab bar immediately
   without resizing its dock or changing its group's display style. A docked lone
   toolbar resets to one row (top/bottom) or column (left/right), adding lanes
   only when needed to fit. Nested resets preserve side-by-side panel widths.

@@ -628,8 +628,7 @@ pub struct Workspace {
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
     menus: RefCell<Vec<NativeMenu>>,
     menu_actions: gtk::gio::SimpleActionGroup,
-    brush_buttons: RefCell<Vec<(u32, gtk::Button)>>,
-    brush_previews: RefCell<Vec<(u32, gtk::Picture)>>,
+    tool_set: crate::tool_panels::ToolSet,
     size_buttons: RefCell<Vec<(f32, gtk::Button)>>,
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
@@ -717,6 +716,7 @@ impl Workspace {
         let toolbar = TileStrip::new();
         toolbar.add_css_class("toolbar-controls");
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let tool_set = crate::tool_panels::ToolSet::new();
         let tool_settings = crate::tool_panels::ToolSettings::new();
         let color_panel = crate::tool_panels::ColorPanel::new();
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -772,8 +772,7 @@ impl Workspace {
             commands: RefCell::new(Vec::new()),
             menus: RefCell::new(Vec::new()),
             menu_actions: gtk::gio::SimpleActionGroup::new(),
-            brush_buttons: RefCell::new(Vec::new()),
-            brush_previews: RefCell::new(Vec::new()),
+            tool_set,
             size_buttons: RefCell::new(Vec::new()),
             size_number,
             opacity,
@@ -815,43 +814,10 @@ impl Workspace {
 
     fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box) {
         margins(brushes, layer_ui::PANEL_CONTENT_INSET as i32);
-        let brush_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        brushes.append(&brush_list);
-        for category in brush_categories() {
-            let heading = gtk::Label::new(Some(category.label));
-            heading.add_css_class("heading");
-            heading.add_css_class("dim-label");
-            heading.set_halign(gtk::Align::Start);
-            margins(&heading, 8);
-            brush_list.append(&heading);
-            for choice in category.brushes {
-                let button =
-                    self.action_button(choice.label, UiAction::SelectBrush { id: choice.id });
-                button.add_css_class("flat");
-                button.add_css_class("brush-choice");
-                button.set_widget_name(&format!("brush-{}", choice.id));
-                button.set_tooltip_text(Some(choice.label));
-                let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                let preview = gtk::Picture::builder()
-                    .can_shrink(true)
-                    .content_fit(gtk::ContentFit::Fill)
-                    .height_request(40)
-                    .build();
-                preview.set_paintable(Some(&crate::previews::texture(choice.id, Theme::Dark)));
-                let label = gtk::Label::new(Some(choice.label));
-                label.set_halign(gtk::Align::End);
-                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                label.set_tooltip_text(Some(choice.label));
-                content.append(&preview);
-                content.append(&label);
-                button.set_child(Some(&content));
-                self.brush_previews.borrow_mut().push((choice.id, preview));
-                brush_list.append(&button);
-                self.brush_buttons.borrow_mut().push((choice.id, button));
-            }
-        }
+        let brush_list = &self.tool_set.root;
+        brushes.append(brush_list);
         self.customization
-            .track(Panel::Brushes, PanelControl::Brushes, &brush_list);
+            .track(Panel::Brushes, PanelControl::Brushes, brush_list);
         self.customization.track(
             Panel::ToolSettings,
             PanelControl::ToolSettings,
@@ -1616,6 +1582,9 @@ impl Workspace {
             return;
         };
         self.refreshing.set(true);
+        if regions & (regions::BRUSH | regions::SETTINGS) != 0 {
+            self.tool_set.refresh(self, &state.tool_set, state.theme);
+        }
         if regions & regions::BRUSH != 0 {
             self.tool_settings.refresh(self, &state.tool_settings);
             self.color_panel.refresh(&state.colors);
@@ -1624,9 +1593,6 @@ impl Workspace {
             let [r, g, b, a] = state.brush.color;
             self.color.set_rgba(&gdk::RGBA::new(r, g, b, a));
             self.toolbar.queue_draw();
-            for (id, button) in self.brush_buttons.borrow().iter() {
-                selected(button, *id == state.brush.preset);
-            }
             for (value, button) in self.size_buttons.borrow().iter() {
                 selected(button, *value == state.brush.diameter);
             }
@@ -1688,9 +1654,6 @@ impl Workspace {
         }
         if regions & regions::SETTINGS != 0 {
             self.apply_palette(state.palette);
-            for (id, preview) in self.brush_previews.borrow().iter() {
-                preview.set_paintable(Some(&crate::previews::texture(*id, state.theme)));
-            }
             if state.theme == Theme::Light {
                 self.window.add_css_class("light-theme");
             } else {
@@ -2422,7 +2385,7 @@ fn scroll(child: &impl IsA<gtk::Widget>) -> gtk::Widget {
         .build()
         .upcast()
 }
-fn selected(widget: &impl IsA<gtk::Widget>, selected: bool) {
+pub(crate) fn selected(widget: &impl IsA<gtk::Widget>, selected: bool) {
     if selected {
         widget.add_css_class("selected-tool");
     } else {

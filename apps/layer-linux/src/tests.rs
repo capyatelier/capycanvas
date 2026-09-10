@@ -56,6 +56,123 @@ fn native_test_app(id: &str) -> NativeTestApp {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_tool_families() {
+    let app = native_test_app("art.capycanvas.ToolFamilies");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(800);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut workspace = state(&w).workspace;
+    let toolbar = workspace
+        .layout
+        .panels
+        .iter_mut()
+        .find(|p| p.id == Panel::Toolbar)
+        .unwrap();
+    if let layer_ui::PanelContent::Toolbar { tiles, .. } = &mut toolbar.content {
+        *tiles = layer_ui::Tool::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(i, tool)| layer_ui::ToolbarTile {
+                id: i as u32 + 1,
+                control: layer_ui::ToolbarControl::Command {
+                    command: tool.command(),
+                },
+            })
+            .collect();
+    }
+    workspace
+        .layout
+        .move_panel(
+            viewport,
+            Panel::Toolbar,
+            DockTarget::Edge {
+                edge: Edge::Left,
+                outer: true,
+            },
+        )
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    workspace
+        .layout
+        .move_panel(
+            viewport,
+            Panel::ToolSettings,
+            DockTarget::Float {
+                position: [500., 120.],
+            },
+        )
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(150);
+    let output = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(output).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for tool in layer_ui::Tool::ALL {
+            click(&command(&w, tool.command()));
+            pump(80);
+            assert_eq!(state(&w).brush.tool, tool);
+            let groups = state(&w).tool_set.groups;
+            for (index, _) in groups.iter().enumerate() {
+                // Activate actual native group and brush buttons, not just the
+                // state API. Copy the widget before invoking its callback.
+                let button = w.tool_set.group_buttons.borrow()[index].clone();
+                click(&button);
+                pump(30);
+                assert!(button.has_css_class("selected-tool"));
+                let bounds = button.compute_bounds(&w.tool_set.root).unwrap();
+                assert_eq!(
+                    bounds.width(),
+                    layer_ui::TOOL_PANEL_MIN_WIDTH - 2. * layer_ui::PANEL_CONTENT_INSET
+                );
+                assert_eq!(bounds.height(), layer_ui::TILE_SIZE);
+                let buttons = w.tool_set.buttons.borrow().clone();
+                for (item, button, _) in buttons {
+                    click(&button);
+                    pump(20);
+                    assert_eq!(Some(state(&w).brush.preset), item.preview);
+                    assert!(button.has_css_class("selected-tool"));
+                    assert_eq!(
+                        w.tool_set
+                            .buttons
+                            .borrow()
+                            .iter()
+                            .filter(|(_, b, _)| b.has_css_class("selected-tool"))
+                            .count(),
+                        1
+                    );
+                    let snapshot = w
+                        .gpu
+                        .borrow()
+                        .as_ref()
+                        .unwrap()
+                        .session
+                        .engine()
+                        .configured_brush()
+                        .clone();
+                    assert_eq!(snapshot.diameter, state(&w).brush.diameter);
+                    assert_eq!(snapshot.opacity, state(&w).brush.opacity);
+                    if tool == layer_ui::Tool::Liquify {
+                        assert_eq!(
+                            snapshot.execution_class(),
+                            layer_core::BrushExecution::Liquify
+                        );
+                    }
+                }
+            }
+            capture_reference(&w, &format!("{output}/tool-{tool:?}-{theme:?}.png"), 1.0);
+        }
+    }
+    w.window.close();
+    pump(50);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_tool_and_color_panels() {
     let app = native_test_app("art.capycanvas.ToolPanels");
     let w = Workspace::new(&app);
@@ -4623,7 +4740,7 @@ fn native_hidden_tabs() {
         );
         capture_reference(&w, &format!("{dir}/tab-hidden-docked-{theme:?}.png"), 1.0);
         // The footer's actual touch context binding still exposes name/icon
-        // selection and the independent Hide tab toggle.
+        // selection and the independent Show tab bar toggle.
         let controllers = handle.observe_controllers();
         let hold = (0..controllers.n_items())
             .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
@@ -6529,15 +6646,19 @@ fn native_workspace_controls_docking_and_ink() {
     click(&command(&w, CommandId::FitCanvas));
     let initial = white_pixels(&w);
     assert!(initial > 100_000, "GPU paper should be visibly presented");
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Pencil,
+    });
     let pencil = w
-        .brush_buttons
+        .tool_set
+        .buttons
         .borrow()
         .iter()
-        .find(|(_, b)| b.widget_name() == "brush-2")
+        .find(|(_, b, _)| b.widget_name() == "brush-2")
         .unwrap()
         .clone();
     click(&pencil.1);
-    assert_eq!(state(&w).brush.preset, pencil.0);
+    assert_eq!(Some(state(&w).brush.preset), pencil.0.preview);
     let size = w
         .size_buttons
         .borrow()
@@ -6901,7 +7022,11 @@ fn native_workspace_controls_docking_and_ink() {
         Some("layer-zen-looking-up-symbolic")
     );
     let toolbar_bounds = w.toolbar.compute_bounds(&w.surface).unwrap();
-    for pair in w.brush_buttons.borrow().windows(2).take(2) {
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Brush,
+    });
+    pump(60);
+    for pair in w.tool_set.buttons.borrow().windows(2).take(2) {
         let a = pair[0].1.compute_bounds(&w.surface).unwrap();
         let b = pair[1].1.compute_bounds(&w.surface).unwrap();
         assert_eq!(b.y() - a.y() - a.height(), 2.0);

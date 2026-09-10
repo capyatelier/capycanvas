@@ -208,8 +208,12 @@ fn key(key: &str, command: bool, shift: bool) -> KeyChord {
 }
 pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
     let chord = match id {
-        "command.Brush" => key("b", false, false),
+        "tools.ink" => key("p", false, false),
+        "tools.paint" => key("b", false, false),
+        "tools.blend" => key("j", false, false),
         "command.Eraser" => key("e", false, false),
+        "command.Lasso" => key("m", false, false),
+        "command.Move" => key("o", false, false),
         "command.FitCanvas" => key("f", false, false),
         "command.ZenMode" => key("tab", false, false),
         "command.Undo" => key("z", true, false),
@@ -252,6 +256,19 @@ pub(crate) fn definitions(
             )
         })
         .collect();
+    rows.extend(ToolFamily::ALL.into_iter().map(|family| {
+        (
+            ShortcutDefinition {
+                id: family.shortcut_id().into(),
+                label: family.label().into(),
+                action: ShortcutAction::Action {
+                    action: Box::new(UiAction::CycleTool { family }),
+                },
+                repeat: false,
+            },
+            "Tools",
+        )
+    }));
     rows.push((
         ShortcutDefinition {
             id: "canvas.pan".into(),
@@ -340,7 +357,16 @@ impl Settings {
         };
         let mut labels = Vec::new();
         if let Some(id) = builtin {
-            let label = self.shortcut_label(&id, platform);
+            let label = if let UiAction::Invoke { command } = action {
+                self.command_keys(command)
+                    .into_iter()
+                    .filter(|k| k.available(platform))
+                    .map(|k| k.label(platform))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            } else {
+                self.shortcut_label(&id, platform)
+            };
             if !label.is_empty() {
                 labels.push(label);
             }
@@ -365,10 +391,26 @@ impl Settings {
         }
     }
     pub(crate) fn keys(&self, id: &str) -> Vec<KeyChord> {
-        self.shortcuts
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| defaults(id))
+        if let Some(keys) = self.shortcuts.get(id) {
+            return keys.clone();
+        }
+        // An upgrade may add defaults on keys the artist already assigned.
+        // Explicit saved bindings win; two explicit bindings still conflict.
+        defaults(id)
+            .into_iter()
+            .filter(|key| !self.shortcuts.values().any(|keys| keys.contains(key)))
+            .collect()
+    }
+    pub(crate) fn command_keys(&self, command: CommandId) -> Vec<KeyChord> {
+        let mut keys = self.keys(&command.shortcut_id());
+        if let Some(family) = ToolFamily::for_command(command) {
+            for key in self.keys(family.shortcut_id()) {
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        keys
     }
     pub(crate) fn shortcut_label(&self, id: &str, platform: Platform) -> String {
         self.keys(id)
@@ -379,9 +421,7 @@ impl Settings {
             .join(" / ")
     }
     pub(crate) fn shortcut_modified(&self, id: &str) -> bool {
-        let Some(keys) = self.shortcuts.get(id) else {
-            return false;
-        };
+        let keys = self.keys(id);
         let defaults = defaults(id);
         keys.len() != defaults.len() || keys.iter().any(|key| !defaults.contains(key))
     }
@@ -451,6 +491,41 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_default_keys_do_not_break_saved_custom_bindings() {
+        let mut settings = Settings::default();
+        let brush = CommandId::Brush.shortcut_id();
+        settings.shortcuts.insert(
+            brush.clone(),
+            vec![key("b", false, false), key("j", false, false)],
+        );
+        settings.validate().unwrap();
+        for family in [ToolFamily::Paint, ToolFamily::Blend] {
+            assert!(settings.keys(family.shortcut_id()).is_empty());
+            assert!(settings.shortcut_modified(family.shortcut_id()));
+        }
+        assert_eq!(
+            settings
+                .shortcut_match(&key("j", false, false), Platform::Gtk)
+                .unwrap()
+                .id,
+            brush
+        );
+        settings
+            .shortcuts
+            .insert(CommandId::Pen.shortcut_id(), vec![key("j", false, false)]);
+        assert!(
+            settings.validate().is_err(),
+            "two explicit overrides remain a conflict"
+        );
+        settings.shortcuts.clear();
+        assert_eq!(
+            settings.keys(ToolFamily::Paint.shortcut_id()),
+            [key("b", false, false)]
+        );
+        assert!(!settings.shortcut_modified(ToolFamily::Paint.shortcut_id()));
+    }
 
     #[test]
     fn tooltips_follow_rebindings_and_platform_without_matching_copy() {

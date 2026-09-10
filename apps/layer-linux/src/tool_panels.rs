@@ -1,9 +1,146 @@
 //! Native projections of shared tool controls and color-wheel geometry.
-use crate::{number_control::NumberControl, workspace::Workspace};
+use crate::{
+    number_control::NumberControl,
+    workspace::{Workspace, selected},
+};
 use gtk::{cairo, glib, prelude::*, subclass::prelude::*};
 use layer_ui::{
-    ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, ToolSetting, UiAction,
+    ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, Theme, ToolSetItem,
+    ToolSetView, ToolSetting, UiAction,
 };
+
+/// A body can be projected in a dock or a tool drawer without reparenting the
+/// other view. Preview textures are shared by the existing immutable cache.
+pub struct ToolSet {
+    pub root: gtk::Box,
+    groups: gtk::FlowBox,
+    list: gtk::Box,
+    pub group_buttons: RefCell<Vec<gtk::Button>>,
+    pub buttons: RefCell<Vec<(ToolSetItem, gtk::Button, Option<gtk::Picture>)>>,
+    view: RefCell<ToolSetView>,
+    theme: Cell<Option<Theme>>,
+}
+impl ToolSet {
+    pub fn new() -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let groups = gtk::FlowBox::builder()
+            .homogeneous(true)
+            .min_children_per_line(1)
+            .max_children_per_line(16)
+            .selection_mode(gtk::SelectionMode::None)
+            .column_spacing(2)
+            .row_spacing(2)
+            .build();
+        groups.add_css_class("tool-groups");
+        let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        root.append(&groups);
+        root.append(&list);
+        Self {
+            root,
+            groups,
+            list,
+            group_buttons: RefCell::default(),
+            buttons: RefCell::default(),
+            view: RefCell::default(),
+            theme: Cell::new(None),
+        }
+    }
+    pub fn refresh(&self, workspace: &Rc<Workspace>, view: &ToolSetView, theme: Theme) {
+        let same = |a: &[ToolSetItem], b: &[ToolSetItem]| {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| {
+                    a.label == b.label
+                        && a.action == b.action
+                        && a.icon == b.icon
+                        && a.preview == b.preview
+                })
+        };
+        let previous = self.view.borrow();
+        if !same(&previous.groups, &view.groups) {
+            while let Some(child) = self.groups.first_child() {
+                self.groups.remove(&child);
+            }
+            let mut buttons = self.group_buttons.borrow_mut();
+            buttons.clear();
+            for item in &view.groups {
+                let button = workspace.action_button(item.label, item.action.clone());
+                button.add_css_class("flat");
+                button.add_css_class("tool-group");
+                button.set_halign(gtk::Align::Start);
+                button.set_size_request(
+                    (layer_ui::TOOL_PANEL_MIN_WIDTH - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
+                    layer_ui::TILE_SIZE as i32,
+                );
+                button.set_child(Some(&tool_label(item)));
+                self.groups.insert(&button, -1);
+                buttons.push(button);
+            }
+        }
+        let rebuild = !same(&previous.subtools, &view.subtools);
+        if rebuild {
+            while let Some(child) = self.list.first_child() {
+                self.list.remove(&child);
+            }
+            let mut buttons = self.buttons.borrow_mut();
+            buttons.clear();
+            for item in &view.subtools {
+                let button = workspace.action_button(item.label, item.action.clone());
+                button.add_css_class("flat");
+                button.add_css_class("brush-choice");
+                let preview = item.preview.map(|id| {
+                    button.set_widget_name(&format!("brush-{id}"));
+                    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    let preview = gtk::Picture::builder()
+                        .can_shrink(true)
+                        .content_fit(gtk::ContentFit::Fill)
+                        .height_request(40)
+                        .build();
+                    let label = gtk::Label::new(Some(item.label));
+                    label.set_halign(gtk::Align::End);
+                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    label.set_tooltip_text(Some(item.label));
+                    content.append(&preview);
+                    content.append(&label);
+                    button.set_child(Some(&content));
+                    preview
+                });
+                if preview.is_none() {
+                    button.set_child(Some(&tool_label(item)));
+                }
+                self.list.append(&button);
+                buttons.push((item.clone(), button, preview));
+            }
+        }
+        for (button, item) in self.group_buttons.borrow().iter().zip(&view.groups) {
+            selected(button, item.selected);
+        }
+        let theme_changed = self.theme.replace(Some(theme)) != Some(theme);
+        for ((_, button, preview), item) in self.buttons.borrow().iter().zip(&view.subtools) {
+            selected(button, item.selected);
+            if (rebuild || theme_changed)
+                && let (Some(id), Some(preview)) = (item.preview, preview)
+            {
+                preview.set_paintable(Some(&crate::previews::texture(id, theme)));
+            }
+        }
+        drop(previous);
+        *self.view.borrow_mut() = view.clone();
+    }
+}
+fn tool_label(item: &ToolSetItem) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_valign(gtk::Align::Center);
+    row.append(&gtk::Image::from_icon_name(&format!(
+        "layer-{}-symbolic",
+        item.icon
+    )));
+    let label = gtk::Label::new(Some(item.label));
+    label.set_hexpand(true);
+    label.set_xalign(0.0);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    row.append(&label);
+    row
+}
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,

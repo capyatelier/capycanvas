@@ -692,13 +692,13 @@ impl DockLayout {
         }
         let hidden = self.panel(*panel)?.hide_tab;
         let mut item = ContextMenuItem::edit(
-            "Hide tab",
+            "Show tab bar",
             CustomizationAction::SetTabHidden {
                 panel: *panel,
                 hidden: !hidden,
             },
         );
-        item.selected = Some(hidden);
+        item.selected = Some(!hidden);
         Ok(vec![item])
     }
     pub fn validate_toolbar_name(&self, name: &str) -> Result<(), String> {
@@ -746,8 +746,14 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
         ToolbarControl::Command { command } => (
             command.label().into(),
             match command {
+                CommandId::Pen => "Draw ink lines with a pen",
+                CommandId::Pencil => "Sketch with pencils and pastels",
                 CommandId::Brush => "Paint with the current brush",
                 CommandId::Eraser => "Erase paint from the active layer",
+                CommandId::Airbrush => "Build up soft color or spray",
+                CommandId::Decoration => "Paint with textured stamps",
+                CommandId::Blend => "Mix and smear existing paint",
+                CommandId::Liquify => "Push and twist existing paint",
                 CommandId::Lasso => "Draw a freehand selection",
                 CommandId::Move => "Move the editing layer or its mask",
                 CommandId::Undo => "Undo the last change",

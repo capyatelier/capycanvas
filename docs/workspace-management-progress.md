@@ -58,11 +58,11 @@ and will be updated with the implementation. No renderer changes are required.
   next 40px for inside. No center rectangle. Empty title space and the complete
   trailing grip strip move groups; singleton tabs move whole groups.
 - All eight floating resize hit regions sit outside the border. Drag-area
-  double-click first restores a custom size. At default size it toggles Hide tab
+  double-click first restores a custom size. At default size it toggles tab visibility
   for lone panels, or cycles compact/vertical/horizontal layouts for toolbars.
   Tile-size changes refit the active toolbar preset. Multi-tab groups only reset.
   For docked lone built-in panels, double-clicking the header's empty/grip area
-  or the hidden tab's bottom grip toggles Hide tab immediately, preserving dock
+  or the hidden tab's bottom grip toggles tab visibility immediately, preserving dock
   dimensions and name/icon style. Docked lone toolbars reset to a single row
   or column for their dock edge, wrapping only when space requires it, without
   stretching side-by-side neighbors. Docked multi-tab groups are unchanged.
@@ -91,8 +91,8 @@ and will be updated with the implementation. No renderer changes are required.
   no central float rectangle; 80/40px snapping; top targets below the app header;
   only standalone toolbars in horizontal dock bands; style-aware ribbon refits;
   recursive column reclaim/minima; singleton floating toolbar reset; named menu
-  entries; and independent Hide tab with a rotated bottom grip/configure action.
-- Hide tab is separate from group display style. A single panel hides its tab on
+  entries; and independent Show tab bar with a rotated bottom grip/configure action.
+- Tab visibility is separate from group display style. A single panel hides its tab on
   tear-off, restores the original flag on docking alone during that drag, and
   clears it when merging. Multi-tab groups show tabs. See the full contract for
   already-floating moves, undo and explicit visibility changes.
@@ -213,7 +213,7 @@ and will be updated with the implementation. No renderer changes are required.
 
 - `DoubleClickPanelHandle` and `panel_handle_target` now own the docked and
   floating rules together. GTK, web and Android only forward native gestures.
-  Lone docked panels toggle Hide tab; lone docked toolbars restore the minimum
+  Lone docked panels toggle tab visibility; lone docked toolbars restore the minimum
   row/column layout for their position, with overflow wrapping. Existing
   floating reset/cycle behavior and name/icon choices are preserved.
 - 115 shared UI tests and five Android Rust adapter tests pass. Native GTK
