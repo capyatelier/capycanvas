@@ -180,6 +180,20 @@ pub struct FilterPreviewImage {
     pub filters: Vec<std::sync::Arc<str>>,
 }
 
+/// Cold-path validation, separate from painting. `programs` are changed
+/// definitions; `namespace` includes programs they may be composed alongside.
+#[derive(Clone, Debug)]
+pub struct EffectValidationRequest {
+    pub request_id: u64,
+    pub programs: Vec<std::sync::Arc<layer_core::EffectProgram>>,
+    pub namespace: Vec<std::sync::Arc<layer_core::EffectProgram>>,
+}
+#[derive(Clone, Debug)]
+pub struct EffectValidationResult {
+    pub request_id: u64,
+    pub result: Result<(), String>,
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -191,6 +205,15 @@ pub trait CanvasRenderer {
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {
         RendererTelemetry::default()
+    }
+    fn request_effect_validation(
+        &mut self,
+        _request: EffectValidationRequest,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    fn take_effect_validation(&mut self) -> Option<EffectValidationResult> {
+        None
     }
 
     /// Cached source-asset geometry for UI cursors; no GPU work or readback.

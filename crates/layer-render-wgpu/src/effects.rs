@@ -43,6 +43,44 @@ pub(super) struct Effects {
     pub compilations: u64,
 }
 impl Effects {
+    /// Cold catalog publication only. Keep live instances until the shared
+    /// document owner publishes; discard superseded compilation versions.
+    pub fn retain_compilations(&mut self, programs: &[Arc<EffectProgram>]) {
+        let mut keep = programs.to_vec();
+        for instance in self.instances.values() {
+            for effect in &instance.effects {
+                if !keep.contains(&effect.program) {
+                    keep.push(effect.program.clone());
+                }
+            }
+        }
+        self.pipelines
+            .retain(|(chain, _, _)| chain.iter().all(|p| keep.contains(p)));
+        self.preparation.retain_programs(&keep);
+    }
+    pub fn fork(&self) -> Self {
+        Self {
+            layout: self.layout.clone(),
+            masks: self.masks.clone(),
+            pipeline_layout: self.pipeline_layout.clone(),
+            pipelines: self.pipelines.clone(),
+            instances: HashMap::new(),
+            preparation: self.preparation.fork(),
+            compilations: 0,
+        }
+    }
+    pub fn merge_validated(&mut self, other: Self) {
+        for (programs, stage, pipeline) in other.pipelines {
+            if !self
+                .pipelines
+                .iter()
+                .any(|(p, s, _)| *p == programs && *s == stage)
+            {
+                self.pipelines.push((programs, stage, pipeline));
+            }
+        }
+        self.preparation.merge(other.preparation);
+    }
     pub fn encode_preparation(&mut self, encoder: &mut wgpu::CommandEncoder) {
         self.preparation.encode(encoder);
     }
@@ -58,6 +96,9 @@ impl Effects {
         uniforms: &wgpu::BindGroupLayout,
         sources: &wgpu::BindGroupLayout,
     ) -> Self {
+        if let Some(cache) = &r.validated_effects {
+            return cache.fork();
+        }
         let layout = r
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -193,20 +234,7 @@ impl Effects {
             pipeline.clone()
         } else {
             let source = shader_source(&programs, &offsets, stage)?;
-            let module = naga::front::wgsl::parse_str(&source)
-                .map_err(|e| GpuRasterError::Effect(e.emit_to_string(&source)))?;
-            naga::valid::Validator::new(
-                naga::valid::ValidationFlags::all(),
-                naga::valid::Capabilities::empty(),
-            )
-            .validate(&module)
-            .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
-            // The wrapper owns all ABI resources and entries.
-            if module.global_variables.len() != 5 + MASK_SLOTS || module.entry_points.len() != 3 {
-                return Err(GpuRasterError::Effect(
-                    "Effects cannot add bindings or entry points".into(),
-                ));
-            }
+            validate_source(&source)?;
             let module = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("checked pointwise effect"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -368,6 +396,63 @@ impl Effects {
         Ok(prepared)
     }
 }
+
+fn validate_source(source: &str) -> Result<(), GpuRasterError> {
+    let module = naga::front::wgsl::parse_str(source)
+        .map_err(|e| GpuRasterError::Effect(e.emit_to_string(source)))?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
+    if module.global_variables.len() != 5 + MASK_SLOTS
+        || module.entry_points.len() != 3
+        || !module.overrides.is_empty()
+    {
+        return Err(GpuRasterError::Effect(
+            "Effects cannot add bindings, overrides or entry points".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Linking all library modules checks conflicting declarations without
+/// generating a giant executable chain or allocating image intermediates.
+pub(super) fn validate_namespace(programs: &[Arc<EffectProgram>]) -> Result<(), GpuRasterError> {
+    let Some(first) = programs.first() else {
+        return Ok(());
+    };
+    let mut linked = (**first).clone();
+    let mut parts = Vec::new();
+    for program in programs {
+        EffectInstance::new(program.clone())
+            .validate()
+            .map_err(|e| GpuRasterError::Effect(e.into()))?;
+        for source in program
+            .wgsl
+            .sources()
+            .map_err(|e| GpuRasterError::Effect(e.into()))?
+        {
+            if !parts.contains(source) {
+                parts.push(source.clone());
+            }
+        }
+    }
+    if parts.iter().map(|s| s.len()).sum::<usize>() > 16 * 1024 * 1024 {
+        return Err(GpuRasterError::Effect(
+            "Filter namespace exceeds source limits".into(),
+        ));
+    }
+    linked.wgsl = layer_core::EffectShader::Linked {
+        sources: parts.into(),
+    };
+    validate_source(&shader_source(
+        &[Arc::new(linked)],
+        &[0],
+        Execution::Preview,
+    )?)
+}
 fn shader_source(
     programs: &[Arc<EffectProgram>],
     offsets: &[u32],
@@ -512,6 +597,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             Execution::Fused,
         );
+    }
+    #[test]
+    fn runtime_namespace_rejects_conflicting_declarations() {
+        let programs: Vec<_> = fixtures().iter().map(|f| f.program()).collect();
+        validate_namespace(&programs).unwrap();
+        let mut changed = (*programs[0]).clone();
+        changed.id = "conflicting_filter".into();
+        changed.wgsl = format!(
+            "{}\n// different module with the same declarations",
+            changed.wgsl.sources().unwrap().join("\n")
+        )
+        .into();
+        assert!(validate_namespace(&[programs[0].clone(), Arc::new(changed)]).is_err());
     }
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
         let source = shader_source(p, &vec![0; p.len()], execution).unwrap();

@@ -4,9 +4,9 @@ import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
-import { createEffectPanels } from "./effects.js";
+import { createEffectPanels, fetchFilterPackage } from "./effects.js";
 
-// The static packager fills this map with fingerprinted artwork filenames.
+// The static packager fills this map with fingerprinted resource filenames.
 const assetPaths = {};
 const asset = (path) => new URL(assetPaths[path.replace(/^\.\//, "")] || path, import.meta.url).href;
 
@@ -1115,7 +1115,7 @@ try {
   if (restoreError) message(restoreError);
   new ResizeObserver(arrange).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
-  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas };
+  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters };
   await startGpu();
 } catch (error) {
   $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
@@ -1138,6 +1138,9 @@ async function startGpu() {
     document.body.dataset.gpu = "ready";
     notice.hidden = true;
     wake();
+    // Resource loading failure never disables the canvas or the working catalog.
+    loadFilters(asset("filters/manifest.json"), "replace", name=>asset(`filters/${name}`))
+      .catch(error=>console.warn("Using bundled filters:",error));
   } catch (error) {
     document.body.dataset.gpu = "unavailable";
     showGpuNotice({ container: notice, error, element, button });
@@ -1145,4 +1148,11 @@ async function startGpu() {
   } finally {
     gpuStarting = false;
   }
+}
+
+async function loadFilters(url, mode="add", moduleUrl) {
+  const change=await fetchFilterPackage(app,new URL(url,location.href),mode,moduleUrl);
+  update(change.regions);
+  if(change.canvas_wake)wake();
+  return app.state().filter_load.request_id;
 }

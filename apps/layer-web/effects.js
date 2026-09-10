@@ -1,18 +1,29 @@
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
+// Host I/O only: Rust validates the filenames, definitions, shaders and atomic
+// publication. This also accepts external packages without rebuilding Wasm.
+export async function fetchFilterPackage(app, manifestUrl, mode, moduleUrl=name=>new URL(name,manifestUrl)) {
+  const read=async url=>{const response=await fetch(url,{cache:"no-cache"});if(!response.ok)throw new Error(`Filter package: HTTP ${response.status}`);return response.text();};
+  const manifest=await read(manifestUrl),names=app.filter_package_modules(manifest);
+  const modules=Object.fromEntries(await Promise.all(names.map(async name=>[name,await read(moduleUrl(name))])));
+  return app.load_filter_package(manifest,modules,mode);
+}
 export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged}) {
   const send=action=>dispatch({type:"effect",action});
   const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
   const pickerHeader=element("div","filter-picker-header"),category=element("select"),search=element("input"),list=element("div","filter-picker-list");
   const pickerAction=action=>dispatch({type:"filter_picker",action});
   const searchButton=button("",()=>{pickerAction({op:"toggle_search"});if(!search.hidden)search.focus();});searchButton.append(icon("search"));
-  for(const c of state().filter_categories){const option=element("option","",c.label);option.value=c.id??"";category.append(option);}
   category.onchange=()=>pickerAction({op:"category",category:category.value||null});
   search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
   search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   pickerHeader.append(category,search,searchButton);adjustments.append(pickerHeader,list);
-  const rows=new Map();let visibleIds="",request=0n,pending=null,polling=false;
+  const rows=new Map();let visibleIds=null,catalogRevision=null,request=0n,pending=null,polling=false;
   function refreshPicker(){
     const s=state(),picker=s.filter_picker;
+    if(catalogRevision!==s.filter_catalog_revision){
+      catalogRevision=s.filter_catalog_revision;visibleIds=null;rows.clear();
+      category.replaceChildren(...s.filter_categories.map(c=>{const option=element("option","",c.label);option.value=c.id??"";return option;}));
+    }
     category.hidden=picker.search!=null;category.value=picker.category??"";
     search.hidden=picker.search==null;search.placeholder=picker.search_label;searchButton.title=picker.search_label;
     if(search.value!==(picker.search??""))search.value=picker.search??"";

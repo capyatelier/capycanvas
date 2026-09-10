@@ -19,6 +19,7 @@ use layer_render::{
 };
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
+mod effect_validation;
 mod effects;
 mod layer_masks;
 #[cfg(test)]
@@ -562,6 +563,8 @@ pub struct WgpuRasterizer {
     scene: Option<scene::Scene>,
     thumbnails: thumbnails::Thumbnails,
     filter_previews: Option<scene::FilterPreviews>,
+    effect_validation: Option<effect_validation::Pending>,
+    validated_effects: Option<effects::Effects>,
     last_style_base: usize,
     filter_source_epoch: u64,
     images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
@@ -787,6 +790,8 @@ impl WgpuRasterizer {
             layer_masks,
             scene: None,
             filter_previews: None,
+            effect_validation: None,
+            validated_effects: None,
             last_style_base: 0,
             filter_source_epoch: 0,
             thumbnails: thumbnails::Thumbnails::new(),
@@ -3518,6 +3523,15 @@ impl CanvasRenderer for WgpuRasterizer {
         request: layer_render::FilterPreviewRequest,
     ) -> Result<bool, Self::Error> {
         self.start_filter_previews(request)
+    }
+    fn request_effect_validation(
+        &mut self,
+        request: layer_render::EffectValidationRequest,
+    ) -> Result<bool, Self::Error> {
+        self.start_effect_validation(request)
+    }
+    fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
+        self.poll_effect_validation()
     }
     fn take_filter_previews(
         &mut self,

@@ -51,6 +51,7 @@ impl Frame {
     }
 }
 enum Command {
+    EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
     FilterPreviews(layer_render::FilterPreviewRequest),
@@ -62,6 +63,7 @@ enum Command {
     Stop,
 }
 enum Reply {
+    EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
     FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
     Error(String),
@@ -82,6 +84,8 @@ pub struct RenderWorker {
     thumbnails: VecDeque<ReadbackImage>,
     filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
     filter_previews_pending: bool,
+    effect_validation_pending: bool,
+    effect_validation: Option<layer_render::EffectValidationResult>,
     pub(super) geometry: Option<Geometry>,
     pub(super) surround: [f32; 4],
     pub(super) cursor: Vec<CursorSegment>,
@@ -150,7 +154,11 @@ impl RenderWorker {
                                 .send(Reply::FilterPreviews(image.map_err(error)))
                                 .map_err(error)?;
                         }
+                        if let Some(result) = worker.renderer.take_effect_validation() {
+                            reply.send(Reply::EffectValidation(result)).map_err(error)?;
+                        }
                         let next = if cfg!(test)
+                            || worker.renderer.effect_validation_pending()
                             || worker.renderer.filter_previews_pending()
                             || worker.pending_present
                             || worker.renderer.thumbnails_pending()
@@ -178,6 +186,25 @@ impl RenderWorker {
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
                         match command {
+                            Command::EffectValidation(request) => {
+                                let request_id = request.request_id;
+                                let result = worker.renderer.request_effect_validation(request);
+                                if !matches!(result, Ok(true)) {
+                                    reply
+                                        .send(Reply::EffectValidation(
+                                            layer_render::EffectValidationResult {
+                                                request_id,
+                                                result: Err(result
+                                                    .err()
+                                                    .map(error)
+                                                    .unwrap_or_else(|| {
+                                                        "Filter validator busy".into()
+                                                    })),
+                                            },
+                                        ))
+                                        .map_err(error)?;
+                                }
+                            }
                             Command::Telemetry(enabled) => {
                                 telemetry_enabled = enabled;
                                 worker.renderer.set_telemetry_enabled(enabled);
@@ -262,6 +289,8 @@ impl RenderWorker {
             thumbnails: VecDeque::new(),
             filter_previews: VecDeque::new(),
             filter_previews_pending: false,
+            effect_validation_pending: false,
+            effect_validation: None,
             geometry: None,
             surround: [0.033; 4],
             cursor: Vec::new(),
@@ -277,6 +306,10 @@ impl RenderWorker {
     pub(super) fn ready(&mut self) -> Result<bool, String> {
         while let Ok(reply) = self.replies.try_recv() {
             match reply {
+                Reply::EffectValidation(result) => {
+                    self.effect_validation_pending = false;
+                    self.effect_validation = Some(result);
+                }
                 Reply::Thumbnail(image) => self.thumbnails.push_back(image),
                 Reply::FilterPreviews(image) => {
                     self.filter_previews_pending = false;
@@ -302,6 +335,21 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn request_effect_validation(
+        &mut self,
+        request: layer_render::EffectValidationRequest,
+    ) -> Result<bool, Self::Error> {
+        if self.effect_validation_pending {
+            return Ok(false);
+        }
+        self.send(Command::EffectValidation(request))?;
+        self.effect_validation_pending = true;
+        Ok(true)
+    }
+    fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
+        self.ready().ok()?;
+        self.effect_validation.take()
+    }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         if self.telemetry_enabled != enabled {
             self.telemetry_enabled = enabled;

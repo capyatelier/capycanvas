@@ -34,6 +34,29 @@ impl GpuCanvas {
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into())?;
         let mut session = UiSession::blank(renderer, extent(area))?;
         session.set_platform(layer_ui::Platform::Gtk);
+        // Prefer installed/development resources. The same runtime loader can
+        // replace these files without recompiling the executable.
+        let filters = std::env::var_os("CAPY_FILTERS_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|p| p.join("filters")))
+                    .filter(|p| p.is_dir())
+            })
+            .or_else(|| {
+                let p = std::path::PathBuf::from("assets/filters");
+                p.is_dir().then_some(p)
+            });
+        if let Some(directory) = filters {
+            let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "replace".into());
+            let result = serde_json::from_value(serde_json::Value::String(mode))
+                .map_err(|e| e.to_string())
+                .and_then(|mode| load_filter_directory(&mut session, &directory, mode));
+            if let Err(error) = result {
+                eprintln!("{error}; using bundled filters");
+            }
+        }
         // Read once while creating this window, before it can accept input.
         match crate::preferences::load() {
             Ok(Some(settings)) => {
@@ -96,6 +119,26 @@ impl GpuCanvas {
     pub fn capture(&mut self) -> Result<ReadbackImage, String> {
         self.session.renderer_mut().capture()
     }
+}
+
+/// Native file transport only; shared Rust owns all replacement policy. Hosts
+/// may call this for additional packages without adding a shader editor UI.
+pub(super) fn load_filter_directory(
+    session: &mut UiSession<RenderWorker>,
+    directory: &std::path::Path,
+    mode: layer_core::EffectInstallMode,
+) -> Result<UiChange, String> {
+    let manifest =
+        std::fs::read_to_string(directory.join("manifest.json")).map_err(|e| e.to_string())?;
+    session.load_effect_package(
+        &manifest,
+        |name| {
+            std::fs::read_to_string(directory.join(name))
+                .map(std::sync::Arc::from)
+                .map_err(|e| e.to_string())
+        },
+        mode,
+    )
 }
 fn extent(area: &gtk::Picture) -> [u32; 2] {
     let scale = area.scale_factor() as u32;

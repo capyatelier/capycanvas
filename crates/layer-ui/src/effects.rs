@@ -5,9 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 impl<B: CanvasRenderer> UiSession<B> {
-    pub fn filter_preview_revision(&self) -> (u64, u64) {
+    pub fn filter_preview_revision(&self) -> (u64, u64, u64) {
         let doc = self.engine.document();
-        (doc.revision, doc.active_layer.0)
+        (
+            doc.revision,
+            doc.active_layer.0,
+            self.state.filter_catalog_revision,
+        )
     }
 
     /// Hosts request only rows on screen, after painting and pending edits end.

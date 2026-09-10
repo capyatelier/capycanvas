@@ -369,6 +369,81 @@ fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
     assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 2);
 }
 
+fn validate_runtime(
+    r: &mut WgpuRasterizer,
+    programs: Vec<Arc<layer_core::EffectProgram>>,
+) -> Result<(), String> {
+    use layer_render::EffectValidationRequest;
+    r.request_effect_validation(EffectValidationRequest {
+        request_id: 7,
+        namespace: programs.clone(),
+        programs,
+    })
+    .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(result) = r.take_effect_validation() {
+            assert_eq!(result.request_id, 7);
+            return result.result;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Filter validation timed out"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn runtime_validation_preserves_working_state_and_reuses_compilation() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    validate_runtime(&mut r, fixtures().iter().map(|f| f.program()).collect()).unwrap();
+    assert!(
+        r.scene.is_none(),
+        "validation does not allocate canvas intermediates"
+    );
+    let cache = r.validated_effects.as_ref().unwrap();
+    assert_eq!(cache.storage_bytes(), 0);
+    assert_eq!(
+        cache.preparation_count(),
+        0,
+        "validation never executes preparation"
+    );
+    let base = setup(&mut r, EXTENT);
+    let mut layers = vec![filter(fixture("gaussian_blur")), base];
+    submit(&mut r, EXTENT, &layers, 0., true, true, None);
+    let original = image(&mut r);
+    assert_eq!(
+        r.scene.as_ref().unwrap().effects.compilations,
+        0,
+        "validated pipelines survive creation of the actual scene"
+    );
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 1);
+    let mut broken = (*layers[0].effect.as_ref().unwrap().program).clone();
+    Arc::make_mut(&mut broken.lookups)[0].wgsl = "this is not WGSL".into();
+    assert!(validate_runtime(&mut r, vec![Arc::new(broken)]).is_err());
+    submit(&mut r, EXTENT, &layers, 0., false, true, None);
+    assert_eq!(
+        image(&mut r),
+        original,
+        "failed preparation replacement leaves the working image intact"
+    );
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 1);
+    // Accepted render-only replacement keeps the live instance's lookup.
+    let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
+    let program = Arc::make_mut(&mut effect.program);
+    program.wgsl = format!(
+        "{}\n// accepted runtime edit\n",
+        program.wgsl.sources().unwrap().join("\n")
+    )
+    .into();
+    validate_runtime(&mut r, vec![effect.program.clone()]).unwrap();
+    submit(&mut r, EXTENT, &layers, 0., false, true, None);
+    assert_eq!(image(&mut r), original);
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 1);
+    assert_eq!(r.scene.as_ref().unwrap().effects.compilations, 0);
+}
+
 #[test]
 fn prepared_pointwise_filters_still_fuse() {
     let mut r = WgpuRasterizer::new().unwrap();

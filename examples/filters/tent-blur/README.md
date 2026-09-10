@@ -14,4 +14,18 @@ Core loading uses `EffectPackage::parse(manifest)?.resolve(read_module)`; hosts
 provide `read_module`, and catalog add/replace is staged without mutating the
 published catalog. Renderer validation must precede publication.
 
+The application-level entry point is `UiSession::load_effect_package`; it owns
+GPU validation and atomic publication. With an already-built GTK executable:
+
+```sh
+CAPY_FILTERS_DIR=examples/filters/tent-blur CAPY_FILTERS_MODE=add ./target/debug/layer-linux
+```
+
+On web, serve this directory and call
+`await layerApp.loadFilters('/tent-blur/manifest.json', 'add')`. Edit the WGSL or
+manifest, call with `'replace'`, and inspect `layerApp.state().filter_load` for
+completion. No application rebuild is needed. Android's matching host entry is
+`CanvasHost.loadFilters(manifest, modules, mode)`. These are programmatic loading
+interfaces, not a shader-editor UI. See [runtime filters](../../../docs/runtime-filters.md).
+
 These files are covered by the repository's MIT OR Apache-2.0 source license.

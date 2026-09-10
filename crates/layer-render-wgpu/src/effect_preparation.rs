@@ -24,6 +24,25 @@ pub(super) struct Preparation {
     pub executions: u64,
 }
 impl Preparation {
+    pub fn retain_programs(&mut self, programs: &[Arc<EffectProgram>]) {
+        self.pipelines
+            .retain(|(key, _)| programs.iter().any(|p| p.lookups.contains(&key.definition)));
+    }
+    pub fn fork(&self) -> Self {
+        Self {
+            layout: self.layout.clone(),
+            pipelines: self.pipelines.clone(),
+            pending: Vec::new(),
+            executions: 0,
+        }
+    }
+    pub fn merge(&mut self, other: Self) {
+        for (key, pipeline) in other.pipelines {
+            if !self.pipelines.iter().any(|(k, _)| *k == key) {
+                self.pipelines.push((key, pipeline));
+            }
+        }
+    }
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
             layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

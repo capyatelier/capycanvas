@@ -56,6 +56,115 @@ fn native_test_app(id: &str) -> NativeTestApp {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_runtime_filter_packages() {
+    let app = native_test_app("art.capycanvas.RuntimeFilters");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(900);
+    let load = |path: &str, mode| {
+        crate::canvas::load_filter_directory(
+            &mut w.gpu.borrow_mut().as_mut().unwrap().session,
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
+            mode,
+        )
+        .unwrap();
+        w.wake();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while state(&w).filter_load.pending && Instant::now() < deadline {
+            pump(20);
+        }
+        assert!(!state(&w).filter_load.pending);
+        assert!(
+            state(&w).filter_load.error.is_none(),
+            "{:?}",
+            state(&w).filter_load.error
+        );
+    };
+    load(
+        "../../assets/filters",
+        layer_core::EffectInstallMode::Replace,
+    );
+    assert_eq!(state(&w).adjustments.len(), 40);
+    load(
+        "../../examples/filters/tent-blur",
+        layer_core::EffectInstallMode::Add,
+    );
+    assert_eq!(state(&w).adjustments.len(), 41);
+    let pixels: Vec<u8> = (0..1024 * 768)
+        .flat_map(|i| {
+            if (i % 1024 / 32 + i / 1024 / 32) % 2 == 0 {
+                [230, 50, 80, 255]
+            } else {
+                [30, 160, 220, 255]
+            }
+        })
+        .collect();
+    w.gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .import_layer_image(
+            "Runtime checker",
+            layer_render::HostImage {
+                width: 1024,
+                height: 768,
+                stride: 4096,
+                format: layer_render::PixelFormat::Rgba8Srgb,
+                bytes: &pixels,
+            },
+        )
+        .unwrap();
+    w.wake();
+    pump(100);
+    w.dispatch(UiAction::FilterPicker {
+        action: layer_ui::FilterPickerAction::Category {
+            category: Some("examples".into()),
+        },
+    });
+    w.dispatch(UiAction::SelectPanelTab {
+        group: 8,
+        panel: Panel::Adjustments,
+    });
+    pump(300);
+    find_named(
+        w.effects.adjustments.upcast_ref(),
+        "adjustment-example:tent_blur",
+    )
+    .unwrap()
+    .downcast::<gtk::Button>()
+    .unwrap()
+    .emit_clicked();
+    pump(300);
+    let view = state(&w).layer_properties;
+    assert_eq!(view.description, "Tent Blur");
+    assert_eq!(view.controls[0].label, "Radius");
+    assert!(view.enabled);
+    w.dispatch(UiAction::Effect {
+        action: layer_ui::EffectAction::Set {
+            layer: view.layer.unwrap(),
+            key: "radius".into(),
+            value: layer_core::EffectValue::Number(9.),
+        },
+    });
+    pump(150);
+    load(
+        "../../examples/filters/tent-blur",
+        layer_core::EffectInstallMode::Replace,
+    );
+    assert_eq!(
+        state(&w).layer_properties.controls[0].value,
+        layer_core::EffectValue::Number(9.)
+    );
+    let dir = "../../artifacts/ui/runtime-filters-gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    crate::capture(&w, &format!("{dir}/runtime-properties.png"));
+    w.window.close();
+    pump(80);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_adjustment_panels_review() {
     use layer_core::EffectValue;
     use layer_ui::EffectAction;

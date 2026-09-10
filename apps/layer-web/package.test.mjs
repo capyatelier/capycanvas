@@ -85,6 +85,8 @@ function runtimeFixture(t, changes = {}) {
     "style.css": 'body { color: black; mask: url("icons/pen.svg"); }',
     "icons/pen.svg": "<svg/>",
     "brush-previews/1-dark.png": Buffer.from([137, 80, 78, 71]),
+    "filters/manifest.json": '{"format":1,"filters":[]}',
+    "filters/example.wgsl": "fn example() {}",
     ...changes,
   })) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
@@ -104,7 +106,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
   for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "pkg/layer_web.js"])
     assert.ok(app.includes(`from "./${names[path]}"`));
-  for (const path of ["icons/pen.svg", "brush-previews/1-dark.png"])
+  for (const path of ["icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"])
     assert.ok(app.includes(JSON.stringify(names[path])));
   assert.ok(readFileSync(join(dir, names["style.css"]), "utf8").includes(`url("${names["icons/pen.svg"]}")`));
   assert.ok(readFileSync(join(dir, names["pkg/layer_web.js"]), "utf8").includes(names["pkg/layer_web_bg.wasm"].slice(4)));
@@ -113,7 +115,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
 
 test("changed assets propagate to their consumers and worker version, not unrelated assets", (t) => {
   const source = runtimeFixture(t), original = runtimeFixture(t), names = fingerprintAssets(original), first = writeWorker(original);
-  for (const path of ["app.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png"]) {
+  for (const path of ["app.js", "style.css", "gpu.js", "numeric.js", "pkg/layer_web_bg.wasm", "icons/pen.svg", "brush-previews/1-dark.png", "filters/manifest.json", "filters/example.wgsl"]) {
     const dir = runtimeFixture(t, { [path]: Buffer.concat([readFileSync(join(source, path)), Buffer.from("\n/* changed */")]) });
     const next = fingerprintAssets(dir);
     assert.notEqual(next[path], names[path], path);

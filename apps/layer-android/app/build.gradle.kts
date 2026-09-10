@@ -26,6 +26,7 @@ android {
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("rustJniLibs").get().asFile)
     sourceSets["main"].assets.srcDirs("../../layer-web/icons", "../../layer-web/brush-previews")
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/capy/assets").get().asFile)
+    sourceSets["androidTest"].assets.srcDir("../../../examples/filters")
     sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/capy/res").get().asFile)
     packaging { jniLibs.useLegacyPackaging = false }
     testOptions { animationsDisabled = true }
@@ -80,6 +81,13 @@ val copyNotices by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("generated/capy/assets/licenses"))
 }
 tasks.named("preBuild") { dependsOn(copyNotices) }
+
+// Runtime resources use the same manifest/WGSL format as desktop and web.
+val copyFilters by tasks.registering(Sync::class) {
+    from(rootDir.resolve("../../assets/filters"))
+    into(layout.buildDirectory.dir("generated/capy/assets/filters"))
+}
+tasks.named("preBuild") { dependsOn(copyFilters) }
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.08.00"))

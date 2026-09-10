@@ -263,11 +263,19 @@ impl App {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
+            FilterPackageModules {
+                manifest: String,
+            },
+            LoadFilterPackage {
+                manifest: String,
+                modules: std::collections::BTreeMap<String, std::sync::Arc<str>>,
+                mode: layer_core::EffectInstallMode,
+            },
             Catalog,
             RendererStats,
             FilterPreviews {
                 request: u64,
-                revision: Option<(u64, u64)>,
+                revision: Option<(u64, u64, u64)>,
                 filters: Vec<std::sync::Arc<str>>,
                 size: [u32; 2],
             },
@@ -306,6 +314,29 @@ impl App {
             },
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
+            Query::FilterPackageModules { manifest } => {
+                json!(layer_core::EffectPackage::parse(&manifest)?.module_names()?)
+            }
+            Query::LoadFilterPackage {
+                manifest,
+                modules,
+                mode,
+            } => {
+                self.dirty |= self
+                    .session
+                    .load_effect_package(
+                        &manifest,
+                        |name| {
+                            modules
+                                .get(name)
+                                .cloned()
+                                .ok_or_else(|| format!("Missing filter module: {name}"))
+                        },
+                        mode,
+                    )?
+                    .canvas_wake;
+                json!(self.session.state().filter_load)
+            }
             Query::Catalog => json!(layer_ui::ui_catalog()),
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {

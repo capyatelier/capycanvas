@@ -50,6 +50,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val filterPreviewCache = FilterPreviewCache()
     private var choreographer: Choreographer? = null
     private var attached = false
+    private var filterResources: JSONObject? = null
     private var scheduled = false
     private var disposed = false
     private var frameInterval = 8_333_333L
@@ -80,6 +81,18 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
                 }
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))
+                // Startup I/O only, before input is accepted. Rust determines
+                // which files the package may read and owns publication policy.
+                attempt(canvas = false) {
+                    val assets = application.assets
+                    val manifest = assets.open("filters/manifest.json").bufferedReader().use { it.readText() }
+                    val names = JSONArray(Native.query(handle, obj("type" to "filter_package_modules", "manifest" to manifest).toString()))
+                    val modules = JSONObject()
+                    for (name in names.values().map { it as String }) {
+                        modules.put(name, assets.open("filters/$name").bufferedReader().use { it.readText() })
+                    }
+                    filterResources = obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to "replace")
+                }
                 main.post { catalog = value }
                 publish(true)
             }
@@ -115,6 +128,12 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     fun query(query: JSONObject, reply: (Any?) -> Unit) = post {
         val value = org.json.JSONTokener(Native.query(handle, query.toString())).nextValue()
         main.post { reply(if (value == JSONObject.NULL) null else value) }
+    }
+    // Programmatic package import/replacement, without a shader-editor UI.
+    fun loadFilters(manifest: String, modules: JSONObject, mode: String = "add") = post {
+        Native.query(handle, obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to mode).toString())
+        publish(true)
+        wake()
     }
     internal fun filterPreviews(query: JSONObject, reply: (FilterPreviewReply?) -> Unit) = post {
         try {
@@ -155,6 +174,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         Native.resize(handle, width, height, density)
         Native.attach(handle, surface)
         attached = true
+        filterResources?.let { resources ->
+            attempt(canvas = false) { Native.query(handle, resources.toString()) }
+            filterResources = null
+        }
         main.post { failure = null }
         publish(true)
         wake()

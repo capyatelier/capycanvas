@@ -12,6 +12,15 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn request_effect_validation(
+        &mut self,
+        request: layer_render::EffectValidationRequest,
+    ) -> Result<bool, Self::Error> {
+        self.gpu()?.request_effect_validation(request)
+    }
+    fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
+        self.0.as_mut()?.take_effect_validation()
+    }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         if let Some(gpu) = &mut self.0 {
             gpu.set_telemetry_enabled(enabled);

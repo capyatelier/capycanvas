@@ -68,6 +68,48 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun runtimeFilterPackages() {
+        waitState { it.getLong("filter_catalog_revision") > 0 && !it.getJSONObject("filter_load").getBoolean("pending") }
+        assertTrue(state().getJSONObject("filter_load").isNull("error"))
+        assertEquals(40, state().array("adjustments").length())
+        val assets = instrumentation.context.assets
+        val manifest = assets.open("tent-blur/manifest.json").bufferedReader().use { it.readText() }
+        val modules = JSONObject()
+        for (name in listOf("prepare.wgsl","tent.wgsl")) modules.put(name, assets.open("tent-blur/$name").bufferedReader().use { it.readText() })
+        fun load(text: String, mode: String) {
+            val before = state().getJSONObject("filter_load").getLong("request_id")
+            compose.runOnIdle { host.loadFilters(text,modules,mode) }
+            waitState { val s=it.getJSONObject("filter_load");s.getLong("request_id")>before && !s.getBoolean("pending") }
+        }
+        load(manifest,"add")
+        assertTrue(state().getJSONObject("filter_load").isNull("error"))
+        assertEquals(41,state().array("adjustments").length())
+        val pixels = ByteArray(1024*768*4)
+        for(i in 0 until 1024*768) {
+            val color = if((i%1024/32+i/1024/32)%2==0) intArrayOf(230,50,80,255) else intArrayOf(30,160,220,255)
+            for(c in 0..3) pixels[i*4+c]=color[c].toByte()
+        }
+        compose.runOnIdle { host.importLayer("Runtime checker",1024,768,pixels) }
+        waitState { it.getJSONObject("layer_tools").getJSONObject("editing_layer").getString("label")=="Runtime checker" }
+        action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to "examples")))
+        action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
+        compose.onNodeWithTag("adjustment-example:tent_blur").performClick()
+        waitState { it.getJSONObject("layer_properties").getString("description")=="Tent Blur" }
+        val layer = state().getJSONObject("layer_properties").getLong("layer")
+        action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer, "key" to "radius", "value" to obj("kind" to "number", "value" to 9))))
+        val edited = manifest.replace("\"label\": \"Radius\"", "\"label\": \"Runtime radius\"")
+        modules.put("prepare.wgsl",modules.getString("prepare.wgsl").replace("max(width-f32(i),0.)/(width*width)","select(0.,1./(2.*width-1.),i<=radius)"))
+        load(edited,"replace")
+        assertTrue(state().getJSONObject("filter_load").isNull("error"))
+        assertEquals("Runtime radius",state().getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getString("label"))
+        assertEquals(9.0,state().getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getDouble("value"),0.0)
+        val revision = state().getLong("filter_catalog_revision")
+        modules.put("prepare.wgsl","invalid preparation WGSL")
+        load(edited,"replace")
+        assertFalse(state().getJSONObject("filter_load").isNull("error"))
+        assertEquals(revision,state().getLong("filter_catalog_revision"))
+        capture("runtime-filter-properties")
+    }
     @Test fun adjustmentPanelsUseSharedSchema() {
         action(obj("type" to "set_theme", "theme" to "dark"))
         action(obj("type" to "set_brush_size", "value" to 220))

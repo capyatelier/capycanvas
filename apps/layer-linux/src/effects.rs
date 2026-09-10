@@ -14,7 +14,7 @@ use std::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct PreviewKey {
-    revision: (u64, u64),
+    revision: (u64, u64, u64),
     size: [u32; 2],
 }
 
@@ -26,6 +26,9 @@ pub struct EffectPanels {
     search_button: gtk::Button,
     search_entry: gtk::SearchEntry,
     picker_bound: Cell<bool>,
+    picker_revision: Cell<Option<u64>>,
+    picker_categories: RefCell<Vec<layer_ui::FilterCategoryChoice>>,
+    picker_updating: Cell<bool>,
     picker_visible: RefCell<Vec<std::sync::Arc<str>>>,
     picker_rows: RefCell<HashMap<std::sync::Arc<str>, (gtk::Button, gtk::Picture)>>,
     preview_key: Cell<Option<PreviewKey>>,
@@ -127,6 +130,9 @@ impl EffectPanels {
             search_button,
             search_entry,
             picker_bound: Cell::new(false),
+            picker_revision: Cell::new(None),
+            picker_categories: RefCell::new(Vec::new()),
+            picker_updating: Cell::new(false),
             picker_visible: RefCell::new(Vec::new()),
             picker_rows: RefCell::new(HashMap::new()),
             preview_key: Cell::new(None),
@@ -166,12 +172,20 @@ impl EffectPanels {
                 .map(|c| c.label.as_ref())
                 .collect::<Vec<_>>(),
         )));
-        let categories = state.filter_categories.clone();
         self.category.connect_selected_notify(glib::clone!(
             #[weak]
             w,
             move |drop| {
-                if let Some(choice) = categories.get(drop.selected() as usize) {
+                if w.effects.picker_updating.get() {
+                    return;
+                }
+                let choice = w
+                    .effects
+                    .picker_categories
+                    .borrow()
+                    .get(drop.selected() as usize)
+                    .cloned();
+                if let Some(choice) = choice {
                     w.dispatch(UiAction::FilterPicker {
                         action: FilterPickerAction::Category {
                             category: choice.id.clone(),
@@ -218,6 +232,24 @@ impl EffectPanels {
         ));
     }
     fn refresh_picker(&self, w: &Rc<Workspace>, state: &UiState) {
+        self.picker_updating.set(true);
+        if self
+            .picker_revision
+            .replace(Some(state.filter_catalog_revision))
+            != Some(state.filter_catalog_revision)
+        {
+            self.picker_visible.borrow_mut().clear();
+            self.picker_rows.borrow_mut().clear();
+            self.preview_loaded.borrow_mut().clear();
+            *self.picker_categories.borrow_mut() = state.filter_categories.clone();
+            self.category.set_model(Some(&gtk::StringList::new(
+                &state
+                    .filter_categories
+                    .iter()
+                    .map(|c| c.label.as_ref())
+                    .collect::<Vec<_>>(),
+            )));
+        }
         let picker = &state.filter_picker;
         self.category.set_visible(picker.search.is_none());
         self.category.set_selected(
@@ -227,6 +259,7 @@ impl EffectPanels {
                 .position(|c| c.id == picker.category)
                 .unwrap_or(0) as u32,
         );
+        self.picker_updating.set(false);
         self.search_entry.set_visible(picker.search.is_some());
         let query = picker.search.as_deref().unwrap_or("");
         if self.search_entry.text() != query {

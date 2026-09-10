@@ -62,6 +62,15 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn request_effect_validation(
+        &mut self,
+        request: layer_render::EffectValidationRequest,
+    ) -> Result<bool, Self::Error> {
+        self.renderer()?.request_effect_validation(request)
+    }
+    fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
+        self.0.as_mut()?.renderer.take_effect_validation()
+    }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         if let Some(gpu) = &mut self.0 {
             gpu.renderer.set_telemetry_enabled(enabled);
@@ -162,6 +171,38 @@ fn phase(value: u8) -> Result<PenPhase, JsValue> {
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn filter_package_modules(&self, manifest: &str) -> Result<JsValue, JsValue> {
+        serialize(
+            &layer_core::EffectPackage::parse(manifest)
+                .map_err(js)?
+                .module_names()
+                .map_err(js)?,
+        )
+    }
+    pub fn load_filter_package(
+        &mut self,
+        manifest: &str,
+        modules: JsValue,
+        mode: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let modules: std::collections::BTreeMap<String, std::sync::Arc<str>> =
+            serde_wasm_bindgen::from_value(modules).map_err(js)?;
+        let mode = serde_wasm_bindgen::from_value(mode).map_err(js)?;
+        let change = self
+            .session
+            .load_effect_package(
+                manifest,
+                |name| {
+                    modules
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("Missing filter module: {name}"))
+                },
+                mode,
+            )
+            .map_err(js)?;
+        serialize(&change)
+    }
     pub fn filter_preview_revision(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.filter_preview_revision())
     }

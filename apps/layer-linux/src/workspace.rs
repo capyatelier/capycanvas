@@ -1520,7 +1520,7 @@ impl Workspace {
                     }
                     let active = this.input.has_pending()
                         || this.gpu.borrow().as_ref().is_some_and(|g| {
-                            g.session.engine().wants_continuous_frames() || g.needs_present
+                            g.session.wants_continuous_frames() || g.needs_present
                         });
                     #[cfg(test)]
                     if let Some(gpu) = this.gpu.borrow().as_ref() {

@@ -3,6 +3,7 @@ node_modules/
 /dist/
 /artifacts/
 /apps/layer-web/pkg/
+/apps/layer-web/filters/
 
 # Android SDK paths, build products and signing material.
 .gradle/

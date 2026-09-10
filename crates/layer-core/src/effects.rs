@@ -275,6 +275,22 @@ impl EffectInstance {
             program,
         }
     }
+    /// Runtime schema replacement preserves compatible values by key, not by
+    /// position. New or individually incompatible fields use their defaults.
+    /// Conflicting joint constraints reject publication instead of silently
+    /// changing otherwise valid user values.
+    pub fn rebind(&self, program: Arc<EffectProgram>) -> Result<Self, &'static str> {
+        let mut next = Self::new(program);
+        for (parameter, value) in next.program.parameters.iter().zip(&mut next.values) {
+            if let Some(old) = self.value(&parameter.key)
+                && parameter.validate(old).is_ok()
+            {
+                *value = old.clone();
+            }
+        }
+        next.validate()?;
+        Ok(next)
+    }
     pub fn validate(&self) -> Result<(), &'static str> {
         let source_len: usize = self.program.wgsl.sources()?.iter().map(|s| s.len()).sum();
         if source_len == 0 || source_len > 1024 * 1024 {
@@ -650,6 +666,33 @@ mod tests {
         fx.set("white", EffectValue::Number(0.2)).unwrap();
         assert_eq!(fx.values[1], EffectValue::Number(0.801));
         fx.validate().unwrap();
+    }
+    #[test]
+    fn schema_rebinding_uses_keys_and_rejects_conflicting_constraints() {
+        let mut instance = EffectInstance::new(fixture("levels").program());
+        instance.set("black", EffectValue::Number(0.4)).unwrap();
+        instance.set("white", EffectValue::Number(0.8)).unwrap();
+        let mut program = (*instance.program).clone();
+        Arc::make_mut(&mut program.parameters).swap(0, 1);
+        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
+        assert_eq!(rebound.value("black"), instance.value("black"));
+        assert_eq!(rebound.value("white"), instance.value("white"));
+        let EffectConstraint::OrderedNumbers { gap, .. } =
+            &mut Arc::make_mut(&mut program.constraints)[0];
+        *gap = 0.5;
+        assert!(
+            instance.rebind(Arc::new(program)).is_err(),
+            "do not silently clamp compatible user values on reload"
+        );
+        let mut program = (*instance.program).clone();
+        let black = &mut Arc::make_mut(&mut program.parameters)[0];
+        let EffectParameterKind::Number { max, .. } = &mut black.kind else {
+            panic!()
+        };
+        *max = 0.2;
+        let rebound = instance.rebind(Arc::new(program)).unwrap();
+        assert_eq!(rebound.value("black"), Some(&EffectValue::Number(0.)));
+        assert_eq!(rebound.value("white"), instance.value("white"));
     }
     #[test]
     fn sections_shorten_labels_without_changing_shader_parameters() {

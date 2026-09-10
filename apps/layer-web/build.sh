@@ -21,3 +21,7 @@ layer_profile="${2:-release}"
 cargo build --locked --profile "$layer_profile" -p layer-web --target wasm32-unknown-unknown
 "$layer_bindgen" --target web --out-dir "${1:-apps/layer-web/pkg}" \
   "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$layer_profile/layer_web.wasm"
+if [[ $# == 0 ]]; then
+  mkdir -p apps/layer-web/filters
+  cp assets/filters/*.json assets/filters/*.wgsl apps/layer-web/filters/
+fi

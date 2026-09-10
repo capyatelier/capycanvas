@@ -49,7 +49,7 @@ for (const [name, installed, customHome, override, expected] of [
     };
     function executable(path, message) {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' '${message}'\n`, {
+      writeFileSync(path, `#!/bin/sh\n${message ? `printf '%s\\n' '${message}'` : ':'}\n`, {
         mode: 0o755,
       });
     }
@@ -57,6 +57,8 @@ for (const [name, installed, customHome, override, expected] of [
     executable(join(bin, "python3"), "serve");
     symlinkSync("/usr/bin/dirname", join(bin, "dirname"));
     symlinkSync("/bin/bash", join(bin, "bash"));
+    executable(join(bin,"mkdir"),"");
+    executable(join(bin,"cp"),"");
     for (const tool of installed) executable(locations[tool], tool);
     const env = { HOME: home, PATH: bin };
     if (customHome) env.CARGO_HOME = cargo;

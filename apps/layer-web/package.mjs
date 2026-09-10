@@ -57,7 +57,7 @@ export function fingerprintAssets(directory) {
     names[path] = name;
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
-  // Hash final bytes, after rewriting dependencies; no bundler or runtime fetch.
+  // Hash final bytes after rewriting dependencies; no bundler required.
   const modules = ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path))
@@ -82,7 +82,7 @@ export function fingerprintAssets(directory) {
   let app = read(join(directory, "app.js"));
   for (const path of modules.slice(0, -1))
     app = replaceRequired(app, `from "./${path}"`, `from "./${names[path]}"`);
-  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews)\//.test(path)));
+  const artwork = Object.fromEntries(Object.entries(names).filter(([path]) => /^(icons|brush-previews|filters)\//.test(path)));
   app = replaceRequired(app, "const assetPaths = {};", `const assetPaths = ${JSON.stringify(artwork)};`);
   publish("app.js", app);
   return names;
@@ -155,6 +155,7 @@ export function packageWeb() {
           cpSync(join(web, directory, path), join(runtime, directory, path));
       }
     }
+    cpSync(join(root,"assets/filters"),join(runtime,"filters"),{recursive:true});
     // Shared brand geometry and mid-gray background at every icon size.
     const mark = read(join(web, "icons/layer-zen-looking-up-symbolic.svg"))
       .replace('width="24" height="24"', 'x="96" y="96" width="320" height="320" color="#f6f5f4"');

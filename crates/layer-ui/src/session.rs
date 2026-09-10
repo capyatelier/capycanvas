@@ -9,10 +9,13 @@ mod art_layers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView};
 #[path = "effects.rs"]
 mod effects;
+#[path = "filter_loading.rs"]
+mod filter_loading;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
     LayerPropertiesView, PropertyControl, PropertyKind,
 };
+pub use filter_loading::FilterLoadState;
 
 const ZEN_CORNER_GUARD: f32 = 300.0;
 
@@ -56,6 +59,7 @@ pub struct UiSession<R: CanvasRenderer> {
     next_request: u32,
     layer_interaction: art_layers::LayerInteraction,
     effect_catalog: layer_core::EffectCatalog,
+    pending_filters: Option<filter_loading::Pending>,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -107,6 +111,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 adjustments: effects::catalog(&effect_catalog, &Default::default()),
                 filter_picker: Default::default(),
                 filter_categories: effects::categories(&effect_catalog),
+                filter_catalog_revision: 0,
+                filter_load: FilterLoadState::default(),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
                 commands: Vec::new(),
@@ -122,6 +128,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 camera,
             },
             effect_catalog,
+            pending_filters: None,
         };
         session.apply_brush()?;
         session.refresh_document();
@@ -1623,13 +1630,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or_else(|| "Unknown divider".into())
     }
 
+    /// Includes shared background work as well as the drawing engine's needs.
+    pub fn wants_continuous_frames(&self) -> bool {
+        self.engine.wants_continuous_frames() || self.pending_filters.is_some()
+    }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
+        let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
         self.engine
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         self.input_pending = false;
-        let mut changed = 0;
         if self.engine.document().revision != revision || self.layer_interaction.changed {
             self.layer_interaction.changed = false;
             self.refresh_document();
@@ -1638,7 +1649,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
-        Ok(self.changed(changed, self.engine.wants_continuous_frames()))
+        Ok(self.changed(changed, self.wants_continuous_frames()))
     }
 
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
@@ -2051,9 +2062,21 @@ mod tests {
     struct Recorder {
         dabs: usize,
         composites: usize,
+        validation: Option<layer_render::EffectValidationRequest>,
+        validation_result: Option<layer_render::EffectValidationResult>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn request_effect_validation(
+            &mut self,
+            request: layer_render::EffectValidationRequest,
+        ) -> Result<bool, Self::Error> {
+            self.validation = Some(request);
+            Ok(true)
+        }
+        fn take_effect_validation(&mut self) -> Option<layer_render::EffectValidationResult> {
+            self.validation_result.take()
+        }
         fn tip_outline(&self, asset: &AssetId) -> Option<&layer_render::TipOutline> {
             static OUTLINE: std::sync::OnceLock<layer_render::TipOutline> =
                 std::sync::OnceLock::new();
@@ -2089,6 +2112,169 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn runtime_filter_publication_is_atomic_and_uses_current_values() {
+        use layer_core::{EffectInstallMode, EffectPackage, EffectValue};
+        use std::sync::Arc;
+        let mut s = session();
+        s.dispatch(UiAction::Effect {
+            action: EffectAction::Insert {
+                effect: "unsharp_mask".into(),
+            },
+        })
+        .unwrap();
+        s.frame(0, 0).unwrap();
+        let id = s.engine.document().active_layer;
+        let original = s
+            .engine
+            .document()
+            .layer(id)
+            .unwrap()
+            .effect
+            .clone()
+            .unwrap();
+        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        Arc::make_mut(&mut definition.program).label = "Runtime sharpness".into();
+        let parameters = Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters);
+        parameters[0].label = "Runtime radius".into();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: vec![definition],
+        };
+        let json = serde_json::to_string(&package).unwrap();
+        let change = s
+            .load_effect_package(
+                &json,
+                |_| panic!("inline sources"),
+                EffectInstallMode::Replace,
+            )
+            .unwrap();
+        assert!(change.canvas_wake);
+        assert_eq!(s.state.filter_catalog_revision, 0);
+        assert_eq!(
+            s.engine
+                .document()
+                .layer(id)
+                .unwrap()
+                .effect
+                .as_ref()
+                .unwrap(),
+            &original
+        );
+        assert!(
+            s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Replace)
+                .is_err()
+        );
+        s.dispatch(UiAction::Effect {
+            action: EffectAction::Set {
+                layer: id.0,
+                key: "amount".into(),
+                value: EffectValue::Number(175.),
+            },
+        })
+        .unwrap();
+        s.frame(1, 1).unwrap();
+        let request = s.renderer_mut().validation.take().unwrap();
+        assert_eq!(request.programs.len(), 1);
+        s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
+            request_id: request.request_id,
+            result: Ok(()),
+        });
+        s.input_pending = true;
+        assert!(s.frame(2, 2).unwrap().canvas_wake);
+        assert!(
+            s.state.filter_load.pending,
+            "publication waits for pending pen input"
+        );
+        s.frame(3, 3).unwrap();
+        assert!(!s.state.filter_load.pending);
+        assert!(s.state.filter_load.error.is_none());
+        assert_eq!(s.state.filter_catalog_revision, 1);
+        let current = s
+            .engine
+            .document()
+            .layer(id)
+            .unwrap()
+            .effect
+            .clone()
+            .unwrap();
+        assert_eq!(current.program.label.as_ref(), "Runtime sharpness");
+        assert_eq!(current.value("amount"), Some(&EffectValue::Number(175.)));
+        assert_eq!(s.state.layer_properties.controls[0].label, "Runtime radius");
+        assert_eq!(s.filter_preview_revision().2, 1);
+        s.frame(4, 4).unwrap();
+        // Device-side compilation failure must not publish any metadata or layers.
+        s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Replace)
+            .unwrap();
+        let request_id = s.state.filter_load.request_id;
+        s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
+            request_id,
+            result: Err("Invalid WGSL".into()),
+        });
+        s.frame(5, 5).unwrap();
+        assert_eq!(s.state.filter_load.error.as_deref(), Some("Invalid WGSL"));
+        assert_eq!(s.state.filter_catalog_revision, 1);
+        assert_eq!(
+            s.engine
+                .document()
+                .layer(id)
+                .unwrap()
+                .effect
+                .as_ref()
+                .unwrap(),
+            &current
+        );
+    }
+
+    #[test]
+    fn runtime_filter_add_refreshes_catalog_and_shared_controls() {
+        use layer_core::{EffectCategory, EffectInstallMode, EffectPackage};
+        use std::sync::Arc;
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
+            s.frame(0, 0).unwrap();
+            let program = Arc::make_mut(&mut definition.program);
+            program.id = "test:runtime".into();
+            program.label = "Runtime test".into();
+            definition.category = "examples".into();
+            let package = EffectPackage {
+                format: 1,
+                categories: vec![EffectCategory {
+                    id: "examples".into(),
+                    label: "Examples".into(),
+                }],
+                filters: vec![definition],
+            };
+            s.load_effect_package(
+                &serde_json::to_string(&package).unwrap(),
+                |_| panic!(),
+                EffectInstallMode::Add,
+            )
+            .unwrap();
+            let request_id = s.state.filter_load.request_id;
+            s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
+                request_id,
+                result: Ok(()),
+            });
+            s.frame(0, 0).unwrap();
+            assert_eq!(s.state.adjustments.len(), 41);
+            assert_eq!(
+                s.state.filter_categories.last().unwrap().label.as_ref(),
+                "Examples"
+            );
+            s.dispatch(UiAction::Effect {
+                action: EffectAction::Insert {
+                    effect: "test:runtime".into(),
+                },
+            })
+            .unwrap();
+            assert_eq!(s.state.layer_properties.controls.len(), 2);
+        }
     }
 
     #[test]

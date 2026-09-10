@@ -18,8 +18,8 @@ mod workspace;
 pub use session::{LayerAction, LayerCanvasTool, LayersView};
 mod stats;
 pub use session::{
-    AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
-    LayerPropertiesView, PropertyControl, PropertyKind,
+    AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterLoadState, FilterPickerAction,
+    FilterPickerState, LayerPropertiesView, PropertyControl, PropertyKind,
 };
 pub use stats::{StatRow, StatsView};
 
@@ -536,6 +536,8 @@ pub struct UiState {
     pub adjustments: Vec<AdjustmentChoice>,
     pub filter_picker: FilterPickerState,
     pub filter_categories: Vec<FilterCategoryChoice>,
+    pub filter_catalog_revision: u64,
+    pub filter_load: FilterLoadState,
     pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
     pub commands: Vec<CommandState>,
