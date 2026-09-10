@@ -7,6 +7,11 @@ use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView};
+#[path = "effects.rs"]
+mod effects;
+pub use effects::{
+    AdjustmentChoice, EffectAction, LayerPropertiesView, PropertyControl, PropertyKind,
+};
 
 const ZEN_CORNER_GUARD: f32 = 300.0;
 
@@ -96,6 +101,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
+                adjustments: effects::catalog(),
+                layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
                 commands: Vec::new(),
                 settings: Settings::default(),
@@ -839,6 +846,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn renderer_mut(&mut self) -> &mut R {
         self.engine.backend_mut()
     }
+    pub fn renderer_stats(&self) -> crate::StatsView {
+        crate::stats::view(self.engine.backend().telemetry())
+    }
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         CommandState {
@@ -948,6 +958,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::Effect { action } => {
+                self.require_idle()?;
+                self.effect_action(action)?;
+                self.refresh_document();
+                (DOCUMENT | LAYOUT, true)
+            }
             UiAction::Layer { action } => {
                 self.require_idle()?;
                 self.layer_action(action)?;
@@ -1815,6 +1831,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
+        if regions & regions::LAYOUT != 0 {
+            self.engine.backend_mut().set_telemetry_enabled(
+                self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats),
+            );
+        }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
         if regions & regions::SETTINGS != 0 {
             self.state.palette = self
@@ -1883,6 +1904,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         interaction.selected.retain(|id| doc.layer(*id).is_some());
         let layer_state = |l: &layer_core::Layer| LayerState {
             id: l.id.0,
+            content_icon: l.effect.as_ref().map(|fx| {
+                format!(
+                    "layer-{}-symbolic",
+                    layer_core::BuiltinEffect::ALL
+                        .into_iter()
+                        .find(|e| e.id() == fx.program.id.as_ref())
+                        .map_or("adjustments", |e| e.id())
+                )
+            }),
             label: l.name.to_string(),
             editable: l.kind == LayerKind::Paint,
             visible: l.visible,
@@ -1936,6 +1966,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_id: l.mask.as_ref().map(|m| m.id.0),
         };
         self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
+        self.state.layer_properties = effects::properties(doc);
         self.state.layer_tools.controls = doc
             .layer(doc.active_layer)
             .map(|l| art_layers::LayerControls::for_layer(doc, l))
@@ -2499,9 +2530,15 @@ mod tests {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
             let menu = s.workspace_menu();
-            assert_eq!(menu.sections[1].len(), 3);
+            assert_eq!(menu.sections[1].len(), 6);
             assert_eq!(menu.sections[2].len(), 1);
-            assert!(menu.sections[1].iter().all(|i| i.selected == Some(true)));
+            assert_eq!(
+                menu.sections[1]
+                    .iter()
+                    .filter(|i| i.selected == Some(true))
+                    .count(),
+                5
+            );
             assert!(!menu.sections[0][0].enabled);
             assert_eq!(menu.sections[0][0].hint, "Ctrl+Alt+Z");
             edit(
@@ -2538,7 +2575,12 @@ mod tests {
             );
             assert_eq!(
                 s.state.workspace.layout.group_panels(8).unwrap(),
-                &[Panel::Layers, Panel::Brushes]
+                &[
+                    Panel::Layers,
+                    Panel::Adjustments,
+                    Panel::Properties,
+                    Panel::Brushes
+                ]
             );
             assert!(!s.command(CommandId::RedoWorkspace).enabled);
             edit(
@@ -3905,6 +3947,9 @@ mod tests {
                         let layout = &mut app.state.workspace.layout;
                         layout.set_panel_visible(Panel::Toolbar, false).unwrap();
                         layout.set_panel_visible(Panel::Sizes, false).unwrap();
+                        for panel in [Panel::Adjustments, Panel::Properties] {
+                            layout.set_panel_visible(panel, false).unwrap();
+                        }
                         let group = layout.panel_group(Panel::Brushes).unwrap();
                         // Place Brushes on this edge, then Layers closest to
                         // the edge, either within its split or in another band.
@@ -4941,7 +4986,7 @@ mod tests {
         invalid.push(value);
         let mut value = valid.clone();
         // Missing placement is now valid (hidden); missing registry data is not.
-        value["layout"]["panels"].as_array_mut().unwrap().pop();
+        value["layout"]["panels"].as_array_mut().unwrap().remove(1);
         invalid.push(value);
         for value in invalid {
             let before = serde_json::to_value(&app.state).unwrap();
@@ -4960,6 +5005,150 @@ mod tests {
                 .is_err()
         );
         assert_eq!(serde_json::to_value(&app.state.workspace).unwrap(), valid);
+    }
+
+    #[test]
+    fn effect_creation_properties_and_navigation_are_shared() {
+        use layer_core::{BuiltinEffect, EffectValue};
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut app = session();
+            app.set_platform(platform);
+            let base = app.engine.document().active_layer;
+            let send = |app: &mut UiSession<Recorder>, action| {
+                app.dispatch(UiAction::Effect { action }).unwrap()
+            };
+            send(
+                &mut app,
+                EffectAction::Insert {
+                    effect: BuiltinEffect::Curves,
+                },
+            );
+            let id = app.engine.document().active_layer;
+            assert_eq!(app.engine.document().layers[0].id, id);
+            assert_eq!(app.engine.document().layers[1].id, base);
+            assert_eq!(
+                app.state.workspace.layout.active_panel(Panel::Properties),
+                Some(Panel::Properties)
+            );
+            send(
+                &mut app,
+                EffectAction::CurvePoint {
+                    layer: id.0,
+                    key: "curve_0".into(),
+                    index: None,
+                    point: [0.4, 0.7],
+                    remove: false,
+                },
+            );
+            assert_eq!(
+                app.state.layer_properties.controls[0].value,
+                EffectValue::Curve(vec![[0., 0.], [0.4, 0.7], [1., 1.]])
+            );
+            send(
+                &mut app,
+                EffectAction::Reset {
+                    layer: id.0,
+                    key: "curve_0".into(),
+                },
+            );
+            assert_eq!(
+                app.state.layer_properties.controls[0].value,
+                app.state.layer_properties.controls[0].default
+            );
+            app.layer_action(LayerAction::Clip {
+                id: id.0,
+                value: true,
+            })
+            .unwrap();
+            assert_eq!(app.engine.document().clipping_base(id), Some(base));
+            app.state
+                .workspace
+                .layout
+                .move_panel(
+                    [1200., 900.],
+                    Panel::Properties,
+                    DockTarget::Float {
+                        position: [450., 150.],
+                    },
+                )
+                .unwrap();
+            let previous = app.state.workspace.layout.panel_group(Panel::Properties);
+            send(
+                &mut app,
+                EffectAction::Insert {
+                    effect: BuiltinEffect::Levels,
+                },
+            );
+            assert_eq!(
+                app.state.workspace.layout.panel_group(Panel::Properties),
+                previous,
+                "visible Properties stays put"
+            );
+            app.state
+                .workspace
+                .layout
+                .set_panel_visible(Panel::Properties, false)
+                .unwrap();
+            send(
+                &mut app,
+                EffectAction::Insert {
+                    effect: BuiltinEffect::BrightnessContrast,
+                },
+            );
+            let panels = app.state.workspace.layout.group_panels(8).unwrap();
+            let a = panels
+                .iter()
+                .position(|p| *p == Panel::Adjustments)
+                .unwrap();
+            assert_eq!(panels[a + 1], Panel::Properties);
+            send(
+                &mut app,
+                EffectAction::Insert {
+                    effect: BuiltinEffect::ColorBalance,
+                },
+            );
+            let controls = &app.state.layer_properties.controls;
+            assert_eq!(controls[0].section.as_deref(), Some("Shadows"));
+            assert_eq!(controls[3].section.as_deref(), Some("Midtones"));
+            assert_eq!(controls[6].section.as_deref(), Some("Highlights"));
+            assert!(controls[9].section.is_none());
+            assert_eq!(controls[0].label, "Cyan — Red");
+            send(
+                &mut app,
+                EffectAction::Insert {
+                    effect: BuiltinEffect::GradientMap,
+                },
+            );
+            let layer = app.state.layer_properties.layer.unwrap();
+            send(
+                &mut app,
+                EffectAction::GradientStop {
+                    layer,
+                    key: "gradient".into(),
+                    index: None,
+                    position: 0.5,
+                    color: Some([0.7, 0.2, 0.1, 0.5]),
+                    remove: false,
+                },
+            );
+            let edited = app.state.layer_properties.controls[0].value.clone();
+            assert!(
+                matches!(&edited, EffectValue::Gradient(stops) if stops.len()==3 && stops[1].color[3]==0.5)
+            );
+            app.dispatch(UiAction::Invoke {
+                command: CommandId::Undo,
+            })
+            .unwrap();
+            assert_eq!(
+                app.state.layer_properties.controls[0].value,
+                app.state.layer_properties.controls[0].default
+            );
+            app.dispatch(UiAction::Invoke {
+                command: CommandId::Redo,
+            })
+            .unwrap();
+            assert_eq!(app.state.layer_properties.controls[0].value, edited);
+        }
     }
     #[test]
     fn shared_drop_preview_validates_the_exact_move() {

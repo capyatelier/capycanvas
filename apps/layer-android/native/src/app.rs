@@ -264,6 +264,7 @@ impl App {
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
             Catalog,
+            RendererStats,
             ActionTooltip {
                 label: String,
                 action: UiAction,
@@ -300,6 +301,7 @@ impl App {
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::RendererStats => json!(self.session.renderer_stats()),
             Query::ActionTooltip { label, action } => {
                 let state = self.session.state();
                 json!(

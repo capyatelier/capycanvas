@@ -4,7 +4,9 @@
 //! executor, or platform types. Strokes are immutable after commit and use
 //! shared point storage so undo/redo moves handles instead of copying samples.
 
+mod effects;
 mod layers;
+pub use effects::*;
 mod presets;
 pub use layers::*;
 
@@ -102,6 +104,7 @@ pub enum LayerKind {
     AiSuggestion,
     Background,
     Group,
+    Effect,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -119,6 +122,7 @@ pub struct Layer {
     pub properties: LayerProperties,
     pub mask: Option<LayerMask>,
     pub operations: Vec<LayerOperation>,
+    pub effect: Option<Arc<EffectInstance>>,
 }
 
 impl Layer {
@@ -135,6 +139,7 @@ impl Layer {
             properties: LayerProperties::default(),
             mask: None,
             operations: Vec::new(),
+            effect: None,
         }
     }
 
@@ -155,6 +160,7 @@ impl Layer {
             properties: LayerProperties::default(),
             mask: None,
             operations: Vec::new(),
+            effect: None,
         }
     }
 }
@@ -1157,6 +1163,7 @@ impl Document {
                     properties: LayerProperties::default(),
                     mask: None,
                     operations: Vec::new(),
+                    effect: None,
                 },
             ],
             active_layer: paint_id,

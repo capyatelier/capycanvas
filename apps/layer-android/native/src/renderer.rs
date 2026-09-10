@@ -12,6 +12,14 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn set_telemetry_enabled(&mut self, enabled: bool) {
+        if let Some(gpu) = &mut self.0 {
+            gpu.set_telemetry_enabled(enabled);
+        }
+    }
+    fn telemetry(&self) -> layer_render::RendererTelemetry {
+        self.0.as_ref().map(|g| g.telemetry()).unwrap_or_default()
+    }
     type Error = GpuRasterError;
     fn request_thumbnail(
         &mut self,

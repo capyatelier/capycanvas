@@ -62,6 +62,17 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn set_telemetry_enabled(&mut self, enabled: bool) {
+        if let Some(gpu) = &mut self.0 {
+            gpu.renderer.set_telemetry_enabled(enabled);
+        }
+    }
+    fn telemetry(&self) -> layer_render::RendererTelemetry {
+        self.0
+            .as_ref()
+            .map(|g| g.renderer.telemetry())
+            .unwrap_or_default()
+    }
     type Error = GpuRasterError;
     fn request_thumbnail(
         &mut self,
@@ -284,6 +295,7 @@ impl WebGpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("web canvas GPU"),
+                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: limits,
                 ..Default::default()
             })
@@ -324,6 +336,9 @@ impl WebApp {
     }
     pub fn preferences(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.preferences())
+    }
+    pub fn renderer_stats(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.renderer_stats())
     }
     pub fn panel_view(&self, panel: JsValue) -> Result<JsValue, JsValue> {
         let panel = serde_wasm_bindgen::from_value(panel).map_err(js)?;

@@ -1,4 +1,5 @@
 mod canvas;
+mod effects;
 mod image_selector;
 mod input;
 mod layers;

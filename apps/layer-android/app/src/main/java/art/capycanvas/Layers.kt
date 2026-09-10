@@ -89,7 +89,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
             val requests = currentLayers.filter { it.getLong("id") in visible }.flatMap { layer ->
                 listOf(false, true).mapNotNull { mask ->
-                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group")) return@mapNotNull null
+                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || !layer.isNull("content_icon")) return@mapNotNull null
                     val key = "${layer.getLong("id")}:$mask"
                     val revision = layer.getLong(if (mask) "mask_revision" else "paint_revision")
                     if (revisions[key] == revision || pending.values.any { it.key == key }) null
@@ -233,7 +233,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false); press=down.position
                 val row=latest
-                val canDrag=(row.getBoolean("editable") || row.getBoolean("group")) &&
+                val canDrag=row.getBoolean("can_drop_below") &&
                     (down.type!=PointerType.Touch || down.position.x>=size.width-20*density)
                 var dragging=false
                 try { do {
@@ -268,6 +268,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     }
                 },contentAlignment=Alignment.Center) {
                 if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open","Expand or collapse group",Modifier.size(28.dp))
+                else if(!mask && !layer.isNull("content_icon")) SharedIcon(layer.getString("content_icon"),null,Modifier.size(24.dp))
                 else images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
             }
             }
@@ -294,6 +295,6 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
-        SharedIcon("grip","Drag layer",Modifier.size(12.dp).alpha(if(layer.getBoolean("editable") || layer.getBoolean("group")) .6f else 0f))
+        SharedIcon("grip","Drag layer",Modifier.size(12.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
     }
 }

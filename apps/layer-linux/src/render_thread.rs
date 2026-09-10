@@ -49,6 +49,7 @@ impl Frame {
     }
 }
 enum Command {
+    Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
     Frame(Box<Frame>),
     Asset(AssetId, [u32; 3], PixelFormat, Vec<u8>),
@@ -66,6 +67,8 @@ enum Reply {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
+    telemetry_enabled: bool,
     commands: mpsc::Sender<Command>,
     replies: mpsc::Receiver<Reply>,
     in_flight: Arc<AtomicUsize>,
@@ -94,6 +97,10 @@ impl RenderWorker {
         let (started, start) = mpsc::sync_channel(1);
         let in_flight = Arc::new(AtomicUsize::new(0));
         let count = in_flight.clone();
+        let telemetry = Arc::new(std::sync::Mutex::new(
+            layer_render::RendererTelemetry::default(),
+        ));
+        let worker_telemetry = telemetry.clone();
         #[cfg(test)]
         let stats = Arc::new(std::sync::Mutex::new(crate::timing::Stats::default()));
         #[cfg(test)]
@@ -109,6 +116,7 @@ impl RenderWorker {
                     #[cfg(test)]
                     let mut timing =
                         crate::timing::Timing::new(worker.renderer.device(), worker_stats);
+                    let mut telemetry_enabled = false;
                     loop {
                         worker
                             .renderer
@@ -116,6 +124,9 @@ impl RenderWorker {
                             .poll(wgpu::PollType::Poll)
                             .map_err(error)?;
                         worker.child.dispatch()?;
+                        if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
+                            *snapshot = worker.renderer.telemetry();
+                        }
                         #[cfg(test)]
                         timing.presented(worker.child.take_presented());
                         while let Some(image) = worker.renderer.take_readback() {
@@ -155,6 +166,10 @@ impl RenderWorker {
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
                         match command {
+                            Command::Telemetry(enabled) => {
+                                telemetry_enabled = enabled;
+                                worker.renderer.set_telemetry_enabled(enabled);
+                            }
                             Command::Thumbnail(id, target) => worker
                                 .renderer
                                 .request_thumbnail(id, target)
@@ -211,6 +226,8 @@ impl RenderWorker {
             }
         };
         Ok(Self {
+            telemetry,
+            telemetry_enabled: false,
             commands,
             replies,
             in_flight,
@@ -254,6 +271,18 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn set_telemetry_enabled(&mut self, enabled: bool) {
+        if self.telemetry_enabled != enabled {
+            self.telemetry_enabled = enabled;
+            let _ = self.send(Command::Telemetry(enabled));
+        }
+    }
+    fn telemetry(&self) -> layer_render::RendererTelemetry {
+        self.telemetry
+            .try_lock()
+            .map(|t| t.clone())
+            .unwrap_or_default()
+    }
     fn request_thumbnail(
         &mut self,
         id: u64,
@@ -314,6 +343,7 @@ impl CanvasRenderer for RenderWorker {
                     source_revision: l.source_revision,
                     properties: l.properties.clone(),
                     operations: l.operations.clone(),
+                    effect: l.effect.clone(),
                     mask: l.mask.as_ref().map(|m| {
                         let mut m = m.clone();
                         m.strokes = Default::default();
@@ -407,7 +437,7 @@ impl Worker {
         }
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
-        let features = wgpu::Features::empty();
+        let features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
         #[cfg(test)]
         let features = features
             | (adapter.features()

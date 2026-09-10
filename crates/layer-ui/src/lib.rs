@@ -16,6 +16,11 @@ mod shortcuts;
 mod theme;
 mod workspace;
 pub use session::{LayerAction, LayerCanvasTool, LayersView};
+mod stats;
+pub use session::{
+    AdjustmentChoice, EffectAction, LayerPropertiesView, PropertyControl, PropertyKind,
+};
+pub use stats::{StatRow, StatsView};
 
 pub use camera::{Camera, TouchGesture};
 pub use cursor::{CanvasCursor, CursorMode};
@@ -219,7 +224,7 @@ pub struct UiCatalog {
     pub zen_icon_size: u32,
     pub panel_expansion_ms: u32,
     pub cursors: &'static [(CursorMode, &'static str)],
-    pub icons: &'static [&'static str],
+    pub icons: Vec<&'static str>,
     pub panels: Vec<PanelChoice>,
     pub toolbar: &'static [ToolbarControl],
     pub menus: &'static [MenuSpec],
@@ -239,7 +244,10 @@ pub fn ui_catalog() -> UiCatalog {
         text_size_pt: UI_TEXT_PT,
         panel_expansion_ms: PANEL_EXPANSION_MS,
         cursors: CursorMode::CHOICES,
-        icons: &[
+        icons: [
+            "adjustments",
+            "properties",
+            "stats",
             "brush",
             "eraser",
             "lasso",
@@ -286,7 +294,10 @@ pub fn ui_catalog() -> UiCatalog {
             "cursor-cross",
             "cursor-dot",
             "cursor-none",
-        ],
+        ]
+        .into_iter()
+        .chain(layer_core::BuiltinEffect::ALL.into_iter().map(|e| e.id()))
+        .collect(),
         panels: Panel::ALL
             .into_iter()
             .map(|id| PanelChoice {
@@ -465,6 +476,7 @@ pub struct BrushState {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LayerState {
     pub id: u64,
+    pub content_icon: Option<String>,
     pub label: String,
     pub editable: bool,
     pub visible: bool,
@@ -511,6 +523,8 @@ pub struct UiState {
     pub brush: BrushState,
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,
+    pub adjustments: Vec<AdjustmentChoice>,
+    pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
     pub commands: Vec<CommandState>,
     pub settings: Settings,
@@ -531,6 +545,9 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Effect {
+        action: EffectAction,
+    },
     Layer {
         action: LayerAction,
     },

@@ -510,6 +510,14 @@ impl Document {
         target.is_some()
     }
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
+        if (layer.kind == LayerKind::Effect) != layer.effect.is_some() {
+            return Err(DocumentError::InvalidLayerOperation("Invalid effect layer"));
+        }
+        if let Some(effect) = &layer.effect {
+            effect
+                .validate()
+                .map_err(DocumentError::InvalidLayerOperation)?;
+        }
         let paper = self.layers.iter().find(|l| l.kind == LayerKind::Background);
         if (layer.kind == LayerKind::Background
             && (paper.is_some_and(|p| p.id != layer.id)

@@ -73,6 +73,7 @@ impl App {
             let (device, queue) =
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                     label: Some("Capy Canvas Android"),
+                    required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                     required_limits: limits,
                     ..Default::default()
                 }))

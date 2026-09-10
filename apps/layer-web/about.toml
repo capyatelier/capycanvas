@@ -11,3 +11,13 @@ license = "MIT OR Apache-2.0"
 path = "LICENSE-MIT"
 license = "MIT"
 checksum = "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+
+# libm declares the complete library MIT at the start of LICENSE.txt. Its long
+# contributor Apache section confuses automatic detection; retain the entire
+# original file, including the math-library copyright notices at the end.
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+license = "MIT"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"

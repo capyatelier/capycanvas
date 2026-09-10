@@ -333,25 +333,32 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn apply_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
-        let rebuild = match &edit {
-            Edit::InsertStroke(_) | Edit::RemoveStroke { .. } => true,
-            Edit::InsertLayer { layer, .. } => !layer.strokes.is_empty() || layer.asset.is_some(),
-            Edit::Batch(_) => true,
-            Edit::ReplaceLayer(layer) => self.document().layer(layer.id).is_some_and(|old| {
-                old.strokes != layer.strokes
-                    || old.operations != layer.operations
-                    || old.asset != layer.asset
-                    || old
-                        .mask
-                        .as_ref()
-                        .map(|m| (&m.initial, m.id, m.default_coverage))
-                        != layer
+        fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
+            match edit {
+                Edit::InsertStroke(_) | Edit::RemoveStroke { .. } => true,
+                Edit::InsertLayer { layer, .. } => {
+                    !layer.strokes.is_empty() || layer.asset.is_some()
+                }
+                Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
+                // A batch may replace a layer inserted earlier in that batch;
+                // it is absent from this pre-edit snapshot, so be conservative.
+                Edit::ReplaceLayer(layer) => document.layer(layer.id).is_none_or(|old| {
+                    old.strokes != layer.strokes
+                        || old.operations != layer.operations
+                        || old.asset != layer.asset
+                        || old
                             .mask
                             .as_ref()
                             .map(|m| (&m.initial, m.id, m.default_coverage))
-            }),
-            _ => false,
-        };
+                            != layer
+                                .mask
+                                .as_ref()
+                                .map(|m| (&m.initial, m.id, m.default_coverage))
+                }),
+                _ => false,
+            }
+        }
+        let rebuild = rebuild_needed(self.document(), &edit);
         let changes_composite = !matches!(&edit, Edit::SetActiveLayer { .. });
         self.editor.perform(edit)?;
         self.rebuild_all |= rebuild;

@@ -11,7 +11,9 @@ use layer_core::{
 };
 use std::fmt;
 mod outline;
+mod telemetry;
 pub use outline::{TipOutline, mask_outline};
+pub use telemetry::{RendererTelemetry, TimingSamples};
 
 /// Display-only cursor line, already transformed to logical viewport pixels.
 /// Kept separate from brush dabs: cursors never touch document textures.
@@ -165,6 +167,10 @@ pub struct ReadbackImage {
 /// resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    fn set_telemetry_enabled(&mut self, _enabled: bool) {}
+    fn telemetry(&self) -> RendererTelemetry {
+        RendererTelemetry::default()
+    }
 
     /// Cached source-asset geometry for UI cursors; no GPU work or readback.
     fn tip_outline(&self, _asset: &AssetId) -> Option<&TipOutline> {

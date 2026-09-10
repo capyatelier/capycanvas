@@ -1080,6 +1080,10 @@ impl Workspace {
 
     fn panel_field(self: &Rc<Self>, control: PanelControl, group: &gtk::Box) -> Option<FieldValue> {
         Some(match control {
+            PanelControl::Adjustments | PanelControl::Properties | PanelControl::Stats => {
+                // These schema-driven surfaces already occupy their panel body.
+                return None;
+            }
             PanelControl::BrushSize => {
                 let input = crate::number_control::NumberControl::new(
                     NumericControl::brush_size(),

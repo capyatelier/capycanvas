@@ -35,6 +35,7 @@ pub struct LayerPanel {
 struct Row {
     id: Cell<u64>,
     content_image: gtk::Picture,
+    effect_icon: gtk::Image,
     mask_image: gtk::Picture,
     root: gtk::Box,
     eye: gtk::Button,
@@ -189,7 +190,7 @@ fn row_drag(
                 return None;
             }
             let row = row_state(&item)?;
-            if !row.editable && !row.group {
+            if !row.can_drop_below {
                 return None;
             }
             let w = owner.borrow().upgrade()?;
@@ -353,6 +354,10 @@ impl LayerPanel {
                 thumbnails.append(&clipping);
                 let (content, content_image, content_preview, content_frame) =
                     thumbnail("Edit layer content");
+                let effect_icon = gtk::Image::new();
+                effect_icon.set_pixel_size(24);
+                effect_icon.set_can_target(false);
+                content_preview.add_overlay(&effect_icon);
                 thumbnails.append(&content);
                 let link = button("layer-link-symbolic", "Link mask to layer");
                 link.add_css_class("layer-link");
@@ -656,6 +661,7 @@ impl LayerPanel {
                     Row {
                         id: Cell::new(0),
                         content_image,
+                        effect_icon,
                         mask_image,
                         root,
                         eye,
@@ -1125,7 +1131,7 @@ impl LayerPanel {
             for (mask, target, revision, picture) in [
                 (
                     false,
-                    Some(state.id),
+                    state.content_icon.is_none().then_some(state.id),
                     state.paint_revision,
                     &row.content_image,
                 ),
@@ -1203,6 +1209,9 @@ impl Row {
             self.mask_image.set_paintable(None::<&gdk::Paintable>);
         }
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
+        self.effect_icon.set_visible(s.content_icon.is_some());
+        self.content_image.set_visible(s.content_icon.is_none());
+        self.effect_icon.set_icon_name(s.content_icon.as_deref());
         self.name.set_text(&s.label);
         self.name.set_tooltip_text(Some(&s.label));
         self.thumbnails
@@ -1249,7 +1258,7 @@ impl Row {
         }));
         self.mask_image
             .set_opacity(if s.mask_enabled { 1. } else { 0.4 });
-        self.grip.set_visible(s.editable || s.group);
+        self.grip.set_visible(s.can_drop_below);
         if s.group {
             self.content.add_css_class("layer-folder");
             self.content.set_icon_name(if s.collapsed {

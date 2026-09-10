@@ -55,6 +55,197 @@ fn native_test_app(id: &str) -> NativeTestApp {
 }
 
 #[test]
+#[ignore = "private Wayland display and GPU"]
+fn native_adjustment_panels_review() {
+    use layer_core::{BuiltinEffect, EffectValue};
+    use layer_ui::EffectAction;
+    let app = native_test_app("art.capycanvas.AdjustmentReview");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(900);
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Dark),
+    });
+    let bytes: Vec<u8> = (0..512 * 512)
+        .flat_map(|i| {
+            let x = (i % 512) as f32 / 511.;
+            let y = (i / 512) as f32 / 511.;
+            [
+                (x * 255.) as u8,
+                (y * 255.) as u8,
+                ((1. - x) * 255.) as u8,
+                255,
+            ]
+        })
+        .collect();
+    w.gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .import_layer_image(
+            "Color study",
+            layer_render::HostImage {
+                width: 512,
+                height: 512,
+                stride: 2048,
+                format: layer_render::PixelFormat::Rgba8Srgb,
+                bytes: &bytes,
+            },
+        )
+        .unwrap();
+    w.refresh(regions::ALL);
+    w.wake();
+    pump(300);
+    let dir = "../../artifacts/ui/adjustments-gtk";
+    std::fs::create_dir_all(dir).unwrap();
+    w.dispatch(UiAction::SelectPanelTab {
+        group: 8,
+        panel: Panel::Adjustments,
+    });
+    pump(300);
+    crate::capture(&w, &format!("{dir}/01-adjustments.png"));
+    let first = w.effects.adjustments.child_at_index(0).unwrap();
+    let second = w.effects.adjustments.child_at_index(1).unwrap();
+    assert_eq!(first.width(), 108);
+    assert_eq!(first.height(), 72);
+    assert!(second.compute_bounds(&w.effects.adjustments).unwrap().x() > 100.);
+    for (i, kind) in BuiltinEffect::ALL.into_iter().enumerate() {
+        w.dispatch(UiAction::SelectPanelTab {
+            group: 8,
+            panel: Panel::Adjustments,
+        });
+        pump(80);
+        find_named(
+            w.effects.adjustments.upcast_ref(),
+            &format!("adjustment-{}", kind.id()),
+        )
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap()
+        .emit_clicked();
+        pump(180);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+        assert!(w.effects.properties.is_mapped());
+        let s = state(&w);
+        let id = s.layer_properties.layer.unwrap();
+        assert_eq!(s.layer_properties.description, kind.label());
+        if kind == BuiltinEffect::ColorBalance {
+            let mut headings = Vec::new();
+            let mut child = w.effects.properties.last_child().unwrap().first_child();
+            while let Some(widget) = child {
+                if widget.has_css_class("property-section") {
+                    headings.push(
+                        widget
+                            .downcast_ref::<gtk::Label>()
+                            .unwrap()
+                            .text()
+                            .to_string(),
+                    );
+                }
+                child = widget.next_sibling();
+            }
+            assert_eq!(headings, ["Shadows", "Midtones", "Highlights"]);
+        }
+        let (key, value) = match kind {
+            BuiltinEffect::Curves => (
+                "curve_0",
+                EffectValue::Curve(vec![[0., 0.], [0.4, 0.65], [1., 1.]]),
+            ),
+            BuiltinEffect::Levels => ("gamma", EffectValue::Number(1.5)),
+            BuiltinEffect::BrightnessContrast => ("contrast", EffectValue::Number(30.)),
+            BuiltinEffect::HueSaturation => ("hue", EffectValue::Number(40.)),
+            BuiltinEffect::ColorBalance => ("midtones_red", EffectValue::Number(25.)),
+            BuiltinEffect::Exposure => ("exposure", EffectValue::Number(1.)),
+            BuiltinEffect::Vibrance => ("vibrance", EffectValue::Number(75.)),
+            BuiltinEffect::BlackWhite => ("reds", EffectValue::Number(80.)),
+            BuiltinEffect::GradientMap => (
+                "gradient",
+                EffectValue::Gradient(vec![
+                    layer_core::GradientStop {
+                        position: 0.,
+                        color: [0.03, 0.05, 0.2, 1.],
+                    },
+                    layer_core::GradientStop {
+                        position: 0.5,
+                        color: [0.8, 0.2, 0.1, 1.],
+                    },
+                    layer_core::GradientStop {
+                        position: 1.,
+                        color: [1., 0.9, 0.5, 1.],
+                    },
+                ]),
+            ),
+            BuiltinEffect::Posterize => ("levels", EffectValue::Number(4.)),
+        };
+        w.dispatch(UiAction::Effect {
+            action: EffectAction::Set {
+                layer: id,
+                key: key.into(),
+                value,
+            },
+        });
+        pump(200);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+        if kind == BuiltinEffect::GradientMap {
+            let bar = find_named(w.effects.properties.upcast_ref(), "effect-gradient").unwrap();
+            let controllers = bar.observe_controllers();
+            for i in 0..controllers.n_items() {
+                if let Some(click) = controllers
+                    .item(i)
+                    .and_then(|c| c.downcast::<gtk::GestureClick>().ok())
+                {
+                    click.emit_by_name::<()>(
+                        "pressed",
+                        &[&1i32, &(bar.width() as f64 * 0.3), &20f64],
+                    );
+                }
+            }
+            pump(80);
+            let EffectValue::Gradient(stops) = &state(&w).layer_properties.controls[0].value else {
+                panic!("gradient control")
+            };
+            assert_eq!(
+                stops.len(),
+                4,
+                "native gradient insertion is handled by Rust"
+            );
+        }
+        crate::capture(&w, &format!("{dir}/{:02}-{}.png", i + 2, kind.id()));
+        w.dispatch(UiAction::SetLayerVisibility { id, visible: false });
+    }
+    w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetPanelVisible {
+            panel: Panel::Stats,
+            visible: true,
+        },
+    });
+    pump(300);
+    let layer = state(&w).layer_properties.layer.unwrap();
+    w.dispatch(UiAction::SetLayerVisibility {
+        id: layer,
+        visible: true,
+    });
+    for i in 0..16 {
+        w.dispatch(UiAction::Effect {
+            action: EffectAction::Set {
+                layer,
+                key: "levels".into(),
+                value: EffectValue::Number(i as f32 + 2.),
+            },
+        });
+        pump(20);
+    }
+    pump(250);
+    let stats = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+    assert!(!stats.samples.is_empty(), "live CPU samples");
+    assert_ne!(stats.rows[1].value, "—", "live GPU timestamps");
+    crate::capture(&w, &format!("{dir}/07-stats.png"));
+    w.window.close();
+    pump(80);
+}
+
+#[test]
 #[ignore = "requires the private Wayland display and hardware GPU"]
 fn native_layer_panel_review() {
     use layer_ui::{LayerAction as A, LayerCanvasTool as T};
@@ -5187,7 +5378,7 @@ fn native_cursor_vectors() {
     w.window.present();
     pump(1800);
     let theme = gtk::IconTheme::for_display(&w.area.display());
-    for &icon in ui_catalog().icons {
+    for icon in ui_catalog().icons {
         for scale in [1, 2] {
             let asset = theme.lookup_icon(
                 &format!("layer-{icon}-symbolic"),

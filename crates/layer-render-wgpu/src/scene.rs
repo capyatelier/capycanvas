@@ -4,10 +4,18 @@ use super::*;
 
 #[derive(Clone)]
 enum Job {
+    Effect {
+        target: wgpu::TextureView,
+        sources: [wgpu::TextureView; 2],
+        data: [f32; 24],
+        prepared: effects::PreparedEffect,
+        // Keep ordinary draw jobs small: only effects carry the mask inputs.
+        masks: Box<[wgpu::TextureView; effects::MASK_SLOTS]>,
+    },
     Draw {
         target: wgpu::TextureView,
         sources: [wgpu::TextureView; 2],
-        data: [f32; 16],
+        data: [f32; 24],
         over: bool,
     },
     Clear(wgpu::TextureView, wgpu::Color),
@@ -39,8 +47,15 @@ pub(super) struct Scene {
     record_count: usize,
     upload: Vec<u8>,
     pipeline: [wgpu::RenderPipeline; 2],
+    pub(super) effects: effects::Effects,
+    pub effect_passes: u64,
 }
 impl Scene {
+    pub fn scratch_bytes(&self) -> u64 {
+        self.pool.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4
+            + (self.capacity * self.stride) as u64
+            + self.effects.storage_bytes()
+    }
     pub fn initialize_images(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -56,7 +71,7 @@ impl Scene {
                 continue;
             };
             for page in &stored.pages {
-                let mut data = [0.; 16];
+                let mut data = [0.; 24];
                 data[..4].copy_from_slice(&[
                     -((page.coordinate[0] * PAGE_SIZE) as f32),
                     -((page.coordinate[1] * PAGE_SIZE) as f32),
@@ -77,6 +92,7 @@ impl Scene {
     }
     pub fn begin_frame(&mut self) {
         self.record_count = 0;
+        self.effect_passes = 0;
     }
     pub fn new(r: &WgpuRasterizer) -> Self {
         let device = &r.device;
@@ -88,7 +104,7 @@ impl Scene {
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(64),
+                    min_binding_size: NonZeroU64::new(96),
                 },
                 count: None,
             }],
@@ -126,7 +142,7 @@ impl Scene {
                 "tile layer composition",
             )
         });
-        let stride = device.limits().min_uniform_buffer_offset_alignment.max(64) as usize;
+        let stride = device.limits().min_uniform_buffer_offset_alignment.max(96) as usize;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
             size: stride as u64 * 128,
@@ -134,6 +150,7 @@ impl Scene {
             mapped_at_creation: false,
         });
         let binding = uniform_binding(device, &uniforms, &buffer);
+        let effects = effects::Effects::new(r, &uniforms, &layout);
         Self {
             style_base: 0,
             pool: Vec::new(),
@@ -148,9 +165,17 @@ impl Scene {
             record_count: 0,
             upload: Vec::new(),
             pipeline,
+            effects,
+            effect_passes: 0,
         }
     }
     fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> usize {
+        let id = self.reserve(r);
+        self.jobs
+            .push(Job::Clear(self.pool[id].view.clone(), color));
+        id
+    }
+    fn reserve(&mut self, r: &WgpuRasterizer) -> usize {
         let id = self
             .used
             .iter()
@@ -161,12 +186,109 @@ impl Scene {
             self.used.push(false);
         }
         self.used[id] = true;
-        self.jobs
-            .push(Job::Clear(self.pool[id].view.clone(), color));
         id
     }
     fn free(&mut self, id: usize) {
         self.used[id] = false;
+    }
+    fn effect(
+        &mut self,
+        r: &WgpuRasterizer,
+        packet: FramePacket<'_>,
+        indices: &[usize],
+        tile: [u32; 2],
+        input: usize,
+    ) -> Result<usize, GpuRasterError> {
+        let layers: Vec<_> = indices.iter().map(|i| &packet.layers[*i]).collect();
+        let prepared = self.effects.prepare(r, &layers)?;
+        let layer = layers[0];
+        let mask =
+            if indices.len() == 1 && !direct_effect_mask(packet.layers, layer) {
+                layer.mask.as_ref().filter(|m| m.enabled).map(|m| {
+                    self.mask_tile(r, m, world_offset(packet.layers, layer.id, true), tile)
+                })
+            } else {
+                None
+            };
+        let out = self.reserve(r);
+        let mut data = [0.; 24];
+        data[..4].copy_from_slice(&[0., 0., 256., 256.]);
+        data[4..6].copy_from_slice(&[256., 256.]);
+        data[11] = f32::from(mask.is_some());
+        let mut masks = Box::new(std::array::from_fn(|_| r.empty_view.clone()));
+        let mut present = 0u32;
+        let mut inverted = 0u32;
+        if mask.is_none() {
+            for (i, l) in layers.iter().enumerate().take(effects::MASK_SLOTS) {
+                if let Some(m) = l.mask.as_ref().filter(|m| m.enabled)
+                    && let Some(page) = r.layer_masks.pages.get(&(m.id, tile))
+                {
+                    masks[i] = page.view.clone();
+                    present |= 1 << i;
+                    if m.inverted {
+                        inverted |= 1 << i;
+                    }
+                }
+            }
+        }
+        data[6] = present as f32;
+        data[7] = inverted as f32;
+        data[12..16].copy_from_slice(&[
+            (tile[0] * PAGE_SIZE) as f32,
+            (tile[1] * PAGE_SIZE) as f32,
+            packet.document_extent[0] as f32,
+            packet.document_extent[1] as f32,
+        ]);
+        let mut sources = [
+            self.pool[input].view.clone(),
+            mask.map_or_else(|| r.empty_view.clone(), |m| self.pool[m].view.clone()),
+        ];
+        // Lower a source-over operation followed by an adjustment into one
+        // shader invocation. No intermediate color tile or pass is necessary.
+        // This is program-independent; masks and nonlocal operations delimit it.
+        if mask.is_none() && self.jobs.len() >= 2 {
+            let n = self.jobs.len();
+            if let (
+                Job::Clear(clear, bg),
+                Job::Draw {
+                    target,
+                    sources: paint,
+                    data: paint_data,
+                    over: true,
+                },
+            ) = (&self.jobs[n - 2], &self.jobs[n - 1])
+                && *clear == self.pool[input].view
+                && target == clear
+                && paint_data[..4] == [0., 0., 256., 256.]
+                && (paint_data[8] == 7. || paint_data[8] == 1.)
+            {
+                sources = paint.clone();
+                data[16..20].copy_from_slice(&[
+                    paint_data[9],
+                    if paint_data[8] == 1. {
+                        1.
+                    } else {
+                        paint_data[10]
+                    },
+                    paint_data[11],
+                    1.,
+                ]);
+                data[20..24].copy_from_slice(&[bg.r as f32, bg.g as f32, bg.b as f32, bg.a as f32]);
+                self.jobs.truncate(n - 2);
+            }
+        }
+        self.jobs.push(Job::Effect {
+            target: self.pool[out].view.clone(),
+            sources,
+            data,
+            prepared,
+            masks,
+        });
+        self.free(input);
+        if let Some(m) = mask {
+            self.free(m);
+        }
+        Ok(out)
     }
     #[allow(clippy::too_many_arguments)] // Explicit tile draw operands.
     fn draw(
@@ -179,7 +301,7 @@ impl Scene {
         options: [f32; 4],
         over: bool,
     ) {
-        let mut data = [0.; 16];
+        let mut data = [0.; 24];
         data[..4].copy_from_slice(&rect);
         data[4..8].copy_from_slice(&[256., 256., 0., 0.]);
         data[8..12].copy_from_slice(&options);
@@ -199,6 +321,31 @@ impl Scene {
         blend: layer_core::LayerBlend,
         clip: bool,
     ) -> usize {
+        // An isolated clipping stack over a constant backdrop needs no color
+        // intermediate after its last adjustment. Fold that final composite.
+        let n = self.jobs.len();
+        if !clip && n >= 2 {
+            let bg = if let Job::Clear(view, color) = &self.jobs[n - 2] {
+                (*view == self.pool[back].view).then_some(*color)
+            } else {
+                None
+            };
+            if let Some(bg) = bg
+                && let Job::Effect { target, data, .. } = &mut self.jobs[n - 1]
+                && *target == self.pool[front].view
+            {
+                data[8] = 1.;
+                data[9] = opacity;
+                data[10] = blend as u32 as f32;
+                if data[19] > 0.5 {
+                    data[19] = 2.;
+                }
+                data[20..24].copy_from_slice(&[bg.r as f32, bg.g as f32, bg.b as f32, bg.a as f32]);
+                self.jobs.remove(n - 2);
+                self.free(back);
+                return front;
+            }
+        }
         let out = self.alloc(r, wgpu::Color::TRANSPARENT);
         self.draw(
             r,
@@ -260,10 +407,14 @@ impl Scene {
         packet: FramePacket<'_>,
         index: usize,
         tile: [u32; 2],
-    ) -> usize {
+    ) -> Result<usize, GpuRasterError> {
         let layer = &packet.layers[index];
         let out = if layer.kind == LayerKind::Group {
-            self.group(r, packet, Some(layer.id), tile)
+            self.group(r, packet, Some(layer.id), tile)?
+        } else if layer.kind == LayerKind::Effect {
+            let input = self.alloc(r, wgpu::Color::TRANSPARENT);
+            // Generator coverage is applied below with ordinary layer masks.
+            self.effect(r, packet, &[index], tile, input)?
         } else {
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             let offset = world_offset(packet.layers, layer.id, false);
@@ -368,9 +519,9 @@ impl Scene {
             );
             self.free(out);
             self.free(m);
-            result
+            Ok(result)
         } else {
-            out
+            Ok(out)
         }
     }
     fn group(
@@ -379,7 +530,7 @@ impl Scene {
         packet: FramePacket<'_>,
         parent: Option<LayerId>,
         tile: [u32; 2],
-    ) -> usize {
+    ) -> Result<usize, GpuRasterError> {
         let mut output = self.alloc(
             r,
             if parent.is_none() {
@@ -395,13 +546,55 @@ impl Scene {
             },
         );
         let mut stack: Option<(usize, usize)> = None;
-        for (i, layer) in packet
+        let mut siblings = packet
             .layers
             .iter()
             .enumerate()
             .rev()
             .filter(|(_, l)| l.properties.parent == parent && l.kind != LayerKind::Background)
-        {
+            .peekable();
+        while let Some((i, layer)) = siblings.next() {
+            if layer
+                .effect
+                .as_ref()
+                .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
+            {
+                if !layer.properties.clipped
+                    && let Some((pixels, base)) = stack.take()
+                {
+                    let b = &packet.layers[base];
+                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+                }
+                if !layer.visible {
+                    continue;
+                }
+                let mut chain = vec![i];
+                if direct_effect_mask(packet.layers, layer) {
+                    while let Some((j, next)) = siblings.peek() {
+                        if !next.visible
+                            || next.properties.clipped != layer.properties.clipped
+                            || !direct_effect_mask(packet.layers, next)
+                            || (chain.len() >= effects::MASK_SLOTS
+                                && next.mask.as_ref().is_some_and(|m| m.enabled))
+                            || !next.effect.as_ref().is_some_and(|e| {
+                                e.program.kind == layer_core::EffectKind::Adjustment
+                            })
+                        {
+                            break;
+                        }
+                        chain.push(*j);
+                        siblings.next();
+                    }
+                }
+                if layer.properties.clipped {
+                    if let Some((pixels, base)) = stack.take() {
+                        stack = Some((self.effect(r, packet, &chain, tile, pixels)?, base));
+                    }
+                } else {
+                    output = self.effect(r, packet, &chain, tile, output)?;
+                }
+                continue;
+            }
             if !layer.properties.clipped {
                 if let Some((pixels, base)) = stack.take() {
                     let b = &packet.layers[base];
@@ -419,18 +612,18 @@ impl Scene {
                     continue;
                 }
                 if layer.visible
-                    && (layer.kind == LayerKind::Group
+                    && (matches!(layer.kind, LayerKind::Group | LayerKind::Effect)
                         || r.paint_layers
                             .iter()
                             .any(|l| l.id == layer.id && !l.pages.is_empty())
                         || r.preview_layer_id == Some(layer.id))
                 {
-                    stack = Some((self.layer(r, packet, i, tile), i));
+                    stack = Some((self.layer(r, packet, i, tile)?, i));
                 }
             } else if layer.visible
                 && let Some((pixels, base)) = stack.take()
             {
-                let source = self.layer(r, packet, i, tile);
+                let source = self.layer(r, packet, i, tile)?;
                 stack = Some((
                     self.combine(
                         r,
@@ -448,7 +641,7 @@ impl Scene {
             let b = &packet.layers[base];
             output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
         }
-        output
+        Ok(output)
     }
 
     // A normal paint tile with an aligned scalar mask needs one source-over
@@ -649,10 +842,11 @@ impl Scene {
         encoder: &mut wgpu::CommandEncoder,
         overlay: bool,
     ) -> Result<(), GpuRasterError> {
+        self.effects.retain(packet.layers);
         self.jobs.clear();
         self.used.fill(false);
         for tile in page_coordinates(dirty) {
-            let mut output = self.group(r, packet, None, tile);
+            let mut output = self.group(r, packet, None, tile)?;
             if overlay {
                 for layer in packet.layers {
                     if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && m.show_area) {
@@ -685,6 +879,23 @@ impl Scene {
                 }
             }
             let origin = [tile[0] * PAGE_SIZE, tile[1] * PAGE_SIZE];
+            // The last effect already writes every pixel. Write directly into
+            // the composite region instead of copying its scratch result.
+            if let Some(Job::Effect { target, data, .. }) = self.jobs.last_mut()
+                && *target == self.pool[output].view
+            {
+                *target = r.composite_view.as_ref().unwrap().clone();
+                data[..6].copy_from_slice(&[
+                    origin[0] as f32,
+                    origin[1] as f32,
+                    PAGE_SIZE.min(packet.document_extent[0] - origin[0]) as f32,
+                    PAGE_SIZE.min(packet.document_extent[1] - origin[1]) as f32,
+                    packet.document_extent[0] as f32,
+                    packet.document_extent[1] as f32,
+                ]);
+                self.free(output);
+                continue;
+            }
             self.jobs.push(Job::Copy {
                 source: self.pool[output].texture.clone(),
                 destination: r.composite_texture.as_ref().unwrap().clone(),
@@ -699,6 +910,8 @@ impl Scene {
         Ok(())
     }
 
+    // wgpu handles hash by stable resource identity, not mutable GPU contents.
+    #[allow(clippy::mutable_key_type)]
     fn encode_jobs(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -718,7 +931,7 @@ impl Scene {
         }
         self.upload.resize(self.jobs.len() * self.stride, 0);
         for (i, job) in self.jobs.iter().enumerate() {
-            if let Job::Draw { data, .. } = job {
+            if let Job::Draw { data, .. } | Job::Effect { data, .. } = job {
                 for (j, v) in data.iter().enumerate() {
                     self.upload[i * self.stride + j * 4..i * self.stride + j * 4 + 4]
                         .copy_from_slice(&v.to_ne_bytes());
@@ -734,9 +947,16 @@ impl Scene {
                 &self.upload,
             );
         }
+        let mut source_bindings = std::collections::HashMap::new();
+        let mut mask_bindings = std::collections::HashMap::new();
+        let mut encoded_through = 0;
         for (i, job) in self.jobs.iter().enumerate() {
+            if i < encoded_through {
+                continue;
+            }
             match job {
                 Job::Clear(target, color) => {
+                    if self.jobs.get(i+1).is_some_and(|next|matches!(next,Job::Draw{target:next,..}|Job::Effect{target:next,..} if next==target)) {continue;}
                     let attachments = [Some(attachment(target, wgpu::LoadOp::Clear(*color)))];
                     let _pass = encoder.begin_render_pass(&descriptor(&attachments));
                 }
@@ -763,36 +983,78 @@ impl Scene {
                         depth_or_array_layers: 1,
                     },
                 ),
-                Job::Draw {
-                    target,
-                    sources,
-                    over,
-                    ..
-                } => {
-                    let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("scene tile inputs"),
-                        layout: &self.layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&sources[0]),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(&sources[1]),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::Sampler(&r.sampler),
-                            },
-                        ],
-                    });
-                    let attachments = [Some(attachment(target, wgpu::LoadOp::Load))];
+                Job::Draw { target, .. } | Job::Effect { target, .. } => {
+                    let end=(i+1..self.jobs.len()).find(|&j|!matches!(&self.jobs[j],Job::Draw{target:next,..}|Job::Effect{target:next,..} if next==target)).unwrap_or(self.jobs.len());
+                    let load = if i > 0
+                        && let Job::Clear(previous, color) = &self.jobs[i - 1]
+                        && previous == target
+                    {
+                        wgpu::LoadOp::Clear(*color)
+                    } else {
+                        wgpu::LoadOp::Load
+                    };
+                    let attachments = [Some(attachment(target, load))];
                     let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
-                    pass.set_pipeline(&self.pipeline[usize::from(*over)]);
-                    pass.set_bind_group(0, &self.binding, &[((base + i) * self.stride) as u32]);
-                    pass.set_bind_group(1, &binding, &[]);
-                    pass.draw(0..3, 0..1);
+                    if self.jobs[i..end]
+                        .iter()
+                        .any(|j| matches!(j, Job::Effect { .. }))
+                    {
+                        self.effect_passes += 1;
+                    }
+                    for (j, job) in self.jobs.iter().enumerate().take(end).skip(i) {
+                        let sources = match job {
+                            Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
+                            _ => unreachable!(),
+                        };
+                        let binding = source_bindings.entry(sources).or_insert_with(|| {
+                            r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("scene tile inputs"),
+                                layout: &self.layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&sources[0]),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::TextureView(&sources[1]),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: wgpu::BindingResource::Sampler(&r.sampler),
+                                    },
+                                ],
+                            })
+                        });
+                        if let Job::Effect {
+                            prepared, masks, ..
+                        } = job
+                        {
+                            pass.set_pipeline(&prepared.pipeline);
+                            pass.set_bind_group(2, &prepared.binding, &[]);
+                            let masks = mask_bindings.entry(masks.as_ref()).or_insert_with(|| {
+                                r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: Some("effect tile masks"),
+                                    layout: &self.effects.masks,
+                                    entries: &masks
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, m)| wgpu::BindGroupEntry {
+                                            binding: i as u32,
+                                            resource: wgpu::BindingResource::TextureView(m),
+                                        })
+                                        .collect::<Vec<_>>(),
+                                })
+                            });
+                            pass.set_bind_group(3, &*masks, &[]);
+                        } else if let Job::Draw { over, .. } = job {
+                            pass.set_pipeline(&self.pipeline[usize::from(*over)]);
+                        }
+                        pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
+                        pass.set_bind_group(1, &*binding, &[]);
+                        pass.draw(0..3, 0..1);
+                    }
+                    encoded_through = end;
                 }
                 Job::Watercolor {
                     target,
@@ -812,6 +1074,11 @@ impl Scene {
         }
         Ok(())
     }
+}
+fn direct_effect_mask(layers: &[Layer], layer: &Layer) -> bool {
+    layer.mask.as_ref().is_none_or(|m| {
+        !m.enabled || world_offset(layers, layer.id, true) == layer_core::Point::default()
+    })
 }
 fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
@@ -838,7 +1105,7 @@ fn uniform_binding(
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer,
                 offset: 0,
-                size: NonZeroU64::new(64),
+                size: NonZeroU64::new(96),
             }),
         }],
     })

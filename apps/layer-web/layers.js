@@ -90,7 +90,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     Object.assign(record, { eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
     let drag;
     row.addEventListener("pointerdown", e => {
-      if (e.button || e.target.closest("input") || (e.pointerType === "touch" && !grip.contains(e.target)) || !(get().editable || get().group)) return;
+      if (e.button || e.target.closest("input") || (e.pointerType === "touch" && !grip.contains(e.target)) || !get().can_drop_below) return;
       drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId };
     });
     row.addEventListener("workspace-context-claimed", () => { drag = null; });
@@ -154,13 +154,14 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       r.mask.b.classList.toggle("editing-target", layer.mask_selected);
       r.content.b.classList.toggle("layer-folder", layer.group);
       if (layer.group) r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
+      else if(layer.content_icon) r.content.b.replaceChildren(icon(nameIcon(layer.content_icon)));
       else if (!r.content.image.isConnected) r.content.b.replaceChildren(r.content.image);
       r.mask.b.hidden = r.link.hidden = !layer.has_mask; r.mask.image.style.opacity = layer.mask_enabled ? 1 : .4;
       r.link.style.opacity = layer.mask_linked ? 1 : .35; r.link.title = r.link.ariaLabel = layer.mask_linked ? "Unlink mask from layer" : "Link mask to layer";
       r.name.textContent = layer.label; r.name.title = layer.label;
       r.meta.textContent = [layer.blend ? layer.blend_label : "", layer.opacity < 1 ? `${Math.round(layer.opacity*100)}%` : ""].filter(Boolean).join(" · ");
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;
-      r.grip.hidden = !(layer.editable || layer.group);
+      r.grip.hidden = !layer.can_drop_below;
       if (view.rename_layer === layer.id && !r.entry) {
         const input = element("input", "layer-name-entry"); input.value = layer.label; input.maxLength = 128; r.entry = input; r.name.hidden = true; r.text.prepend(input);
         let finished = false;
@@ -183,7 +184,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       for (const [id, r] of records) {
         const rect = r.row.getBoundingClientRect(); if (rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0) continue;
         for (const mask of [false,true]) {
-          if (mask ? !r.layer.has_mask : r.layer.group) continue;
+          if (mask ? !r.layer.has_mask : r.layer.group || r.layer.content_icon) continue;
           const key = `${id}:${mask}`, revision = String(mask ? r.layer.mask_revision : r.layer.paint_revision);
           if (revisions.get(key) === revision || pending.size >= 8) continue;
           const token = ++request;

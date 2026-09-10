@@ -79,6 +79,9 @@ pub enum PanelControl {
     Layers,
     LayerActions,
     LayerOpacity,
+    Adjustments,
+    Properties,
+    Stats,
 }
 impl PanelControl {
     pub fn label(self) -> &'static str {
@@ -91,6 +94,9 @@ impl PanelControl {
             Self::Layers => "Layers",
             Self::LayerActions => "Layer actions",
             Self::LayerOpacity => "Layer opacity",
+            Self::Adjustments => "Filters",
+            Self::Properties => "Properties",
+            Self::Stats => "Stats for nerds",
         }
     }
     pub fn available(panel: Panel) -> &'static [Self] {
@@ -108,6 +114,9 @@ impl PanelControl {
                 Self::BrushColor,
             ],
             Panel::Layers => &[Self::LayerActions, Self::Layers, Self::LayerOpacity],
+            Panel::Adjustments => &[Self::Adjustments],
+            Panel::Properties => &[Self::Properties],
+            Panel::Stats => &[Self::Stats],
             _ => &[],
         }
     }
@@ -115,7 +124,9 @@ impl PanelControl {
         match panel {
             Panel::Brushes => &[Self::Brushes],
             Panel::Sizes => &[Self::BrushSize, Self::SizePresets],
-            Panel::Layers => Self::available(panel),
+            Panel::Layers | Panel::Adjustments | Panel::Properties | Panel::Stats => {
+                Self::available(panel)
+            }
             _ => &[],
         }
     }
@@ -1572,7 +1583,7 @@ mod tests {
                     bad["layout"]["panels"][0]["content"]["tiles"][1]["id"] = serde_json::json!(1)
                 }
                 "missing_panel" => {
-                    bad["layout"]["panels"].as_array_mut().unwrap().pop();
+                    bad["layout"]["panels"].as_array_mut().unwrap().remove(1);
                 }
                 "wrong_control" => {
                     bad["layout"]["panels"][1]["content"]["visible"] =
@@ -1653,7 +1664,7 @@ mod tests {
         );
         edit(&mut state, &mut layout, CustomizationAction::ConfirmTools);
         assert!(state.picker.is_none());
-        assert_eq!(layout.panels.len(), 5);
+        assert_eq!(layout.panels.len(), Panel::ALL.len() + 1);
         assert_eq!(layout.panels.last().unwrap().tiles()[0].control, PEN);
         let before = layout.clone();
         edit(

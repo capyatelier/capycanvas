@@ -635,6 +635,7 @@ pub struct Workspace {
     opacity: crate::number_control::NumberControl,
     color: gtk::ColorDialogButton,
     pub(crate) layer_panel: crate::layers::LayerPanel,
+    pub(crate) effects: crate::effects::EffectPanels,
     tab: gtk::Label,
     view_info: gtk::Label,
     status: gtk::Label,
@@ -716,6 +717,7 @@ impl Workspace {
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layer_panel = crate::layers::LayerPanel::new();
+        let effects = crate::effects::EffectPanels::new();
         let size_number = crate::number_control::NumberControl::new(
             NumericControl::brush_size(),
             "Brush size",
@@ -757,6 +759,9 @@ impl Workspace {
                 (Panel::Brushes, scroll(&brushes)),
                 (Panel::Sizes, scroll(&sizes)),
                 (Panel::Layers, layer_panel.root.clone().upcast()),
+                (Panel::Adjustments, scroll(&effects.adjustments)),
+                (Panel::Properties, scroll(&effects.properties)),
+                (Panel::Stats, scroll(&effects.stats)),
             ],
             commands: RefCell::new(Vec::new()),
             menus: RefCell::new(Vec::new()),
@@ -768,6 +773,7 @@ impl Workspace {
             opacity,
             color,
             layer_panel,
+            effects,
             tab,
             view_info,
             status,
@@ -890,6 +896,18 @@ impl Workspace {
             .track(Panel::Sizes, PanelControl::SizePresets, &grid);
         self.append_panel_fields(Panel::Sizes, sizes);
         self.layer_panel.bind(self);
+        self.customization.track(
+            Panel::Adjustments,
+            PanelControl::Adjustments,
+            &self.effects.adjustments,
+        );
+        self.customization.track(
+            Panel::Properties,
+            PanelControl::Properties,
+            &self.effects.properties,
+        );
+        self.customization
+            .track(Panel::Stats, PanelControl::Stats, &self.effects.stats);
         self.customization.track(
             Panel::Layers,
             PanelControl::LayerActions,
@@ -1592,6 +1610,7 @@ impl Workspace {
         }
         if regions & regions::DOCUMENT != 0 {
             self.layer_panel.refresh(&state);
+            self.effects.refresh(self, &state);
             if let Some(tab) = state.tabs.first() {
                 self.tab
                     .set_text(&format!("{} · {} × {}", tab.title, tab.width, tab.height));

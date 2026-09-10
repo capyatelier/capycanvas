@@ -4,6 +4,7 @@ import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
+import { createEffectPanels } from "./effects.js";
 
 // The static packager fills this map with fingerprinted artwork filenames.
 const assetPaths = {};
@@ -33,7 +34,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel;
+let refreshPreferences, customization, layerPanel, effectPanels;
 let gpuStarting = false;
 let gpuReady = false;
 let servicingRequests = false;
@@ -573,6 +574,8 @@ function buildPanels() {
   }
   panels.get("sizes").append(controls, grid);
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField });
+  effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
+    contentChanged:id=>{panelMeasurements.delete(id);queuePanelMeasurements();}});
 }
 function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 128)) customization.refresh();
@@ -591,6 +594,7 @@ function update(regions) {
     $("document-title").textContent =
       `${tab.title} · ${tab.width} × ${tab.height}`;
     layerPanel.refresh();
+    effectPanels.refresh();
   }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();

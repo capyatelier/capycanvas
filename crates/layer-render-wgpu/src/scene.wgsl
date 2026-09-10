@@ -3,6 +3,8 @@ struct Settings {
     extent: vec4<f32>,
     options: vec4<f32>,
     color: vec4<f32>,
+    source_over: vec4<f32>,
+    backdrop: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(1) @binding(0) var front: texture_2d<f32>;

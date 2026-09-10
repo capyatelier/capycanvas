@@ -431,3 +431,28 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 }
 @media (prefers-reduced-motion: reduce) { .chrome, .dock-group { transition: none; } }
 @media (max-width: 640px) { #document-title { display: none; } }
+/* Schema-driven adjustment, property and diagnostic panels. */
+.adjustments-panel,.properties-panel,.stats-panel { padding: 0; }
+.adjustment-grid { display:grid; grid-template-columns:repeat(auto-fit,108px); grid-auto-rows:72px; gap:2px; margin:4px; }
+.adjustment-grid .adjustment-tile { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; padding:4px; min-width:0; min-height:0; font-weight:400; line-height:18px; }
+.adjustment-tile svg { width:24px; height:24px; flex:none; }
+.effect-properties,.renderer-stats { margin:6px; }
+.effect-properties h3 { font-size:inherit; margin:0 0 6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.property-controls { display:flex; flex-direction:column; gap:6px; }
+.property-divider { border:0; border-top:1px solid color-mix(in srgb,var(--text) 15%,transparent); margin:3px 0; }
+.property-section { font-size:inherit; font-weight:700; margin:0 0 0 6px; }
+.property-row { display:flex; align-items:center; gap:6px; justify-content:space-between; min-width:0; }
+.property-row > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.property-row select { min-width:0; max-width:60%; }
+.property-controls select { background:var(--input); padding:4px 10px; }
+.property-controls.disabled { opacity:.4; pointer-events:none; }
+.curve-editor { display:block; width:100%; height:200px; background:color-mix(in srgb,var(--text) 12%,transparent); pointer-events:auto; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+.curve-editor * { pointer-events:none; }
+.gradient-editor { display:flex; flex-direction:column; gap:6px; }
+.gradient-ramp { height:32px; margin:0 6px; border-radius:4px; cursor:crosshair; }
+.gradient-stops { position:relative; height:14px; margin:0 6px; }
+.gradient-stops button { position:absolute; padding:0; width:10px; min-width:0; height:10px; border-radius:50%; transform:translateX(-50%); border:1px solid var(--text); }
+.gradient-stops button.selected { outline:2px solid var(--text); outline-offset:1px; }
+.renderer-stats { display:flex; flex-direction:column; gap:6px; }
+.renderer-stats .numeric { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.renderer-chart { display:block; width:100%; height:46px; }

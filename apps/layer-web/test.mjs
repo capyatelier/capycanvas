@@ -6,6 +6,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkParity } from "./parity.mjs";
 import { checkLayers } from "./layers.test.mjs";
+import { checkAdjustments } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup } from "./gpu.test.mjs";
@@ -165,7 +166,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--layers")) {
+  if (process.argv.includes("--adjustments")) {
+    await checkAdjustments({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--layers")) {
     await checkLayers({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--toolbar-manager")) {

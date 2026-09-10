@@ -8,6 +8,14 @@ import test from "node:test";
 import { checkRuntime, dependencyNotices, filesIn, fingerprintAssets, writeWorker } from "./package.mjs";
 import { gpuEnvironment, gpuProblem } from "./gpu.js";
 
+test("outlined filter icons work without GTK's symbolic CSS", () => {
+  for (const name of ["exposure", "vibrance", "black_white", "gradient_map", "posterize"]) {
+    const svg = readFileSync(new URL(`./icons/layer-${name}-symbolic.svg`, import.meta.url), "utf8");
+    assert.match(svg, /<svg\b[^>]*fill="none"/);
+    if (name === "black_white") assert.match(svg, /<path\b[^>]*fill="currentColor"/);
+  }
+});
+
 test("GPU help distinguishes missing support, insecure access and no adapter", () => {
   assert.match(gpuProblem({ secure: false, api: false })[1], /secure connection/);
   assert.match(gpuProblem({ secure: true, api: false })[1], /WebGPU is not available/);
@@ -65,9 +73,10 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
-    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nconst assetPaths = {};',
+    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nconst assetPaths = {};',
     "numeric.js": "export function createNumberField() {}",
     "layers.js": "export function createLayerPanel() {}",
+    "effects.js": "export function createEffectPanels() {}",
     "preferences.js": "export function createPreferences() {}",
     "gpu.js": "export function showGpuNotice() {}",
     "customization.js": "export function createCustomization() {}",

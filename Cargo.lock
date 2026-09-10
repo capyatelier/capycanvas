@@ -848,6 +848,9 @@ dependencies = [
 [[package]]
 name = "layer-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "layer-engine"
@@ -902,7 +905,9 @@ version = "0.1.0"
 dependencies = [
  "layer-core",
  "layer-render",
+ "naga",
  "pollster",
+ "web-time",
  "wgpu",
 ]
 
@@ -1874,6 +1879,16 @@ name = "web-sys"
 version = "0.3.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fbddc4a036f00ec4f18c83445bd3115cb306a91da554919a099d9222fe4a7f8"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

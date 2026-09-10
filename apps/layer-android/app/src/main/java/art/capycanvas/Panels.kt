@@ -84,7 +84,7 @@ import kotlin.math.roundToInt
         return
     }
     Box(modifier) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(if (layers) 12.dp else 8.dp),
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
                 when (item.getString("control")) {
@@ -98,6 +98,9 @@ import kotlin.math.roundToInt
                     }
                     "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
                     "layers" -> LayerPanel(host, state, Modifier.heightIn(min = 240.dp, max = 480.dp))
+                    "adjustments" -> AdjustmentPanel(host, state)
+                    "properties" -> LayerPropertiesPanel(host, state)
+                    "stats" -> RendererStatsPanel(host)
                     "layer_actions" -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         host.catalog.array("layer_commands").values().forEach { id ->
                             state.array("commands").objects().find { it.getString("id") == id }?.let { command ->

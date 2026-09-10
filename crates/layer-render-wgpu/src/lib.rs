@@ -19,11 +19,13 @@ use layer_render::{
 };
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
+mod effects;
 mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
 mod present;
 mod scene;
+mod telemetry;
 mod thumbnails;
 pub use present::ViewportPresenter;
 
@@ -46,7 +48,7 @@ fn needs_scene(layers: &[Layer]) -> bool {
     layers.iter().any(|l| {
         !l.operations.is_empty()
             || l.mask.is_some()
-            || l.kind == LayerKind::Group
+            || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
             || l.properties.clipped
             || l.properties.parent.is_some()
             || l.properties.blend != layer_core::LayerBlend::Normal
@@ -155,11 +157,13 @@ pub enum GpuRasterError {
     SizeOverflow,
     MapFailed(String),
     WaitFailed(String),
+    Effect(String),
 }
 
 impl fmt::Display for GpuRasterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Effect(message) => write!(formatter, "effect shader: {message}"),
             Self::AdapterUnavailable => {
                 formatter.write_str("no compatible wgpu adapter is available")
             }
@@ -603,6 +607,7 @@ pub struct WgpuRasterizer {
     pending_readback: Option<ReadbackImage>,
     inspection: Option<(layer_render::ViewState, Vec<Layer>)>,
     metrics: GpuRasterMetrics,
+    telemetry: telemetry::Telemetry,
 }
 
 impl WgpuRasterizer {
@@ -653,7 +658,7 @@ impl WgpuRasterizer {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("layer canvas device"),
-                required_features: wgpu::Features::empty(),
+                required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: limits,
                 ..Default::default()
             })
@@ -768,7 +773,9 @@ impl WgpuRasterizer {
         let uploads = Uploads::new(&device, 64 * 1024);
         let layer_masks =
             layer_masks::MaskRenderer::new(&device, &style_layout, &target_layout, &texture_layout);
+        let telemetry = telemetry::Telemetry::new(&device, &queue);
         let mut renderer = Self {
+            telemetry,
             adapter,
             device,
             queue,
@@ -3467,6 +3474,28 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn set_telemetry_enabled(&mut self, enabled: bool) {
+        self.telemetry.enabled = enabled;
+    }
+    fn telemetry(&self) -> layer_render::RendererTelemetry {
+        let mut t = self.telemetry.snapshot();
+        let m = &self.metrics;
+        t.submissions = m.submissions;
+        t.dabs = m.dabs;
+        t.dirty_pixels = m.composited_pixels;
+        t.resident_bytes = m.paint_storage_bytes
+            + m.preview_storage_bytes
+            + m.destination_storage_bytes
+            + m.paint_state_storage_bytes
+            + m.composite_storage_bytes
+            + self.layer_masks.pages.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64;
+        if let Some(scene) = &self.scene {
+            t.effect_passes = scene.effect_passes;
+            t.compiled_effects = scene.effects.compilations;
+            t.resident_bytes += scene.scratch_bytes();
+        }
+        t
+    }
     fn request_thumbnail(&mut self, request_id: u64, target: LayerId) -> Result<(), Self::Error> {
         self.start_thumbnail(request_id, target)
     }
@@ -3548,6 +3577,10 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        let started = self.telemetry.enabled.then(web_time::Instant::now);
+        if let Some(scene) = &mut self.scene {
+            scene.effect_passes = 0;
+        }
         let mut view = packet.view;
         self.thumbnails.paper = packet
             .layers
@@ -3767,6 +3800,7 @@ impl CanvasRenderer for WgpuRasterizer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("layer incremental sparse frame"),
             });
+        self.telemetry.begin(&self.device, &mut encoder);
         let background_offset = self.prepare_uploads(packet, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
@@ -4466,10 +4500,17 @@ impl CanvasRenderer for WgpuRasterizer {
         }
 
         self.uploads.finish(&encoder);
+        self.telemetry.end(&mut encoder);
         let submission = self.queue.submit([encoder.finish()]);
+        self.telemetry.submitted();
         self.last_submission = Some(submission);
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);
         self.refresh_storage_metrics();
+        if let Some(started) = started {
+            self.telemetry
+                .cpu
+                .push(started.elapsed().as_secs_f32() * 1000.);
+        }
         Ok(())
     }
 
@@ -6225,6 +6266,7 @@ fn lattice_noise(x: u32, y: u32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod adjustments;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

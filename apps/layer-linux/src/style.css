@@ -119,3 +119,11 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .shortcut-hint { font-weight: 400; }
 /* Reset is a normal menu action, with a dim trailing default value. */
 .preference-reset { font-weight: 400; }
+/* Adjustment tiles share the editor's compact 36px tool-cell rhythm. */
+.adjustment-grid { margin: 4px; }
+.adjustment-grid > flowboxchild { padding: 0; margin: 0; }
+.adjustment-grid button { padding: 4px; min-width: 0; min-height: 0; font-weight: normal; }
+.effect-properties { margin: 6px; }
+.property-divider { margin-top: 3px; margin-bottom: 3px; }
+.property-section { margin-left: 6px; }
+.renderer-stats { margin: 6px; }

@@ -68,6 +68,50 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun adjustmentPanelsUseSharedSchema() {
+        action(obj("type" to "set_theme", "theme" to "dark"))
+        action(obj("type" to "set_brush_size", "value" to 220))
+        listOf(listOf(.9,.12,.08,1),listOf(.08,.7,.15,1),listOf(.1,.2,.9,1)).forEachIndexed { i, color ->
+            action(obj("type" to "set_color", "rgba" to JSONArray(color)))
+            val x=.4f+i*.1f
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(androidx.compose.ui.geometry.Offset(x,.4f)), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(androidx.compose.ui.geometry.Offset(x+.03f,.6f)), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_UP, listOf(androidx.compose.ui.geometry.Offset(x+.03f,.6f)), MotionEvent.TOOL_TYPE_STYLUS)
+        }
+        val choices=state().array("adjustments").objects().map { it.getString("id") }
+        for((i,id) in choices.withIndex()) {
+            action(obj("type" to "select_panel_tab", "group" to group("adjustments").getLong("id"), "panel" to "adjustments"))
+            if(i==0)capture("adjustments-grid")
+            compose.onNodeWithTag("adjustment-$id").performClick()
+            waitState { it.getJSONObject("layer_properties").getString("description") == it.array("adjustments").objects().first { c->c.getString("id")==id }.getString("label") }
+            compose.onNodeWithTag("layer-properties").assertIsDisplayed()
+            if(id=="color_balance") listOf("Shadows", "Midtones", "Highlights").forEach { compose.onNodeWithText(it).assertExists() }
+            val view=state().getJSONObject("layer_properties");val controls=view.array("controls").objects()
+            val number=controls.firstOrNull { it.getJSONObject("kind").getString("kind")=="number" }
+            if(number!=null) action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to view.getLong("layer"), "key" to number.getString("key"),
+                "value" to obj("kind" to "number", "value" to number.getJSONObject("kind").getJSONObject("numeric").number("min")))))
+            else if(controls.any { it.getJSONObject("kind").getString("kind")=="curve" }) {
+                compose.onNodeWithTag("effect-curve").performTouchInput { click(center) }
+                waitState { it.getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getJSONArray("value").length()==3 }
+            }
+            if(controls.any {it.getJSONObject("kind").getString("kind")=="gradient"}) {
+                compose.onNodeWithTag("effect-gradient").performTouchInput {click(center)}
+                waitState {it.getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getJSONArray("value").length()==3}
+                action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
+                    "key" to "gradient", "index" to 1, "position" to .5, "color" to JSONArray(listOf(.8,.2,.1,1)), "remove" to false)))
+                action(obj("type" to "effect", "action" to obj("op" to "reset", "layer" to view.getLong("layer"), "key" to "amount")))
+            }
+            capture("adjustment-$id")
+            action(obj("type" to "set_layer_visibility", "id" to view.getLong("layer"), "visible" to false))
+        }
+        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
+        floatPanel("stats",650f,120f)
+        action(obj("type" to "set_layer_visibility", "id" to state().getJSONObject("layer_properties").getLong("layer"), "visible" to true))
+        repeat(16) { action(obj("type" to "set_layer_opacity", "id" to state().getJSONObject("layer_properties").getLong("layer"), "opacity" to .8+it*.01)) }
+        compose.onNodeWithTag("renderer-stats").assertIsDisplayed()
+        capture("adjustments-stats-dark")
+        action(obj("type" to "set_theme", "theme" to "light"));capture("adjustments-stats-light")
+    }
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
     private fun groups() = host.snapshot!!.getJSONObject("layout").array("groups").objects()
     private fun group(panel: String) = groups().first { panel in it.array("panels").values() }

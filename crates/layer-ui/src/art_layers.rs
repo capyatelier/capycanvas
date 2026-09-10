@@ -286,10 +286,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_interaction.changed = true;
         Ok(())
     }
-    fn layer_edit(&mut self, edit: Edit) -> Result<(), String> {
+    pub(super) fn layer_edit(&mut self, edit: Edit) -> Result<(), String> {
         self.engine.apply_edit(edit).map_err(error)
     }
-    fn editable_layer(&self, id: u64) -> Result<Layer, String> {
+    pub(super) fn editable_layer(&self, id: u64) -> Result<Layer, String> {
         let layer = self
             .engine
             .document()

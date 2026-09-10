@@ -210,6 +210,9 @@ pub enum Panel {
     Brushes,
     Sizes,
     Layers,
+    Adjustments,
+    Properties,
+    Stats,
     CustomToolbar(u32),
 }
 
@@ -221,6 +224,9 @@ impl From<Panel> for String {
             Panel::Brushes => "brushes".into(),
             Panel::Sizes => "sizes".into(),
             Panel::Layers => "layers".into(),
+            Panel::Adjustments => "adjustments".into(),
+            Panel::Properties => "properties".into(),
+            Panel::Stats => "stats".into(),
             Panel::CustomToolbar(id) => format!("toolbar:{id}"),
         }
     }
@@ -233,6 +239,9 @@ impl TryFrom<String> for Panel {
             "brushes" => Self::Brushes,
             "sizes" => Self::Sizes,
             "layers" => Self::Layers,
+            "adjustments" => Self::Adjustments,
+            "properties" => Self::Properties,
+            "stats" => Self::Stats,
             _ => {
                 let id: u32 = value
                     .strip_prefix("toolbar:")
@@ -263,13 +272,24 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 4] = [Self::Toolbar, Self::Brushes, Self::Sizes, Self::Layers];
+    pub const ALL: [Self; 7] = [
+        Self::Toolbar,
+        Self::Brushes,
+        Self::Sizes,
+        Self::Layers,
+        Self::Adjustments,
+        Self::Properties,
+        Self::Stats,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Toolbar => "Tools",
             Self::Brushes => "Brushes",
             Self::Sizes => "Brush size",
             Self::Layers => "Layers",
+            Self::Adjustments => "Filters",
+            Self::Properties => "Properties",
+            Self::Stats => "Stats for nerds",
             Self::CustomToolbar(_) => "Toolbar",
         }
     }
@@ -279,6 +299,9 @@ impl Panel {
             Self::Brushes => "brush",
             Self::Sizes => "size",
             Self::Layers => "layers",
+            Self::Adjustments => "adjustments",
+            Self::Properties => "properties",
+            Self::Stats => "stats",
         }
     }
 }
@@ -463,7 +486,10 @@ pub struct PanelMeasurement {
 pub struct DockLayout {
     /// Outermost first. Reordering changes corner ownership explicitly.
     pub bands: Vec<DockBand>,
-    #[serde(default = "PanelConfig::defaults")]
+    #[serde(
+        default = "PanelConfig::defaults",
+        deserialize_with = "read_panel_registry"
+    )]
     pub panels: Vec<PanelConfig>,
     #[serde(default)]
     pub floating: Vec<FloatingGroup>,
@@ -478,6 +504,23 @@ pub struct DockLayout {
 }
 fn initial_tile_id() -> u32 {
     crate::TOOLBAR_CONTROLS.len() as u32 + 1
+}
+fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<PanelConfig>, D::Error> {
+    let mut panels = Vec::<PanelConfig>::deserialize(d)?;
+    // Newly available built-ins start hidden in saved workspaces. Keep every
+    // existing dock, custom toolbar, tab order and user configuration intact.
+    for default in PanelConfig::defaults() {
+        if matches!(
+            default.id,
+            Panel::Adjustments | Panel::Properties | Panel::Stats
+        ) && !panels.iter().any(|p| p.id == default.id)
+        {
+            panels.push(default);
+        }
+    }
+    Ok(panels)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -764,6 +807,25 @@ impl DockLayout {
             .find_map(|root| root.group_for(panel))
             .map(|(id, _)| id)
     }
+    pub(crate) fn reveal_after(&mut self, panel: Panel, anchor: Panel) -> Result<(), String> {
+        if self.active_panel(panel) == Some(panel) {
+            return Ok(());
+        }
+        if let Some(group) = self.panel_group(anchor) {
+            self.add_panel_to_group(panel, group)?;
+            if let Some(DockNode::Tabs { panels, active, .. }) = self.node_mut(group) {
+                panels.retain(|p| *p != panel);
+                let index = panels.iter().position(|p| *p == anchor).unwrap() + 1;
+                panels.insert(index, panel);
+                *active = panel;
+            }
+            Ok(())
+        } else if let Some(group) = self.panel_group(panel) {
+            self.select_tab(group, panel).map(|_| ())
+        } else {
+            self.set_panel_visible(panel, true)
+        }
+    }
 
     pub(crate) fn active_panel(&self, panel: Panel) -> Option<Panel> {
         self.bands
@@ -917,7 +979,12 @@ impl Default for DockLayout {
                     id: 7,
                     edge: Edge::Right,
                     extent: 232.0,
-                    root: tabs(8, Panel::Layers),
+                    root: DockNode::Tabs {
+                        id: 8,
+                        panels: vec![Panel::Layers, Panel::Adjustments, Panel::Properties],
+                        active: Panel::Layers,
+                        tab_style: crate::TabStyle::default(),
+                    },
                 },
                 DockBand {
                     id: 1,
@@ -1185,7 +1252,7 @@ impl DockLayout {
         let band = next.allocate()?;
         let edge = match panel {
             Panel::Brushes | Panel::Sizes => Edge::Left,
-            Panel::Layers => Edge::Right,
+            Panel::Layers | Panel::Adjustments | Panel::Properties | Panel::Stats => Edge::Right,
             _ => Edge::Top,
         };
         next.bands.push(DockBand {
@@ -4423,6 +4490,10 @@ mod tests {
     #[test]
     fn narrow_vertical_toolbar_has_a_merge_target_and_tab_growth_is_reversible() {
         let mut layout = DockLayout::default();
+        // This sizing fixture specifically compares two tab captions.
+        for panel in [Panel::Adjustments, Panel::Properties] {
+            layout.set_panel_visible(panel, false).unwrap();
+        }
         layout
             .move_panel(
                 VIEWPORT,
@@ -4904,7 +4975,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            matches!(layout.node_mut(6).unwrap(), DockNode::Tabs {panels, active: Panel::Toolbar, ..} if *panels == [Panel::Layers, Panel::Toolbar, Panel::Brushes, Panel::Sizes])
+            matches!(layout.node_mut(6).unwrap(), DockNode::Tabs {panels, active: Panel::Toolbar, ..} if *panels == [Panel::Layers, Panel::Adjustments,Panel::Properties, Panel::Toolbar, Panel::Brushes, Panel::Sizes])
         );
     }
     #[test]
@@ -5213,7 +5284,7 @@ mod tests {
                 over_grip.target,
                 DockTarget::Tab {
                     group: 8,
-                    index: Some(1)
+                    index: Some(3)
                 }
             );
             assert_eq!(over_grip.bounds, hint.bounds);
@@ -5268,7 +5339,7 @@ mod tests {
             .move_panel(VIEWPORT, Panel::Brushes, hint.target)
             .unwrap();
         assert!(
-            matches!(layout.node_mut(8).unwrap(), DockNode::Tabs {panels, ..} if *panels == [Panel::Brushes, Panel::Layers])
+            matches!(layout.node_mut(8).unwrap(), DockNode::Tabs {panels, ..} if *panels == [Panel::Brushes, Panel::Layers,Panel::Adjustments,Panel::Properties])
         );
         layout
             .move_panel(
@@ -5281,7 +5352,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            matches!(layout.node_mut(8).unwrap(), DockNode::Tabs {panels, ..} if *panels == [Panel::Layers, Panel::Brushes])
+            matches!(layout.node_mut(8).unwrap(), DockNode::Tabs {panels, ..} if *panels == [Panel::Layers,Panel::Adjustments,Panel::Properties, Panel::Brushes])
         );
         assert_eq!(
             r.drop_hint(b.x + 100.0, b.y + b.height - 2.0, &tabs, true)
@@ -5365,7 +5436,10 @@ mod tests {
         for destination in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             let mut layout = DockLayout::default();
             // Leave one standalone toolbar; top/bottom docks only accept these.
-            for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
+            for panel in Panel::ALL
+                .into_iter()
+                .filter(|p| p.kind() == PanelKind::Content)
+            {
                 layout.set_panel_visible(panel, false).unwrap();
             }
             layout
@@ -5508,10 +5582,10 @@ mod tests {
             .unwrap();
         let node = layout.node_mut(8).unwrap();
         assert!(
-            matches!(node, DockNode::Tabs {panels, active: Panel::Brushes, ..} if panels.len() == 2)
+            matches!(node, DockNode::Tabs {panels, active: Panel::Brushes, ..} if panels.len() == 4)
         );
         layout.select_tab(8, Panel::Layers).unwrap();
-        for panel in Panel::ALL {
+        for panel in Panel::ALL.into_iter().filter(|p| *p != Panel::Stats) {
             assert_eq!(
                 layout
                     .resolve(1600.0, 1000.0)

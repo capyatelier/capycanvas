@@ -168,6 +168,11 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           const command = state().commands.find((c) => c.id === node.dataset.command);
           node.textContent = command.label; node.disabled = !command.enabled;
         } }; break;
+      case "adjustments":
+      case "properties":
+      case "stats":
+        // These are complete schema-driven views, not duplicated scalar fields.
+        row.append(element("span", "", label)); break;
       default: throw new Error(`Unknown panel control: ${control}`);
     }
     if (input) input.setAttribute("aria-label", label);
