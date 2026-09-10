@@ -2276,6 +2276,38 @@ mod tests {
             assert_eq!(s.state.layer_properties.controls.len(), 2);
         }
     }
+    #[test]
+    fn runtime_filter_add_cannot_replace_a_document_only_program() {
+        use layer_core::{Edit, EffectInstallMode, EffectInstance, EffectPackage, Layer};
+        use std::sync::Arc;
+        let mut s = session();
+        let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
+        Arc::make_mut(&mut definition.program).id = "document:custom".into();
+        let id = s.engine.allocate_layer_id();
+        let mut layer = Layer::paint(id, "Document-only filter");
+        layer.kind = LayerKind::Effect;
+        layer.effect = Some(Arc::new(EffectInstance::new(definition.program())));
+        s.layer_edit(Edit::InsertLayer { index: 0, layer }).unwrap();
+        s.frame(0, 0).unwrap();
+        let original = s.engine.document().layer(id).unwrap().effect.clone();
+        Arc::make_mut(&mut definition.program).label = "Different definition".into();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: vec![definition],
+        };
+        let error = s
+            .load_effect_package(
+                &serde_json::to_string(&package).unwrap(),
+                |_| panic!(),
+                EffectInstallMode::Add,
+            )
+            .unwrap_err();
+        assert!(error.contains("document program"));
+        assert!(s.renderer_mut().validation.is_none());
+        assert_eq!(s.engine.document().layer(id).unwrap().effect, original);
+        assert!(s.effect_catalog.get("document:custom").is_none());
+    }
 
     #[test]
     fn filter_picker_search_and_categories_are_ui_only() {

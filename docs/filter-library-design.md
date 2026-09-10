@@ -6,9 +6,12 @@ filters. This extends the ten adjustments documented in
 
 ## Execution contract
 
-All algorithms are original WGSL. Rust declares parameters, preview presets,
-categories, sampling requirements and ordered passes. Hosts render the shared
-catalog and property schema; they do not implement filter algorithms or policy.
+Filter shaders are original WGSL. Runtime JSON declares parameters, preview
+presets, categories, sampling requirements and ordered passes. Generic lookup
+preparation is also WGSL; Curves and Gradient Map retain their Rust interpolation
+and custom controls by design. Hosts render the shared catalog and property
+schema; they do not implement filter algorithms or policy. See
+[runtime-filters.md](runtime-filters.md) for the loading and preparation contract.
 
 - Pointwise adjustments stay fused, including compatible masks and clipping.
 - Image passes sample full-resolution GPU inputs across paint-tile boundaries.

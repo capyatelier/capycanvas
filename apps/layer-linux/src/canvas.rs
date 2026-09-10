@@ -49,7 +49,7 @@ impl GpuCanvas {
                 p.is_dir().then_some(p)
             });
         if let Some(directory) = filters {
-            let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "replace".into());
+            let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "merge".into());
             let result = serde_json::from_value(serde_json::Value::String(mode))
                 .map_err(|e| e.to_string())
                 .and_then(|mode| load_filter_directory(&mut session, &directory, mode));

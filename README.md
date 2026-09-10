@@ -92,6 +92,13 @@ and About pages. GTK opens its adaptive sidebar dialog from the top-right main
 menu; web uses a gear. Preference edits apply immediately and are saved across
 launches. See the [settings design](docs/settings-implementation-plan.md).
 
+The forty filters use runtime JSON/WGSL definitions in `assets/filters`, including
+GPU lookup preparation. Native packages ship editable copies in `bin/filters`;
+web and Android expose the same programmatic import/replacement API. See
+[runtime filters](docs/runtime-filters.md) and the standalone
+[Tent Blur example](examples/filters/tent-blur) for adding filters without rebuilding.
+Curves and Gradient Map retain their Rust interpolation and custom controls.
+
 ## Verify
 
 ```bash

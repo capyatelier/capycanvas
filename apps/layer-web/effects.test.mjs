@@ -29,6 +29,16 @@ export async function checkRuntimeFilters({call,evaluate,settle,host}) {
   await settle();
   assert.equal(await evaluate("layerApp.state().layer_properties.controls[0].label"),"Runtime radius");
   assert.equal(await evaluate("layerApp.state().layer_properties.controls[0].value.value"),9);
+  // A resource catalog can contain both an existing definition and a new ID,
+  // even when neither was part of the executable's embedded fallback.
+  const added=structuredClone(manifest.filters[0]);
+  added.program.id="example:second_tent";added.program.label="Second Tent Blur";
+  manifest.filters.push(added);
+  await writeFile(manifestPath,JSON.stringify(manifest));
+  await evaluate("layerApp.loadFilters('./runtime-filter/manifest.json','merge')");
+  assert.equal(await wait(),null);
+  assert.ok(await evaluate("layerApp.state().adjustments.some(f=>f.id==='example:second_tent')"));
+  assert.equal(await evaluate("layerApp.state().layer_properties.controls[0].value.value"),9);
   const revision=await evaluate("String(layerApp.state().filter_catalog_revision)");
   await writeFile(preparePath,"invalid preparation WGSL");
   await evaluate("layerApp.loadFilters('./runtime-filter/manifest.json','replace')");
@@ -44,10 +54,14 @@ export async function checkRuntimeFilters({call,evaluate,settle,host}) {
 export async function benchmarkFilters({evaluate}) {
   const choices=await evaluate("layerApp.app.state().adjustments.map(c=>c.id)");
   const expensive=["motion_blur","gaussian_blur","domain_warp","painterly","denoise"];
-  const cases=[["Baseline",[]],...choices.map(id=>[id,[id]]),["Five expensive",expensive]];
+  const prepared=["pencil","soft_focus","bloom","gaussian_blur","unsharp_mask"];
+  const cases=[["Baseline",[]],...choices.map(id=>[id,[id]]),["Five expensive",expensive],["Prepared edits",["unsharp_mask"]],["Five prepared edits",prepared]];
+  const label=process.env.CAPY_FILTER_BENCHMARK_LABEL??"";
+  if(label&&!/^[a-z0-9_-]+$/.test(label))throw new Error("Invalid benchmark label");
+  const output=`artifacts/benchmarks/filter-web${label?`-${label}`:""}.json`;
   const report=[];
   for(const [label,filters] of cases) {
-    const modes=label==="Five expensive"?["local","full","animation"]:["local"];
+    const modes=label.endsWith("edits")?["relevant","unrelated"]:label==="Five expensive"?["local","full","animation"]:["local"];
     for(const mode of modes) {
       const result=await evaluate(`(${async function(filters,mode){
         const app=layerApp.app,send=a=>app.dispatch(a),effect=a=>send({type:"effect",action:a}),ids=[];
@@ -67,9 +81,11 @@ export async function benchmarkFilters({evaluate}) {
         const before=app.renderer_stats().rows.find(r=>r.label==="Frames").value;
         for(let i=0;i<180;i++){
           const now=await frame();
+          const start=performance.now();
           if(mode==="local")app.pen(new Float64Array([777,i===0?1:i===179?3:2,600+i%80,500+Math.sin(i*.1)*35,.8,0,0,0,now,2,0]),revision);
           if(mode==="full")send({type:"set_layer_opacity",id:1,opacity:.7+(i%20)*.01});
-          const start=performance.now();app.frame(now,now+1000/120);if(i>=60)wall.push(performance.now()-start);
+          if(mode==="relevant"||mode==="unrelated")effect({op:"set",layer:ids[ids.length-1],key:mode==="relevant"?"sigma":"amount",value:{kind:"number",value:mode==="relevant"?2+(i%20)*.5:50+(i%20)*5}});
+          app.frame(now,now+1000/120);if(i>=60)wall.push(performance.now()-start);
         }
         await frame();const stats=app.renderer_stats();
         for(const id of ids.reverse()){send({type:"select_layer",id});send({type:"layer",action:{op:"delete_selected"}});}
@@ -81,7 +97,7 @@ export async function benchmarkFilters({evaluate}) {
       report.push({filter:label,mode,...result});
       console.log(`${label} ${mode}: ${result.stats.rows.slice(0,2).map(r=>r.label+" "+r.value).join("; ")}`);
       await mkdir("artifacts/benchmarks",{recursive:true});
-      await writeFile("artifacts/benchmarks/filter-web.json",JSON.stringify(report,null,2));
+      await writeFile(output,JSON.stringify(report,null,2));
     }
   }
 }

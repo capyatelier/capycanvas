@@ -1,296 +1,266 @@
 # Runtime-defined filters
 
-Follow-up to the completed forty-filter milestone (`7719e6b`). This document
-records the implementation contract, not a claim that the migration is complete.
+Implemented and validated on 2026-09-10. All forty built-ins and custom filters use
+one runtime JSON/WGSL format and shared renderer. **Curves and Gradient Map are
+the agreed exceptions:** their custom controls, interpolation and LUT generation
+remain in Rust. Generic preparation, including Gaussian coefficients, is WGSL.
+No shader-editor UI or general node graph was added.
 
-## Required outcome
+## Definitions and ownership
 
-All built-ins and custom filters load through one definition format: WGSL plus
-declarative parameters, constraints, sampling bounds, ordered image passes,
-animation, category/icon metadata and preview presets. Adding a filter or changing
-its generic preparation math must require neither Rust changes nor an application
-rebuild. Curves and Gradient Map are explicit exceptions: their custom controls,
-interpolation and LUT generation may remain in Rust. No shader-editor UI or general
-node graph is part of this task.
+`assets/filters/manifest.json` supplies runtime IDs, category/ordering, labels,
+icons, parameters, constraints, ordered passes, sampling bounds, animation and
+preview presets. WGSL modules live beside it. `BuiltinEffect`, built-in category
+switches, Rust filter constructors and the Rust Gaussian algorithm are removed.
+The same parser resolves external packages and the embedded startup fallback.
 
-Remove `BuiltinEffect`/category switches and filter constructors from registration,
-preview generation and host views. Replace Gaussian coefficient generation with
-definition-owned WGSL preparation; do not migrate the two custom-editor exceptions.
-Retain generic Rust validation, packing, dependency scheduling and native controls.
+| Owner | Responsibility |
+| --- | --- |
+| `layer-core/effect_catalog.rs` | Parse/resolve packages, validate metadata and stage catalogs |
+| `layer-core/effects.rs` | Generic parameter/layout validation; the two custom-editor exceptions |
+| `layer-ui/filter_loading.rs` | Transactional publication, compatible values, catalog and preview revisions |
+| `layer-render-wgpu/effect_validation.rs` | Namespace/interface checks and device compilation |
+| `layer-render-wgpu/effects.rs`, `effect_preparation.rs` | Shared storage, compilation reuse, ordered preparation/render work |
+| GTK, web, Android hosts | Obtain bytes and render the shared schema |
 
-## Data and loading
+A package has `format: 1`, `categories` and `filters`. Each filter contains a
+`program`, category, icon and optional preview overrides. A shader accepts inline
+WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
+shared source chunks, so fused filters include common helpers once. Serialized
+document programs contain resolved code and do not need their original package.
 
-- Runtime identifiers, not enum discriminants, identify programs and categories.
-  The catalog supplies ordering, labels, icons and preview overrides.
-- Ship editable WGSL and declarative metadata as resources. A portable package
-  contains these same resources for native assets, static web hosting and custom
-  loading. Resource packaging is not recompilation of the application.
-- The shared core accepts package data; platform hosts only obtain bytes from
-  files, web assets or Android assets. Provide a programmatic load/reload boundary
-  that tests can exercise after startup. No custom-only registration route.
-- Explicit add versus replace semantics. Reject duplicate IDs, incompatible ABI,
-  malformed metadata, conflicting shader declarations and over-limit resources.
-  Shared identical shader modules may be reused; conflicting definitions must
-  never silently override one another.
-- Stage replacements and validate their preparation/render interfaces before
-  publishing them. Retain the last working catalog/program and instances on
-  failure. Successful replacements preserve compatible values by parameter key
-  and invalidate affected renderer dependencies and preview rows.
+Installation modes are explicit:
 
-## GPU preparation
+- `add`: reject existing catalog IDs, including conflicting document-only IDs.
+- `replace`: update existing IDs; reject missing IDs.
+- `merge`: update existing IDs and admit new IDs. Startup resources use this,
+  so editing their manifest can add a filter without rebuilding the executable.
+  Omitted IDs remain available; this is not a catalog-deletion operation.
 
-Each optional preparation declaration specifies its WGSL entry, bounded output
-storage, workgroup dimensions and parameter dependencies. Generic parameters have
-a bounded GPU layout. Preparation code owns normalization, kernel choice and other
-mathematical policy. Curve/gradient LUTs retain their existing Rust packing.
+Duplicate IDs inside a package, conflicting WGSL declarations, invalid metadata,
+ABI/interfaces and excessive resource requests are rejected. Module names cannot
+escape their directory or select another origin. Limits include 1,024 filters,
+64 categories, 256 modules, a 16 MiB manifest and 16 MiB aggregate module text.
 
-Keep prepared output in persistent renderer-owned storage and share it across
-image passes and fused consumers. Render shaders retain constant-time table
-lookup/interpolation; do not replace LUT access with per-pixel curve/kernel math.
-Packing raw parameters and offsets is Rust work, not preprocessing an algorithm.
+## Transactional loading
 
-Preparation dirtiness is separate from image dirtiness:
+`UiSession::load_effect_package` stages the candidate while keeping the current
+catalog and document live. The renderer checks the combined namespace and all
+changed preparation/render interfaces. Device error scopes are popped immediately
+and polled without a blocking wait. Validation does not dispatch preparation or
+allocate canvas image intermediates. Accepted compilation results are reused.
 
-| Change | Preparation | Images |
+Publication waits until input, the active stroke and pending document edits are
+settled. Live values are matched by parameter key, including edits made while
+validation was pending. New/incompatible fields use defaults; conflicting joint
+constraints reject the replacement rather than silently altering valid values.
+A single document edit replaces affected live programs. Unrelated layers and
+paint history remain unchanged. Invalid replacement retains the working state.
+
+`UiState.filter_load` reports request ID, pending and error. Catalog revision
+refreshes picker categories, rows and controls, and participates in preview
+invalidation. GTK's idle scheduler follows the session's pending work, so shader
+validation completes even when nothing is being drawn. Superseded compilation
+versions are pruned at this cold publication boundary.
+
+Compilation is cold work, not a 120 Hz operation. Authored WGSL is executable
+content: bounded storage and interface validation do not prove termination,
+safety from GPU watchdog resets, or a particular execution time.
+
+## Persistent GPU preparation
+
+`EffectLookup` declares WGSL, entry, named parameter dependencies, fixed output
+capacity and dispatch dimensions. Authored functions read declared inputs through
+`prep_parameter(index, element)` and write through bounded
+`prep_store(index, value)`. They may declare private/workgroup scratch, but not
+extra resources, entry points, override constants or direct shared-buffer access.
+
+Limits are eight tables per effect, 4,096 vec4 records per table, 256 invocations
+per group and 256 groups. Device workgroup dimensions/storage limits are checked.
+Generic Rust packs values and offsets; preparation WGSL owns the mathematics.
+
+Gaussian Blur, Unsharp Mask, High Pass, Bloom, Soft Focus and Pencil share the
+Gaussian preparation definition. It generates normalized, bilinear-paired taps;
+consuming pixels perform table lookups, not coefficient calculations. The
+standalone Tent Blur example demonstrates a different kernel using the same ABI.
+
+Every pass of an effect chain shares one persistent parameter/table buffer.
+Edits upload parameter prefixes, never GPU-owned tables. Preparation runs in the
+existing scene encoder before consumers, with no extra submit, readback, blocking
+wait or intermediate table copy. Pointwise prepared filters still fuse. Ordinary
+warm cache lookup reuses its CPU key storage and updates cached time scalars in
+place rather than constructing three temporary vectors per frame. Parameter
+repacking uses small CPU temporaries; it does not allocate fresh GPU lookup storage.
+
+A two-pass Unsharp Mask uses 624 parameter/table bytes versus 1,248 previously.
+Large canvas/image caches are unchanged; slider edits do not grow lookup storage.
+
+| Change | Preparation | Image work |
 | --- | --- | --- |
-| Paint or canvas navigation | Reuse | Existing tiled/halo rules |
-| Unrelated parameter | Reuse | Only affected filter output/dependents |
-| Declared parameter dependency | Once | Filter output/dependents |
-| Render-only code | Reuse if preparation/layout unchanged | Affected output |
+| Painting or navigation | Reuse | Existing dirty-tile/halo rules; navigation reuses pixels |
+| Unrelated parameter | Reuse | Affected filter output and dependents |
+| Declared dependency | Once | Affected output and dependents |
+| Render-only code | Reuse if preparation/layout is unchanged | Affected output |
 | Preparation code/layout | Once | Affected output |
-| Ordinary animation time | Reuse static tables | Existing time-aware outputs |
+| Ordinary animation time | Reuse static tables | Time-dependent output |
 
-Compute writes precede consuming render passes in GPU command order. There must
-be no rendering dependency on CPU readback of prepared tables, blocking GPU waits,
-or allocations of fresh preparation storage on ordinary frames/parameter edits.
-Fixed-capacity outputs prevent parameter changes from reallocating buffers.
-Storage limits, bindings, dispatch sizes and checked offset arithmetic are generic
-validation responsibilities. A bounded buffer is not proof arbitrary shader code
-is cheap or terminating; do not promise sandboxed timing for arbitrary programs.
+Clipping input and static backdrop caches remain separate. Painting on a backdrop
+updates its dirty tiles, not the entire cache or an unrelated frozen filter.
+Neighborhood footprints propagate through multipass chains; global remapping
+conservatively invalidates the required image. Masks, layer properties and blend
+apply to final output, not independently to every intermediate pass.
 
-GTK curve plots, shared curve plot data and gradient-stop insertion may continue
-using Rust interpolation. This is a deliberate scope exception, not an alternate
-implementation of generic preparation. Adding a generic kernel must never require
-a new Rust algorithm variant or a filter-specific renderer branch.
+## Use without rebuilding
 
-## Validation and milestones
+- GTK checks `CAPY_FILTERS_DIR`, then `filters` beside the executable, then
+  development `assets/filters`, with the embedded catalog as fallback.
+  `CAPY_FILTERS_MODE` defaults to `merge`. For an isolated custom package:
+  `CAPY_FILTERS_DIR=examples/filters/tent-blur CAPY_FILTERS_MODE=add
+  ./target/debug/layer-linux`. The native transport also accepts directories
+  for live add/replace/merge. There is no automatic file watcher.
+- The native packager ships editable resources in
+  `dist/capycanvas-linux/bin/filters`; editing those resources does not require
+  rebuilding `bin/capycanvas`.
+- Web ships fingerprinted JSON/WGSL in the PWA precache. Startup merges them;
+  loading failure retains the fallback. Call
+  `await layerApp.loadFilters('/my-filter/manifest.json', 'add')`,
+  `'replace'` or `'merge'`, then inspect
+  `layerApp.state().filter_load` for completion. Serve edited resources and call
+  again—no Wasm rebuild. Requests revalidate HTTP caches; normal CORS applies.
+- Android merges the same resources from APK assets after GPU attachment.
+  `CanvasHost.loadFilters(manifest, modules, mode)` accepts acquired package
+  bytes for live loading without rebuilding the native library. A file picker or
+  download UI is outside this task.
 
-1. Preserve pre-migration pixel references and CPU/GPU median/p95/p99 baselines,
-   including continuous relevant/unrelated parameter editing and expensive stacks.
-2. Load the forty built-ins from data through the runtime registry. Exercise
-   adding a definition and replacing one without rebuilding, including invalid
-   replacement rollback and collisions.
-3. Introduce bounded WGSL preparation and migrate Gaussian; remove its superseded
-   Rust algorithm. Demonstrate a new non-Gaussian kernel using only data/WGSL.
-4. Check preparation counts: paint, pan, time and unrelated edits reuse; relevant
-   edits execute once; all passes consume the shared result. Preserve masks,
-   clipping chains, transparency, image halos and dirty-tile backdrop caching.
-5. Re-run before/after rendering and parameter-edit benchmarks. Report any
-   regression, including dispatch cost, not just per-pixel shader throughput.
-6. Validate controls and rendering in GTK, web and the available Android emulator;
-   explicitly identify untested physical devices. Update packaging, docs and
-   notices, remove migration helpers/old paths, commit and push tested milestones.
+See [the Tent Blur package](../examples/filters/tent-blur/README.md) and
+[web packaging](web-packaging.md). All shaders added here are original code;
+no third-party shader implementation was imported.
 
-GPU/host validation builds on the existing Naga parser and validator. Device error scopes
-return an asynchronous result; popping the scope does not require waiting before
-unrelated work continues. See [wgpu error scopes](https://wgpu.rs/doc/wgpu/struct.ErrorScopeGuard.html).
+## Validation
 
-## GPU preparation milestone (2026-09-10)
+Final checks pass: 59 GPU tests (six opt-in benchmarks excluded), 21 core tests,
+23 engine tests, 145 UI tests, six Android bridge tests, 19 packaging/launcher
+tests, Clippy and the Wasm build. Native and static web staging bundles build;
+the native bundle's forty definitions and WGSL files match the source resources.
 
-Implemented the generic preparation ABI and removed Rust Gaussian coefficient
-generation. The six Gaussian consumers (Blur, Unsharp Mask, High Pass, Bloom,
-Soft Focus and Pencil) use the same WGSL preparation definition. Curves and
-Gradient Map retain their Rust interpolation and controls, as requested.
+| Requirement | Evidence |
+| --- | --- |
+| Same format for all forty filters | Disk/bundled catalogs match; shared modules and self-contained document round trips |
+| Runtime non-Gaussian algorithm | Tent Blur loaded on GTK, Chrome/WebGPU and Android; box-kernel replacement on web/Android |
+| New IDs without rebuilding | Mixed existing/new catalog merge test; browser edits served JSON/WGSL with unchanged Wasm |
+| Last working program | Invalid WGSL/resource access/namespace or ID collision rejected; image, values and catalog retained |
+| Efficient preparation | Dependency-count tests: paint, pan, time, opacity and unrelated edits reuse; relevant/code edits run once |
+| Reuse across passes/fusion | Stable storage size, shared multipass tables, prepared pointwise fusion, accepted pipeline reuse |
+| Correct pixels | Original forty-filter reference × four scopes, at most one byte difference; Gaussian sigma 0–21 |
+| Incremental correctness | Every filter and expensive chains match forced rebuild at tile/document boundaries; clipped backdrop edits remain local |
+| Shared controls and rendering | All-filter UI suites on GTK/private Wayland, packaged Chrome and API-35 tablet emulator; runtime load/replacement tests on each |
 
-`EffectLookup` declares WGSL, entry function, named dependencies, a fixed vec4
-capacity and dispatch dimensions. The wrapper exposes `prep_parameter(index,
-element)` for declared inputs and bounded `prep_store(index, value)`. Libraries
-may use private/workgroup scratch; additional bindings and entry points are
-rejected. Metadata bounds tables to 4,096 records, eight tables per effect and
-at most 256 invocations per group / 256 groups. Device limits are checked too.
-These are resource bounds, not a guarantee arbitrary authored code terminates.
+Runtime screenshots are under `artifacts/ui/runtime-filters-{gtk,web,android}`;
+the GTK, web and Android custom-filter results were visually inspected.
+Forty-filter review captures are under `artifacts/ui/adjustments-{gtk,web}` and
+the emulator's generated `Pictures/CapyCanvasValidation` directories.
 
-All image passes share one persistent parameter/table buffer. Edits upload only
-the parameter prefix, not GPU-owned output. Queued compute runs in the existing
-scene command encoder before consuming draws, with no extra submit, readback,
-wait or intermediate table copy. Pointwise filters with preparation still fuse.
-A two-pass Unsharp Mask uses 624 parameter/table bytes rather than 1,248; its
-large image caches are unchanged. Lookup storage does not grow on slider edits.
+## Performance
 
-Checks cover the pre-migration forty-filter pixel reference (four scope variants
-each, maximum one-byte difference), normalization at sigma 0 through 21,
-pointwise fusion, and live replacement with an original triangular kernel read
-from a WGSL file. Preparation counts prove that paint, pan/zoom, animation,
-opacity and unrelated parameter edits reuse tables; relevant edits and
-preparation-code changes each dispatch once. Render-only code preserves tables.
-Invalid WGSL, extra bindings and attempts to access raw shared storage are
-rejected without replacing the working GPU state. Native GPU tests pass, as do
-the shared core/engine/UI/Android bridge tests and Clippy. GTK's private-Wayland
-forty-filter review, the packaged Chrome/WebGPU forty-filter test and Android's
-API-35 emulator forty-filter schema/render test all pass. The static web package
-was rebuilt successfully. Physical Android/iPad hardware and other browsers have
-not been tested for this migration.
+All triples below are **median / p95 / p99, milliseconds**. Timings measure
+render preparation/encoding/submission and GPU execution, not end-to-end input
+latency or final compositor presentation. GPU timing includes scheduling gaps.
+Runs were sequential, not simultaneous GPU stress tests; individual runs do not
+provide statistical confidence intervals or isolate clock/driver variation.
 
-### Workstation comparison
+### Native workstation
 
-Release mode, 2,048 × 1,536, 320 updates per case; discard 64 CPU warm-up samples.
-GPU values are the renderer's bounded telemetry window. Each triple below is
-median / p95 / p99 in milliseconds. Parameter edits send the same composition
-invalidation as the application. Completion includes the benchmark's GPU wait;
-the application does not wait this way. These are individual runs, not confidence
-intervals; CPU tail differences should not be interpreted as proven speedups.
+Release, 2,048 × 1,536, 320 updates per case, 64 CPU warm-up samples discarded;
+GPU values use the bounded telemetry window. The existing benchmark measures
+relevant/unrelated edits and painting with the same operations before and after.
 
-| Case | CPU before | CPU GPU-prepared | GPU before | GPU GPU-prepared |
+| Case | CPU before | CPU final | GPU before | GPU final |
 | --- | --- | --- | --- | --- |
-| Unsharp, paint | .066 / .146 / .306 | .058 / .075 / .124 | .034 / .035 / .036 | .034 / .035 / .036 |
-| Unsharp, kernel edit | .041 / .057 / .456 | .039 / .051 / .278 | .137 / .190 / .193 | .147 / .200 / .206 |
-| Unsharp, other edit | .043 / .053 / .107 | .033 / .058 / .164 | .068 / .069 / .069 | .069 / .070 / .070 |
-| Five prepared, paint | .167 / .294 / .510 | .116 / .146 / .215 | .087 / .090 / .091 | .087 / .090 / .090 |
-| Five prepared, kernel edit | .125 / .267 / .519 | .124 / .214 / .423 | .567 / .623 / .639 | .578 / .640 / .653 |
-| Five prepared, other edit | .130 / .258 / .386 | .131 / .251 / .530 | .509 / .521 / .523 | .513 / .525 / .527 |
+| Unsharp, paint | .066 / .146 / .306 | .057 / .086 / .177 | .034 / .035 / .036 | .033 / .035 / .035 |
+| Unsharp, kernel edit | .041 / .057 / .456 | .033 / .064 / .257 | .137 / .190 / .193 | .146 / .199 / .201 |
+| Unsharp, other edit | .043 / .053 / .107 | .031 / .080 / .112 | .068 / .069 / .069 | .068 / .069 / .070 |
+| Five prepared, paint | .167 / .294 / .510 | .120 / .194 / .368 | .087 / .090 / .091 | .087 / .090 / .090 |
+| Five prepared, kernel edit | .125 / .267 / .519 | .094 / .122 / .225 | .567 / .623 / .639 | .579 / .645 / .656 |
+| Five prepared, other edit | .130 / .258 / .386 | .102 / .184 / .248 | .509 / .521 / .523 | .525 / .531 / .532 |
 
-Preparation is not free: relevant edits add approximately .010–.016 ms GPU time
-in these runs. Painting and unrelated edits have no preparation dispatch.
-The five-filter completion p99 is .457 ms painting, 1.114 ms on kernel edits,
-and 1.114 ms on unrelated edits, below the 8.33 ms render budget. The latter CPU
-p99 increased in this run; it is reported rather than hidden. Raw results:
-`artifacts/benchmarks/filter-parameters-{before,gpu}.csv` (generated, ignored).
+Five prepared filters are Pencil, Soft Focus, Bloom, Gaussian Blur and Unsharp.
+Final completion p99 (including the benchmark-only GPU wait) is .571 ms painting,
+.961 ms on kernel edits and .865 ms on unrelated edits: below the 8.33 ms budget.
+Preparation is not free: relevant-edit GPU medians increased about .009–.012 ms.
+The unrelated five-filter GPU median increased .016 ms despite no preparation
+dispatch; these runs do not isolate driver/clock variance from storage effects.
+The small Unsharp unrelated CPU tail increase is also retained above.
 
-## Manifest and runtime-ID milestone (2026-09-10)
+### Chrome/WebGPU
 
-All forty definitions, defaults, constraints, passes, sampling bounds, animation
-controls, categories and preview overrides now live in
-`assets/filters/manifest.json`. The WGSL libraries are beside it. `BuiltinEffect`,
-the category enum and all filter-specific Rust constructors have been removed.
-Both the bundled catalog and external packages use `EffectPackage::parse` and
-`resolve`; the host supplies module contents. `EffectCatalog::stage` has explicit
-add/replace semantics and leaves its input catalog untouched on failure.
+Same 2,048 × 1,536 canvas, 180 updates per case, last 120 render samples. The
+forty single-filter tests plus baseline, three expensive-stack modes and four
+preparation-edit cases all pass (48 cases). Five expensive filters are Motion
+Blur, Gaussian Blur, Domain Warp, Painterly and Denoise.
 
-The manifest's `program.wgsl` and lookup `wgsl` accept an inline code string or
-an ordered array of manifest-local WGSL filenames. Resolved modules share `Arc`
-storage and remain separate for fusion: common helper modules are included once,
-not concatenated into every filter's private source. Serialized document programs
-retain resolved code, so opening a project does not require its original package.
-Module names cannot escape the package directory or select another web origin.
+| Case | CPU before | CPU final | GPU before | GPU final |
+| --- | --- | --- | --- | --- |
+| Baseline | .10 / .30 / .40 | .20 / .40 / .50 | .01 / .01 / .02 | .01 / .01 / .01 |
+| Five, local paint | .20 / .50 / .50 | .40 / .60 / .70 | .10 / .23 / .36 | .07 / .11 / .15 |
+| Five, full update | .30 / .50 / .50 | .30 / .50 / .70 | .49 / .52 / .59 | .48 / .50 / .51 |
+| Five, animated | .20 / .40 / .50 | .20 / .50 / .50 | .35 / .37 / .39 | .34 / .34 / .35 |
 
-The picker, insertion actions, category choices and GTK caches use runtime string
-IDs. Preview requests contain resolved programs/presets; the renderer no longer
-constructs a forty-filter catalog or indexes programs by enum discriminants.
-Changing a requested definition invalidates that preview row, without rebuilding
-the document source capture just because the filter program changed.
+Individual-filter maximum CPU p99 is .60 ms and GPU p99 .12 ms. CPU values are
+modestly higher, including the no-filter baseline; the run does not prove the
+cause. All cases remain within the render budget. Browser timer quantization
+limits interpretation of these small CPU differences.
 
-`examples/filters/tent-blur` is a standalone manifest and two original WGSL files,
-including its non-Gaussian preparation. The GPU test loads those files at runtime,
-renders the new filter, and verifies radius-zero identity. Tests also load all
-forty definitions from disk, compare them with the bundled resource catalog,
-check shared module storage and document round trips, and reject ID/category
-collisions, invalid ABI/metadata, missing modules and path traversal. The original
-forty-filter pixel reference still matches; the full GPU suite passes (57 tests,
-six opt-in benchmarks excluded).
-GTK's forty-filter private-Wayland review, packaged Chrome/WebGPU test and
-Android API-35 emulator test pass with the runtime-ID picker and preview path.
-The shared core (19), UI (142), engine (23) and Android bridge (6) tests pass.
+### Android emulator
 
-Repeating the same workstation benchmark after this catalog migration gives:
+API-35 tablet, x86_64 native library, host-backed GPU, 180+ submitted updates per
+case, last 120 samples. Two final 48-case sweeps were retained, not cherry-picked.
 
-| Five prepared filters | CPU median / p95 / p99 | GPU median / p95 / p99 | Completion p99 |
+| Case | CPU before | CPU final A | CPU final B | GPU before | GPU final A | GPU final B |
+| --- | --- | --- | --- | --- | --- | --- |
+| Baseline | .73 / .93 / 1.53 | .61 / 1.15 / 4.90 | .65 / .86 / 1.01 | .01 / .02 / .02 | .01 / .02 / .02 | .01 / .02 / .02 |
+| Five, local paint | 2.97 / 4.24 / 8.62 | 2.92 / 4.75 / 6.19 | 2.62 / 3.43 / 5.51 | .17 / .27 / .30 | .15 / .21 / .22 | .14 / .19 / .20 |
+| Five, full update | 3.10 / 3.59 / 3.82 | 3.38 / 6.33 / 13.03 | 2.67 / 3.63 / 5.72 | .55 / .65 / .66 | .59 / .61 / .62 | .59 / .64 / .66 |
+| Five, animated | 1.24 / 1.59 / 1.73 | 1.32 / 3.05 / 3.95 | 1.29 / 1.69 / 2.17 | .39 / .39 / .40 | .40 / .41 / .42 | .41 / .41 / .42 |
+
+The full-update CPU tail regression is real in these measurements, but varies
+substantially on repeat; the baseline tail also varies without any filters.
+No preparation runs for full-opacity edits or ordinary animation. These tests
+do not establish whether the remaining CPU tails arise in the guest, host
+scheduling or driver calls. **Reliable 120 Hz on Android is not established.**
+GPU work remains small; physical-device profiling is still required.
+
+### Additional parameter-edit coverage
+
+These host cases are new, so no host-specific pre-migration baseline exists;
+the native before/after comparison above covers continuous parameter editing.
+
+| Host | Case | CPU | GPU |
 | --- | --- | --- | --- |
-| Painting | .114 / .142 / .156 | .088 / .092 / .092 | .382 |
-| Kernel edits | .110 / .178 / .415 | .574 / .637 / .650 | 1.044 |
-| Unrelated edits | .088 / .149 / .348 | .524 / .528 / .528 | .912 |
+| Web | Unsharp, kernel | .20 / .40 / .40 | .16 / .24 / .24 |
+| Web | Unsharp, other | .20 / .40 / .40 | .07 / .08 / .09 |
+| Web | Five prepared, kernel | .20 / .40 / .50 | .19 / .35 / .41 |
+| Web | Five prepared, other | .20 / .40 / .40 | .09 / .17 / .21 |
+| Android A | Unsharp, kernel | 1.05 / 1.87 / 2.84 | .17 / .25 / .27 |
+| Android A | Unsharp, other | 1.26 / 1.71 / 7.84 | .16 / .17 / .18 |
+| Android A | Five prepared, kernel | 1.08 / 2.46 / 7.07 | .27 / .38 / .49 |
+| Android A | Five prepared, other | 1.01 / 3.13 / 4.86 | .37 / .55 / .57 |
+| Android B | Unsharp, kernel | .97 / 1.29 / 1.86 | .18 / .24 / .25 |
+| Android B | Unsharp, other | 1.31 / 1.77 / 2.46 | .25 / .26 / .27 |
+| Android B | Five prepared, kernel | 1.07 / 1.72 / 7.05 | .29 / .41 / .56 |
+| Android B | Five prepared, other | 1.10 / 7.61 / 12.41 | .38 / .44 / .45 |
 
-Milliseconds, same 2,048 × 1,536 cases and sampling as above. No budget regression
-appears in this run, but small GPU/CPU differences remain visible in the raw data;
-this is not a claim of statistically identical performance. Results are in
-`artifacts/benchmarks/filter-parameters-catalog.csv` (generated, ignored).
+Android B's unrelated-edit p99 also exceeds budget. It cannot be attributed to
+GPU preparation, which is not dispatched in that case. No mobile 120 Hz claim
+is made from either run.
 
-## Validated host loading milestone (2026-09-10)
+Raw reports are generated and ignored under `artifacts/benchmarks`:
+`filter-parameters-{before,final}.csv`, `filter-web{,-runtime}.json`, and
+`filter-android{,-runtime,-runtime-repeat}.json`. Intermediate milestone
+reports remain there too. Compare the unchanged renderer Stats fields across
+web runs: the newer auxiliary `frame_cpu` timer additionally includes dispatch,
+so that field is not directly comparable with its earlier definition.
 
-`UiSession::load_effect_package` stages a catalog, requests GPU validation and
-keeps the working catalog/document active. The renderer checks the combined WGSL
-namespace, metadata, preparation and render interfaces; device error scopes are
-popped immediately and polled without waiting. Compilation is cold work, not a
-120 Hz operation. Validation neither dispatches preparation nor allocates canvas
-image intermediates. Accepted pipelines are reused by subsequent rendering;
-superseded compilation versions are pruned at this cold boundary.
-
-Publication waits for pending input, the active stroke and pending document edits
-to finish. Compatible current values are matched by parameter key, including
-edits made while validation was pending. New/incompatible fields use defaults;
-conflicting joint constraints reject the replacement rather than silently
-clamping otherwise valid user values. One document edit replaces affected live
-programs. Unrelated layers are untouched, paint is not replayed, and the existing
-tiled composition dependency rules still apply.
-
-`UiState.filter_load` reports the request ID, pending flag and error.
-`filter_catalog_revision` refreshes category/row metadata and is part of the
-preview revision. Controls continue to come from the shared schema. GTK's idle
-scheduler now follows the session's background-work needs, not just animation
-and drawing; validation completes on an otherwise idle canvas.
-
-### Loading without rebuilding
-
-- GTK loads `CAPY_FILTERS_DIR`, an installed `filters` directory beside the
-  executable, or development `assets/filters`, with the embedded same-format
-  catalog as fallback. `CAPY_FILTERS_MODE` is `replace` by default; use `add` for
-  a new package. For example, from the repository root, run an already-built
-  executable with `CAPY_FILTERS_DIR=examples/filters/tent-blur
-  CAPY_FILTERS_MODE=add ./target/debug/layer-linux`. The native transport function
-  also accepts directories for live add/replace; there is no shader-editor UI.
-- Web ships separately fingerprinted JSON/WGSL, included in the PWA precache.
-  Startup fetches these resources; failed loading retains the working fallback.
-  `await layerApp.loadFilters('/my-filter/manifest.json', 'add')` imports a
-  package, and `'replace'` reloads existing IDs. This returns a request ID;
-  inspect `layerApp.state().filter_load` for completion. Serve edited external
-  manifest/WGSL files and call again—no Wasm rebuild is involved. Resource
-  requests revalidate HTTP caches. Cross-origin packages require normal CORS.
-- Android ships the same resource directory as APK assets, loaded through the
-  Rust API after the GPU attaches. `CanvasHost.loadFilters(manifest, modules,
-  mode)` accepts acquired package bytes for live import/replacement, with no
-  native-library rebuild. The host only transports bytes; Rust owns validation,
-  publication, constraints, selection and control metadata. A file-picker or
-  download UI is not part of this task.
-
-The generic resource reader validates manifest-local module filenames. Treat
-authored WGSL as trusted executable content: resource/interface checks are not a
-proof a shader terminates or meets a frame budget. Device watchdogs still apply.
-
-### Current validation
-
-The full GPU suite passes: 59 tests and six opt-in benchmarks excluded, including
-the original forty-filter pixel reference, transparency, clipping, masks, dirty
-tiles, fusion and preparation dependencies. Shared core (20), UI (144), engine
-(23) and Android bridge (6) tests pass. Packaging/launcher tests pass (19).
-
-Live loading tests pass on GTK/private Wayland, packaged Chrome/WebGPU and the
-Android API-35 tablet emulator. They load the forty definitions and add Tent
-Blur from its standalone package, expose its shared controls, and preserve
-values across replacement. The web and Android tests also replace its triangular
-kernel with a box kernel and reject invalid preparation WGSL without publishing
-it. Renderer tests verify unchanged pixels/preparation after rejection, pipeline
-reuse after acceptance and render-only edits retaining existing lookup storage.
-
-Still required before closing the overall goal: final all-filter platform
-regression runs, before/after platform timing checks and the concluding audit.
-Curves and Gradient Map remain the agreed Rust exceptions. Physical mobile
-hardware and browsers other than the available Chrome have not been tested.
-
-The same workstation parameter benchmark after transactional loading produces:
-
-| Case | CPU median / p95 / p99 | GPU median / p95 / p99 | Completion p99 |
-| --- | --- | --- | --- |
-| Unsharp, painting | .056 / .073 / .164 | .034 / .035 / .039 | .306 |
-| Unsharp, kernel edits | .033 / .047 / .153 | .146 / .198 / .200 | .499 |
-| Unsharp, unrelated edits | .030 / .031 / .033 | .068 / .069 / .069 | .313 |
-| Five prepared, painting | .113 / .195 / .348 | .087 / .095 / .095 | .501 |
-| Five prepared, kernel edits | .112 / .201 / .407 | .571 / .627 / .641 | 1.033 |
-| Five prepared, unrelated edits | .088 / .111 / .168 | .525 / .528 / .530 | .845 |
-
-Milliseconds; same cases/sampling as the preserved baseline above. Small GPU
-increases remain measurable: Unsharp kernel-edit median is about .009 ms higher
-than before GPU preparation, and the five-filter unrelated-edit median is about
-.016 ms higher. No preparation dispatch occurs for unrelated edits, so that
-difference cannot be attributed to dispatch cost. These individual runs do not
-isolate driver/clock variance from storage-layout effects. All measured cases
-remain below the render budget. Raw output is
-`artifacts/benchmarks/filter-parameters-runtime.csv` (generated, ignored).
+Physical Android/iPad devices, Safari, other browsers, Windows and macOS were
+not tested for this migration. Resource compilation and user-authored shaders
+have no guaranteed latency. There is no CPU canvas fallback and no new rendering
+simulation or alternate brush path.

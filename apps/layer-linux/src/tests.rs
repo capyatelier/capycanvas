@@ -80,14 +80,11 @@ fn native_runtime_filter_packages() {
             state(&w).filter_load.error
         );
     };
-    load(
-        "../../assets/filters",
-        layer_core::EffectInstallMode::Replace,
-    );
+    load("../../assets/filters", layer_core::EffectInstallMode::Merge);
     assert_eq!(state(&w).adjustments.len(), 40);
     load(
         "../../examples/filters/tent-blur",
-        layer_core::EffectInstallMode::Add,
+        layer_core::EffectInstallMode::Merge,
     );
     assert_eq!(state(&w).adjustments.len(), 41);
     let pixels: Vec<u8> = (0..1024 * 768)

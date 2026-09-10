@@ -91,7 +91,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     for (name in names.values().map { it as String }) {
                         modules.put(name, assets.open("filters/$name").bufferedReader().use { it.readText() })
                     }
-                    filterResources = obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to "replace")
+                    filterResources = obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to "merge")
                 }
                 main.post { catalog = value }
                 publish(true)

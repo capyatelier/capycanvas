@@ -39,6 +39,8 @@ pub(super) struct Effects {
     pipelines: Vec<(Vec<Arc<EffectProgram>>, Execution, wgpu::RenderPipeline)>,
     // Parameters and GPU tables are shared by every pass of the same chain.
     instances: HashMap<Vec<LayerId>, Instance>,
+    // Reuse the lookup key; ordinary painting/animation does not repack inputs.
+    ids: Vec<LayerId>,
     preparation: preparation::Preparation,
     pub compilations: u64,
 }
@@ -65,6 +67,7 @@ impl Effects {
             pipeline_layout: self.pipeline_layout.clone(),
             pipelines: self.pipelines.clone(),
             instances: HashMap::new(),
+            ids: Vec::new(),
             preparation: self.preparation.fork(),
             compilations: 0,
         }
@@ -144,6 +147,7 @@ impl Effects {
             pipeline_layout,
             pipelines: Vec::new(),
             instances: HashMap::new(),
+            ids: Vec::new(),
             preparation: preparation::Preparation::new(&r.device),
             compilations: 0,
         }
@@ -159,57 +163,44 @@ impl Effects {
         stage: Execution,
         time: f32,
     ) -> Result<PreparedEffect, GpuRasterError> {
-        let ids = layers.iter().map(|l| l.id).collect::<Vec<_>>();
-        let effects: Vec<_> = layers
-            .iter()
-            .map(|l| l.effect.as_ref().unwrap().clone())
-            .collect();
-        let properties: Vec<_> = layers
-            .iter()
-            .map(|l| {
-                [
-                    l.opacity,
-                    l.properties.blend as u32 as f32,
-                    l.mask.as_ref().filter(|m| m.enabled).map_or(1., |m| {
-                        if m.inverted {
-                            1. - m.default_coverage
-                        } else {
-                            m.default_coverage
-                        }
-                    }),
-                    l.effect.as_ref().unwrap().time_seconds(time),
-                ]
-            })
-            .collect();
-        if let Some(old) = self.instances.get_mut(&ids)
+        self.ids.clear();
+        self.ids.extend(layers.iter().map(|l| l.id));
+        if let Some(old) = self.instances.get_mut(self.ids.as_slice())
             && old
                 .effects
                 .iter()
-                .zip(&effects)
-                .all(|(a, b)| Arc::ptr_eq(a, b))
+                .zip(layers)
+                .all(|(effect, layer)| Arc::ptr_eq(effect, layer.effect.as_ref().unwrap()))
             && old
                 .properties
                 .iter()
-                .zip(&properties)
-                .all(|(a, b)| a[..3] == b[..3])
+                .zip(layers)
+                .all(|(a, layer)| a[..3] == effect_properties(layer, time)[..3])
             && let Some(pipeline) = old.pipelines.get(&stage)
         {
             // Animation updates only one scalar per instance, never its LUTs.
-            for (i, (a, b)) in old.properties.iter().zip(&properties).enumerate() {
-                if a[3] != b[3] {
+            for (i, (properties, layer)) in old.properties.iter_mut().zip(layers).enumerate() {
+                let seconds = layer.effect.as_ref().unwrap().time_seconds(time);
+                if properties[3] != seconds {
                     r.queue.write_buffer(
                         &old.buffer,
                         old.offsets[i] as u64 * 16 + 12,
-                        &b[3].to_le_bytes(),
+                        &seconds.to_le_bytes(),
                     );
+                    properties[3] = seconds;
                 }
             }
-            old.properties = properties;
             return Ok(PreparedEffect {
                 pipeline: pipeline.clone(),
                 binding: old.binding.clone(),
             });
         }
+        let ids = self.ids.clone();
+        let effects: Vec<_> = layers
+            .iter()
+            .map(|l| l.effect.as_ref().unwrap().clone())
+            .collect();
+        let properties: Vec<_> = layers.iter().map(|l| effect_properties(l, time)).collect();
         let mut data = Vec::new();
         let mut offsets = Vec::new();
         for (effect, properties) in effects.iter().zip(&properties) {
@@ -395,6 +386,21 @@ impl Effects {
         );
         Ok(prepared)
     }
+}
+
+fn effect_properties(layer: &Layer, time: f32) -> [f32; 4] {
+    [
+        layer.opacity,
+        layer.properties.blend as u32 as f32,
+        layer.mask.as_ref().filter(|m| m.enabled).map_or(1., |m| {
+            if m.inverted {
+                1. - m.default_coverage
+            } else {
+                m.default_coverage
+            }
+        }),
+        layer.effect.as_ref().unwrap().time_seconds(time),
+    ]
 }
 
 fn validate_source(source: &str) -> Result<(), GpuRasterError> {

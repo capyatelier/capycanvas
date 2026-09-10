@@ -1139,7 +1139,7 @@ async function startGpu() {
     notice.hidden = true;
     wake();
     // Resource loading failure never disables the canvas or the working catalog.
-    loadFilters(asset("filters/manifest.json"), "replace", name=>asset(`filters/${name}`))
+    loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`))
       .catch(error=>console.warn("Using bundled filters:",error));
   } catch (error) {
     document.body.dataset.gpu = "unavailable";

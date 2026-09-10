@@ -1,6 +1,6 @@
 // Native staging directory; no bundled GTK libraries or generated source assets.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,8 @@ const files = [
   [binary, "bin/capycanvas"],
   [join(app, "art.capycanvas.CapyCanvas.desktop"), "share/applications/art.capycanvas.CapyCanvas.desktop"],
   [join(generated, "art.capycanvas.CapyCanvas.svg"), "share/icons/hicolor/scalable/apps/art.capycanvas.CapyCanvas.svg"],
+  ...readdirSync(join(root, "assets/filters")).filter(name => /\.(json|wgsl)$/.test(name))
+    .map(name => [join(root, "assets/filters", name), `bin/filters/${name}`]),
   ...["LICENSE", "LICENSE-MIT", "LICENSE-APACHE", "BRANDING.md", "THIRD_PARTY_NOTICES.md"].map(name => [join(root, name), `share/doc/capycanvas/${name}`]),
 ];
 for (const [source, relative] of files) { const target = join(output, relative); mkdirSync(dirname(target), { recursive: true }); cpSync(source, target); }

@@ -163,6 +163,9 @@ impl EffectPackage {
 pub enum EffectInstallMode {
     Add,
     Replace,
+    /// Explicitly update known IDs and add new ones, e.g. a shipped resource
+    /// catalog newer than the executable's startup fallback. Omitted IDs stay.
+    Merge,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -191,7 +194,7 @@ impl EffectCatalog {
                 .find(|c| c.id == category.id)
             {
                 Some(old) if *old == category => {}
-                Some(old) if matches!(mode, EffectInstallMode::Replace) => *old = category,
+                Some(old) if !matches!(mode, EffectInstallMode::Add) => *old = category,
                 Some(_) => return Err("Conflicting filter category".into()),
                 None => candidate.categories.push(category),
             }
@@ -329,6 +332,21 @@ mod tests {
             added.get("user:custom").unwrap().program.abi,
             crate::EFFECT_ABI
         );
+    }
+    #[test]
+    fn resource_catalog_merge_updates_and_adds_without_changing_the_fallback() {
+        let original = disk_catalog();
+        let mut resources = original.clone();
+        let mut added = resources.get("gaussian_blur").unwrap().clone();
+        Arc::make_mut(&mut added.program).id = "user:new_kernel".into();
+        resources.filters.push(added);
+        Arc::make_mut(&mut resources.filters[0].program).label = "Updated filter".into();
+        let merged = original.stage(resources, EffectInstallMode::Merge).unwrap();
+        assert_eq!(merged.filters().len(), 41);
+        assert!(merged.get("user:new_kernel").is_some());
+        assert_eq!(merged.filters()[0].label(), "Updated filter");
+        assert_eq!(original.filters().len(), 40);
+        assert_ne!(original.filters()[0].label(), "Updated filter");
     }
     #[test]
     fn modules_cannot_escape_the_package_or_silently_go_missing() {

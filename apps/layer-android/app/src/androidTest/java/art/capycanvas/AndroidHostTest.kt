@@ -192,7 +192,9 @@ class AndroidHostTest {
         penStroke(40)
         val choices=state().array("adjustments").objects().map {it.getString("id")}
         val expensive=listOf("motion_blur","gaussian_blur","domain_warp","painterly","denoise")
-        val cases=listOf("Baseline" to emptyList<String>())+choices.map {it to listOf(it)}+listOf("Five expensive" to expensive)
+        val prepared=listOf("pencil","soft_focus","bloom","gaussian_blur","unsharp_mask")
+        val cases=listOf("Baseline" to emptyList<String>())+choices.map {it to listOf(it)}+
+            listOf("Five expensive" to expensive,"Prepared edits" to listOf("unsharp_mask"),"Five prepared edits" to prepared)
         val report=JSONArray()
         for((name,filters) in cases) {
             val ids=mutableListOf<Long>()
@@ -206,7 +208,8 @@ class AndroidHostTest {
                     effect(obj("op" to "set","layer" to layer,"key" to c.getString("key"),"value" to obj("kind" to "number","value" to c.getJSONObject("kind").getJSONObject("numeric").number("max")*.25)))
                 }
             }
-            for(mode in if(name=="Five expensive") listOf("local","full","animation") else listOf("local")) {
+            val modes=if(name.endsWith("edits")) listOf("relevant","unrelated") else if(name=="Five expensive") listOf("local","full","animation") else listOf("local")
+            for(mode in modes) {
                 if(mode=="animation") effect(obj("op" to "set","layer" to ids[2],"key" to "animate","value" to obj("kind" to "toggle","value" to true)))
                 action(obj("type" to "select_layer","id" to 1))
                 val before=frames(stats());var count=0;var after=before
@@ -214,6 +217,8 @@ class AndroidHostTest {
                     if(mode=="local") canvasEvent(if(count==0) MotionEvent.ACTION_DOWN else MotionEvent.ACTION_MOVE,
                         listOf(androidx.compose.ui.geometry.Offset(.5f+kotlin.math.sin(count*.1f)*.04f,.5f+kotlin.math.cos(count*.15f)*.03f)),MotionEvent.TOOL_TYPE_STYLUS)
                     if(mode=="full") host.dispatch(obj("type" to "set_layer_opacity","id" to 1,"opacity" to .7+(count%20)*.01))
+                    if(mode=="relevant"||mode=="unrelated") host.dispatch(obj("type" to "effect","action" to obj("op" to "set","layer" to ids.last(),
+                        "key" to if(mode=="relevant") "sigma" else "amount","value" to obj("kind" to "number","value" to if(mode=="relevant") 2+(count%20)*.5 else 50+(count%20)*5))))
                     SystemClock.sleep(9);count++
                     if(count%30==0)after=frames(stats())
                 }

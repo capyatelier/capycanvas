@@ -45,6 +45,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Self-contained documents may contain programs absent from the catalog.
         // Programs being replaced are deliberately excluded from this namespace.
         for layer in &self.engine.document().layers {
+            if matches!(mode, EffectInstallMode::Add)
+                && let Some(effect) = &layer.effect
+                && changed
+                    .iter()
+                    .any(|p| p.id == effect.program.id && *p != effect.program)
+            {
+                return Err(format!(
+                    "Filter ID already belongs to a document program: {}",
+                    effect.program.id
+                ));
+            }
             if let Some(effect) = &layer.effect
                 && !changed.iter().any(|p| p.id == effect.program.id)
                 && !namespace.contains(&effect.program)
