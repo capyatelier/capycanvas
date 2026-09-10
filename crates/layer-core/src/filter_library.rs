@@ -128,8 +128,13 @@ pub(super) fn program(id: BuiltinEffect) -> EffectProgram {
                 ]),
                 _ => {}
             }
-            p.lookups = Arc::from([EffectLookup::Gaussian {
-                sigma: "sigma".into(),
+            p.lookups = Arc::from([EffectLookup {
+                wgsl: include_str!("gaussian-prepare.wgsl").into(),
+                entry: "capy_prepare_gaussian".into(),
+                dependencies: Arc::from([Arc::from("sigma")]),
+                values: 33,
+                workgroup_size: [64, 1, 1],
+                workgroups: [1, 1, 1],
             }]);
             p.passes = Arc::from([
                 EffectPass {

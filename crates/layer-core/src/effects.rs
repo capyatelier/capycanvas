@@ -95,11 +95,16 @@ impl EffectSampling {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum EffectLookup {
-    /// Normalized discrete Gaussian, packed into bilinear positive tap pairs.
-    /// Sigma is constrained to 0..21 px (at most 63 px / 32 pairs per side).
-    Gaussian { sigma: Arc<str> },
+pub struct EffectLookup {
+    /// Preparation library. The wrapper owns bindings and the compute entry.
+    pub wgsl: Arc<str>,
+    pub entry: Arc<str>,
+    /// Parameters exposed through prep_parameter, in this order.
+    pub dependencies: Arc<[Arc<str>]>,
+    /// Fixed output capacity in vec4<f32> records, read through fx_lookup.
+    pub values: u32,
+    pub workgroup_size: [u32; 3],
+    pub workgroups: [u32; 3],
 }
 
 impl EffectProgram {
@@ -268,9 +273,25 @@ impl EffectInstance {
             return Err("Too many effect lookup tables");
         }
         for lookup in self.program.lookups.iter() {
-            let EffectLookup::Gaussian { sigma } = lookup;
-            if !self.program.parameters.iter().any(|p| p.key == *sigma && matches!(p.kind, EffectParameterKind::Number { min, max, .. } if min >= 0. && max <= 21.)) {
-                return Err("Gaussian sigma must be a numeric parameter within 0..21 px");
+            let product = |v: [u32; 3]| v.into_iter().try_fold(1u32, u32::checked_mul);
+            if !(1..=4096).contains(&lookup.values)
+                || lookup.wgsl.len() > 256 * 1024
+                || lookup.entry.is_empty()
+                || !lookup.entry.bytes().enumerate().all(|(i, c)| {
+                    c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
+                })
+                || !matches!(product(lookup.workgroup_size), Some(1..=256))
+                || !matches!(product(lookup.workgroups), Some(1..=256))
+                || lookup.dependencies.len() > 64
+            {
+                return Err("Invalid or oversized effect preparation");
+            }
+            for (i, key) in lookup.dependencies.iter().enumerate() {
+                if lookup.dependencies[..i].contains(key)
+                    || !self.program.parameters.iter().any(|p| p.key == *key)
+                {
+                    return Err("Unknown or duplicate preparation dependency");
+                }
             }
         }
         if self.program.time
@@ -384,41 +405,15 @@ impl EffectInstance {
         data[0] = [directory as f32, self.program.lookups.len() as f32, 0., 0.];
         data.resize(directory + self.program.lookups.len(), [0.; 4]);
         for (i, lookup) in self.program.lookups.iter().enumerate() {
-            let EffectLookup::Gaussian { sigma } = lookup;
-            let sigma = match self.value(sigma) {
-                Some(EffectValue::Number(v)) => *v,
-                _ => 0.,
-            };
-            data[directory + i] = [data.len() as f32, 33., 0., 0.];
-            data.extend(gaussian_taps(sigma));
+            data[directory + i] = [data.len() as f32, lookup.values as f32, 0., 0.];
+            // Reserve GPU-owned output. Upload only the prefix before these
+            // tables on edits, preserving previously prepared results.
+            data.resize(data.len() + lookup.values as usize, [0.; 4]);
         }
         data
     }
 }
 
-fn gaussian_taps(sigma: f32) -> [[f32; 4]; 33] {
-    let mut taps = [[0.; 4]; 33];
-    if sigma <= 0. {
-        taps[0][0] = 1.;
-        return taps;
-    }
-    let radius = (sigma * 3.).ceil().min(63.) as usize;
-    let mut weights = [0.; 65];
-    for (i, w) in weights.iter_mut().enumerate().take(radius + 1) {
-        *w = (-0.5 * (i as f32 / sigma).powi(2)).exp();
-    }
-    let total = weights[0] + 2. * weights[1..=radius].iter().sum::<f32>();
-    taps[0] = [weights[0] / total, 0., 0., 0.];
-    for (pair, i) in (1..=radius).step_by(2).enumerate() {
-        let weight = weights[i] + weights[i + 1];
-        if weight <= 1e-20 {
-            break;
-        }
-        taps[pair + 1] = [i as f32 + weights[i + 1] / weight, weight / total, 0., 0.];
-        taps[0][1] += 1.;
-    }
-    taps
-}
 impl EffectParameter {
     fn in_section(mut self, section: &str) -> Self {
         self.section = Some(section.into());
@@ -875,14 +870,20 @@ mod tests {
         );
     }
     #[test]
-    fn gaussian_lookup_is_finite_normalized_and_fixed_size() {
-        for sigma in [0., 0.000001, 0.1, 0.5, 1., 3., 12., 21.] {
-            let taps = gaussian_taps(sigma);
-            assert!(taps.iter().flatten().all(|v| v.is_finite()));
-            let weight = taps[0][0] + 2. * taps[1..].iter().map(|v| v[1]).sum::<f32>();
-            assert!((weight - 1.).abs() < 0.00001, "sigma={sigma}: {weight}");
-            assert!(taps[0][1] <= 32.);
-        }
+    fn preparation_has_bounded_storage_and_known_dependencies() {
+        let mut program = (*BuiltinEffect::GaussianBlur.program()).clone();
+        EffectInstance::new(Arc::new(program.clone()))
+            .validate()
+            .unwrap();
+        Arc::make_mut(&mut program.lookups)[0].values = u32::MAX;
+        assert!(
+            EffectInstance::new(Arc::new(program.clone()))
+                .validate()
+                .is_err()
+        );
+        Arc::make_mut(&mut program.lookups)[0].values = 33;
+        Arc::make_mut(&mut program.lookups)[0].dependencies = Arc::from([Arc::from("unknown")]);
+        assert!(EffectInstance::new(Arc::new(program)).validate().is_err());
     }
     #[test]
     fn defaults_and_parameter_validation() {

@@ -145,6 +145,297 @@ fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
         .unwrap();
 }
 
+/// Immutable pre-migration reference: sample actual full-resolution renders,
+/// including masked/clipped transparency, not a CPU reimplementation.
+#[test]
+fn runtime_filter_pixel_reference() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    let sample = [64usize, 48usize];
+    let columns = 8;
+    let rows = (BuiltinEffect::ALL.len() * 4).div_ceil(columns);
+    let extent = [(columns * sample[0]) as u32, (rows * sample[1]) as u32];
+    let mut pixels = vec![0; extent[0] as usize * extent[1] as usize * 4];
+    for (i, id) in BuiltinEffect::ALL.into_iter().enumerate() {
+        for scope in 0..4 {
+            let mut effect = filter(id);
+            effect.properties.clipped = scope == 1 || scope == 3;
+            if scope >= 2 {
+                effect.opacity = 0.63;
+                let mut mask = layer_core::LayerMask::reveal_all(LayerId(100), Point::default());
+                mask.default_coverage = 0.47;
+                effect.mask = Some(mask);
+            }
+            if scope == 3 && effect.effect.as_ref().unwrap().program.time {
+                Arc::make_mut(effect.effect.as_mut().unwrap())
+                    .set("animate", EffectValue::Toggle(true))
+                    .unwrap();
+            }
+            submit(
+                &mut r,
+                EXTENT,
+                &[effect, base.clone()],
+                2.5,
+                i == 0 && scope == 0,
+                true,
+                None,
+            );
+            let output = image(&mut r);
+            let index = i * 4 + scope;
+            for y in 0..sample[1] {
+                for x in 0..sample[0] {
+                    let sx = (2 * x + 1) * EXTENT[0] as usize / (2 * sample[0]);
+                    let sy = (2 * y + 1) * EXTENT[1] as usize / (2 * sample[1]);
+                    let src = (sy * EXTENT[0] as usize + sx) * 4;
+                    let dst = ((index / columns * sample[1] + y) * extent[0] as usize
+                        + index % columns * sample[0]
+                        + x)
+                        * 4;
+                    pixels[dst..dst + 4].copy_from_slice(&output[src..src + 4]);
+                }
+            }
+        }
+    }
+    let path = "tests/fixtures/runtime-filters-v2.png";
+    let mut reader = png::Decoder::new(std::fs::File::open(path).unwrap())
+        .read_info()
+        .unwrap();
+    let mut reference = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut reference).unwrap();
+    assert_eq!([info.width, info.height], extent);
+    let error = reference
+        .iter()
+        .zip(&pixels)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
+    assert!(
+        error <= 1,
+        "Runtime migration changed reference pixels: maximum byte error {error}"
+    );
+}
+
+#[test]
+fn gpu_preparation_is_shared_and_dependency_driven() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    let mut effect = filter(BuiltinEffect::UnsharpMask);
+    let old = effect.effect.take().unwrap();
+    let program = Arc::new((*old.program).clone().with_time_controls());
+    effect.effect = Some(Arc::new(layer_core::EffectInstance::new(program)));
+    let mut layers = vec![effect, base];
+    let count = |r: &WgpuRasterizer| r.scene.as_ref().unwrap().effects.preparation_count();
+    submit(&mut r, EXTENT, &layers, 0., true, true, None);
+    assert_eq!(count(&r), 1, "two image passes share one preparation");
+    let bytes = r.scene.as_ref().unwrap().effects.storage_bytes();
+    for i in 0..5 {
+        submit(
+            &mut r,
+            EXTENT,
+            &layers,
+            i as f32,
+            false,
+            false,
+            Some(([192., 128.], 12.)),
+        );
+        assert_eq!(count(&r), 1, "painting and animation reuse the lookup");
+    }
+    r.submit(FramePacket {
+        time_seconds: 8.,
+        view: ViewState {
+            width_px: EXTENT[0],
+            height_px: EXTENT[1],
+            document_to_surface: [1.5, 0., 0., 1.5, 20., 10.],
+            ..test_view()
+        },
+        document_extent: EXTENT,
+        layers: &layers,
+        dabs: &[],
+        dab_batches: &[],
+        reset_layers: false,
+        composite_all: true,
+    })
+    .unwrap();
+    assert_eq!(count(&r), 1, "panning/zoom must not prepare");
+    Arc::make_mut(layers[0].effect.as_mut().unwrap())
+        .set("amount", EffectValue::Number(175.))
+        .unwrap();
+    submit(&mut r, EXTENT, &layers, 9., false, true, None);
+    assert_eq!(count(&r), 1, "unrelated value edit must not prepare");
+    layers[0].opacity = 0.7;
+    submit(&mut r, EXTENT, &layers, 10., false, true, None);
+    assert_eq!(count(&r), 1, "layer properties must not prepare");
+    Arc::make_mut(layers[0].effect.as_mut().unwrap())
+        .set("sigma", EffectValue::Number(8.))
+        .unwrap();
+    submit(&mut r, EXTENT, &layers, 11., false, true, None);
+    assert_eq!(count(&r), 2, "relevant edit prepares exactly once");
+    let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
+    let program = Arc::make_mut(&mut effect.program);
+    program.wgsl = format!("{}\n// render-only revision\n", program.wgsl).into();
+    submit(&mut r, EXTENT, &layers, 12., false, true, None);
+    assert_eq!(count(&r), 2, "render-only code retains preparation");
+    let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
+    let lookup = &mut Arc::make_mut(&mut Arc::make_mut(&mut effect.program).lookups)[0];
+    lookup.wgsl = format!("{}\n// preparation revision\n", lookup.wgsl).into();
+    submit(&mut r, EXTENT, &layers, 13., false, true, None);
+    assert_eq!(count(&r), 3, "preparation code edit prepares once");
+    assert_eq!(
+        r.scene.as_ref().unwrap().effects.storage_bytes(),
+        bytes,
+        "no fresh GPU parameter storage on edits"
+    );
+}
+
+#[test]
+fn custom_preparation_replaces_kernel_at_runtime() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    let mut layers = vec![filter(BuiltinEffect::GaussianBlur), base];
+    submit(&mut r, EXTENT, &layers, 0., true, true, None);
+    let gaussian = image(&mut r);
+    let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
+    let lookup = &mut Arc::make_mut(&mut Arc::make_mut(&mut effect.program).lookups)[0];
+    // Runtime-authored triangular kernel: the consumer's tap ABI is unchanged,
+    // but no host-side algorithm or compiled preparation selector is involved.
+    lookup.wgsl = std::fs::read_to_string("tests/fixtures/triangle-prepare.wgsl")
+        .unwrap()
+        .into();
+    lookup.entry = "triangle".into();
+    lookup.workgroup_size = [1, 1, 1];
+    submit(&mut r, EXTENT, &layers, 0., false, true, None);
+    assert_ne!(image(&mut r), gaussian);
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 2);
+    let expected = image(&mut r);
+    submit(&mut r, EXTENT, &layers, 0., true, true, None);
+    assert_eq!(
+        image(&mut r),
+        expected,
+        "runtime kernel agrees with fresh composition"
+    );
+}
+
+#[test]
+fn prepared_pointwise_filters_still_fuse() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    let mut program = (*BuiltinEffect::BrightnessContrast.program()).clone();
+    program.id = "runtime_factor".into();
+    program.entry = "runtime_factor".into();
+    program.wgsl="fn runtime_factor(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(c.rgb*fx_lookup(b,0u,0u).x,c.a);}".into();
+    program.lookups=Arc::from([layer_core::EffectLookup {
+        wgsl:"fn prepare_factor(local:vec3<u32>,global:vec3<u32>){prep_store(0u,prep_parameter(0u,0u)/100.);}".into(),
+        entry:"prepare_factor".into(),dependencies:Arc::from([Arc::from("brightness")]),values:1,workgroup_size:[1,1,1],workgroups:[1,1,1],
+    }]);
+    let mut first = filter(BuiltinEffect::BrightnessContrast);
+    first.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
+    Arc::make_mut(first.effect.as_mut().unwrap())
+        .set("brightness", EffectValue::Number(50.))
+        .unwrap();
+    let mut second = first.clone();
+    second.id = LayerId(3);
+    Arc::make_mut(second.effect.as_mut().unwrap())
+        .set("brightness", EffectValue::Number(80.))
+        .unwrap();
+    submit(
+        &mut r,
+        EXTENT,
+        &[first.clone(), second, base.clone()],
+        0.,
+        true,
+        true,
+        None,
+    );
+    assert_eq!(
+        r.scene.as_ref().unwrap().effects.compilations,
+        1,
+        "preparation must not introduce image boundaries"
+    );
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 2);
+    let pair = image(&mut r);
+    Arc::make_mut(first.effect.as_mut().unwrap())
+        .set("brightness", EffectValue::Number(40.))
+        .unwrap();
+    submit(&mut r, EXTENT, &[first, base], 0., false, true, None);
+    assert!(
+        image(&mut r)
+            .iter()
+            .zip(pair)
+            .all(|(a, b)| a.abs_diff(b) <= 1)
+    );
+}
+
+#[test]
+fn invalid_preparation_keeps_the_working_gpu_state() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    let effect = filter(BuiltinEffect::GaussianBlur);
+    let layers = vec![effect.clone(), base];
+    submit(&mut r, EXTENT, &layers, 0., true, true, None);
+    let expected = image(&mut r);
+    for source in [
+        "fn bad(local:vec3<u32>,global:vec3<u32>){this is not WGSL;}",
+        "fn bad(local:vec3<u32>,global:vec3<u32>){prep_data[0u]=vec4<f32>(0.);}",
+        "@group(0) @binding(1) var<storage,read> extra:array<f32>; fn bad(local:vec3<u32>,global:vec3<u32>){prep_store(0u,vec4<f32>(extra[0u]));}",
+    ] {
+        let mut candidate = effect.clone();
+        let lookup = &mut Arc::make_mut(
+            &mut Arc::make_mut(&mut Arc::make_mut(candidate.effect.as_mut().unwrap()).program)
+                .lookups,
+        )[0];
+        lookup.wgsl = source.into();
+        lookup.entry = "bad".into();
+        let mut scene = r.scene.take().unwrap();
+        assert!(
+            scene
+                .effects
+                .prepare(&r, &[&candidate], effects::Execution::Image(0), 0.)
+                .is_err()
+        );
+        assert_eq!(scene.effects.preparation_count(), 1);
+        r.scene = Some(scene);
+        submit(&mut r, EXTENT, &layers, 0., false, true, None);
+        assert_eq!(image(&mut r), expected);
+    }
+}
+
+#[test]
+fn gpu_gaussian_is_normalized_at_parameter_extremes() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let extent = [128, 128];
+    let asset = AssetId("test:uniform-normalization".into());
+    let pixels: [u8; 4] = [140, 90, 180, 255];
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: 128,
+            height: 128,
+            stride: 128 * 4,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &pixels.repeat(128 * 128),
+        },
+    )
+    .unwrap();
+    let mut base = Layer::paint(LayerId(1), "Uniform");
+    base.asset = Some(asset);
+    let mut layers = vec![filter(BuiltinEffect::GaussianBlur), base];
+    for (i, sigma) in [0., 0.000001, 0.1, 0.5, 1., 3., 12., 21.]
+        .into_iter()
+        .enumerate()
+    {
+        Arc::make_mut(layers[0].effect.as_mut().unwrap())
+            .set("sigma", EffectValue::Number(sigma))
+            .unwrap();
+        submit(&mut r, extent, &layers, 0., i == 0, true, None);
+        assert!(
+            image(&mut r)
+                .chunks_exact(4)
+                .all(|p| p.iter().zip(pixels).all(|(a, b)| a.abs_diff(b) <= 1)),
+            "unnormalized Gaussian at sigma {sigma}"
+        );
+    }
+}
+
 #[test]
 fn entire_filter_catalog_renders_masks_freezes_and_animates() {
     let mut r = WgpuRasterizer::new().expect("physical GPU required");
@@ -615,6 +906,108 @@ fn clipped_animation_latency() {
     }
     std::fs::create_dir_all("../../artifacts/benchmarks").unwrap();
     std::fs::write("../../artifacts/benchmarks/clipped-animation.csv", report).unwrap();
+}
+
+#[test]
+#[ignore = "release-mode physical GPU benchmark"]
+fn filter_parameter_latency() {
+    use std::time::Instant;
+    let summary = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        format!(
+            "{:.6},{:.6},{:.6}",
+            v[v.len() / 2],
+            v[v.len() * 95 / 100],
+            v[v.len() * 99 / 100]
+        )
+    };
+    let mut r = WgpuRasterizer::new().unwrap();
+    let extent = [2048, 1536];
+    let base = setup(&mut r, extent);
+    let mut report = String::from(
+        "filter,mode,cpu_median,cpu_p95,cpu_p99,gpu_median,gpu_p95,gpu_p99,complete_median,complete_p95,complete_p99\n",
+    );
+    for (label, filters) in [
+        ("Unsharp", vec![BuiltinEffect::UnsharpMask]),
+        (
+            "Five prepared",
+            vec![
+                BuiltinEffect::Pencil,
+                BuiltinEffect::SoftFocus,
+                BuiltinEffect::Bloom,
+                BuiltinEffect::GaussianBlur,
+                BuiltinEffect::UnsharpMask,
+            ],
+        ),
+    ] {
+        for mode in ["paint", "relevant", "unrelated"] {
+            let mut layers: Vec<_> = filters
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let mut l = filter(*id);
+                    l.id = LayerId(i as u64 + 2);
+                    l
+                })
+                .collect();
+            layers.push(base.clone());
+            submit(&mut r, extent, &layers, 0., true, true, None);
+            r.wait_idle().unwrap();
+            r.set_telemetry_enabled(true);
+            let (mut cpu, mut complete) = (Vec::new(), Vec::new());
+            for i in 0..320 {
+                let start = Instant::now();
+                let effect = Arc::make_mut(layers[filters.len() - 1].effect.as_mut().unwrap());
+                match mode {
+                    "relevant" => effect
+                        .set("sigma", EffectValue::Number(1. + (i % 80) as f32 * 0.1))
+                        .unwrap(),
+                    "unrelated" => effect
+                        .set("amount", EffectValue::Number(50. + (i % 80) as f32))
+                        .unwrap(),
+                    _ => {}
+                }
+                submit(
+                    &mut r,
+                    extent,
+                    &layers,
+                    0.,
+                    false,
+                    mode != "paint",
+                    (mode == "paint").then_some(([1024., 768.], 12.)),
+                );
+                let submitted = start.elapsed().as_secs_f64() * 1000.;
+                r.wait_idle().unwrap();
+                if i >= 64 {
+                    cpu.push(submitted);
+                    complete.push(start.elapsed().as_secs_f64() * 1000.);
+                }
+            }
+            let gpu = r
+                .telemetry()
+                .gpu
+                .ordered()
+                .into_iter()
+                .map(f64::from)
+                .collect();
+            let line = format!(
+                "{label},{mode},{},{},{}\n",
+                summary(cpu),
+                summary(gpu),
+                summary(complete)
+            );
+            eprint!("{line}");
+            report.push_str(&line);
+        }
+    }
+    let name = std::env::var("CAPY_FILTER_BENCHMARK_LABEL").unwrap_or_else(|_| "current".into());
+    assert!(name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-'));
+    std::fs::create_dir_all("../../artifacts/benchmarks").unwrap();
+    std::fs::write(
+        format!("../../artifacts/benchmarks/filter-parameters-{name}.csv"),
+        report,
+    )
+    .unwrap();
 }
 
 #[test]

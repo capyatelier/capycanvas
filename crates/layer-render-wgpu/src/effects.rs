@@ -3,6 +3,8 @@
 use super::*;
 use layer_core::{EffectInstance, EffectKind, EffectProgram};
 use std::{collections::HashMap, sync::Arc};
+#[path = "effect_preparation.rs"]
+mod preparation;
 
 // WebGPU guarantees 16 sampled textures per stage. Two are scene inputs;
 // the rest let ordinary aligned masks participate in the same fused shader.
@@ -24,7 +26,10 @@ struct Instance {
     effects: Vec<Arc<EffectInstance>>,
     properties: Vec<[f32; 4]>,
     buffer: wgpu::Buffer,
-    prepared: PreparedEffect,
+    binding: wgpu::BindGroup,
+    compute_binding: wgpu::BindGroup,
+    pipelines: HashMap<Execution, wgpu::RenderPipeline>,
+    lookups: Vec<preparation::State>,
     offsets: Vec<u32>,
 }
 pub(super) struct Effects {
@@ -32,10 +37,19 @@ pub(super) struct Effects {
     pub masks: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     pipelines: Vec<(Vec<Arc<EffectProgram>>, Execution, wgpu::RenderPipeline)>,
-    instances: HashMap<(Vec<LayerId>, Execution), Instance>,
+    // Parameters and GPU tables are shared by every pass of the same chain.
+    instances: HashMap<Vec<LayerId>, Instance>,
+    preparation: preparation::Preparation,
     pub compilations: u64,
 }
 impl Effects {
+    pub fn encode_preparation(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.preparation.encode(encoder);
+    }
+    #[cfg(test)]
+    pub fn preparation_count(&self) -> u64 {
+        self.preparation.executions
+    }
     pub fn storage_bytes(&self) -> u64 {
         self.instances.values().map(|i| i.buffer.size()).sum()
     }
@@ -89,12 +103,13 @@ impl Effects {
             pipeline_layout,
             pipelines: Vec::new(),
             instances: HashMap::new(),
+            preparation: preparation::Preparation::new(&r.device),
             compilations: 0,
         }
     }
     pub fn retain(&mut self, layers: &[Layer]) {
         self.instances
-            .retain(|(ids, _), _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
+            .retain(|ids, _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
     }
     pub fn prepare(
         &mut self,
@@ -103,7 +118,7 @@ impl Effects {
         stage: Execution,
         time: f32,
     ) -> Result<PreparedEffect, GpuRasterError> {
-        let ids = (layers.iter().map(|l| l.id).collect::<Vec<_>>(), stage);
+        let ids = layers.iter().map(|l| l.id).collect::<Vec<_>>();
         let effects: Vec<_> = layers
             .iter()
             .map(|l| l.effect.as_ref().unwrap().clone())
@@ -136,6 +151,7 @@ impl Effects {
                 .iter()
                 .zip(&properties)
                 .all(|(a, b)| a[..3] == b[..3])
+            && let Some(pipeline) = old.pipelines.get(&stage)
         {
             // Animation updates only one scalar per instance, never its LUTs.
             for (i, (a, b)) in old.properties.iter().zip(&properties).enumerate() {
@@ -148,7 +164,10 @@ impl Effects {
                 }
             }
             old.properties = properties;
-            return Ok(old.prepared.clone());
+            return Ok(PreparedEffect {
+                pipeline: pipeline.clone(),
+                binding: old.binding.clone(),
+            });
         }
         let mut data = Vec::new();
         let mut offsets = Vec::new();
@@ -166,15 +185,6 @@ impl Effects {
             .flatten()
             .flat_map(|v| v.to_le_bytes())
             .collect();
-        if let Some(old) = self.instances.get_mut(&ids)
-            && old.effects.iter().map(|e| &e.program).eq(programs.iter())
-            && old.buffer.size() == bytes.len() as u64
-        {
-            r.queue.write_buffer(&old.buffer, 0, &bytes);
-            old.effects = effects;
-            old.properties = properties;
-            return Ok(old.prepared.clone());
-        }
         let pipeline = if let Some((_, _, pipeline)) = self
             .pipelines
             .iter()
@@ -214,29 +224,144 @@ impl Effects {
             self.compilations += 1;
             pipeline
         };
-        let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("effect parameter values"),
-            size: bytes.len() as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        r.queue.write_buffer(&buffer, 0, &bytes);
-        let binding = r.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("effect parameter binding"),
-            layout: &self.layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
-        let prepared = PreparedEffect { pipeline, binding };
+        let reusable = self
+            .instances
+            .get(&ids)
+            .is_some_and(|old| old.buffer.size() == bytes.len() as u64 && old.offsets == offsets);
+        let mut lookups = Vec::new();
+        let mut dispatches = Vec::new();
+        for (effect, &base) in effects.iter().zip(&offsets) {
+            let mut parameters = Vec::new();
+            let mut position = base + 2;
+            for value in &effect.values {
+                let size = if matches!(
+                    value,
+                    layer_core::EffectValue::Curve(_) | layer_core::EffectValue::Gradient(_)
+                ) {
+                    layer_core::EFFECT_LUT_SAMPLES as u32
+                } else {
+                    1
+                };
+                parameters.push([position, size]);
+                position += size;
+            }
+            let directory = base as usize + 1 + data[base as usize + 1][0] as usize;
+            for (i, definition) in effect.program.lookups.iter().enumerate() {
+                let indices: Vec<_> = definition
+                    .dependencies
+                    .iter()
+                    .map(|key| {
+                        effect
+                            .program
+                            .parameters
+                            .iter()
+                            .position(|p| p.key == *key)
+                            .unwrap()
+                    })
+                    .collect();
+                let key = preparation::Key {
+                    definition: definition.clone(),
+                    inputs: indices.iter().map(|i| parameters[*i]).collect(),
+                    output: base + 1 + data[directory + i][0] as u32,
+                };
+                let values: Vec<_> = indices.iter().map(|i| effect.values[*i].clone()).collect();
+                let old = self
+                    .instances
+                    .get(&ids)
+                    .and_then(|old| old.lookups.get(lookups.len()));
+                if !reusable || old.is_none_or(|old| old.key != key || old.values != values) {
+                    dispatches.push((
+                        self.preparation.pipeline(&r.device, &key)?,
+                        definition.workgroups,
+                    ));
+                }
+                lookups.push(preparation::State { key, values });
+            }
+        }
+        let buffer = if reusable {
+            self.instances[&ids].buffer.clone()
+        } else {
+            r.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("effect parameter values"),
+                size: bytes.len() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        // Parameter edits never overwrite GPU-owned tables. Neither render-code
+        // changes nor edits unrelated to preparation regenerate those tables.
+        for (i, (&base, effect)) in offsets.iter().zip(&effects).enumerate() {
+            if reusable
+                && self.instances[&ids].effects[i].program == effect.program
+                && self.instances[&ids].effects[i].values == effect.values
+                && self.instances[&ids].properties[i] == properties[i]
+            {
+                continue;
+            }
+            let directory = base as usize + 1 + data[base as usize + 1][0] as usize;
+            let end = directory + effect.program.lookups.len();
+            r.queue.write_buffer(
+                &buffer,
+                u64::from(base) * 16,
+                &bytes[base as usize * 16..end * 16],
+            );
+        }
+        let binding = if reusable {
+            self.instances[&ids].binding.clone()
+        } else {
+            r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("effect parameter binding"),
+                layout: &self.layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            })
+        };
+        let compute_binding = if reusable {
+            self.instances[&ids].compute_binding.clone()
+        } else {
+            r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("effect preparation binding"),
+                layout: &self.preparation.layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            })
+        };
+        for (pipeline, groups) in dispatches {
+            self.preparation.pending.push(preparation::Dispatch {
+                pipeline,
+                binding: compute_binding.clone(),
+                groups,
+            });
+        }
+        let mut pipelines = HashMap::new();
+        if let Some(old) = self.instances.get(&ids)
+            && old
+                .effects
+                .iter()
+                .map(|e| &e.program)
+                .eq(effects.iter().map(|e| &e.program))
+        {
+            pipelines = old.pipelines.clone();
+        }
+        pipelines.insert(stage, pipeline.clone());
+        let prepared = PreparedEffect {
+            pipeline,
+            binding: binding.clone(),
+        };
         self.instances.insert(
             ids,
             Instance {
                 effects,
                 properties,
                 buffer,
-                prepared: prepared.clone(),
+                binding,
+                compute_binding,
+                pipelines,
+                lookups,
                 offsets,
             },
         );

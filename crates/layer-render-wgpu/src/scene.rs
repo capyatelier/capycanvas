@@ -1075,6 +1075,7 @@ impl Scene {
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let base = self.record_count;
+        self.effects.encode_preparation(encoder);
         self.record_count += self.jobs.len();
         if self.record_count > self.capacity {
             self.capacity = self.record_count.next_power_of_two();
