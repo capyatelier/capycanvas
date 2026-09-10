@@ -157,7 +157,7 @@ fn exchange(
         style.transport_b.y,
         style.transport_b.x,
         recipient_is_watercolor,
-    );
+    ) * brush_selection_at(neighbor_position);
     let path = path_conductance(world, neighbor_position, center_conductance);
 
     // Wetness is a capillary activation field rather than a conserved fluid
@@ -212,6 +212,8 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
     );
     let center = textureLoad(color_center, coordinate, 0);
     let center_wet = textureLoad(wet_center, coordinate, 0).r;
+    let clip = brush_selection_at(world);
+    if clip <= 0. { return TransportOutput(center, vec4<f32>(center_wet, 0., 0., 1.)); }
     let center_conductance = conductance(world);
     // Incommensurate coarse-to-fine hops cover the requested radius without
     // landing every pass on one visible pixel lattice. The damage rect remains
@@ -330,7 +332,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
         next_pigment = vec4<f32>(next_pigment.rgb / max(next_pigment.a, 0.000001) * center.a, center.a);
     }
     return TransportOutput(
-        next_pigment,
-        vec4<f32>(select(next_wetness, 0.0, style.color.a > 0.5 && center.a == 0.0), 0.0, 0.0, 1.0),
+        mix(center, next_pigment, clip),
+        vec4<f32>(mix(center_wet, select(next_wetness, 0.0, style.color.a > 0.5 && center.a == 0.0), clip), 0.0, 0.0, 1.0),
     );
 }

@@ -77,6 +77,7 @@ pub enum DabMode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DabStyle {
     pub alpha_locked: bool,
+    pub selection: Option<std::sync::Arc<layer_core::Selection>>,
     pub tip: BrushTip,
     pub mode: DabMode,
     pub execution: BrushExecution,

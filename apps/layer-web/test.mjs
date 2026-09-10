@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkParity } from "./parity.mjs";
-import { checkLayers } from "./layers.test.mjs";
+import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
 import { checkAdjustments, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
@@ -175,6 +175,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--adjustments")) {
     await checkAdjustments({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--selection")) {
+    await checkSelectedPainting({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--layers")) {
     await checkLayers({ call, evaluate, settle });

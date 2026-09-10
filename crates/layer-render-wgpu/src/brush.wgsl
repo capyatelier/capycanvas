@@ -74,7 +74,8 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
 
 fn brush_color(coverage: f32, input: VertexOutput) -> vec4<f32> {
     let alpha = clamp(
-        coverage * input.flow_hardness.x * style.canvas_opacity.z * input.color.a,
+        coverage * brush_selection_at(render_target.origin_extent.xy + input.position.xy)
+            * input.flow_hardness.x * style.canvas_opacity.z * input.color.a,
         0.0,
         1.0,
     );

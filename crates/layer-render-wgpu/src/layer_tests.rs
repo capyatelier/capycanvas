@@ -38,6 +38,7 @@ fn batch(id: u64) -> DabBatch {
         dab_count: 1,
         style: DabStyle {
             alpha_locked: false,
+            selection: None,
             tip: BrushTip::AnalyticEllipse,
             mode: DabMode::Paint,
             execution: BrushExecution::Dry,
@@ -78,6 +79,49 @@ fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
         .try_into()
         .unwrap()
 }
+
+// Inspect persistent pigment/wetness independently of layer-level effects.
+// This is test-only readback, never a drawing or selection raster path.
+fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
+    let row = texture.width() * texture.format().block_copy_size(None).unwrap();
+    assert_eq!(row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
+    let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test persistent page"),
+        size: u64::from(row) * u64::from(texture.height()),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = r.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: None,
+            },
+        },
+        texture.size(),
+    );
+    let submission = r.queue.submit([encoder.finish()]);
+    let (send, receive) = mpsc::channel();
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            send.send(result).unwrap();
+        });
+    r.device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: Some(READBACK_TIMEOUT),
+        })
+        .unwrap();
+    receive.recv().unwrap().unwrap();
+    let bytes = buffer.slice(..).get_mapped_range().unwrap().to_vec();
+    buffer.unmap();
+    bytes
+}
 fn left_mask(id: u64) -> LayerMask {
     let mut m = LayerMask::reveal_all(LayerId(id), Point::default());
     m.default_coverage = 0.;
@@ -91,6 +135,385 @@ fn left_mask(id: u64) -> LayerMask {
         .unwrap(),
     );
     m
+}
+
+fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
+    let brush = layer_core::default_brush(preset);
+    DabStyle {
+        alpha_locked: false,
+        selection: None,
+        tip: brush.tip,
+        mode: if preset == layer_core::DefaultBrushPreset::Eraser {
+            DabMode::Erase
+        } else {
+            DabMode::Paint
+        },
+        execution: brush.execution,
+        grain: brush.grain,
+        dual: brush.dual,
+        rendering: brush.rendering,
+        wet_mix: brush.wet_mix,
+        transport: brush.transport,
+        deform: brush.deform,
+    }
+}
+
+#[test]
+fn packed_brush_selection_matches_mask_coverage_and_reuses_geometry() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let polygon = Selection::polygon(vec![
+        Point { x: 5., y: 5. },
+        Point { x: 121., y: 27. },
+        Point { x: 91., y: 122. },
+        Point { x: 19., y: 80. },
+    ])
+    .unwrap();
+    let mut white = dab([1.; 4]);
+    white.radii = [200.; 2];
+    for inverted in [false, true] {
+        let mut selection = polygon.clone();
+        selection.inverted = inverted;
+        let mut masked = Layer::paint(LayerId(1), "mask reference");
+        let mut mask = LayerMask::reveal_all(LayerId(2), Point::default());
+        mask.default_coverage = f32::from(inverted);
+        mask.initial = Some(selection.clone());
+        masked.mask = Some(mask);
+        submit(&mut r, &[masked], &[white], &[batch(1)], true);
+        let reference = r.readback_srgb_rgba8().unwrap();
+        let mut brush = batch(1);
+        brush.style.selection = Some(std::sync::Arc::new(selection));
+        let plain = [Layer::paint(LayerId(1), "selected stroke")];
+        submit(&mut r, &plain, &[white], &[brush.clone()], true);
+        let selected = r.readback_srgb_rgba8().unwrap();
+        assert!(
+            selected
+                .iter()
+                .zip(reference)
+                .all(|(a, b)| a.abs_diff(b) <= 1),
+            "packed coverage must match four-sample R8 coverage"
+        );
+        let generations = r.selection_clip.generations;
+        for _ in 0..3 {
+            submit(&mut r, &plain, &[white], &[brush.clone()], true);
+        }
+        assert_eq!(
+            r.selection_clip.generations, generations,
+            "stroke/reset alone do not regenerate geometry"
+        );
+        assert!(r.selection_clip.bytes <= 128 * 128 / 2 + 48);
+    }
+    // Two geometries queued together must not share overwritten input headers
+    // or edges, even when both use the same reusable output buffer.
+    let mut first = batch(1);
+    first.style.selection = Some(std::sync::Arc::new(left_mask(5).initial.unwrap()));
+    let mut second = first.clone();
+    second.first_dab = 1;
+    second.stroke_id = StrokeId(2);
+    let mut inverse = second.style.selection.as_ref().unwrap().as_ref().clone();
+    inverse.inverted = true;
+    second.style.selection = Some(std::sync::Arc::new(inverse));
+    let mut red = white;
+    red.color_rgba_linear = [1., 0., 0., 1.];
+    submit(
+        &mut r,
+        &[Layer::paint(LayerId(1), "two selections")],
+        &[red, white],
+        &[first, second],
+        true,
+    );
+    assert_eq!(pixel(&mut r, 32, 64), [255, 0, 0, 255]);
+    assert_eq!(pixel(&mut r, 96, 64), [255, 255, 255, 255]);
+}
+
+#[test]
+fn all_brush_families_preserve_unselected_pigment_and_wetness() {
+    use layer_core::DefaultBrushPreset::*;
+    let mut r = WgpuRasterizer::new().unwrap();
+    for preset in [
+        GPen,
+        Pencil,
+        Eraser,
+        DualTexture,
+        Marker,
+        NaturalBlender,
+        WetRound,
+        LoadedOil,
+        PaletteKnife,
+        LiquifyPush,
+        LiquifyTwirl,
+        WatercolorWash,
+        WetWatercolor,
+    ] {
+        let layers = [Layer::paint(LayerId(1), "selected painting")];
+        let mut blue = dab([0., 0.1, 1., 1.]);
+        blue.center.x = 32.;
+        blue.radii = [35., 48.];
+        let mut yellow = blue;
+        yellow.center.x = 96.;
+        yellow.color_rgba_linear = [1., 0.8, 0., 1.];
+        let base = [blue, yellow];
+        let base_batch = DabBatch {
+            dab_count: 2,
+            ..batch(1)
+        };
+        submit(&mut r, &layers, &base, &[base_batch], true);
+        let before = r.readback_srgb_rgba8().unwrap();
+        let raw_before = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
+        let mut b = batch(1);
+        b.stroke_id = StrokeId(2);
+        b.dab_count = 3;
+        b.style = preset_style(preset);
+        b.style.selection = Some(std::sync::Arc::new(left_mask(5).initial.unwrap()));
+        let watercolor = b.style.execution == BrushExecution::Watercolor;
+        let dabs: Vec<_> = [42., 62., 82.]
+            .into_iter()
+            .map(|x| {
+                let mut d = dab([1., 0., 0.1, 1.]);
+                d.center.x = x;
+                d.radii = [36., 36.];
+                d.motion = [20., 0.];
+                d.material = [0.6, 0.8, 1., 0.8];
+                d
+            })
+            .collect();
+        submit(&mut r, &layers, &dabs, &[b], false);
+        let after = r.readback_srgb_rgba8().unwrap();
+        let raw_after = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
+        let channels = raw_before.len() / (256 * 256);
+        for y in 0..128 {
+            let start = (y * 256 + 64) * channels;
+            let end = (y * 256 + 128) * channels;
+            assert_eq!(
+                &raw_after[start..end],
+                &raw_before[start..end],
+                "{preset:?} changed persistent unselected pigment at row {y}"
+            );
+        }
+        for page in &r.paint_layers[0].watercolor_wetness_pages {
+            let wetness = page_bytes(&r, &page.active().texture);
+            for y in 0..128 {
+                assert!(
+                    wetness[y * 256 + 64..y * 256 + 128].iter().all(|v| *v == 0),
+                    "{preset:?} deposited water outside selection at row {y}"
+                );
+            }
+        }
+        let mut changed = 0;
+        for y in 0..128 {
+            for x in 0..128 {
+                let i = (y * 128 + x) * 4;
+                // Watercolor's non-destructive layer edge effect is applied
+                // after painting (like other layer filters), not baked pigment.
+                // Its outside band can extend beyond the painted selection.
+                if x >= 64 && !watercolor {
+                    assert_eq!(
+                        &after[i..i + 4],
+                        &before[i..i + 4],
+                        "{preset:?} altered unselected {x},{y}"
+                    );
+                } else if x < 64 && after[i..i + 4] != before[i..i + 4] {
+                    changed += 1;
+                }
+            }
+        }
+        assert!(
+            changed > 10,
+            "{preset:?} must actually affect selected paint"
+        );
+    }
+}
+
+#[test]
+fn selected_wet_brush_does_not_dry_or_advect_unselected_wet_paint() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    for preset in [
+        layer_core::DefaultBrushPreset::WetWatercolor,
+        layer_core::DefaultBrushPreset::WetRound,
+    ] {
+        let layers = [Layer::paint(LayerId(1), "wet selection")];
+        let mut b = batch(1);
+        b.style = preset_style(preset);
+        let mut blue = dab([0., 0., 1., 0.7]);
+        blue.material = [0.5, 0.8, 1., 0.8];
+        submit(&mut r, &layers, &[blue], &[b.clone()], true);
+        let state = |r: &WgpuRasterizer| {
+            let layer = &r.paint_layers[0];
+            let mut pages = vec![page_bytes(r, &layer.pages[0].active().texture)];
+            pages.extend(
+                layer
+                    .watercolor_wetness_pages
+                    .iter()
+                    .map(|p| page_bytes(r, &p.active().texture)),
+            );
+            pages.extend(
+                layer
+                    .material_pages
+                    .iter()
+                    .map(|p| page_bytes(r, &p.wetness.texture)),
+            );
+            pages
+        };
+        let before = state(&r);
+        assert!(before.len() > 1, "wet state must actually exist");
+        assert!(
+            before[1].iter().any(|v| *v != 0),
+            "initial paint must be wet"
+        );
+        b.stroke_id = StrokeId(2);
+        b.style.selection = Some(std::sync::Arc::new(left_mask(9).initial.unwrap()));
+        let mut red = blue;
+        red.color_rgba_linear = [1., 0., 0., 0.7];
+        red.motion = [20., 0.];
+        for _ in 0..3 {
+            submit(&mut r, &layers, &[red], &[b.clone()], false);
+        }
+        let after = state(&r);
+        assert_ne!(before[0], after[0], "selected pigment must change");
+        for (before, after) in before.iter().zip(after) {
+            let channels = before.len() / (256 * 256);
+            for y in 0..128 {
+                let start = (y * 256 + 64) * channels;
+                let end = (y * 256 + 128) * channels;
+                assert_eq!(
+                    &before[start..end],
+                    &after[start..end],
+                    "{preset:?} changed unselected pigment/water at row {y}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn selection_clips_mask_paint_and_disposable_brush_previews() {
+    use layer_core::DefaultBrushPreset::*;
+    let mut r = WgpuRasterizer::new().unwrap();
+    let selection = std::sync::Arc::new(left_mask(5).initial.unwrap());
+    let mut masked = Layer::paint(LayerId(1), "masked");
+    masked.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
+    let mut erase = batch(9);
+    erase.style.mode = DabMode::Erase;
+    erase.style.selection = Some(selection.clone());
+    erase.first_dab = 1;
+    submit(
+        &mut r,
+        &[masked],
+        &[dab([1.; 4]), dab([1.; 4])],
+        &[batch(1), erase],
+        true,
+    );
+    assert_eq!(pixel(&mut r, 32, 64), [0; 4]);
+    assert_eq!(pixel(&mut r, 96, 64), [255; 4]);
+
+    for opacity in [1., 0.5] {
+        for preset in [GPen, Marker, WetRound, WatercolorWash] {
+            let mut layer = Layer::paint(LayerId(1), "preview");
+            layer.opacity = opacity;
+            let layers = [layer];
+            submit(&mut r, &layers, &[dab([0., 0., 1., 1.])], &[batch(1)], true);
+            let before = r.readback_srgb_rgba8().unwrap();
+            let raw_before = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
+            let mut preview = batch(1);
+            preview.kind = DabBatchKind::Preview;
+            preview.stroke_id = StrokeId(2);
+            preview.stroke_end = false;
+            preview.style = preset_style(preset);
+            preview.style.selection = Some(selection.clone());
+            let mut red = dab([1., 0., 0., 1.]);
+            red.material = [0.6, 0.8, 1., 0.8];
+            submit(&mut r, &layers, &[red], &[preview], false);
+            let after = r.readback_srgb_rgba8().unwrap();
+            assert_ne!(before, after, "{preset:?} preview should be visible");
+            assert_eq!(
+                &before[(64 * 128 + 96) * 4..][..4],
+                &after[(64 * 128 + 96) * 4..][..4],
+                "{preset:?} unselected preview"
+            );
+            assert_eq!(
+                raw_before,
+                page_bytes(&r, &r.paint_layers[0].pages[0].active().texture)
+            );
+            submit(&mut r, &layers, &[], &[], false);
+            assert_eq!(
+                before,
+                r.readback_srgb_rgba8().unwrap(),
+                "{preset:?} preview cancellation"
+            );
+        }
+    }
+}
+
+#[test]
+fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let extent = [2048, 128];
+    let mut outside = Selection::polygon(vec![
+        Point { x: -40., y: -10. },
+        Point { x: 2031.5, y: 5. },
+        Point { x: 2050., y: 135. },
+        Point { x: -1., y: 113. },
+    ])
+    .unwrap();
+    let hole = Selection::polygon(vec![
+        Point { x: 7.25, y: 3.75 },
+        Point { x: 1950., y: 125. },
+        Point { x: 17.25, y: 105. },
+        Point { x: 1910., y: 10. },
+    ])
+    .unwrap();
+    outside.contours = vec![outside.contours[0].clone(), hole.contours[0].clone()].into();
+    let render = |r: &mut WgpuRasterizer, layer: &Layer, brush: &DabBatch| {
+        let mut d = dab([1.; 4]);
+        d.center = Point { x: 1024., y: 64. };
+        d.radii = [3000.; 2];
+        r.submit(FramePacket {
+            view: ViewState {
+                width_px: 2048,
+                ..view()
+            },
+            document_extent: extent,
+            layers: std::slice::from_ref(layer),
+            dabs: &[d],
+            dab_batches: std::slice::from_ref(brush),
+            reset_layers: true,
+            time_seconds: 0.,
+            composite_all: true,
+        })
+        .unwrap();
+        r.readback_srgb_rgba8().unwrap()
+    };
+    for inverted in [false, true] {
+        for delta in [
+            Point::default(),
+            Point {
+                x: 0.375,
+                y: -0.125,
+            },
+        ] {
+            let mut geometry = outside.translated(delta);
+            geometry.inverted = inverted;
+            let mut layer = Layer::paint(LayerId(1), "scanline reference");
+            let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+            mask.default_coverage = f32::from(inverted);
+            mask.initial = Some(geometry.clone());
+            layer.mask = Some(mask);
+            let mut b = batch(1);
+            b.damage = Rect {
+                min: Point::default(),
+                max: Point { x: 2048., y: 128. },
+            };
+            let reference = render(&mut r, &layer, &b);
+            layer.mask = None;
+            b.style.selection = Some(std::sync::Arc::new(geometry));
+            let actual = render(&mut r, &layer, &b);
+            for (i, (a, b)) in actual.iter().zip(reference).enumerate() {
+                assert!(
+                    a.abs_diff(b) <= 1,
+                    "coverage mismatch at byte {i}: {a} vs {b}, inverted={inverted}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -727,6 +1150,141 @@ fn mask_scene_destination_preview_preserves_untouched_color() {
     submit(&mut r, &[l], &[d], &[b], false);
     assert_eq!(pixel(&mut r, 32, 64), [0, 0, 255, 255]);
     assert_eq!(pixel(&mut r, 50, 64), [255, 0, 0, 255]);
+}
+
+#[test]
+#[ignore = "hardware GPU latency benchmark; run serially in release mode"]
+fn selected_brush_latency() {
+    use layer_core::DefaultBrushPreset::*;
+    let mut r = WgpuRasterizer::new().unwrap();
+    r.set_telemetry_enabled(true);
+    let extent = [2048, 1536];
+    let v = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let layers = [Layer::paint(LayerId(1), "selected brush latency")];
+    let selection = std::sync::Arc::new(
+        Selection::polygon(
+            (0..256)
+                .map(|i| {
+                    let a = i as f32 / 256. * std::f32::consts::TAU;
+                    Point {
+                        x: 1024. + 1000. * a.cos(),
+                        y: 768. + 740. * a.sin(),
+                    }
+                })
+                .collect(),
+        )
+        .unwrap(),
+    );
+    for preset in [GPen, NaturalBlender, WatercolorWash] {
+        for selected in [false, true] {
+            let mut b = batch(1);
+            b.style = preset_style(preset);
+            b.style.selection = selected.then(|| selection.clone());
+            b.dab_count = 8;
+            b.damage = Rect {
+                min: Point { x: 600., y: 550. },
+                max: Point { x: 1050., y: 1000. },
+            };
+            let dabs: Vec<_> = (0..8)
+                .map(|i| {
+                    let mut d = dab([0.2, 0.4, 0.8, 0.8]);
+                    d.center = Point {
+                        x: 800. + i as f32 * 4.,
+                        y: 768.,
+                    };
+                    d.radii = [192.; 2];
+                    d.motion = [4., 0.];
+                    d.material = [0.6, 0.8, 1., 0.8];
+                    d
+                })
+                .collect();
+            let mut completed = Vec::new();
+            let mut generation = 0;
+            for i in 0..160 {
+                let start = std::time::Instant::now();
+                b.stroke_id = StrokeId(i + 1);
+                r.submit(FramePacket {
+                    view: v,
+                    document_extent: extent,
+                    layers: &layers,
+                    dabs: &dabs,
+                    dab_batches: std::slice::from_ref(&b),
+                    reset_layers: i == 0,
+                    time_seconds: 0.,
+                    composite_all: false,
+                })
+                .unwrap();
+                r.wait_idle().unwrap();
+                if i >= 40 {
+                    completed.push(start.elapsed().as_secs_f32() * 1000.);
+                }
+                if i == 0 {
+                    generation = r.selection_clip.generations;
+                }
+                assert_eq!(
+                    r.selection_clip.generations, generation,
+                    "unchanged selection is cached across strokes"
+                );
+            }
+            let summary = |mut values: Vec<f32>| {
+                values.sort_by(f32::total_cmp);
+                [values[60], values[114], values[118]]
+            };
+            let stats = r.telemetry();
+            assert!(stats.gpu_timestamps);
+            eprintln!(
+                "{preset:?} selected={selected} p50/p95/p99 ms CPU {:.3?} GPU {:.3?} completed {:.3?}",
+                summary(stats.cpu.ordered()),
+                summary(stats.gpu.ordered()),
+                summary(completed)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "hardware GPU latency benchmark; run serially in release mode"]
+fn selection_raster_latency() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    r.ensure_document([2048, 1536], &[]).unwrap();
+    for vertices in [4, 256, 4096] {
+        let mut times = Vec::new();
+        for i in 0..12 {
+            let points = (0..vertices)
+                .map(|j| {
+                    let a = j as f32 / vertices as f32 * std::f32::consts::TAU;
+                    Point {
+                        x: 1024. + a.cos() * (1000. + i as f32 * 0.1),
+                        y: 768. + a.sin() * 740.,
+                    }
+                })
+                .collect();
+            let mut style = batch(1).style;
+            style.selection = Some(std::sync::Arc::new(Selection::polygon(points).unwrap()));
+            let start = std::time::Instant::now();
+            let mut encoder = r.device.create_command_encoder(&Default::default());
+            r.prepare_selection(&mut encoder, &style).unwrap();
+            let submission = r.queue.submit([encoder.finish()]);
+            r.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(submission),
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .unwrap();
+            if i >= 2 {
+                times.push(start.elapsed().as_secs_f64() * 1000.);
+            }
+        }
+        times.sort_by(f64::total_cmp);
+        eprintln!(
+            "selection {vertices} vertices, {} bytes, prepare + GPU completion median {:.3}ms max {:.3}ms",
+            r.selection_clip.bytes, times[5], times[9]
+        );
+    }
 }
 
 #[test]

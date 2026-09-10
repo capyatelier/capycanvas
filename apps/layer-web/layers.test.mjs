@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 
+export async function checkSelectedPainting({call, evaluate, settle}) {
+  const action = value => evaluate(`layerApp.dispatch(${JSON.stringify(value)})`);
+  const layer = value => action({type:"layer",action:value});
+  const path = async points => {
+    for (let i=0;i<points.length;i++) {
+      const [x,y]=points[i];
+      await call("Input.dispatchMouseEvent",{type:i===0?"mousePressed":i===points.length-1?"mouseReleased":"mouseMoved",
+        x,y,button:"left",buttons:i===points.length-1?0:1,clickCount:1});
+      await settle();
+    }
+    await settle();
+  };
+  const pixels = async () => {
+    const {data}=await call("Page.captureScreenshot",{format:"png"});
+    return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${data}';await image.decode();
+      const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+      const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
+      return [600,750,900].map(x=>Array.from(ctx.getImageData(x,500,1,1).data));})()`);
+  };
+  await layer({op:"tool",tool:"select"});
+  await path([[650,350],[850,350],[850,650],[650,650],[650,350]]);
+  assert.ok(await evaluate("layerApp.state().layer_tools.has_selection"));
+  const before=await pixels();
+  assert.ok(before.every(p=>p.slice(0,3).every(v=>v>245)),"Sample points start on blank paper");
+  await action({type:"select_brush",id:1});
+  await action({type:"set_brush_size",value:80});
+  await action({type:"set_color",rgba:[.9,0,0,1]});
+  const line=Array.from({length:21},(_,i)=>[550+i*20,500]);
+  await path(line);
+  const selected=await pixels();
+  assert.deepEqual(selected[0],before[0]);
+  assert.deepEqual(selected[2],before[2]);
+  assert.ok(selected[1][0]>150&&selected[1][1]<100,"GPU paint fills selected interior");
+  await layer({op:"invert_selection"});
+  await action({type:"set_color",rgba:[0,0,.9,1]});
+  await path(line);
+  const inverse=await pixels();
+  assert.deepEqual(inverse[1],selected[1]);
+  assert.ok([inverse[0],inverse[2]].every(p=>p[2]>150&&p[0]<100),"Inversion paints only the exterior");
+  await layer({op:"deselect"});
+  for (const command of ["undo","undo","redo","redo"]) {
+    await action({type:"invoke",command}); await settle();
+  }
+  assert.deepEqual(await pixels(),inverse,"Replay retains each stroke's selection after deselecting");
+  console.log("PASS: WebGPU selected/inverted painting, deselect and stroke replay");
+}
+
 export async function checkLayers({ call, evaluate, settle }) {
   const send = action => evaluate(`layerApp.dispatch({type:'layer',action:${JSON.stringify(action)}})`);
   const screenshot = async name => {

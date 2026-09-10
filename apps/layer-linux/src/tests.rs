@@ -348,6 +348,152 @@ fn native_tool_drawers() {
     pump(50);
 }
 
+fn native_pen_path(w: &Rc<Workspace>, points: &[[f32; 2]]) {
+    let camera = state(w).camera;
+    let m = camera.document_to_surface();
+    for (i, p) in points.iter().enumerate() {
+        let now = glib::monotonic_time() as u64 * 1000;
+        w.input.send(
+            w,
+            PenEvent {
+                device_id: 92,
+                sequence: now,
+                timestamp_ns: now,
+                view_revision: camera.revision,
+                surface_position: Point {
+                    x: m[0] * p[0] + m[2] * p[1] + m[4],
+                    y: m[1] * p[0] + m[3] * p[1] + m[5],
+                },
+                pressure: 1.,
+                tilt_radians: [0.; 2],
+                twist_radians: 0.,
+                distance: 0.,
+                phase: if i == 0 {
+                    PenPhase::Down
+                } else if i + 1 == points.len() {
+                    PenPhase::Up
+                } else {
+                    PenPhase::Move
+                },
+                tool: ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            },
+        );
+        pump(20);
+    }
+    pump(180);
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
+fn native_selected_brushes() {
+    use layer_core::DefaultBrushPreset;
+    let app = native_test_app("art.capycanvas.SelectedBrushes");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Lasso,
+    });
+    native_pen_path(
+        &w,
+        &[
+            [760., 460.],
+            [1280., 460.],
+            [1280., 1060.],
+            [760., 1060.],
+            [760., 460.],
+        ],
+    );
+    assert!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .selection
+            .is_some()
+    );
+    for (i, (preset, color)) in [
+        (DefaultBrushPreset::GPen, [0.8, 0.1, 0.25, 1.]),
+        (DefaultBrushPreset::WetRound, [0.1, 0.4, 0.8, 1.]),
+        (DefaultBrushPreset::WatercolorWash, [0.2, 0.6, 0.3, 1.]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        w.dispatch(UiAction::SelectBrush { id: preset as u32 });
+        w.dispatch(UiAction::SetBrushSize { value: 200. });
+        w.dispatch(UiAction::SetColor { rgba: color });
+        let y = 550. + i as f32 * 200.;
+        native_pen_path(
+            &w,
+            &(0..25)
+                .map(|j| [580. + j as f32 * 38., y])
+                .collect::<Vec<_>>(),
+        );
+    }
+    {
+        let gpu = w.gpu.borrow();
+        let doc = gpu.as_ref().unwrap().session.engine().document();
+        assert_eq!(doc.strokes().count(), 3);
+        assert!(doc.strokes().all(|s| s.selection.is_some()));
+    }
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(150);
+        capture_reference(&w, &format!("{dir}/selected-brushes-{theme:?}.png"), 1.);
+    }
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::InvertSelection,
+    });
+    w.dispatch(UiAction::SelectBrush {
+        id: DefaultBrushPreset::GPen as u32,
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.55, 0.25, 0.8, 1.],
+    });
+    native_pen_path(
+        &w,
+        &(0..25)
+            .map(|j| [580. + j as f32 * 38., 755.])
+            .collect::<Vec<_>>(),
+    );
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::Deselect,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    pump(200);
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(150);
+        capture_reference(
+            &w,
+            &format!("{dir}/selection-inverted-replayed-{theme:?}.png"),
+            1.,
+        );
+    }
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    w.window.destroy();
+    pump(100);
+}
+
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_gradient_tool() {
@@ -7031,6 +7177,18 @@ fn native_frame_pacing() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1500);
+    if std::env::var("LAYER_PACING_SELECTION").as_deref() == Ok("1") {
+        let points: Vec<_> = (0..=256)
+            .map(|i| {
+                let a = i as f32 / 256. * std::f32::consts::TAU;
+                [1024. + 1000. * a.cos(), 768. + 740. * a.sin()]
+            })
+            .collect();
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Lasso,
+        });
+        native_pen_path(&w, &points);
+    }
     if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
         w.dispatch(UiAction::Customize {
             action: CustomizationAction::SetPanelVisible {

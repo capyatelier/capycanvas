@@ -516,6 +516,68 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   it did not repeat. GTK input p99 was 0.040/0.039ms. Reports are
   `/tmp/capy-gradient-drawing{,-repeat}.json`; synthetic input and compositor
   feedback establish approximate 120Hz delivery, not physical pen latency.
+- Selection-constrained brush painting now uses immutable, layer-local geometry
+  captured at contact start. The same coverage reaches persistent paint, mask
+  painting, predicted/private previews and replay; later selection changes do
+  not rewrite old strokes. Zero-offset snapshots share the existing contours.
+  GPU tests verify all 13 brush families, including unchanged pigment and wetness
+  outside the selection during wet-on-wet transport. Selection edits do not
+  clip non-destructive layer effects: watercolor's outside edge band still may
+  appear beyond the painted boundary, just as image filters can. That is not
+  deposited pigment and is not baked into strokes. A strict final-appearance
+  boundary for watercolor remains a follow-up before final tool review.
+- Selection rasterization is GPU-only: mark four-sample scanline crossings,
+  then prefix-XOR/popcount the interiors into a reusable packed buffer. Holes,
+  self-crossings, off-canvas geometry, inversion, fractional coordinates and
+  multiple scan blocks/tile boundaries match the mask renderer. Both renderers
+  share canonical edge intersection math, fixing rounding differences at exact
+  sampled vertices. Encoder-ordered uploads preserve multiple selections queued
+  in one replay. No pixel readback, wait, or per-frame selection allocation.
+- Storage is half a byte/pixel of the selection bounding rectangle, plus a
+  32-byte header, row padding and allocation alignment. Full 2048×1536 coverage
+  needs about 1.5 MiB (12.5% of one RGBA8 image), not another texture binding:
+  material brushes remain within the portable 16 sampled-texture limit. The
+  buffer grows when needed and is reused across strokes, camera changes and
+  replay with unchanged geometry; changing document extent discards it.
+- Selection initialization benchmark, 2048×1536, near-full-canvas polygons:
+  prepare plus GPU completion median/max was 0.063/0.079ms at four vertices,
+  0.057/0.072ms at 256, and 0.083/0.750ms at 4096. These are ten warm samples,
+  not percentile/first-use claims. The initial per-pixel edge-search prototype
+  took 1.759ms median at 256 vertices; it was replaced, not retained as another
+  runtime path. Benchmark: `selection_raster_latency` (release, ignored test).
+- Selected-brush benchmark, 384px diameter, eight incremental dabs per submit,
+  2048×1536, warm 120-sample windows. Triplets are median/p95/p99 milliseconds;
+  completion includes the benchmark's explicit GPU wait, not display latency:
+
+  | Brush | Selection | CPU | GPU | Completed |
+  | --- | --- | --- | --- | --- |
+  | G-Pen | None | 0.034 / 0.041 / 0.067 | 0.020 / 0.020 / 0.020 | 0.087 / 0.094 / 0.119 |
+  | G-Pen | Active | 0.034 / 0.035 / 0.040 | 0.020 / 0.020 / 0.021 | 0.087 / 0.090 / 0.094 |
+  | Natural Blender | None | 0.068 / 0.124 / 0.244 | 0.078 / 0.081 / 0.082 | 0.186 / 0.275 / 0.365 |
+  | Natural Blender | Active | 0.063 / 0.144 / 0.216 | 0.085 / 0.085 / 0.086 | 0.184 / 0.266 / 0.345 |
+  | Watercolor Wash | None | 0.362 / 0.431 / 0.666 | 0.415 / 0.416 / 0.417 | 0.842 / 0.936 / 1.145 |
+  | Watercolor Wash | Active | 0.365 / 0.456 / 0.711 | 0.462 / 0.463 / 0.463 | 0.903 / 1.031 / 1.236 |
+
+  Watercolor has a measurable ~0.047ms median GPU increase from restricting
+  deposition, backtraces and neighboring transport samples. This is not free,
+  but remains comfortably within 8.33ms. CPU tails vary between runs; do not
+  interpret their decreases as a selection speedup. `selected_brush_latency`
+  asserts that unchanged coverage is not regenerated between strokes.
+- Six-second GTK/Wayland G-Pen runs delivered 119.93Hz without selection and
+  119.95Hz with a 256-point selection; the latter discarded one presentation.
+  Selected worker CPU median/p95/p99 was 0.281/0.525/0.717ms; GPU
+  0.152/0.192/0.346ms; input processing p99 0.041ms. Reports:
+  `/tmp/capy-selection-{0,1}.json`. Use `LAYER_PACING_SELECTION=1` with
+  `native_frame_pacing` to repeat. These synthetic events plus compositor
+  feedback establish approximate 120Hz delivery, not physical tablet latency.
+- Validation: 21 core, 25 engine, 180 shared UI and 69 GPU tests passed; strict
+  Clippy and workspace/Wasm compilation passed. GTK selected/inverted brush
+  input, deselect and undo/redo passed; all four dark/light captures in
+  `artifacts/familiar-workspace/{selected-brushes,selection-inverted-replayed}-*.png`
+  were visually inspected. The rebuilt static web package passed `--selection`
+  (actual WebGPU drawing and replay) and `--gpu-compatibility` (strict non-null
+  layouts plus startup-failure recovery). No physical Android/iPad selection
+  validation is claimed; new tool UI rollout still awaits GTK review.
 - Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, rulers, remaining shortcuts
   and full functional/performance validation.

@@ -29,6 +29,7 @@ mod layer_masks;
 mod layer_tests;
 mod present;
 mod scene;
+mod selection_clip;
 mod telemetry;
 mod thumbnails;
 pub use present::ViewportPresenter;
@@ -564,6 +565,8 @@ pub struct WgpuRasterizer {
     document_extent: [u32; 2],
     paint_layers: Vec<PaintLayer>,
     layer_masks: layer_masks::MaskRenderer,
+    selection_clip: selection_clip::SelectionClip,
+    unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
     thumbnails: thumbnails::Thumbnails,
     canvas_preview: canvas_preview::CanvasOverview,
@@ -733,7 +736,14 @@ impl WgpuRasterizer {
             .max(mem::size_of::<TargetGpu>() as u32) as u64;
         let target_capacity = INITIAL_TARGET_RECORDS;
         let target_buffer = create_target_buffer(&device, target_stride, target_capacity);
-        let target_bind_group = create_target_bind_group(&device, &target_layout, &target_buffer);
+        use wgpu::util::DeviceExt;
+        let unclipped = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("unrestricted brush coverage"),
+            contents: &[0; 48],
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let target_bind_group =
+            create_target_bind_group(&device, &target_layout, &target_buffer, &unclipped);
         let (empty_texture, empty_view) =
             create_color_target(&device, [1, 1], "layer transparent missing page");
         let (empty_scalar_texture, empty_scalar_view) = create_target(
@@ -787,6 +797,7 @@ impl WgpuRasterizer {
         let layer_masks =
             layer_masks::MaskRenderer::new(&device, &style_layout, &target_layout, &texture_layout);
         let telemetry = telemetry::Telemetry::new(&device, &queue);
+        let selection_clip = selection_clip::SelectionClip::new(&device);
         let mut renderer = Self {
             telemetry,
             adapter,
@@ -795,6 +806,8 @@ impl WgpuRasterizer {
             surface_extent: [0, 0],
             document_extent: [0, 0],
             layer_masks,
+            selection_clip,
+            unclipped,
             scene: None,
             filter_previews: None,
             effect_validation: None,
@@ -1163,6 +1176,7 @@ impl WgpuRasterizer {
         }
         let resized = extent != self.document_extent;
         if resized {
+            self.selection_clip.reset();
             self.document_extent = extent;
             self.paint_layers.clear();
             self.preview_pages.clear();
@@ -1215,8 +1229,12 @@ impl WgpuRasterizer {
             self.target_capacity = records.next_power_of_two();
             self.target_buffer =
                 create_target_buffer(&self.device, self.target_stride, self.target_capacity);
-            self.target_bind_group =
-                create_target_bind_group(&self.device, &self.target_layout, &self.target_buffer);
+            self.target_bind_group = create_target_bind_group(
+                &self.device,
+                &self.target_layout,
+                &self.target_buffer,
+                &self.unclipped,
+            );
         }
         let used = records * self.target_stride as usize;
         self.target_upload.clear();
@@ -1714,7 +1732,8 @@ impl WgpuRasterizer {
         self.metrics.paint_state_storage_bytes = coverage_pages
             .saturating_mul(SCALAR_PAGE_BYTES * 2)
             .saturating_add(material_surface_pages.saturating_mul(SCALAR_PAGE_BYTES))
-            .saturating_add(RESERVOIR_BYTES);
+            .saturating_add(RESERVOIR_BYTES)
+            .saturating_add(self.selection_clip.bytes);
         self.metrics.composite_storage_bytes =
             self.document_extent[0] as u64 * self.document_extent[1] as u64 * 4;
     }
@@ -2016,7 +2035,7 @@ impl WgpuRasterizer {
             &self.style_bind_group,
             &[batch_index as u32 * self.style_stride as u32],
         );
-        pass.set_bind_group(1, &self.target_bind_group, &[target_offset]);
+        pass.set_bind_group(1, self.paint_target_binding(&batch.style), &[target_offset]);
         if let Some(mask) = mask {
             pass.set_bind_group(2, &mask.bind_group, &[]);
         } else if let Some(set) = texture_set {
@@ -2025,6 +2044,35 @@ impl WgpuRasterizer {
         pass.set_vertex_buffer(0, self.dab_buffer.slice(start..end));
         pass.draw(0..4, 0..batch.dab_count);
         Ok(())
+    }
+
+    fn prepare_selection(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        style: &layer_render::DabStyle,
+    ) -> Result<(), GpuRasterError> {
+        if let Some(geometry) = &style.selection {
+            self.selection_clip.prepare(
+                &self.device,
+                encoder,
+                &self.target_layout,
+                &self.target_buffer,
+                self.document_extent,
+                geometry,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn paint_target_binding(&self, style: &layer_render::DabStyle) -> &wgpu::BindGroup {
+        if style.selection.is_some() {
+            self.selection_clip
+                .binding
+                .as_ref()
+                .expect("selection prepared before painting")
+        } else {
+            &self.target_bind_group
+        }
     }
 
     fn encode_brush_batch(
@@ -2038,6 +2086,7 @@ impl WgpuRasterizer {
         if batch.dab_count == 0 || damage.is_empty() {
             return Ok(());
         }
+        self.prepare_selection(encoder, &batch.style)?;
 
         let plan = BrushPassPlan::for_style(&batch.style);
         if plan.requires_destination() {
@@ -2501,7 +2550,7 @@ impl WgpuRasterizer {
             );
             pass.set_bind_group(
                 1,
-                &self.target_bind_group,
+                self.paint_target_binding(&batch.style),
                 &[self.target_offset(job.coordinate)],
             );
             pass.set_bind_group(2, &job.source_bind_group, &[]);
@@ -2787,7 +2836,7 @@ impl WgpuRasterizer {
                 );
                 pass.set_bind_group(
                     1,
-                    &self.target_bind_group,
+                    self.paint_target_binding(&batch.style),
                     &[self.target_offset(job.coordinate)],
                 );
                 pass.set_bind_group(2, &job.bind_group, &[]);
@@ -2873,7 +2922,7 @@ impl WgpuRasterizer {
             );
             pass.set_bind_group(
                 1,
-                &self.target_bind_group,
+                self.paint_target_binding(&batch.style),
                 &[self.target_offset(coordinate)],
             );
             pass.set_bind_group(2, source_bind_group, &[]);
@@ -2890,6 +2939,7 @@ impl WgpuRasterizer {
         batch_index: usize,
         batch: &DabBatch,
     ) -> Result<(), GpuRasterError> {
+        self.prepare_selection(encoder, &batch.style)?;
         struct Job {
             coordinate: [u32; 2],
             destination_secondary: bool,
@@ -2981,7 +3031,7 @@ impl WgpuRasterizer {
             );
             pass.set_bind_group(
                 1,
-                &self.target_bind_group,
+                self.paint_target_binding(&batch.style),
                 &[self.target_offset(job.coordinate)],
             );
             pass.set_bind_group(2, &job.bind_group, &[]);
@@ -3209,7 +3259,7 @@ impl WgpuRasterizer {
             );
             pass.set_bind_group(
                 1,
-                &self.target_bind_group,
+                self.paint_target_binding(&batch.style),
                 &[self.target_offset(job.coordinate)],
             );
             pass.set_bind_group(2, &job.source_bind_group, &[]);
@@ -3311,7 +3361,7 @@ impl WgpuRasterizer {
             );
             pass.set_bind_group(
                 1,
-                &self.target_bind_group,
+                self.paint_target_binding(&batch.style),
                 &[self.target_offset(job.coordinate)],
             );
             pass.set_bind_group(2, &job.source_bind_group, &[]);
@@ -4399,11 +4449,15 @@ impl CanvasRenderer for WgpuRasterizer {
 
             // Encode composition directly so the background may use its own
             // dynamic record even when brush record zero is live.
-            let target = self.composite_view.as_ref().expect("composite exists");
+            let target = self
+                .composite_view
+                .as_ref()
+                .expect("composite exists")
+                .clone();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("layer incremental composition"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: &target,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -4590,7 +4644,8 @@ impl CanvasRenderer for WgpuRasterizer {
                 {
                     let batch_dirty = batch_pixel_rect(batch, packet.document_extent);
                     if batch.dab_count != 0 && !batch_dirty.is_empty() {
-                        self.encode_batch(&mut encoder, index, batch, target, batch_dirty, 0)?;
+                        self.prepare_selection(&mut encoder, &batch.style)?;
+                        self.encode_batch(&mut encoder, index, batch, &target, batch_dirty, 0)?;
                     }
                 }
             }
@@ -5185,16 +5240,28 @@ fn create_advanced_texture_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
 fn create_target_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("layer render target layout"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: true,
-                min_binding_size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(48),
+                },
+                count: None,
+            },
+        ],
     })
 }
 
@@ -5341,18 +5408,25 @@ fn create_target_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
+    selection: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("layer dynamic render target binding"),
         layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer,
-                offset: 0,
-                size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
-            }),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(mem::size_of::<TargetGpu>() as u64),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: selection.as_entire_binding(),
+            },
+        ],
     })
 }
 
@@ -5615,7 +5689,10 @@ fn compose_wgsl(parts: &[&str]) -> Cow<'static, str> {
 fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipelines {
     let brush = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer dry brush shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("brush.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+            include_str!("brush.wgsl"),
+            include_str!("selection_clip.wgsl"),
+        ])),
     });
     let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer composite shader"),
@@ -5626,6 +5703,7 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
         source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
             include_str!("advanced_brush.wgsl"),
             include_str!("brush_coverage.wgsl"),
+            include_str!("selection_clip.wgsl"),
         ])),
     });
     let material_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -5633,11 +5711,15 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
         source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
             include_str!("material_brush.wgsl"),
             include_str!("brush_coverage.wgsl"),
+            include_str!("selection_clip.wgsl"),
         ])),
     });
     let stroke_edge_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer post-stroke edge shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("stroke_edge.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+            include_str!("stroke_edge.wgsl"),
+            include_str!("selection_clip.wgsl"),
+        ])),
     });
     let watercolor_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer live watercolor composite shader"),
@@ -5645,7 +5727,10 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
     });
     let watercolor_transport_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer watercolor capillary transport shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("watercolor_transport.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+            include_str!("watercolor_transport.wgsl"),
+            include_str!("selection_clip.wgsl"),
+        ])),
     });
     let export_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer export shader"),
@@ -6427,6 +6512,7 @@ mod tests {
     fn test_style(execution: BrushExecution) -> DabStyle {
         DabStyle {
             alpha_locked: false,
+            selection: None,
             tip: BrushTip::AnalyticEllipse,
             mode: DabMode::Paint,
             execution,
@@ -7668,6 +7754,7 @@ mod tests {
         };
         let style = DabStyle {
             alpha_locked: false,
+            selection: None,
             tip: BrushTip::AnalyticEllipse,
             mode: DabMode::Paint,
             execution: BrushExecution::Dry,
@@ -7766,6 +7853,7 @@ mod tests {
             dab_count: 1,
             style: DabStyle {
                 alpha_locked: false,
+                selection: None,
                 tip: BrushTip::AnalyticEllipse,
                 mode: DabMode::Paint,
                 execution: BrushExecution::Dry,
@@ -7820,6 +7908,7 @@ mod tests {
             dab_count: 1,
             style: DabStyle {
                 alpha_locked: false,
+                selection: None,
                 tip: BrushTip::AnalyticEllipse,
                 mode: DabMode::Paint,
                 execution: BrushExecution::Smudge,
@@ -7870,6 +7959,7 @@ mod tests {
             dab_count: 1,
             style: DabStyle {
                 alpha_locked: false,
+                selection: None,
                 tip: BrushTip::AnalyticEllipse,
                 mode: DabMode::Paint,
                 execution: BrushExecution::Liquify,

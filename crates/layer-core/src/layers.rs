@@ -197,6 +197,9 @@ impl Selection {
         })
     }
     pub fn translated(&self, delta: Point) -> Self {
+        if delta == Point::default() {
+            return self.clone();
+        }
         Self {
             contours: self
                 .contours

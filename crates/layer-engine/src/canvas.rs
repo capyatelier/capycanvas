@@ -623,6 +623,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 let mut style = style_for(&brush, tool);
                 style.alpha_locked = alpha_locked;
+                style.selection = self.document().selection.as_ref().map(|selection| {
+                    std::sync::Arc::new(selection.translated(layer_core::Point {
+                        x: -offset.x,
+                        y: -offset.y,
+                    }))
+                });
                 let active = ActiveStroke {
                     id,
                     layer_id,
@@ -709,6 +715,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 )
                 .map_err(EngineError::Document)?;
                 stroke.alpha_locked = alpha_locked;
+                stroke.selection = active.style.selection.clone();
                 self.editor
                     .perform(Edit::InsertStroke(Box::new(stroke)))
                     .map_err(EngineError::Document)?;
@@ -1064,6 +1071,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             };
             let mut style = style_for(&stroke.brush, stroke.tool);
             style.alpha_locked = stroke.alpha_locked;
+            style.selection = stroke.selection.clone();
             let mut generator = DabGenerator::default();
             generator.reset_for_replay(stroke);
             let mut started = false;
@@ -1305,6 +1313,7 @@ fn rect_area(rect: Rect) -> f32 {
 fn style_for(brush: &BrushSnapshot, tool: StrokeTool) -> DabStyle {
     DabStyle {
         alpha_locked: false,
+        selection: None,
         tip: brush.tip.clone(),
         mode: match tool {
             StrokeTool::Brush => DabMode::Paint,
@@ -1351,6 +1360,7 @@ mod tests {
         persistent: Vec<Dab>,
         persistent_batches: Vec<(StrokeId, bool, bool, u32)>,
         preview: Vec<Dab>,
+        styles: Vec<DabStyle>,
         saw_reset: bool,
     }
 
@@ -1380,7 +1390,9 @@ mod tests {
                 self.persistent.clear();
             }
             self.preview.clear();
+            self.styles.clear();
             for batch in packet.dab_batches {
+                self.styles.push(batch.style.clone());
                 let start = batch.first_dab as usize;
                 let end = start + batch.dab_count as usize;
                 let dabs = &packet.dabs[start..end];
@@ -1409,6 +1421,134 @@ mod tests {
 
         fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
             None
+        }
+    }
+
+    #[test]
+    fn strokes_capture_layer_local_selection_for_preview_commit_and_replay() {
+        use layer_core::{LayerMask, Selection};
+        use std::sync::Arc;
+        for mask_target in [false, true] {
+            let (mut producer, consumer) = input_queue(32);
+            let selection = Selection::polygon(vec![
+                Point { x: 4., y: 4. },
+                Point { x: 50., y: 4. },
+                Point { x: 50., y: 40. },
+                Point { x: 4., y: 40. },
+            ])
+            .unwrap();
+            let mut doc = Document::new("selected brush", 128, 128);
+            doc.selection = Some(selection.clone());
+            let layer = doc
+                .layers
+                .iter_mut()
+                .find(|l| l.id == doc.active_layer)
+                .unwrap();
+            layer.properties.offset = Point { x: 3., y: 7. };
+            let offset = if mask_target {
+                let mut mask = LayerMask::reveal_all(LayerId(99), Point { x: 11., y: 2. });
+                mask.linked = false;
+                layer.mask = Some(mask);
+                Point { x: 11., y: 2. }
+            } else {
+                layer.properties.offset
+            };
+            doc.apply(Edit::SetMaskTarget(mask_target)).unwrap();
+            let expected = Arc::new(selection.translated(Point {
+                x: -offset.x,
+                y: -offset.y,
+            }));
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                doc,
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            producer.push(event(1, PenPhase::Down, 8.)).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(
+                engine
+                    .active_stroke
+                    .as_ref()
+                    .unwrap()
+                    .style
+                    .selection
+                    .as_ref(),
+                Some(&expected)
+            );
+            assert!(
+                engine
+                    .backend
+                    .styles
+                    .iter()
+                    .all(|s| s.selection.as_ref() == Some(&expected))
+            );
+            // Even a programmatic selection edit during contact must not change
+            // its preview, final dabs, or recorded geometry.
+            let mut inverse = selection;
+            inverse.inverted = true;
+            engine
+                .apply_edit(Edit::SetSelection(Some(inverse)))
+                .unwrap();
+            producer.push(event(2, PenPhase::Up, 48.)).unwrap();
+            engine.render_frame().unwrap();
+            let stroke = engine.document().strokes().next().unwrap();
+            assert_eq!(stroke.selection.as_ref(), Some(&expected));
+            assert_eq!(stroke.layer_id, engine.document().active_target());
+            engine.apply_edit(Edit::SetSelection(None)).unwrap();
+            engine.rebuild_all = true;
+            engine.render_frame().unwrap();
+            assert!(!engine.backend.styles.is_empty());
+            assert!(
+                engine
+                    .backend
+                    .styles
+                    .iter()
+                    .all(|s| s.selection.as_ref() == Some(&expected))
+            );
+            engine.undo().unwrap(); // Deselect.
+            engine.undo().unwrap(); // Stroke.
+            engine.render_frame().unwrap();
+            assert_eq!(engine.document().strokes().count(), 0);
+            engine.redo().unwrap();
+            engine.redo().unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(
+                engine
+                    .document()
+                    .strokes()
+                    .next()
+                    .unwrap()
+                    .selection
+                    .as_ref(),
+                Some(&expected)
+            );
+            assert!(
+                engine
+                    .backend
+                    .styles
+                    .iter()
+                    .all(|s| s.selection.as_ref() == Some(&expected))
+            );
+            producer.push(event(3, PenPhase::Down, 60.)).unwrap();
+            engine.render_frame().unwrap();
+            assert!(
+                engine
+                    .active_stroke
+                    .as_ref()
+                    .unwrap()
+                    .style
+                    .selection
+                    .is_none()
+            );
+            producer.push(event(4, PenPhase::Cancel, 64.)).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.document().strokes().count(), 1);
         }
     }
 

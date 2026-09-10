@@ -216,7 +216,7 @@ fn contact_coverage(dab: Dab, world: vec2<f32>) -> f32 {
         coverage = combine_coverage(coverage, secondary, style.dual_offset_flags.z);
     }
     if coverage < style.dual_offset_flags.w { return 0.0; }
-    return coverage;
+    return coverage * brush_selection_at(world);
 }
 
 fn contact_segment_progress(dab: Dab, world: vec2<f32>) -> f32 {
@@ -459,7 +459,7 @@ fn watercolor_fragment(
             trace_local,
             dab.hardness,
             min(dab.radii.x, dab.radii.y),
-        );
+        ) * brush_selection_at(trace_coordinate);
         if trace_coverage > 0.0 {
             trace_coordinate -= dab.motion
                 * clamp(dab.material.y, 0.0, 1.0)

@@ -1095,6 +1095,9 @@ pub struct Stroke {
     pub bounds: Rect,
     /// Captured at contact start; replay must not use today's alpha lock.
     pub alpha_locked: bool,
+    /// Immutable layer-local coverage captured at stroke start, including for
+    /// mask painting. Later selection edits must not change stroke replay.
+    pub selection: Option<Arc<Selection>>,
 }
 
 impl Stroke {
@@ -1140,6 +1143,7 @@ impl Stroke {
             points,
             bounds,
             alpha_locked: false,
+            selection: None,
         })
     }
 }

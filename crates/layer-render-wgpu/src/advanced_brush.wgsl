@@ -158,7 +158,8 @@ fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let alpha = clamp(
-        coverage * input.flow_hardness.x * style.canvas_opacity.z * input.color.a,
+        coverage * brush_selection_at(input.world)
+            * input.flow_hardness.x * style.canvas_opacity.z * input.color.a,
         0.0,
         1.0,
     );
