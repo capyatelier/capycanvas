@@ -47,6 +47,31 @@ pub struct DrawerConnection {
     pub square_corners: [bool; 4],
 }
 impl DrawerPlacement {
+    /// Ancestor clipping must not round off a tile's connected corners.
+    /// Only flatten container corners actually reached by the originating tile.
+    pub fn source_corners(&self, container: Bounds) -> [bool; 4] {
+        let a = self.anchor;
+        let b = container;
+        let facing = match self.direction {
+            Edge::Top => [true, true, false, false],
+            Edge::Right => [false, true, true, false],
+            Edge::Bottom => [false, false, true, true],
+            Edge::Left => [true, false, false, true],
+        };
+        let corners = [
+            [b.x, b.y],
+            [b.x + b.width, b.y],
+            [b.x + b.width, b.y + b.height],
+            [b.x, b.y + b.height],
+        ];
+        std::array::from_fn(|i| {
+            facing[i]
+                && corners[i][0] >= a.x - 0.5
+                && corners[i][0] <= a.x + a.width + 0.5
+                && corners[i][1] >= a.y - 0.5
+                && corners[i][1] <= a.y + a.height + 0.5
+        })
+    }
     pub fn connection(&self) -> Option<DrawerConnection> {
         let a = self.anchor;
         let b = self.bounds;
@@ -536,6 +561,22 @@ mod tests {
                     direction,
                     columns: vec![],
                 };
+                let facing = match direction {
+                    Edge::Top => [true, true, false, false],
+                    Edge::Right => [false, true, true, false],
+                    Edge::Bottom => [false, false, true, true],
+                    Edge::Left => [true, false, false, true],
+                };
+                assert_eq!(p.source_corners(anchor), facing);
+                assert_eq!(
+                    p.source_corners(Bounds {
+                        x: 50.0,
+                        y: 50.0,
+                        width: 150.0,
+                        height: 150.0
+                    }),
+                    [false; 4]
+                );
                 let c = p.connection().unwrap();
                 assert_eq!(c.depth, 6.0);
                 assert_eq!(c.length, 36.0);

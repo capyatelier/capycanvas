@@ -144,8 +144,8 @@ all edges and tile sizes, single/multiple sections, empty/adjacent dividers,
 multiple toolbars, corner collisions, entry/exit, tool drawers, and unchanged
 normal workspace persistence. The shared toggle and GTK split-bar presentation
 are implemented and validated. Connected tile drawers share their geometry and
-corner decisions in Rust, including during animation; GTK paints the same
-panel-colored stem and concave joins as the existing panel configuration design.
+  corner decisions in Rust, including during animation; GTK paints the same
+  panel-colored stem and concave joins as the existing panel configuration design.
 
 ## Collapsible panel columns (added to this milestone)
 
@@ -355,6 +355,13 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   drawer corner, and aligned body corners flatten to maintain a continuous edge.
   Opening/closing grows from the attached side. The connection is part of the
   drawer's hit region, never a canvas drawing target or outside-dismiss contact.
+  Opening also darkens the source toolbar background slightly (8% black mix),
+  while the originating tile retains the panel background. Partial-Zen section
+  corners reached by that tile flatten too, so the ancestor clip cannot cut off
+  the connection. GTK reuses the native tile node above the drawer shadow rather
+  than darkening that tile or creating another input widget. All styles restore
+  after dismissal. Pixel tests cover the joined corners and contrast in both
+  themes, not just the presence of CSS classes.
 - Current milestone validation: 171 shared UI tests; workspace/Wasm checks;
   strict UI/GTK Clippy; GTK `native_tool_drawers`, `native_zen_behaviors` and
   `native_panel_expansion` on the private Wayland GPU display. Zen tests cover

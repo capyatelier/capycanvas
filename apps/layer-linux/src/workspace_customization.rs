@@ -837,8 +837,26 @@ impl Customization {
         }
     }
 
+    pub fn drawer_button(&self, anchor: TileAnchor) -> Option<gtk::Button> {
+        self.toolbars
+            .borrow()
+            .iter()
+            .find(|bar| bar.id == anchor.panel)
+            .and_then(|bar| {
+                bar.tiles
+                    .iter()
+                    .zip(&bar.buttons)
+                    .find(|(tile, _)| tile.id == anchor.tile)
+                    .map(|(_, button)| button.clone())
+            })
+    }
     pub fn mark_drawer_origin(&self, origin: Option<(TileAnchor, Edge)>) {
         for bar in self.toolbars.borrow().iter() {
+            if origin.is_some_and(|(anchor, _)| anchor.panel == bar.id) {
+                bar.strip.add_css_class("drawer-source");
+            } else {
+                bar.strip.remove_css_class("drawer-source");
+            }
             for (tile, button) in bar.tiles.iter().zip(&bar.buttons) {
                 drawer_origin(
                     button,

@@ -237,6 +237,31 @@ impl Drawer {
     pub fn placement(&self) -> Option<DrawerPlacement> {
         self.presented.borrow().clone()
     }
+    pub fn snapshot_origin(&self, w: &Workspace, snapshot: &gtk::Snapshot) {
+        let Some(anchor) = self.state.borrow().as_ref().map(|s| s.anchor) else {
+            return;
+        };
+        let Some(button) = w
+            .zen
+            .drawer_button(anchor)
+            .or_else(|| w.customization.drawer_button(anchor))
+        else {
+            return;
+        };
+        let Some(parent) = button.parent() else {
+            return;
+        };
+        let Some(position) = parent.compute_point(&w.surface, &gtk::graphene::Point::new(0.0, 0.0))
+        else {
+            return;
+        };
+        // Reuse GTK's cached native button node above the drawer shadow. No
+        // reparenting, texture copies or duplicate input widget are involved.
+        snapshot.save();
+        snapshot.translate(&position);
+        parent.snapshot_child(&button, snapshot);
+        snapshot.restore();
+    }
     fn target(&self, w: &Workspace) -> Option<DrawerPlacement> {
         let state = self.state.borrow();
         let state = state.as_ref()?;
@@ -291,7 +316,8 @@ impl Drawer {
             .as_ref()
             .map(|s| (s.anchor, result.direction));
         w.customization.mark_drawer_origin(origin);
-        w.zen.mark_drawer_origin(origin);
+        w.zen
+            .mark_drawer_origin(origin.map(|(anchor, _)| (anchor, &result)));
         *self.presented.borrow_mut() = Some(result.clone());
         Some(result)
     }

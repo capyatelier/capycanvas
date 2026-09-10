@@ -275,7 +275,7 @@ mod allocation {
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            for (_, child) in self.children.borrow().iter() {
+            for (slot, child) in self.children.borrow().iter() {
                 let expanded = child.has_css_class("expanded-panel");
                 if expanded {
                     // One shadow around the complete stepped silhouette:
@@ -290,6 +290,13 @@ mod allocation {
                 self.obj().snapshot_child(child, snapshot);
                 if expanded {
                     snapshot.pop();
+                }
+                if *slot == Slot::DrawerConnection
+                    && child.is_mapped()
+                    && !child.has_css_class("zen-hidden")
+                    && let Some(owner) = self.owner.borrow().upgrade()
+                {
+                    owner.drawer.snapshot_origin(&owner, snapshot);
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade()

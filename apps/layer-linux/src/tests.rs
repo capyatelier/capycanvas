@@ -2619,6 +2619,70 @@ fn native_zen_behaviors() {
                 [placement.anchor.x, placement.anchor.y],
                 [anchor.x, anchor.y]
             );
+            let bar = tile.ancestor(TileStrip::static_type()).unwrap();
+            assert!(bar.has_css_class("drawer-source"));
+            let corners = placement.source_corners(section.bounds);
+            for (expected, class) in corners
+                .into_iter()
+                .zip(["join-nw", "join-ne", "join-se", "join-sw"])
+            {
+                assert_eq!(bar.has_css_class(class), expected);
+            }
+            // Inspect the final composited GTK pixels, not just button CSS:
+            // a rounded toolbar clip used to cut off the square tile corners.
+            let texture = crate::snapshot(&w);
+            let stride = texture.width() as usize * 4;
+            let mut bytes = vec![0; stride * texture.height() as usize];
+            texture.download(&mut bytes, stride);
+            let offset = w
+                .surface
+                .compute_point(&w.window, &gtk::graphene::Point::new(0.0, 0.0))
+                .unwrap();
+            let pixel = |x: f32, y: f32| {
+                let i = (y + offset.y()).floor() as usize * stride
+                    + (x + offset.x()).floor() as usize * 4;
+                &bytes[i..i + 3]
+            };
+            let c = placement.connection().unwrap().bounds;
+            let expected = pixel(c.x + c.width * 0.5, c.y + c.height * 0.5);
+            for (joined, [x, y]) in placement.source_corners(anchor).into_iter().zip([
+                [anchor.x + 1.0, anchor.y + 1.0],
+                [anchor.x + anchor.width - 2.0, anchor.y + 1.0],
+                [
+                    anchor.x + anchor.width - 2.0,
+                    anchor.y + anchor.height - 2.0,
+                ],
+                [anchor.x + 1.0, anchor.y + anchor.height - 2.0],
+            ]) {
+                if joined {
+                    assert!(
+                        pixel(x, y)
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| a.abs_diff(*b) <= 3),
+                        "{edge:?} joined tile corner: {:?} vs {expected:?}",
+                        pixel(x, y)
+                    );
+                }
+            }
+            if section.tiles.len() > 1 {
+                let first = section.tiles[0].1;
+                let [x, y] = if matches!(edge, Edge::Left | Edge::Right) {
+                    [
+                        section.bounds.x + first.width * 0.5,
+                        section.bounds.y + first.height + 1.0,
+                    ]
+                } else {
+                    [
+                        section.bounds.x + first.width + 1.0,
+                        section.bounds.y + first.height * 0.5,
+                    ]
+                };
+                assert!(
+                    pixel(x, y).iter().zip(expected).all(|(a, b)| *a + 2 < *b),
+                    "source toolbar should be subtly darker than its connected tile"
+                );
+            }
             capture_reference(&w, &format!("{dir}/zen-drawer-{edge:?}-{name}.png"), 1.0);
             let dismissed = w.chrome_event(ChromeEvent::Contact {
                 position: [600.0, 450.0],
@@ -2627,6 +2691,10 @@ fn native_zen_behaviors() {
             assert!(dismissed.handled && dismissed.chrome_hidden);
             pump(250);
             assert!(state(&w).customization.drawer.is_none());
+            assert!(!bar.has_css_class("drawer-source"));
+            for class in ["join-nw", "join-ne", "join-se", "join-sw"] {
+                assert!(!bar.has_css_class(class));
+            }
         }
         click(&zen);
         pump(250);

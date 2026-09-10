@@ -58,12 +58,53 @@ pub(super) struct Zen {
 }
 type SectionKey = (Panel, Edge, TileStyle, Vec<u32>);
 impl Zen {
-    pub fn mark_drawer_origin(&self, origin: Option<(TileAnchor, Edge)>) {
+    pub fn drawer_button(&self, anchor: TileAnchor) -> Option<gtk::Button> {
+        self.active
+            .get()
+            .then(|| {
+                self.buttons
+                    .borrow()
+                    .iter()
+                    .find(|(a, _)| *a == anchor)
+                    .map(|(_, b)| b.clone())
+            })
+            .flatten()
+    }
+    pub fn mark_drawer_origin(&self, origin: Option<(TileAnchor, &DrawerPlacement)>) {
         for (anchor, button) in self.buttons.borrow().iter() {
             customization::drawer_origin(
                 button,
-                origin.filter(|(a, _)| a == anchor).map(|(_, d)| d),
+                origin
+                    .filter(|(a, _)| a == anchor)
+                    .map(|(_, p)| p.direction),
             );
+        }
+        if let Some(root) = self.root.borrow().as_ref() {
+            for ((bounds, strip), (panel, _, _, tiles)) in root
+                .imp()
+                .children
+                .borrow()
+                .iter()
+                .zip(self.key.borrow().iter())
+            {
+                let source = origin.filter(|(a, _)| a.panel == *panel && tiles.contains(&a.tile));
+                if source.is_some() {
+                    strip.add_css_class("drawer-source");
+                } else {
+                    strip.remove_css_class("drawer-source");
+                }
+                let corners = source.map_or([false; 4], |(_, p)| p.source_corners(*bounds));
+                for (joined, class) in corners
+                    .into_iter()
+                    .zip(["join-nw", "join-ne", "join-se", "join-sw"])
+                {
+                    if joined {
+                        strip.add_css_class(class);
+                    } else {
+                        strip.remove_css_class(class);
+                    }
+                }
+            }
         }
     }
     pub fn allocate(&self, layout: &DockLayout, viewport: [f32; 2]) {
