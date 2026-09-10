@@ -13,7 +13,6 @@ enum Ready {
 }
 pub(crate) struct FilterPreviews {
     scene: Scene,
-    prepared: effects::PreparedEffect,
     programs: Vec<Layer>,
     probe: wgpu::ComputePipeline,
     mask: Image,
@@ -34,7 +33,7 @@ pub(crate) struct FilterPreviews {
 }
 impl FilterPreviews {
     fn new(r: &mut WgpuRasterizer) -> Result<Self, GpuRasterError> {
-        let mut scene = Scene::new(r);
+        let scene = Scene::new(r);
         let programs: Vec<_> = BuiltinEffect::ALL
             .into_iter()
             .enumerate()
@@ -44,12 +43,6 @@ impl FilterPreviews {
                 layer
             })
             .collect();
-        let prepared = scene.effects.prepare(
-            r,
-            &programs.iter().collect::<Vec<_>>(),
-            effects::Execution::Preview,
-            0.,
-        )?;
         let shader = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filter preview content probe"),
             source: wgpu::ShaderSource::Wgsl(include_str!("filter_probe.wgsl").into()),
@@ -94,7 +87,6 @@ impl FilterPreviews {
         let (tx, rx) = mpsc::channel();
         Ok(Self {
             scene,
-            prepared,
             programs,
             probe,
             mask,
@@ -342,6 +334,7 @@ impl FilterPreviews {
                 sources: [r.empty_view.clone(), r.empty_view.clone()],
                 data,
                 over: false,
+                clip: None,
             });
             fallback.1.clone()
         };
@@ -351,6 +344,14 @@ impl FilterPreviews {
             "filter preview atlas",
         );
         for (row, id) in self.rendering.iter().enumerate() {
+            // Compile only requested rows. A catalog-wide dynamic switch would
+            // compile every expensive kernel before showing even the first row.
+            let prepared = self.scene.effects.prepare(
+                r,
+                &[&self.programs[*id as usize]],
+                effects::Execution::Preview,
+                0.,
+            )?;
             let program = self.programs[*id as usize]
                 .effect
                 .as_ref()
@@ -364,7 +365,12 @@ impl FilterPreviews {
                 .iter()
                 .skip(1)
                 .any(|p| p.sampling == layer_core::EffectSampling::Document);
-            let pad = program.damage_radius().unwrap_or(0);
+            let pad = self.programs[*id as usize]
+                .effect
+                .as_ref()
+                .unwrap()
+                .damage_radius()
+                .unwrap_or(0);
             let crop = if whole {
                 [0, 0]
             } else {
@@ -401,7 +407,7 @@ impl FilterPreviews {
                     size[1] as f32,
                     self.scratch_size[0] as f32,
                     self.scratch_size[1] as f32,
-                    *id as u32 as f32,
+                    0.,
                     stage as f32,
                 ]);
                 data[12..16].copy_from_slice(&[
@@ -422,7 +428,7 @@ impl FilterPreviews {
                     target: target.clone(),
                     sources: [previous, source.clone()],
                     data,
-                    prepared: self.prepared.clone(),
+                    prepared: prepared.clone(),
                     masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
                 });
                 previous = target;
@@ -448,6 +454,7 @@ impl FilterPreviews {
                 sources: [previous, self.mask.1.clone()],
                 data,
                 over: false,
+                clip: None,
             });
         }
         self.scene.encode_jobs(r, &mut encoder)?;
@@ -727,7 +734,10 @@ mod tests {
         let preview = r.filter_previews.as_ref().unwrap();
         assert_eq!(preview.source_updates, 1);
         assert_eq!(preview.rendered_rows, 2);
-        assert_eq!(preview.scene.effects.compilations, 1);
+        assert_eq!(
+            preview.scene.effects.compilations, 2,
+            "compile only the two requested filters"
+        );
         let p = preview.point.unwrap();
         assert!((300..340).contains(&p[0]) && (105..145).contains(&p[1]));
         let colors: Vec<_> = first.image.bytes[..200 * 40 * 4]
@@ -763,7 +773,7 @@ mod tests {
                 .scene
                 .effects
                 .compilations,
-            1
+            3
         );
     }
     #[test]
@@ -943,7 +953,7 @@ mod tests {
         let mut filter = Layer::paint(LayerId(2), "Blur");
         filter.kind = LayerKind::Effect;
         filter.effect = Some(effect.clone());
-        let layers = vec![filter, base];
+        let mut layers = vec![filter, base];
         let view = layer_render::ViewState {
             width_px: 512,
             height_px: 256,
@@ -964,16 +974,6 @@ mod tests {
         let full = r.readback_srgb_rgba8().unwrap();
         let mut previews = FilterPreviews::new(&mut r).unwrap();
         previews.programs[BuiltinEffect::BrightnessContrast as usize].effect = Some(effect);
-        previews.prepared = previews
-            .scene
-            .effects
-            .prepare(
-                &r,
-                &previews.programs.iter().collect::<Vec<_>>(),
-                effects::Execution::Preview,
-                0.,
-            )
-            .unwrap();
         r.filter_previews = Some(previews);
         r.request_filter_previews(FilterPreviewRequest {
             request_id: 1,
@@ -1008,5 +1008,53 @@ mod tests {
             r.filter_previews.as_ref().unwrap().scratch_size[0] < 512,
             "bounded passes render crop plus halo, not the whole document"
         );
+        // Every built-in preview executes the exact canvas algorithm, including
+        // document-coordinate warps and original-input reads in later passes.
+        r.filter_previews = None;
+        for id in BuiltinEffect::ALL {
+            layers[0].effect = Some(Arc::new(id.preview()));
+            r.submit(FramePacket {
+                time_seconds: 0.,
+                view,
+                document_extent: [512, 256],
+                layers: &layers,
+                dabs: &[],
+                dab_batches: &[],
+                reset_layers: false,
+                composite_all: true,
+            })
+            .unwrap();
+            let full = r.readback_srgb_rgba8().unwrap();
+            r.request_filter_previews(FilterPreviewRequest {
+                request_id: 2,
+                target: LayerId(1),
+                size: [200, 40],
+                extent: [512, 256],
+                view,
+                layers: layers.iter().map(Layer::composite_snapshot).collect(),
+                filters: vec![id],
+            })
+            .unwrap();
+            let preview = finish(&mut r).image;
+            let mut compared = 0;
+            for y in 0..40 {
+                for x in 0..200 {
+                    let small = &preview.bytes[(y * 200 + x) * 4..][..4];
+                    if small[3] == 255 {
+                        let large = &full[((y + 108) * 512 + x + 156) * 4..][..4];
+                        assert!(
+                            small
+                                .iter()
+                                .zip(large)
+                                .all(|(&a, &b)| (a as i16 - b as i16).abs() <= 1),
+                            "{} ({x},{y}): preview={small:?} canvas={large:?}",
+                            id.label()
+                        );
+                        compared += 1;
+                    }
+                }
+            }
+            assert!(compared > 500, "{} opaque preview coverage", id.label());
+        }
     }
 }

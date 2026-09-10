@@ -1918,7 +1918,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     layer_core::BuiltinEffect::ALL
                         .into_iter()
                         .find(|e| e.id() == fx.program.id.as_ref())
-                        .map_or("adjustments", |e| e.id())
+                        .map_or("adjustments", |e| e.icon())
                 )
             }),
             label: l.name.to_string(),

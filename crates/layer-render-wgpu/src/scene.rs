@@ -22,6 +22,7 @@ enum Job {
         sources: [wgpu::TextureView; 2],
         data: [f32; 24],
         over: bool,
+        clip: Option<PixelRect>,
     },
     Clear(wgpu::TextureView, wgpu::Color),
     Watercolor {
@@ -58,6 +59,14 @@ pub(super) struct Scene {
     stop_before: Option<(usize, bool)>,
 }
 impl Scene {
+    #[cfg(test)]
+    pub fn force_image_rebuild(&mut self) {
+        self.images = images::ImageStages::default();
+    }
+    #[cfg(test)]
+    pub fn image_pass_pixels(&self) -> u64 {
+        self.images.pass_pixels
+    }
     #[cfg(test)]
     pub fn image_work(&self) -> [u64; 2] {
         [self.images.input_updates, self.images.pass_updates]
@@ -101,6 +110,7 @@ impl Scene {
                     sources: [source.clone(), r.empty_view.clone()],
                     data,
                     over: false,
+                    clip: None,
                 });
             }
         }
@@ -284,6 +294,7 @@ impl Scene {
                     sources: paint,
                     data: paint_data,
                     over: true,
+                    ..
                 },
             ) = (&self.jobs[n - 2], &self.jobs[n - 1])
                 && *clear == self.pool[input].view
@@ -339,6 +350,7 @@ impl Scene {
             sources: [source, back.unwrap_or_else(|| r.empty_view.clone())],
             data,
             over,
+            clip: None,
         });
     }
     fn combine(
@@ -1171,6 +1183,14 @@ impl Scene {
                         }
                         pass.set_bind_group(0, &self.binding, &[((base + j) * self.stride) as u32]);
                         pass.set_bind_group(1, &*binding, &[]);
+                        let (data, clip) = match job {
+                            Job::Draw { data, clip, .. } => (data, *clip),
+                            Job::Effect { data, .. } => (data, None),
+                            _ => unreachable!(),
+                        };
+                        let clip =
+                            clip.unwrap_or(PixelRect::full([data[4] as u32, data[5] as u32]));
+                        pass.set_scissor_rect(clip.min_x, clip.min_y, clip.width(), clip.height());
                         pass.draw(0..3, 0..1);
                     }
                     encoded_through = end;

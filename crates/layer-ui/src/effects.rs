@@ -175,7 +175,7 @@ pub(super) fn catalog(picker: &FilterPickerState) -> Vec<AdjustmentChoice> {
         .map(|id| AdjustmentChoice {
             id,
             label: id.label(),
-            icon: id.id(),
+            icon: id.icon(),
             action: UiAction::Effect {
                 action: EffectAction::Insert { effect: id },
             },
@@ -225,6 +225,11 @@ fn control(p: &layer_core::EffectParameter, value: EffectValue) -> PropertyContr
             let mut numeric =
                 NumericControl::number(*min as f64, *max as f64, *step as f64, *decimals as u32)
                     .unit(unit);
+            // Percentages express an amount, not an item count, even when the
+            // displayed range is short. Keep their compact slider presentation.
+            if unit.as_ref() == "%" {
+                numeric.kind = NumericKind::Slider;
+            }
             if let EffectValue::Number(v) = p.default {
                 numeric.default_value = Some(v as f64);
             }

@@ -297,7 +297,9 @@ pub fn ui_catalog() -> UiCatalog {
             "cursor-none",
         ]
         .into_iter()
-        .chain(layer_core::BuiltinEffect::ALL.into_iter().map(|e| e.id()))
+        .chain(layer_core::BuiltinEffect::ALL.into_iter().map(|e| e.icon()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect(),
         panels: Panel::ALL
             .into_iter()

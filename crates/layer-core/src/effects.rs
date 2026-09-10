@@ -1,6 +1,8 @@
 //! Pure effect descriptions and parameters. No graphics API or UI widget types.
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+#[path = "filter_library.rs"]
+mod library;
 
 pub const EFFECT_ABI: u32 = 2;
 pub const EFFECT_LUT_SAMPLES: usize = 256;
@@ -64,7 +66,32 @@ pub enum EffectSampling {
     Neighborhood {
         radius: u32,
     },
+    /// Effective support of the current setting, not its maximum slider value.
+    Parameter {
+        key: Arc<str>,
+        scale: f32,
+        padding: u32,
+    },
     Document,
+}
+
+impl EffectSampling {
+    pub fn radius(&self, effect: &EffectInstance) -> Option<u32> {
+        match self {
+            Self::Neighborhood { radius } => Some(*radius),
+            Self::Parameter {
+                key,
+                scale,
+                padding,
+            } => match effect.value(key) {
+                Some(EffectValue::Number(value)) => {
+                    ((value * scale).ceil() as u32).checked_add(*padding)
+                }
+                _ => None,
+            },
+            Self::Document => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,12 +135,6 @@ impl EffectProgram {
         !self.passes.is_empty()
             || self.time
             || (self.kind == EffectKind::Adjustment && self.alpha == EffectAlpha::Filter)
-    }
-    pub fn damage_radius(&self) -> Option<u32> {
-        self.passes.iter().try_fold(0u32, |r, p| match p.sampling {
-            EffectSampling::Neighborhood { radius } => r.checked_add(radius),
-            EffectSampling::Document => None,
-        })
     }
 }
 
@@ -180,6 +201,11 @@ pub struct EffectInstance {
     pub values: Vec<EffectValue>,
 }
 impl EffectInstance {
+    pub fn damage_radius(&self) -> Option<u32> {
+        self.program.passes.iter().try_fold(0u32, |radius, pass| {
+            radius.checked_add(pass.sampling.radius(self)?)
+        })
+    }
     pub fn animated(&self) -> bool {
         self.program.time && self.value("animate") == Some(&EffectValue::Toggle(true))
     }
@@ -232,6 +258,10 @@ impl EffectInstance {
                 || matches!(pass.sampling, EffectSampling::Neighborhood { radius } if radius > 4096)
             {
                 return Err("Invalid image pass");
+            }
+            if let EffectSampling::Parameter{key,scale,padding}=&pass.sampling
+                && (!scale.is_finite() || *scale<0. || !self.program.parameters.iter().any(|p| p.key==*key && matches!(p.kind,EffectParameterKind::Number{min,max,..} if min>=0. && max*scale+*padding as f32<=4096.))) {
+                return Err("Invalid parameter-derived sampling footprint");
             }
         }
         if self.program.lookups.len() > 8 {
@@ -501,19 +531,60 @@ pub fn gradient_value(stops: &[GradientStop], x: f32) -> [f32; 4] {
     std::array::from_fn(|c| stops[i].color[c] * (1. - t) + stops[i + 1].color[c] * t)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltinEffect {
-    Curves,
-    Levels,
-    BrightnessContrast,
-    HueSaturation,
-    ColorBalance,
-    Exposure,
-    Vibrance,
-    BlackWhite,
-    GradientMap,
-    Posterize,
+macro_rules! builtin_filters {
+    ($($variant:ident, $id:literal, $label:literal, $category:ident;)+) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum BuiltinEffect { $($variant,)+ }
+        impl BuiltinEffect {
+            pub const ALL:[Self;[$(stringify!($variant),)+].len()]=[$(Self::$variant,)+];
+            pub fn id(self)->&'static str {match self {$(Self::$variant=>$id,)+}}
+            pub fn label(self)->&'static str {match self {$(Self::$variant=>$label,)+}}
+            pub fn category(self)->FilterCategory {match self {$(Self::$variant=>FilterCategory::$category,)+}}
+        }
+    };
+}
+builtin_filters! {
+    Curves, "curves", "Curves", Tone;
+    Levels, "levels", "Levels", Tone;
+    BrightnessContrast, "brightness_contrast", "Brightness / Contrast", Tone;
+    HueSaturation, "hue_saturation", "Hue / Saturation", Color;
+    ColorBalance, "color_balance", "Color Balance", Color;
+    Exposure, "exposure", "Exposure", Tone;
+    Vibrance, "vibrance", "Vibrance", Color;
+    BlackWhite, "black_white", "Black & White", Color;
+    GradientMap, "gradient_map", "Gradient Map", Color;
+    Posterize, "posterize", "Posterize", Artistic;
+    GaussianBlur, "gaussian_blur", "Gaussian Blur", Blur;
+    UnsharpMask, "unsharp_mask", "Unsharp Mask", Detail;
+    HighPass, "high_pass", "High Pass", Detail;
+    MotionBlur, "motion_blur", "Motion Blur", Blur;
+    Denoise, "denoise", "Denoise", Detail;
+    EdgeDetect, "edge_detect", "Edge Detect", Detail;
+    WhiteBalance, "white_balance", "White Balance", Color;
+    SplitTone, "split_tone", "Split Tone", Color;
+    Vignette, "vignette", "Vignette", Tone;
+    FilmGrain, "film_grain", "Film Grain", Texture;
+    Bloom, "bloom", "Bloom", Blur;
+    SoftFocus, "soft_focus", "Soft Focus", Blur;
+    Halftone, "halftone", "Halftone", Artistic;
+    Crosshatch, "crosshatch", "Crosshatch", Artistic;
+    Emboss, "emboss", "Emboss", Detail;
+    PixelMosaic, "pixel_mosaic", "Pixel Mosaic", Artistic;
+    ChromaticAberration, "chromatic_aberration", "Chromatic Aberration", Distort;
+    Painterly, "painterly", "Painterly", Artistic;
+    Solarize, "solarize", "Solarize", Color;
+    Pencil, "pencil", "Pencil", Artistic;
+    Kaleidoscope, "kaleidoscope", "Kaleidoscope", Distort;
+    Swirl, "swirl", "Swirl", Distort;
+    Ripple, "ripple", "Ripple", Distort;
+    Glass, "glass", "Glass", Distort;
+    RainyGlass, "rainy_glass", "Rainy Glass", Distort;
+    Vhs, "vhs", "VHS", Texture;
+    Crt, "crt", "CRT", Texture;
+    HeatHaze, "heat_haze", "Heat Haze", Distort;
+    Iridescence, "iridescence", "Iridescence", Color;
+    DomainWarp, "domain_warp", "Domain Warp", Distort;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -521,66 +592,40 @@ pub enum BuiltinEffect {
 pub enum FilterCategory {
     Tone,
     Color,
+    Detail,
+    Blur,
     Artistic,
+    Distort,
+    Texture,
 }
 impl FilterCategory {
-    pub const ALL: [Self; 3] = [Self::Tone, Self::Color, Self::Artistic];
+    pub const ALL: [Self; 7] = [
+        Self::Tone,
+        Self::Color,
+        Self::Detail,
+        Self::Blur,
+        Self::Artistic,
+        Self::Distort,
+        Self::Texture,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Tone => "Tone",
             Self::Color => "Color",
+            Self::Detail => "Detail",
+            Self::Blur => "Blur",
             Self::Artistic => "Artistic",
+            Self::Distort => "Distort",
+            Self::Texture => "Texture",
         }
     }
 }
 impl BuiltinEffect {
-    pub fn category(self) -> FilterCategory {
-        match self {
-            Self::Curves | Self::Levels | Self::BrightnessContrast | Self::Exposure => {
-                FilterCategory::Tone
-            }
-            Self::HueSaturation | Self::ColorBalance | Self::Vibrance => FilterCategory::Color,
-            Self::BlackWhite | Self::GradientMap | Self::Posterize => FilterCategory::Artistic,
-        }
-    }
-    pub const ALL: [Self; 10] = [
-        Self::Curves,
-        Self::Levels,
-        Self::BrightnessContrast,
-        Self::HueSaturation,
-        Self::ColorBalance,
-        Self::Exposure,
-        Self::Vibrance,
-        Self::BlackWhite,
-        Self::GradientMap,
-        Self::Posterize,
-    ];
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::Curves => "curves",
-            Self::Levels => "levels",
-            Self::BrightnessContrast => "brightness_contrast",
-            Self::HueSaturation => "hue_saturation",
-            Self::ColorBalance => "color_balance",
-            Self::Exposure => "exposure",
-            Self::Vibrance => "vibrance",
-            Self::BlackWhite => "black_white",
-            Self::GradientMap => "gradient_map",
-            Self::Posterize => "posterize",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Curves => "Curves",
-            Self::Levels => "Levels",
-            Self::BrightnessContrast => "Brightness / Contrast",
-            Self::HueSaturation => "Hue / Saturation",
-            Self::ColorBalance => "Color Balance",
-            Self::Exposure => "Exposure",
-            Self::Vibrance => "Vibrance",
-            Self::BlackWhite => "Black & White",
-            Self::GradientMap => "Gradient Map",
-            Self::Posterize => "Posterize",
+    pub fn icon(self) -> &'static str {
+        if (self as usize) < 10 {
+            self.id()
+        } else {
+            "adjustments"
         }
     }
     pub fn program(self) -> Arc<EffectProgram> {
@@ -612,6 +657,7 @@ impl BuiltinEffect {
             ],
             Self::Exposure => vec![("exposure", EffectValue::Number(0.8))],
             Self::Vibrance => vec![("vibrance", EffectValue::Number(45.))],
+            Self::WhiteBalance => vec![("temperature", EffectValue::Number(35.))],
             _ => Vec::new(),
         };
         for (key, value) in values {
@@ -768,6 +814,7 @@ impl BuiltinEffect {
                 });
                 p
             }
+            _ => return Arc::new(library::program(self)),
         };
         Arc::new(EffectProgram {
             abi: EFFECT_ABI,
@@ -775,7 +822,7 @@ impl BuiltinEffect {
             label: self.label().into(),
             kind: EffectKind::Adjustment,
             alpha: EffectAlpha::Preserve,
-            wgsl: include_str!("effects.wgsl").into(),
+            wgsl: library::source(),
             entry: format!("capy_{}", self.id()).into(),
             passes: Arc::from([]),
             time: false,
@@ -806,6 +853,26 @@ mod tests {
             assert_eq!(original, EffectInstance::new(id.program()));
             assert!(!preview.animated());
         }
+    }
+    #[test]
+    fn image_footprints_follow_parameters_and_validate_their_bounds() {
+        let mut blur = EffectInstance::new(BuiltinEffect::GaussianBlur.program());
+        assert_eq!(blur.damage_radius(), Some(18));
+        blur.set("sigma", EffectValue::Number(1.)).unwrap();
+        assert_eq!(blur.damage_radius(), Some(6));
+        blur.set("sigma", EffectValue::Number(0.)).unwrap();
+        assert_eq!(blur.damage_radius(), Some(0));
+        let mut invalid = (*blur.program).clone();
+        Arc::make_mut(&mut invalid.passes)[0].sampling = EffectSampling::Parameter {
+            key: "missing".into(),
+            scale: 1.,
+            padding: 0,
+        };
+        assert!(EffectInstance::new(Arc::new(invalid)).validate().is_err());
+        assert_eq!(
+            EffectInstance::new(BuiltinEffect::Kaleidoscope.program()).damage_radius(),
+            None
+        );
     }
     #[test]
     fn gaussian_lookup_is_finite_normalized_and_fixed_size() {

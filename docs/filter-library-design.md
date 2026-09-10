@@ -1,6 +1,6 @@
 # WGSL filter library
 
-Implementation checklist for the expanded Filters picker and thirty additional
+Design and milestone checklist for the expanded Filters picker and thirty additional
 filters. This extends the ten adjustments documented in
 [adjustments-implementation.md](adjustments-implementation.md).
 
@@ -73,8 +73,8 @@ masking, frozen-time cache hits, upstream reuse, cache memory accounting and
 equivalence to fused filters in masked/clipped/isolated groups. This comparison
 also fixed a pre-existing double-fusion bug that overwrote nested opacity.
 
-The thirty-filter catalog and web/Android picker ports remain implementation
-work, not completed features. The repeat ten-filter 4096×4096 Vulkan baseline on the
+At the foundation milestone the thirty-filter catalog and web/Android picker
+ports were still pending. The repeat ten-filter 4096×4096 Vulkan baseline on the
 workstation measured completion median/p99: 2.05/2.56 ms fused, 3.46/5.83 ms
 masked, 2.89/3.94 ms clipped. This establishes no large baseline regression;
 it does not yet establish neighborhood-filter, preview or device performance.
@@ -82,8 +82,9 @@ it does not yet establish neighborhood-filter, preview or device performance.
 ## GTK picker milestone (2026-09-10)
 
 The shared category/search model and GTK categorized list now display actual
-GPU-rendered previews. They use the same shader bodies as the canvas through
-one catalog preview pipeline. Non-neutral preview presets do not change layer
+GPU-rendered previews. They use the same shader bodies as the canvas. The initial
+catalog-wide preview pipeline was replaced with per-requested-filter pipelines
+at the forty-filter milestone below. Non-neutral preview presets do not change layer
 insertion defaults. Hosts request only visible rows, at most eight at a time;
 the core defers requests while input, a stroke or document edits are pending.
 
@@ -127,6 +128,42 @@ core/engine/UI tests and GTK integration pass. The wasm target compiles; this is
 not yet a web/Android UI-port or device-performance claim. The PNG dependency
 passes the existing MIT/Apache-compatible distribution notice audit.
 
+## Forty-filter GTK milestone (2026-09-10)
+
+All thirty additions in the catalog above are now implemented as declarative
+Rust programs and original WGSL. The same registry defines IDs, categories,
+labels, controls and preview presets. The renderer does not branch on filter IDs.
+Time-aware filters include Film Grain, Ripple, Rainy Glass, VHS, CRT, Heat Haze,
+Iridescence and Domain Warp. Other effects do not request animation frames.
+
+The blur family shares normalized separable Gaussian tap tables and two passes.
+Denoise uses a bounded, alpha-aware bilateral neighborhood. Painterly chooses
+the lowest-variance of four regions using fixed nine-sample quadrature per region;
+it is an efficient approximation, not a full anisotropic Kuwahara implementation.
+Halftone and Crosshatch are artistic screen treatments, not CMYK print separation.
+Rainy Glass is an original procedural refraction/drop effect, not fluid simulation
+or a port of Heartfelt. Bloom thresholds bilinear samples during its first pass;
+it is a compact approximation to threshold-then-convolve, not an exact reference
+implementation of that ordering. These limits keep the implementation explicit.
+
+Current parameter values determine bounded sampling support. Dependency indices
+respect isolated groups and clipping bases and update only on structural edits.
+Write-only input tiles draw directly into image caches in a shared pass, removing
+redundant tile copies. All forty filters and preview crops pass pixel tests, and
+GTK insertion, controls, categories and search pass integration tests.
+
+Preview pipelines now compile lazily per requested filter. The initial single
+catalog-wide switch would compile every kernel up front; with forty effects its
+measured cold startup reached 413 ms. Compiling only the eight requested rows
+reduced that to 128 ms in the first comparison, with warmed eight-row generation
+still around 0.34 ms. Cold startup remains a one-time cost, not a claim of instant
+compilation. Row image and pipeline caches survive category/search changes.
+
+See [forty-filter validation](filter-library-validation.md) for all measured
+latencies, incremental correctness, memory, artwork and remaining platform gates.
+Web/Android categorized preview-picker ports and expanded platform benchmarks
+remain to be done; compiling their shared Rust catalog is not a completed port.
+
 ## Validation gates
 
 - Shader validation and generated controls for every registered program.
@@ -153,6 +190,11 @@ provenance cannot be assumed permissive. No shader code is imported from it.
 Implement common mathematical operations independently under this repository's
 MIT OR Apache-2.0 license, with no translation of third-party shader code.
 The [WGSL specification](https://gpuweb.github.io/gpuweb/wgsl/) is the API reference.
+
+Algorithm references include GIMP's [Unsharp Mask](https://docs.gimp.org/2.10/en/gimp-filter-unsharp-mask.html),
+[Gaussian Blur](https://docs.gimp.org/2.10/en/gimp-filter-gaussian-blur.html), and
+[Newsprint](https://docs.gimp.org/2.10/en/gimp-filter-newsprint.html) documentation
+for conventional controls and behavior. No implementation or assets are copied.
 
 Additional leads supplied by the user: Dave Hoskins (Bokeh Venice), p4vv37
 (Generalized Kuwahara), Martijn Steinrucken / BigWIngs (Heartfelt), FMS_Cat

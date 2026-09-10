@@ -90,8 +90,9 @@ later features. Time-dependent WGSL does not imply a simulation/history buffer.
    and Properties follow Layers in the default tab group. Choosing a filter
    inserts above the editing target. Reveal Properties only when it is not
    already displayed elsewhere; restore/insert the panel through shared docking
-   actions. Labeled adjustment tiles use three standard tool cells in width and
-   two in height, wrapping to available panel width.
+   actions. GTK now uses categorized preview rows with search; the original
+   three-by-two-cell tiles remain only in the web/Android views pending their
+   picker ports. See the current [library milestone](filter-library-design.md).
 3. Exposure, Vibrance, Black & White, Gradient Map and Posterize use the same
    registry and controls as the first five. No host-specific filter algorithms.
 

@@ -1,6 +1,20 @@
 use super::*;
 use layer_core::{BuiltinEffect, EffectInstance, EffectValue, LayerMask, Selection};
 
+// Keep the established ten-filter baseline stable as the catalog grows.
+const POINTWISE_BASELINE: [BuiltinEffect; 10] = [
+    BuiltinEffect::Curves,
+    BuiltinEffect::Levels,
+    BuiltinEffect::BrightnessContrast,
+    BuiltinEffect::HueSaturation,
+    BuiltinEffect::ColorBalance,
+    BuiltinEffect::Exposure,
+    BuiltinEffect::Vibrance,
+    BuiltinEffect::BlackWhite,
+    BuiltinEffect::GradientMap,
+    BuiltinEffect::Posterize,
+];
+
 fn effect(id: u64, kind: BuiltinEffect) -> Layer {
     let mut l = Layer::paint(LayerId(id), kind.label());
     l.kind = LayerKind::Effect;
@@ -274,7 +288,7 @@ fn adjustment_defaults_masks_clipping_and_parameter_updates() {
         32.,
     );
     let original = pixel(&mut r, 64, 64);
-    for kind in BuiltinEffect::ALL {
+    for kind in POINTWISE_BASELINE {
         if matches!(
             kind,
             BuiltinEffect::BlackWhite | BuiltinEffect::GradientMap | BuiltinEffect::Posterize
@@ -359,7 +373,7 @@ fn adjustment_chain_is_fused_and_preserves_clip_base() {
         [0.2, 0.4, 0.7, 1.],
         32.,
     );
-    let mut layers: Vec<_> = BuiltinEffect::ALL
+    let mut layers: Vec<_> = POINTWISE_BASELINE
         .into_iter()
         .enumerate()
         .map(|(i, kind)| {
@@ -429,15 +443,15 @@ fn adjustment_latency() {
     eprintln!("adapter {:?}", r.adapter.get_info());
     for size in [128, 2048, 4096] {
         for incremental in [false, true] {
-            for case in 0..=BuiltinEffect::ALL.len() + 4 {
+            for case in 0..=POINTWISE_BASELINE.len() + 4 {
                 let kind = case
                     .checked_sub(1)
-                    .and_then(|i| BuiltinEffect::ALL.get(i))
+                    .and_then(|i| POINTWISE_BASELINE.get(i))
                     .copied();
-                let chain = case > BuiltinEffect::ALL.len();
-                let masked = case == BuiltinEffect::ALL.len() + 2;
-                let clipped = case == BuiltinEffect::ALL.len() + 3;
-                let telemetry = case != BuiltinEffect::ALL.len() + 4;
+                let chain = case > POINTWISE_BASELINE.len();
+                let masked = case == POINTWISE_BASELINE.len() + 2;
+                let clipped = case == POINTWISE_BASELINE.len() + 3;
+                let telemetry = case != POINTWISE_BASELINE.len() + 4;
                 let label = if !chain {
                     kind.map_or("Baseline", BuiltinEffect::label)
                 } else if masked {
@@ -454,7 +468,7 @@ fn adjustment_latency() {
                     layers.insert(0, effect(2, kind));
                 }
                 if chain {
-                    for (i, kind) in BuiltinEffect::ALL.into_iter().enumerate() {
+                    for (i, kind) in POINTWISE_BASELINE.into_iter().enumerate() {
                         let mut fx = effect(2 + i as u64, kind);
                         fx.properties.clipped = clipped;
                         if masked {
@@ -759,7 +773,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
     group.kind = LayerKind::Group;
     base.properties.parent = Some(group.id);
     let mut layers = vec![group];
-    for (i, kind) in BuiltinEffect::ALL.into_iter().enumerate() {
+    for (i, kind) in POINTWISE_BASELINE.into_iter().enumerate() {
         let mut fx = effect(i as u64 + 2, kind);
         fx.properties.parent = Some(LayerId(20));
         fx.properties.clipped = true;

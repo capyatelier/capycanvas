@@ -162,6 +162,7 @@ fn native_adjustment_panels_review() {
             }
             assert_eq!(headings, ["Shadows", "Midtones", "Highlights"]);
         }
+        let program = kind.program();
         let (key, value) = match kind {
             BuiltinEffect::Curves => (
                 "curve_0",
@@ -192,6 +193,21 @@ fn native_adjustment_panels_review() {
                 ]),
             ),
             BuiltinEffect::Posterize => ("levels", EffectValue::Number(4.)),
+            _ => {
+                let parameter = program
+                    .parameters
+                    .iter()
+                    .find(|p| matches!(p.kind, layer_core::EffectParameterKind::Number { .. }))
+                    .unwrap();
+                let layer_core::EffectParameterKind::Number { min, max, .. } = parameter.kind
+                else {
+                    unreachable!()
+                };
+                (
+                    parameter.key.as_ref(),
+                    EffectValue::Number(min + (max - min) * 0.3),
+                )
+            }
         };
         w.dispatch(UiAction::Effect {
             action: EffectAction::Set {
@@ -229,6 +245,36 @@ fn native_adjustment_panels_review() {
         crate::capture(&w, &format!("{dir}/{:02}-{}.png", i + 2, kind.id()));
         w.dispatch(UiAction::SetLayerVisibility { id, visible: false });
     }
+    // Category/search changes use the shared policy and preserve the selected
+    // editing layer. The GTK view only rebuilds the matching rows.
+    w.dispatch(UiAction::SelectPanelTab {
+        group: 8,
+        panel: Panel::Adjustments,
+    });
+    w.dispatch(UiAction::FilterPicker {
+        action: layer_ui::FilterPickerAction::Category {
+            category: Some(layer_core::FilterCategory::Distort),
+        },
+    });
+    pump(700);
+    crate::capture(&w, &format!("{dir}/41-distort-picker.png"));
+    w.dispatch(UiAction::FilterPicker {
+        action: layer_ui::FilterPickerAction::ToggleSearch,
+    });
+    w.dispatch(UiAction::FilterPicker {
+        action: layer_ui::FilterPickerAction::Search {
+            query: "glass".into(),
+        },
+    });
+    pump(700);
+    assert_eq!(state(&w).adjustments.len(), 2);
+    crate::capture(&w, &format!("{dir}/42-glass-search.png"));
+    w.dispatch(UiAction::FilterPicker {
+        action: layer_ui::FilterPickerAction::ToggleSearch,
+    });
+    w.dispatch(UiAction::FilterPicker {
+        action: layer_ui::FilterPickerAction::Category { category: None },
+    });
     w.dispatch(UiAction::Customize {
         action: CustomizationAction::SetPanelVisible {
             panel: Panel::Stats,
@@ -236,6 +282,12 @@ fn native_adjustment_panels_review() {
         },
     });
     pump(300);
+    // Keep the stable stats exercise on a simple pointwise filter.
+    w.dispatch(UiAction::Effect {
+        action: EffectAction::Insert {
+            effect: BuiltinEffect::Posterize,
+        },
+    });
     let layer = state(&w).layer_properties.layer.unwrap();
     w.dispatch(UiAction::SetLayerVisibility {
         id: layer,

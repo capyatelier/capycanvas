@@ -288,23 +288,16 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
         }
     }
     if stage == Execution::Preview {
-        source.push_str("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);switch u32(settings.extent.z) {\n");
-        for (i, (p, offset)) in programs.iter().zip(offsets).enumerate() {
-            source.push_str(&format!("case {i}u: {{\n"));
-            for (j, pass) in p.passes.iter().enumerate() {
-                source.push_str(&format!(
-                    "if u32(settings.extent.w)=={j}u {{return {}(c,position,{}u);}}\n",
-                    pass.entry,
-                    offset + 1
-                ));
-            }
+        let p = &programs[0];
+        let base = offsets[0] + 1;
+        source.push_str("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);\n");
+        for (j, pass) in p.passes.iter().enumerate() {
             source.push_str(&format!(
-                "return {}(c,position,{}u);}}\n",
-                p.entry,
-                offset + 1
+                "if u32(settings.extent.w)=={j}u {{return {}(c,position,{base}u);}}\n",
+                pass.entry
             ));
         }
-        source.push_str("default: {return c;} }}");
+        source.push_str(&format!("return {}(c,position,{base}u);}}", p.entry));
         return Ok(source);
     }
     if let Execution::Image(stage) = stage {
@@ -374,12 +367,25 @@ mod tests {
             .map(|b| b.program())
             .collect();
         for p in &programs {
-            validate(std::slice::from_ref(p));
+            validate(std::slice::from_ref(p), Execution::Preview);
+            if p.image_boundary() {
+                for stage in 0..p.passes.len().max(1) {
+                    validate(std::slice::from_ref(p), Execution::Image(stage));
+                }
+            } else {
+                validate(std::slice::from_ref(p), Execution::Fused);
+            }
         }
-        validate(&programs);
+        validate(
+            &programs
+                .into_iter()
+                .filter(|p| !p.image_boundary())
+                .collect::<Vec<_>>(),
+            Execution::Fused,
+        );
     }
-    fn validate(p: &[Arc<EffectProgram>]) {
-        let source = shader_source(p, &vec![0; p.len()], Execution::Fused).unwrap();
+    fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
+        let source = shader_source(p, &vec![0; p.len()], execution).unwrap();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

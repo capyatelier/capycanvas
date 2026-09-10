@@ -3,6 +3,10 @@
 2026-09-09. All ten filters use the same WGSL runtime on GTK, web and Android.
 Shared UI labels are **Filters** and **Properties**.
 
+This is the original ten-filter cross-platform baseline. The expanded catalog
+and current incremental/animation measurements are in
+[forty-filter validation](filter-library-validation.md).
+
 ## Measured rendering cost
 
 Release build, Vulkan on NVIDIA RTX PRO 6000 Blackwell Max-Q. Painted RGBA8 canvas,

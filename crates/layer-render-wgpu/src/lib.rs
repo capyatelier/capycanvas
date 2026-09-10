@@ -6307,6 +6307,7 @@ fn lattice_noise(x: u32, y: u32, seed: u32) -> f32 {
 mod tests {
     use super::*;
     mod adjustments;
+    mod filter_library;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,
