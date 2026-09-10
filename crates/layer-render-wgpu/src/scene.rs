@@ -1,6 +1,8 @@
-//! Tile-local layer composition. Scratch usage follows nesting depth, not layer
-//! count or canvas area. Mask multiplication never downloads or rewrites paint.
+//! Tiled layer composition with explicit cached image boundaries. Pointwise
+//! scratch follows nesting depth. Masks never download or rewrite paint.
 use super::*;
+#[path = "scene_images.rs"]
+mod images;
 
 #[derive(Clone)]
 enum Job {
@@ -49,12 +51,23 @@ pub(super) struct Scene {
     pipeline: [wgpu::RenderPipeline; 2],
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
+    images: images::ImageStages,
+    stop_before: Option<usize>,
 }
 impl Scene {
+    #[cfg(test)]
+    pub fn image_work(&self) -> [u64; 2] {
+        [self.images.input_updates, self.images.pass_updates]
+    }
+    #[cfg(test)]
+    pub fn image_cache_bytes(&self) -> u64 {
+        self.images.storage_bytes()
+    }
     pub fn scratch_bytes(&self) -> u64 {
         self.pool.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4
             + (self.capacity * self.stride) as u64
             + self.effects.storage_bytes()
+            + self.images.storage_bytes()
     }
     pub fn initialize_images(
         &mut self,
@@ -167,6 +180,8 @@ impl Scene {
             pipeline,
             effects,
             effect_passes: 0,
+            images: images::ImageStages::default(),
+            stop_before: None,
         }
     }
     fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> usize {
@@ -200,8 +215,19 @@ impl Scene {
         input: usize,
     ) -> Result<usize, GpuRasterError> {
         let layers: Vec<_> = indices.iter().map(|i| &packet.layers[*i]).collect();
-        let prepared = self.effects.prepare(r, &layers)?;
         let layer = layers[0];
+        if layer.effect.as_ref().unwrap().program.image_boundary() {
+            let view = self
+                .images
+                .output(layer.id)
+                .ok_or_else(|| GpuRasterError::Effect("Missing image effect stage".into()))?;
+            let out = self.image_tile(r, view, packet.document_extent, tile);
+            self.free(input);
+            return Ok(out);
+        }
+        let prepared = self
+            .effects
+            .prepare(r, &layers, None, packet.time_seconds)?;
         let mask =
             if indices.len() == 1 && !direct_effect_mask(packet.layers, layer) {
                 layer.mask.as_ref().filter(|m| m.enabled).map(|m| {
@@ -333,6 +359,7 @@ impl Scene {
             if let Some(bg) = bg
                 && let Job::Effect { target, data, .. } = &mut self.jobs[n - 1]
                 && *target == self.pool[front].view
+                && data[8] == 0.
             {
                 data[8] = 1.;
                 data[9] = opacity;
@@ -546,14 +573,50 @@ impl Scene {
             },
         );
         let mut stack: Option<(usize, usize)> = None;
+        // An image boundary already contains its full input stack, final mask
+        // and layer properties. Start above the latest completed boundary.
+        let checkpoint = packet.layers.iter().enumerate().find(|(i, l)| {
+            l.visible
+                && l.properties.parent == parent
+                && !l.properties.clipped
+                && l.effect
+                    .as_ref()
+                    .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
+                && self.stop_before.is_none_or(|stop| *i > stop)
+                && self.images.output(l.id).is_some()
+        });
+        if let Some((_, l)) = checkpoint {
+            self.free(output);
+            output = self.image_tile(
+                r,
+                self.images.output(l.id).unwrap(),
+                packet.document_extent,
+                tile,
+            );
+        }
         let mut siblings = packet
             .layers
             .iter()
             .enumerate()
             .rev()
             .filter(|(_, l)| l.properties.parent == parent && l.kind != LayerKind::Background)
+            .filter(|(i, _)| checkpoint.is_none_or(|(cut, _)| *i < cut))
             .peekable();
         while let Some((i, layer)) = siblings.next() {
+            if self.stop_before == Some(i) {
+                if layer.properties.clipped {
+                    self.free(output);
+                    return Ok(stack.map_or_else(
+                        || self.alloc(r, wgpu::Color::TRANSPARENT),
+                        |(pixels, _)| pixels,
+                    ));
+                }
+                if let Some((pixels, base)) = stack {
+                    let b = &packet.layers[base];
+                    output = self.combine(r, pixels, output, b.opacity, b.properties.blend, false);
+                }
+                return Ok(output);
+            }
             if layer
                 .effect
                 .as_ref()
@@ -569,7 +632,9 @@ impl Scene {
                     continue;
                 }
                 let mut chain = vec![i];
-                if direct_effect_mask(packet.layers, layer) {
+                if direct_effect_mask(packet.layers, layer)
+                    && !layer.effect.as_ref().unwrap().program.image_boundary()
+                {
                     while let Some((j, next)) = siblings.peek() {
                         if !next.visible
                             || next.properties.clipped != layer.properties.clipped
@@ -578,6 +643,7 @@ impl Scene {
                                 && next.mask.as_ref().is_some_and(|m| m.enabled))
                             || !next.effect.as_ref().is_some_and(|e| {
                                 e.program.kind == layer_core::EffectKind::Adjustment
+                                    && !e.program.image_boundary()
                             })
                         {
                             break;
@@ -843,8 +909,55 @@ impl Scene {
         overlay: bool,
     ) -> Result<(), GpuRasterError> {
         self.effects.retain(packet.layers);
+        let dirty = self.update_images(r, packet, dirty, encoder)?;
+        if dirty.is_empty() {
+            return Ok(());
+        }
         self.jobs.clear();
         self.used.fill(false);
+        // A topmost full-image checkpoint is already the final composition.
+        // One region copy replaces a tile draw + copy for every document tile.
+        if let Some(top) = packet
+            .layers
+            .iter()
+            .find(|l| l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background)
+            && !top.properties.clipped
+            && top
+                .effect
+                .as_ref()
+                .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
+            && (!overlay
+                || !packet
+                    .layers
+                    .iter()
+                    .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area)))
+            && let Some(source) = self.images.output_texture(top.id)
+        {
+            let origin = wgpu::Origin3d {
+                x: dirty.min_x,
+                y: dirty.min_y,
+                z: 0,
+            };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: source,
+                    origin,
+                    ..source.as_image_copy()
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: r.composite_texture.as_ref().unwrap(),
+                    origin,
+                    ..source.as_image_copy()
+                },
+                wgpu::Extent3d {
+                    width: dirty.width(),
+                    height: dirty.height(),
+                    depth_or_array_layers: 1,
+                },
+            );
+            r.metrics.composited_pixels += dirty.area();
+            return Ok(());
+        }
         for tile in page_coordinates(dirty) {
             let mut output = self.group(r, packet, None, tile)?;
             if overlay {

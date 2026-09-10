@@ -605,7 +605,7 @@ pub struct WgpuRasterizer {
     pipelines: Pipelines,
     last_submission: Option<wgpu::SubmissionIndex>,
     pending_readback: Option<ReadbackImage>,
-    inspection: Option<(layer_render::ViewState, Vec<Layer>)>,
+    inspection: Option<(layer_render::ViewState, Vec<Layer>, f32)>,
     metrics: GpuRasterMetrics,
     telemetry: telemetry::Telemetry,
 }
@@ -3340,7 +3340,7 @@ impl WgpuRasterizer {
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
         }
-        if let Some((view, layers)) = &inspection {
+        if let Some((view, layers, time)) = &inspection {
             let mut scene = self.scene.take().expect("inspection scene");
             scene.compose(
                 self,
@@ -3351,6 +3351,7 @@ impl WgpuRasterizer {
                     dabs: &[],
                     dab_batches: &[],
                     reset_layers: false,
+                    time_seconds: *time,
                     composite_all: true,
                 },
                 PixelRect::full([width, height]),
@@ -3407,7 +3408,7 @@ impl WgpuRasterizer {
                 depth_or_array_layers: 1,
             },
         );
-        if let Some((view, layers)) = &inspection {
+        if let Some((view, layers, time)) = &inspection {
             let mut scene = self.scene.take().expect("inspection scene");
             scene.compose(
                 self,
@@ -3418,6 +3419,7 @@ impl WgpuRasterizer {
                     dabs: &[],
                     dab_batches: &[],
                     reset_layers: false,
+                    time_seconds: *time,
                     composite_all: true,
                 },
                 PixelRect::full([width, height]),
@@ -3578,6 +3580,9 @@ impl CanvasRenderer for WgpuRasterizer {
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         let started = self.telemetry.enabled.then(web_time::Instant::now);
+        if !needs_scene(packet.layers) {
+            self.scene = None;
+        }
         if let Some(scene) = &mut self.scene {
             scene.effect_passes = 0;
         }
@@ -3619,6 +3624,7 @@ impl CanvasRenderer for WgpuRasterizer {
                             layer
                         })
                         .collect(),
+                    packet.time_seconds,
                 )
             });
         if let Some(scene) = &mut self.scene {
@@ -4215,7 +4221,11 @@ impl CanvasRenderer for WgpuRasterizer {
             dirty = PixelRect::full(packet.document_extent);
         }
 
-        if !dirty.is_empty() && needs_scene(packet.layers) {
+        let animated = packet
+            .layers
+            .iter()
+            .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated()));
+        if (!dirty.is_empty() || animated) && needs_scene(packet.layers) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             scene.style_base = packet.dab_batches.len();
             // A moved target's damage is stored in image coordinates. Round to
@@ -6347,6 +6357,7 @@ mod tests {
                     dabs,
                     dab_batches: batches,
                     reset_layers: false,
+                    time_seconds: 0.,
                     composite_all: true,
                 })
                 .unwrap();
@@ -6448,6 +6459,7 @@ mod tests {
             dabs: std::slice::from_ref(&dab),
             dab_batches: std::slice::from_ref(&batch),
             reset_layers: true,
+            time_seconds: 0.,
             composite_all: true,
         })
         .unwrap();
@@ -6473,6 +6485,7 @@ mod tests {
             dabs: std::slice::from_ref(&dab),
             dab_batches: std::slice::from_ref(&batch),
             reset_layers: false,
+            time_seconds: 0.,
             composite_all: false,
         })
         .unwrap();
@@ -6489,6 +6502,7 @@ mod tests {
             dabs: &[],
             dab_batches: &[],
             reset_layers: false,
+            time_seconds: 0.,
             composite_all: true,
         })
         .unwrap();
@@ -6592,6 +6606,7 @@ mod tests {
                     dabs: std::slice::from_ref(&base_dab),
                     dab_batches: std::slice::from_ref(&base),
                     reset_layers: true,
+                    time_seconds: 0.,
                     composite_all: true,
                 })
                 .unwrap();
@@ -6649,6 +6664,7 @@ mod tests {
                 dabs: &active_dabs,
                 dab_batches: &active_batches,
                 reset_layers: !existing_wet,
+                time_seconds: 0.,
                 composite_all: !existing_wet,
             })
             .unwrap();
@@ -6741,6 +6757,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -6756,6 +6773,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -6775,6 +6793,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -6825,6 +6844,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -6846,6 +6866,7 @@ mod tests {
                 dabs: &[],
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -6924,6 +6945,7 @@ mod tests {
                     dabs: &dabs,
                     dab_batches: &batches,
                     reset_layers: true,
+                    time_seconds: 0.,
                     composite_all: true,
                 })
                 .unwrap();
@@ -6980,6 +7002,7 @@ mod tests {
                         dabs: std::slice::from_ref(&fringe),
                         dab_batches: std::slice::from_ref(&first),
                         reset_layers: true,
+                        time_seconds: 0.,
                         composite_all: true,
                     })
                     .unwrap();
@@ -7007,6 +7030,7 @@ mod tests {
                     dabs: std::slice::from_ref(&solid),
                     dab_batches: std::slice::from_ref(&second),
                     reset_layers: !include_fringe,
+                    time_seconds: 0.,
                     composite_all: !include_fringe,
                 })
                 .unwrap();
@@ -7072,6 +7096,7 @@ mod tests {
                         dabs: std::slice::from_ref(dab),
                         dab_batches: std::slice::from_ref(&batch),
                         reset_layers: index == 0,
+                        time_seconds: 0.,
                         composite_all: index == 0,
                     })
                     .unwrap();
@@ -7131,6 +7156,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dry_dab),
                 dab_batches: std::slice::from_ref(&dry),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7167,6 +7193,7 @@ mod tests {
                 dabs: std::slice::from_ref(&watercolor_dab),
                 dab_batches: std::slice::from_ref(&watercolor),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7214,6 +7241,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7249,6 +7277,7 @@ mod tests {
                 dabs: std::slice::from_ref(&red),
                 dab_batches: std::slice::from_ref(&dry),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7285,6 +7314,7 @@ mod tests {
                 dabs: &[first, second],
                 dab_batches: std::slice::from_ref(&smudge),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -7323,6 +7353,7 @@ mod tests {
                 dabs: std::slice::from_ref(&red),
                 dab_batches: std::slice::from_ref(&dry),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7345,6 +7376,7 @@ mod tests {
                 dabs: std::slice::from_ref(&blue),
                 dab_batches: std::slice::from_ref(&wet),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -7391,6 +7423,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7412,6 +7445,7 @@ mod tests {
                 dabs: &[],
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -7568,6 +7602,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dab),
                 dab_batches: std::slice::from_ref(&batch),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7640,6 +7675,7 @@ mod tests {
                 dabs: std::slice::from_ref(&dry_dab),
                 dab_batches: std::slice::from_ref(&dry_batch),
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();
@@ -7693,6 +7729,7 @@ mod tests {
                 dabs: std::slice::from_ref(&smudge_dab),
                 dab_batches: std::slice::from_ref(&smudge_batch),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -7746,6 +7783,7 @@ mod tests {
                 dabs: std::slice::from_ref(&liquify_dab),
                 dab_batches: std::slice::from_ref(&liquify_batch),
                 reset_layers: false,
+                time_seconds: 0.,
                 composite_all: false,
             })
             .unwrap();
@@ -7781,6 +7819,7 @@ mod tests {
                 dabs: &[],
                 dab_batches: &[],
                 reset_layers: true,
+                time_seconds: 0.,
                 composite_all: true,
             })
             .unwrap();

@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub const EFFECT_ABI: u32 = 1;
+pub const EFFECT_ABI: u32 = 2;
 pub const EFFECT_LUT_SAMPLES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,20 +12,109 @@ pub enum EffectKind {
     Generator,
 }
 
-/// ABI 1 is pointwise. Spatial/temporal graphs require a new capability contract;
-/// never pretend a tile-local source can service arbitrary neighbor sampling.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectAlpha {
+    #[default]
+    Preserve,
+    /// Blur and remapping can alter coverage. Clipping still preserves the
+    /// clipping base's alpha, independently of this declaration.
+    Filter,
+}
+
+/// WGSL functions take premultiplied linear color, document position and a
+/// parameter offset. Empty `passes` means pointwise and permits shader fusion.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectProgram {
     pub abi: u32,
     pub id: Arc<str>,
     pub label: Arc<str>,
     pub kind: EffectKind,
+    #[serde(default)]
+    pub alpha: EffectAlpha,
     /// Ordinary WGSL library with a uniquely named function matching the ABI.
     pub wgsl: Arc<str>,
     pub entry: Arc<str>,
+    /// Ordered image passes. Each reads the previous pass and original input
+    /// through fx_sample/fx_original; only the last applies layer properties.
+    #[serde(default)]
+    pub passes: Arc<[EffectPass]>,
+    /// Time is supplied through fx_time. Such programs include the shared
+    /// `animate` toggle and `time` (seconds) parameter declarations.
+    #[serde(default)]
+    pub time: bool,
+    /// Small parameter-derived tables, computed on edits rather than per pixel.
+    #[serde(default)]
+    pub lookups: Arc<[EffectLookup]>,
     pub parameters: Arc<[EffectParameter]>,
     #[serde(default)]
     pub constraints: Arc<[EffectConstraint]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EffectPass {
+    pub entry: Arc<str>,
+    pub sampling: EffectSampling,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EffectSampling {
+    /// Maximum footprint in document pixels, including bilinear support.
+    Neighborhood {
+        radius: u32,
+    },
+    Document,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EffectLookup {
+    /// Normalized discrete Gaussian, packed into bilinear positive tap pairs.
+    /// Sigma is constrained to 0..21 px (at most 63 px / 32 pairs per side).
+    Gaussian { sigma: Arc<str> },
+}
+
+impl EffectProgram {
+    pub fn with_time_controls(mut self) -> Self {
+        self.time = true;
+        let mut parameters = self.parameters.to_vec();
+        parameters.extend([
+            EffectParameter {
+                key: "animate".into(),
+                label: "Animate".into(),
+                section: Some("Animation".into()),
+                kind: EffectParameterKind::Toggle,
+                default: EffectValue::Toggle(true),
+            },
+            EffectParameter {
+                key: "time".into(),
+                label: "Frozen time".into(),
+                section: Some("Animation".into()),
+                kind: EffectParameterKind::Number {
+                    min: 0.,
+                    max: 3600.,
+                    step: 0.1,
+                    decimals: 2,
+                    unit: "s".into(),
+                },
+                default: EffectValue::Number(0.),
+            },
+        ]);
+        self.parameters = parameters.into();
+        self
+    }
+    pub fn image_boundary(&self) -> bool {
+        !self.passes.is_empty()
+            || self.time
+            || (self.kind == EffectKind::Adjustment && self.alpha == EffectAlpha::Filter)
+    }
+    pub fn damage_radius(&self) -> Option<u32> {
+        self.passes.iter().try_fold(0u32, |r, p| match p.sampling {
+            EffectSampling::Neighborhood { radius } => r.checked_add(radius),
+            EffectSampling::Document => None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -91,6 +180,25 @@ pub struct EffectInstance {
     pub values: Vec<EffectValue>,
 }
 impl EffectInstance {
+    pub fn animated(&self) -> bool {
+        self.program.time && self.value("animate") == Some(&EffectValue::Toggle(true))
+    }
+    pub fn time_seconds(&self, elapsed: f32) -> f32 {
+        if self.animated() {
+            elapsed
+        } else if let Some(EffectValue::Number(time)) = self.value("time") {
+            *time
+        } else {
+            0.
+        }
+    }
+    pub fn value(&self, key: &str) -> Option<&EffectValue> {
+        self.program
+            .parameters
+            .iter()
+            .position(|p| &*p.key == key)
+            .map(|i| &self.values[i])
+    }
     pub fn new(program: Arc<EffectProgram>) -> Self {
         Self {
             values: program
@@ -103,6 +211,7 @@ impl EffectInstance {
     }
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.program.abi != EFFECT_ABI
+            || self.program.passes.len() > 8
             || self.program.parameters.len() > 64
             || self.values.len() != self.program.parameters.len()
             || self.program.entry.is_empty()
@@ -114,6 +223,31 @@ impl EffectInstance {
                 .all(|(i, c)| c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()))
         {
             return Err("Unsupported or invalid effect program");
+        }
+        for pass in self.program.passes.iter() {
+            if pass.entry.is_empty()
+                || !pass.entry.bytes().enumerate().all(|(i, c)| {
+                    c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
+                })
+                || matches!(pass.sampling, EffectSampling::Neighborhood { radius } if radius > 4096)
+            {
+                return Err("Invalid image pass");
+            }
+        }
+        if self.program.lookups.len() > 8 {
+            return Err("Too many effect lookup tables");
+        }
+        for lookup in self.program.lookups.iter() {
+            let EffectLookup::Gaussian { sigma } = lookup;
+            if !self.program.parameters.iter().any(|p| p.key == *sigma && matches!(p.kind, EffectParameterKind::Number { min, max, .. } if min >= 0. && max <= 21.)) {
+                return Err("Gaussian sigma must be a numeric parameter within 0..21 px");
+            }
+        }
+        if self.program.time
+            && (!matches!(self.value("animate"), Some(EffectValue::Toggle(_)))
+                || !matches!(self.value("time"), Some(EffectValue::Number(v)) if v.is_finite() && *v >= 0.))
+        {
+            return Err("Time-aware effects require Animate and Time parameters");
         }
         for (i, p) in self.program.parameters.iter().enumerate() {
             if self.program.parameters[..i].iter().any(|q| q.key == p.key) {
@@ -195,7 +329,7 @@ impl EffectInstance {
     /// Small parameter upload, never image processing. Curves/gradients become
     /// lookup data once per edit; shaders do constant-time interpolation.
     pub fn gpu_parameters(&self) -> Vec<[f32; 4]> {
-        let mut data = Vec::new();
+        let mut data = vec![[0.; 4]];
         for value in &self.values {
             match value {
                 EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
@@ -216,11 +350,44 @@ impl EffectInstance {
                     })),
             }
         }
-        if data.is_empty() {
-            data.push([0.; 4]);
+        let directory = data.len();
+        data[0] = [directory as f32, self.program.lookups.len() as f32, 0., 0.];
+        data.resize(directory + self.program.lookups.len(), [0.; 4]);
+        for (i, lookup) in self.program.lookups.iter().enumerate() {
+            let EffectLookup::Gaussian { sigma } = lookup;
+            let sigma = match self.value(sigma) {
+                Some(EffectValue::Number(v)) => *v,
+                _ => 0.,
+            };
+            data[directory + i] = [data.len() as f32, 33., 0., 0.];
+            data.extend(gaussian_taps(sigma));
         }
         data
     }
+}
+
+fn gaussian_taps(sigma: f32) -> [[f32; 4]; 33] {
+    let mut taps = [[0.; 4]; 33];
+    if sigma <= 0. {
+        taps[0][0] = 1.;
+        return taps;
+    }
+    let radius = (sigma * 3.).ceil().min(63.) as usize;
+    let mut weights = [0.; 65];
+    for (i, w) in weights.iter_mut().enumerate().take(radius + 1) {
+        *w = (-0.5 * (i as f32 / sigma).powi(2)).exp();
+    }
+    let total = weights[0] + 2. * weights[1..=radius].iter().sum::<f32>();
+    taps[0] = [weights[0] / total, 0., 0., 0.];
+    for (pair, i) in (1..=radius).step_by(2).enumerate() {
+        let weight = weights[i] + weights[i + 1];
+        if weight <= 1e-20 {
+            break;
+        }
+        taps[pair + 1] = [i as f32 + weights[i + 1] / weight, weight / total, 0., 0.];
+        taps[0][1] += 1.;
+    }
+    taps
 }
 impl EffectParameter {
     fn in_section(mut self, section: &str) -> Self {
@@ -544,8 +711,12 @@ impl BuiltinEffect {
             id: self.id().into(),
             label: self.label().into(),
             kind: EffectKind::Adjustment,
+            alpha: EffectAlpha::Preserve,
             wgsl: include_str!("effects.wgsl").into(),
             entry: format!("capy_{}", self.id()).into(),
+            passes: Arc::from([]),
+            time: false,
+            lookups: Arc::from([]),
             parameters: parameters.into(),
             constraints: if self == Self::Levels {
                 Arc::from([EffectConstraint::OrderedNumbers {
@@ -563,6 +734,16 @@ impl BuiltinEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gaussian_lookup_is_finite_normalized_and_fixed_size() {
+        for sigma in [0., 0.000001, 0.1, 0.5, 1., 3., 12., 21.] {
+            let taps = gaussian_taps(sigma);
+            assert!(taps.iter().flatten().all(|v| v.is_finite()));
+            let weight = taps[0][0] + 2. * taps[1..].iter().map(|v| v[1]).sum::<f32>();
+            assert!((weight - 1.).abs() < 0.00001, "sigma={sigma}: {weight}");
+            assert!(taps[0][1] <= 32.);
+        }
+    }
     #[test]
     fn defaults_and_parameter_validation() {
         for kind in BuiltinEffect::ALL {
@@ -598,8 +779,9 @@ mod tests {
         let fx = EffectInstance::new(program);
         assert_eq!(
             fx.gpu_parameters(),
-            vec![[0., 0., 0., 0.]; 9]
+            [[11., 0., 0., 0.]]
                 .into_iter()
+                .chain(vec![[0., 0., 0., 0.]; 9])
                 .chain([[1., 0., 0., 0.]])
                 .collect::<Vec<_>>()
         );

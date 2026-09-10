@@ -13,7 +13,9 @@ and the existing tiled compositor, not a second rendering engine.
 - Opacity and mask coverage interpolate between the original and adjusted
   result. They do not source-over a second copy and increase alpha. Blend modes
   blend adjusted RGB with original RGB within that same coverage.
-- Built-ins preserve alpha. A generator produces content; it uses ordinary layer
+- The ten tone adjustments preserve alpha. Image programs can explicitly filter
+  alpha (for example, blur softening a transparent edge); clipping still preserves
+  the base's coverage. A generator produces content; it uses ordinary layer
   compositing rather than adjustment replacement. The two modes share the effect
   parameter and shader execution contract.
 - Shader boundaries use premultiplied linear RGBA. Artistic RGB tone controls
@@ -39,8 +41,10 @@ not PixiEditor's SkSL, and does not copy its implementation.
 Keep one host-owned WGSL runtime with a versioned ABI. Built-in implementations
 are shader programs, not a per-pixel Rust callback or a separate CPU filter path.
 The initial ten effects are pointwise, so dirty regions need no neighborhood
-expansion. Future neighborhood/multipass effects must declare their footprint
-and execution requirements; unsupported capabilities are rejected explicitly.
+expansion. ABI 2 additionally supports declared neighborhood/document sampling,
+ordered image passes and time-aware programs. Each pass reads its preceding
+result and original input using WGSL helpers. The layer's mask, opacity and blend
+apply only to the last pass. Undeclared bindings and entry points are rejected.
 
 Cache pipelines by program identity; parameter edits update data, not code.
 Consecutive compatible pointwise adjustments share a generated fragment
@@ -54,18 +58,29 @@ no native-only binding arrays are required. Split before a masked effect would
 exceed those inputs. Missing mask tiles use the mask's declared coverage, not a
 new image. Translated masks and isolated groups retain tile operations where
 required. Each effect still applies its own mask, opacity and blend in order.
-Reuse tile-sized scratch surfaces. Do not allocate a full-document image per
-effect or read canvas pixels back to the CPU. Unchanged documents retain their
-cached composite during navigation. Curve/gradient lookup preparation is
-parameter processing and happens only when parameters change.
+Pointwise effects reuse tile-sized scratch surfaces. Image boundaries cache
+full-resolution input/result textures; adjacent compatible boundaries alias the
+preceding result directly instead of allocating or copying another input.
+Intermediate images are reused across passes and filters. No canvas readback is
+used. Unchanged documents retain their cached composite during navigation.
+Curve/gradient LUTs and normalized Gaussian tap pairs are computed only on edits.
+Gaussian shaders reuse those coefficients and bilinear sampling, without
+recomputing exponential weights per pixel.
+
+Animation supplies monotonic session time independently of document revisions.
+Unchanged upstream sources stay cached, and only a scalar time value is uploaded
+for an unchanged animated instance. Animate and Frozen time are ordinary shared
+parameter declarations. Visible animated effects request display frames through
+the core; hidden groups do not. The expanded catalog/picker requirements are in
+[filter-library-design.md](filter-library-design.md).
 
 Use normal checked [wgpu shader creation](https://docs.rs/wgpu/30.0.1/wgpu/struct.Device.html#method.create_shader_module).
 No native bytecode, unsafe shader passthrough, arbitrary bindings, native plugins,
 or document-supplied pipeline caches. Cache compiled objects in memory; optional
 driver [pipeline caches](https://docs.rs/wgpu/30.0.1/wgpu/struct.PipelineCache.html)
 are not a portable requirement. A native graphics driver is not an RCE sandbox.
-The shader editor, untrusted document execution policy, node builder, spatial
-filters and temporal state remain later features, with explicit ABI evolution.
+The shader editor, untrusted document execution policy and node builder remain
+later features. Time-dependent WGSL does not imply a simulation/history buffer.
 
 ## Panels and built-ins
 

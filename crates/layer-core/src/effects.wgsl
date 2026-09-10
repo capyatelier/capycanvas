@@ -1,4 +1,4 @@
-// ABI 1 library: premultiplied linear input/output, document-pixel position,
+// ABI 2 library: premultiplied linear input/output, document-pixel position,
 // vec4 parameter base. fx_parameter/fx_lut are supplied by the host wrapper.
 fn fx_encode(c: vec3<f32>) -> vec3<f32> {
     let v=max(c,vec3<f32>(0.));

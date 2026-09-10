@@ -12,6 +12,214 @@ fn set(layer: &mut Layer, key: &str, value: EffectValue) {
         .set(key, value)
         .unwrap();
 }
+
+#[test]
+fn image_passes_cross_tiles_cache_inputs_and_freeze_animation() {
+    use layer_core::{EffectKind, EffectPass, EffectSampling};
+    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut source = effect(1, BuiltinEffect::BrightnessContrast);
+    let mut generator = (*source.effect.as_ref().unwrap().program).clone();
+    generator.kind = EffectKind::Generator;
+    generator.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(select(0.,1.,p.x<256.),select(1.,0.,p.x<256.),p.y/291.,1.);}".into();
+    generator.entry = "pattern".into();
+    source.effect = Some(Arc::new(EffectInstance::new(Arc::new(generator))));
+    let mut filter = effect(2, BuiltinEffect::BrightnessContrast);
+    let mut program = (*filter.effect.as_ref().unwrap().program)
+        .clone()
+        .with_time_controls();
+    program.entry = "horizontal".into();
+    program.wgsl = "fn horizontal(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (fx_sample(p+vec2<f32>(-2.,0.))+c+fx_sample(p+vec2<f32>(2.,0.)))/3.;}\nfn vertical(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let a=(fx_sample(p+vec2<f32>(0.,-2.))+c+fx_sample(p+vec2<f32>(0.,2.)))/3.;return vec4<f32>(a.rg,clamp(a.b+fx_time(b)*.1,0.,1.),a.a);}".into();
+    program.passes = ["horizontal", "vertical"]
+        .map(|entry| EffectPass {
+            entry: entry.into(),
+            sampling: EffectSampling::Neighborhood { radius: 2 },
+        })
+        .into();
+    filter.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
+    let mut layers = vec![filter, source];
+    let mut view = test_view();
+    view.width_px = 333;
+    view.height_px = 291;
+    view.background_rgba_linear = [0.; 4];
+    let render = |r: &mut WgpuRasterizer, layers: &[Layer], time, all| {
+        r.submit(FramePacket {
+            view,
+            document_extent: [333, 291],
+            layers,
+            dabs: &[],
+            dab_batches: &[],
+            reset_layers: false,
+            time_seconds: time,
+            composite_all: all,
+        })
+        .unwrap();
+        let mut bytes = vec![0; 333 * 291 * 4];
+        r.copy_rgba8_srgb(&mut bytes, 333 * 4).unwrap();
+        bytes
+    };
+    let initial = render(&mut r, &layers, 0., true);
+    let at = |image: &[u8], x: usize, y: usize| {
+        <[u8; 4]>::try_from(&image[(y * 333 + x) * 4..][..4]).unwrap()
+    };
+    let edge = at(&initial, 255, 150);
+    assert!(
+        edge[0] > 200 && edge[0] < 220 && edge[1] > 150 && edge[1] < 165,
+        "neighbor sampling must cross x=256: {edge:?}"
+    );
+    assert_eq!(r.scene.as_ref().unwrap().image_work(), [1, 2]);
+    let later = render(&mut r, &layers, 1., false);
+    assert_ne!(initial, later);
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_work(),
+        [1, 4],
+        "time changes must not rebuild the source"
+    );
+    let compiled = r.scene.as_ref().unwrap().effects.compilations;
+    set(&mut layers[0], "animate", EffectValue::Toggle(false));
+    set(&mut layers[0], "time", EffectValue::Number(1.));
+    let frozen = render(&mut r, &layers, 20., true);
+    assert_eq!(frozen, later);
+    let work = r.scene.as_ref().unwrap().image_work();
+    let again = render(&mut r, &layers, 21., true);
+    assert_eq!(again, frozen);
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_work(),
+        work,
+        "unchanged frozen effects do no image work"
+    );
+    assert_eq!(r.scene.as_ref().unwrap().effects.compilations, compiled);
+    layers[0].mask = Some(LayerMask::reveal_all(LayerId(20), Point::default()));
+    layers[0].mask.as_mut().unwrap().default_coverage = 0.;
+    let hidden = render(&mut r, &layers, 21., true);
+    assert_eq!(
+        at(&hidden, 255, 150)[1],
+        0,
+        "mask applies only after both passes"
+    );
+    layers[0].mask = None;
+    let mut next = layers[0].clone();
+    next.id = LayerId(3);
+    layers.insert(0, next);
+    let work = r.scene.as_ref().unwrap().image_work();
+    render(&mut r, &layers, 21., true);
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_work()[0] - work[0],
+        1,
+        "adjacent stages must share their image without recomposing it"
+    );
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_cache_bytes(),
+        333 * 291 * 4 * 4,
+        "one original, two results, one shared intermediate"
+    );
+    let work = r.scene.as_ref().unwrap().image_work();
+    set(&mut layers[0], "time", EffectValue::Number(2.));
+    render(&mut r, &layers, 21., true);
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_work(),
+        [work[0], work[1] + 2],
+        "editing the upper stage reuses all upstream pixels"
+    );
+    let work = r.scene.as_ref().unwrap().image_work();
+    set(&mut layers[1], "time", EffectValue::Number(2.));
+    render(&mut r, &layers, 21., true);
+    assert_eq!(
+        r.scene.as_ref().unwrap().image_work(),
+        [work[0], work[1] + 4],
+        "editing the lower stage updates both without copying the input"
+    );
+    layers.remove(0);
+    set(&mut layers[0], "time", EffectValue::Number(0.));
+    Arc::make_mut(&mut Arc::make_mut(layers[0].effect.as_mut().unwrap()).program).alpha =
+        layer_core::EffectAlpha::Filter;
+    Arc::make_mut(&mut Arc::make_mut(layers[1].effect.as_mut().unwrap()).program).wgsl="fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return select(vec4<f32>(0.),vec4<f32>(1.,0.,0.,1.),p.x<256.);}".into();
+    let blurred = render(&mut r, &layers, 21., true);
+    assert!(
+        (80..90).contains(&at(&blurred, 256, 150)[3]),
+        "blur must extend coverage across a transparent edge"
+    );
+    layers[0].properties.clipped = true;
+    let clipped = render(&mut r, &layers, 21., true);
+    assert_eq!(
+        at(&clipped, 256, 150)[3],
+        0,
+        "clipping preserves original base coverage even for spatial filters"
+    );
+}
+
+#[test]
+fn image_boundary_matches_fused_mask_clip_and_group_semantics() {
+    use layer_core::{EffectPass, EffectSampling};
+    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let base = Layer::paint(LayerId(1), "Paint");
+    paint(
+        &mut r,
+        std::slice::from_ref(&base),
+        1,
+        [0.7, 0.25, 0.1, 0.6],
+        45.,
+    );
+    let mut effect = effect(2, BuiltinEffect::HueSaturation);
+    set(&mut effect, "hue", EffectValue::Number(100.));
+    effect.opacity = 0.7;
+    for grouped in [false, true] {
+        for clipped in [false, true] {
+            for moved in [false, true] {
+                let mut paint = base.clone();
+                paint.opacity = 0.6;
+                let mut fx = effect.clone();
+                fx.properties.clipped = clipped;
+                let mut mask = LayerMask::reveal_all(
+                    LayerId(4),
+                    Point {
+                        x: if moved { 13. } else { 0. },
+                        y: 0.,
+                    },
+                );
+                mask.default_coverage = 0.;
+                mask.initial = Some(
+                    Selection::polygon(vec![
+                        Point { x: 0., y: 0. },
+                        Point { x: 100., y: 15. },
+                        Point { x: 30., y: 128. },
+                    ])
+                    .unwrap(),
+                );
+                fx.mask = Some(mask);
+                let mut layers = vec![];
+                if grouped {
+                    let mut group = Layer::paint(LayerId(3), "Group");
+                    group.kind = LayerKind::Group;
+                    group.opacity = 0.75;
+                    paint.properties.parent = Some(group.id);
+                    fx.properties.parent = Some(group.id);
+                    layers.push(group);
+                }
+                layers.extend([fx, paint]);
+                frame(&mut r, &layers);
+                let mut expected = vec![0; 128 * 128 * 4];
+                r.copy_rgba8_srgb(&mut expected, 512).unwrap();
+                let index = usize::from(grouped);
+                let instance = Arc::make_mut(layers[index].effect.as_mut().unwrap());
+                let program = Arc::make_mut(&mut instance.program);
+                program.passes = Arc::from([EffectPass {
+                    entry: program.entry.clone(),
+                    sampling: EffectSampling::Neighborhood { radius: 0 },
+                }]);
+                frame(&mut r, &layers);
+                let mut actual = vec![0; 128 * 128 * 4];
+                r.copy_rgba8_srgb(&mut actual, 512).unwrap();
+                assert!(
+                    actual
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| a.abs_diff(*b) <= 2),
+                    "grouped={grouped} clipped={clipped} moved={moved}"
+                );
+            }
+        }
+    }
+}
 fn frame(r: &mut WgpuRasterizer, layers: &[Layer]) {
     r.submit(FramePacket {
         view: test_view(),
@@ -20,6 +228,7 @@ fn frame(r: &mut WgpuRasterizer, layers: &[Layer]) {
         dabs: &[],
         dab_batches: &[],
         reset_layers: false,
+        time_seconds: 0.,
         composite_all: true,
     })
     .unwrap();
@@ -48,6 +257,7 @@ fn paint(r: &mut WgpuRasterizer, layers: &[Layer], id: u64, color: [f32; 4], rad
         dabs: &[dab],
         dab_batches: &[batch],
         reset_layers: false,
+        time_seconds: 0.,
         composite_all: true,
     })
     .unwrap();
@@ -303,6 +513,7 @@ fn adjustment_latency() {
                     dabs: &[dab],
                     dab_batches: std::slice::from_ref(&batch),
                     reset_layers: true,
+                    time_seconds: 0.,
                     composite_all: true,
                 })
                 .unwrap();
@@ -334,6 +545,7 @@ fn adjustment_latency() {
                             &[]
                         },
                         reset_layers: false,
+                        time_seconds: 0.,
                         composite_all: !incremental || i == 0,
                     })
                     .unwrap();
@@ -379,8 +591,8 @@ fn programmable_generator_and_adjustment_share_runtime_without_tile_seams() {
     let mut generator = Layer::paint(LayerId(1), "Procedural gradient");
     generator.kind = LayerKind::Effect;
     generator.effect=Some(Arc::new(EffectInstance::new(Arc::new(EffectProgram{
-        abi:EFFECT_ABI,id:"test_gradient".into(),label:"Test gradient".into(),kind:EffectKind::Generator,
-        entry:"test_gradient".into(),parameters:Arc::from([]),constraints:Arc::from([]),
+        abi:EFFECT_ABI,id:"test_gradient".into(),label:"Test gradient".into(),kind:EffectKind::Generator,alpha:layer_core::EffectAlpha::Filter,
+        entry:"test_gradient".into(),parameters:Arc::from([]),constraints:Arc::from([]),passes:Arc::from([]),time:false,lookups:Arc::from([]),
         wgsl:"fn test_gradient(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32>{return vec4<f32>(position.x/333.,position.y/291.,.25,.5)*vec4<f32>(.5,.5,.5,1.);}".into(),
     }))));
     let mut fx = effect(2, BuiltinEffect::HueSaturation);
@@ -397,6 +609,7 @@ fn programmable_generator_and_adjustment_share_runtime_without_tile_seams() {
             dabs: &[],
             dab_batches: &[],
             reset_layers: false,
+            time_seconds: 0.,
             composite_all: true,
         })
         .unwrap();
@@ -587,6 +800,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
             dabs,
             dab_batches: batches,
             reset_layers: false,
+            time_seconds: 0.,
             composite_all: all,
         })
         .unwrap();

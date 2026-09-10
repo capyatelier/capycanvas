@@ -1143,6 +1143,24 @@ pub struct Document {
 }
 
 impl Document {
+    pub fn has_animated_effects(&self) -> bool {
+        self.layers.iter().any(|l| {
+            if !l.visible || !l.effect.as_ref().is_some_and(|e| e.animated()) {
+                return false;
+            }
+            let mut parent = l.properties.parent;
+            while let Some(id) = parent {
+                let Some(group) = self.layer(id) else {
+                    return false;
+                };
+                if !group.visible {
+                    return false;
+                }
+                parent = group.properties.parent;
+            }
+            true
+        })
+    }
     pub fn new(id: impl Into<Arc<str>>, width: u32, height: u32) -> Self {
         let paint_id = LayerId(1);
         Self {

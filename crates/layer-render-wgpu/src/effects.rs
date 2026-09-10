@@ -1,5 +1,5 @@
-//! One validated WGSL execution path for built-ins and programmable pointwise
-//! effects. Compatible chains are inlined into a single fragment invocation.
+//! Validated WGSL execution for built-ins and programmable effects. Compatible
+//! pointwise chains are fused; declared image passes share the same ABI helpers.
 use super::*;
 use layer_core::{EffectInstance, EffectKind, EffectProgram};
 use std::{collections::HashMap, sync::Arc};
@@ -18,13 +18,14 @@ struct Instance {
     properties: Vec<[f32; 4]>,
     buffer: wgpu::Buffer,
     prepared: PreparedEffect,
+    offsets: Vec<u32>,
 }
 pub(super) struct Effects {
     layout: wgpu::BindGroupLayout,
     pub masks: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
-    pipelines: Vec<(Vec<Arc<EffectProgram>>, wgpu::RenderPipeline)>,
-    instances: HashMap<Vec<LayerId>, Instance>,
+    pipelines: Vec<(Vec<Arc<EffectProgram>>, Option<usize>, wgpu::RenderPipeline)>,
+    instances: HashMap<(Vec<LayerId>, Option<usize>), Instance>,
     pub compilations: u64,
 }
 impl Effects {
@@ -71,7 +72,7 @@ impl Effects {
         let pipeline_layout = r
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("pointwise effects ABI 1"),
+                label: Some("WGSL effects ABI 2"),
                 bind_group_layouts: &[Some(uniforms), Some(sources), Some(&layout), Some(&masks)],
                 immediate_size: 0,
             });
@@ -86,14 +87,16 @@ impl Effects {
     }
     pub fn retain(&mut self, layers: &[Layer]) {
         self.instances
-            .retain(|ids, _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
+            .retain(|(ids, _), _| ids.iter().all(|id| layers.iter().any(|l| l.id == *id)));
     }
     pub fn prepare(
         &mut self,
         r: &WgpuRasterizer,
         layers: &[&Layer],
+        stage: Option<usize>,
+        time: f32,
     ) -> Result<PreparedEffect, GpuRasterError> {
-        let ids: Vec<_> = layers.iter().map(|l| l.id).collect();
+        let ids = (layers.iter().map(|l| l.id).collect::<Vec<_>>(), stage);
         let effects: Vec<_> = layers
             .iter()
             .map(|l| l.effect.as_ref().unwrap().clone())
@@ -111,18 +114,33 @@ impl Effects {
                             m.default_coverage
                         }
                     }),
-                    0.,
+                    l.effect.as_ref().unwrap().time_seconds(time),
                 ]
             })
             .collect();
-        if let Some(old) = self.instances.get(&ids)
+        if let Some(old) = self.instances.get_mut(&ids)
             && old
                 .effects
                 .iter()
                 .zip(&effects)
                 .all(|(a, b)| Arc::ptr_eq(a, b))
-            && old.properties == properties
+            && old
+                .properties
+                .iter()
+                .zip(&properties)
+                .all(|(a, b)| a[..3] == b[..3])
         {
+            // Animation updates only one scalar per instance, never its LUTs.
+            for (i, (a, b)) in old.properties.iter().zip(&properties).enumerate() {
+                if a[3] != b[3] {
+                    r.queue.write_buffer(
+                        &old.buffer,
+                        old.offsets[i] as u64 * 16 + 12,
+                        &b[3].to_le_bytes(),
+                    );
+                }
+            }
+            old.properties = properties;
             return Ok(old.prepared.clone());
         }
         let mut data = Vec::new();
@@ -150,12 +168,14 @@ impl Effects {
             old.properties = properties;
             return Ok(old.prepared.clone());
         }
-        let pipeline = if let Some((_, pipeline)) =
-            self.pipelines.iter().find(|(p, _)| *p == programs)
+        let pipeline = if let Some((_, _, pipeline)) = self
+            .pipelines
+            .iter()
+            .find(|(p, s, _)| *p == programs && *s == stage)
         {
             pipeline.clone()
         } else {
-            let source = shader_source(&programs, &offsets)?;
+            let source = shader_source(&programs, &offsets, stage)?;
             let module = naga::front::wgsl::parse_str(&source)
                 .map_err(|e| GpuRasterError::Effect(e.emit_to_string(&source)))?;
             naga::valid::Validator::new(
@@ -183,7 +203,7 @@ impl Effects {
                 COLOR_FORMAT,
                 "pointwise effect chain",
             );
-            self.pipelines.push((programs, pipeline.clone()));
+            self.pipelines.push((programs, stage, pipeline.clone()));
             self.compilations += 1;
             pipeline
         };
@@ -210,6 +230,7 @@ impl Effects {
                 properties,
                 buffer,
                 prepared: prepared.clone(),
+                offsets,
             },
         );
         Ok(prepared)
@@ -218,6 +239,7 @@ impl Effects {
 fn shader_source(
     programs: &[Arc<EffectProgram>],
     offsets: &[u32],
+    stage: Option<usize>,
 ) -> Result<String, GpuRasterError> {
     let mut source = include_str!("scene.wgsl").to_string();
     for i in 0..MASK_SLOTS {
@@ -228,10 +250,22 @@ fn shader_source(
     source.push_str(
         r#"
 @group(2) @binding(0) var<storage,read> effect_data:array<vec4<f32>>;
-fn fx_parameter(base:u32,index:u32)->vec4<f32> { return effect_data[base+index]; }
+fn fx_parameter(base:u32,index:u32)->vec4<f32> { return effect_data[base+1u+index]; }
+fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
+    let directory=base+u32(effect_data[base].x);let entry=effect_data[directory+table];
+    return effect_data[base+u32(entry.x)+min(index,u32(entry.y)-1u)];
+}
+fn fx_time(base:u32)->f32 { return effect_data[base-1u].w; }
+fn fx_extent()->vec2<f32> { return settings.color.zw; }
+fn fx_sample(p:vec2<f32>)->vec4<f32> {
+    return textureSampleLevel(front,sampling,clamp(p,vec2<f32>(.5),fx_extent()-.5)/fx_extent(),0.);
+}
+fn fx_original(p:vec2<f32>)->vec4<f32> {
+    return textureSampleLevel(back,sampling,clamp(p,vec2<f32>(.5),fx_extent()-.5)/fx_extent(),0.);
+}
 fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     let x=clamp(value,0.,1.)*255.; let i=u32(x);
-    return mix(effect_data[base+offset+i],effect_data[base+offset+min(i+1u,255u)],fract(x));
+    return mix(effect_data[base+1u+offset+i],effect_data[base+1u+offset+min(i+1u,255u)],fract(x));
 }
 
 "#,
@@ -243,6 +277,22 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
             source.push('\n');
             included.push(&program.wgsl);
         }
+    }
+    if let Some(stage) = stage {
+        let p = &programs[0];
+        let entry = p.passes.get(stage).map_or(&p.entry, |p| &p.entry);
+        let last = stage + 1 >= p.passes.len();
+        source.push_str(&format!("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {{ let position=v.position.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
+        if last && p.kind == EffectKind::Adjustment {
+            source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=clamp(blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)),vec3<f32>(0.),vec3<f32>(1.));");
+            if p.alpha == layer_core::EffectAlpha::Filter {
+                source.push_str("if settings.options.y<.5 {return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
+            }
+            source.push_str("return vec4<f32>(mix(c.rgb,rgb*c.a,controls.x*coverage),c.a);}");
+        } else {
+            source.push_str("return adjusted;}");
+        }
+        return Ok(source);
     }
     source.push_str(
         r#"
@@ -300,7 +350,7 @@ mod tests {
         validate(&programs);
     }
     fn validate(p: &[Arc<EffectProgram>]) {
-        let source = shader_source(p, &vec![0; p.len()]).unwrap();
+        let source = shader_source(p, &vec![0; p.len()], None).unwrap();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

@@ -121,6 +121,8 @@ pub struct DabBatch {
 /// the small records it needs after return; canvas pixels remain GPU-owned.
 #[derive(Clone, Copy, Debug)]
 pub struct FramePacket<'a> {
+    /// Monotonic seconds since this editor session started; never wall time.
+    pub time_seconds: f32,
     pub view: ViewState,
     /// Finite raster-canvas extent in document pixels. Renderers clip damage and
     /// storage allocation to this bound.

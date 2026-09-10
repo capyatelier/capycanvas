@@ -99,6 +99,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     batches: Vec<DabBatch>,
     rebuild_all: bool,
     composite_all: bool,
+    animation_origin_ns: Option<u64>,
     metrics: EngineMetrics,
 }
 
@@ -150,6 +151,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             batches: Vec::with_capacity(capacity.batches_per_frame),
             rebuild_all: true,
             composite_all: true,
+            animation_origin_ns: None,
             metrics: EngineMetrics::default(),
         })
     }
@@ -262,6 +264,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// old GPU pixels under the new document revision.
     pub fn has_pending_document_edits(&self) -> bool {
         self.rebuild_all || self.composite_all
+    }
+    pub fn wants_continuous_frames(&self) -> bool {
+        self.has_active_stroke() || self.editor.document().has_animated_effects()
     }
 
     pub fn set_layer_opacity(&mut self, id: LayerId, opacity: f32) -> Result<(), DocumentError> {
@@ -414,6 +419,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.composite_all |= rebuilt;
 
         let packet = FramePacket {
+            time_seconds: timestamp_ns.map_or(0., |now| {
+                now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
+            }),
             view: self.view,
             document_extent: [self.editor.document().width, self.editor.document().height],
             layers: &self.editor.document().layers,

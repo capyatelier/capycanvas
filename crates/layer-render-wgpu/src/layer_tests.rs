@@ -68,6 +68,7 @@ fn submit(
         dabs,
         dab_batches: batches,
         reset_layers: reset,
+        time_seconds: 0.,
         composite_all: true,
     })
     .unwrap();

@@ -1626,7 +1626,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
-        Ok(self.changed(changed, self.engine.has_active_stroke()))
+        Ok(self.changed(changed, self.engine.wants_continuous_frames()))
     }
 
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {

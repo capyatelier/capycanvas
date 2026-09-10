@@ -22,6 +22,7 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 
 struct Frame {
+    time_seconds: f32,
     view: ViewState,
     extent: [u32; 2],
     layers: Vec<Layer>,
@@ -38,6 +39,7 @@ struct Frame {
 impl Frame {
     fn packet(&self) -> FramePacket<'_> {
         FramePacket {
+            time_seconds: self.time_seconds,
             view: self.view,
             document_extent: self.extent,
             layers: &self.layers,
@@ -326,6 +328,7 @@ impl CanvasRenderer for RenderWorker {
             return Err(BackendError("Canvas frame queue full"));
         }
         let frame = Frame {
+            time_seconds: packet.time_seconds,
             view: packet.view,
             extent: packet.document_extent,
             // The renderer needs layer properties, not stroke-history lists.
