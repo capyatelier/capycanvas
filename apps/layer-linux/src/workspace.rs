@@ -634,6 +634,8 @@ pub struct Workspace {
     size_number: crate::number_control::NumberControl,
     opacity: crate::number_control::NumberControl,
     color: gtk::ColorDialogButton,
+    tool_settings: crate::tool_panels::ToolSettings,
+    color_panel: crate::tool_panels::ColorPanel,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: crate::effects::EffectPanels,
     tab: gtk::Label,
@@ -715,6 +717,8 @@ impl Workspace {
         let toolbar = TileStrip::new();
         toolbar.add_css_class("toolbar-controls");
         let brushes = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let tool_settings = crate::tool_panels::ToolSettings::new();
+        let color_panel = crate::tool_panels::ColorPanel::new();
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layer_panel = crate::layers::LayerPanel::new();
         let effects = crate::effects::EffectPanels::new();
@@ -757,6 +761,8 @@ impl Workspace {
             panels: [
                 (Panel::Toolbar, toolbar.clone().upcast()),
                 (Panel::Brushes, scroll(&brushes)),
+                (Panel::ToolSettings, scroll(&tool_settings.root)),
+                (Panel::Color, scroll(&color_panel.root)),
                 (Panel::Sizes, scroll(&sizes)),
                 (Panel::Layers, layer_panel.root.clone().upcast()),
                 (Panel::Adjustments, effects.adjustments.clone().upcast()),
@@ -772,6 +778,8 @@ impl Workspace {
             size_number,
             opacity,
             color,
+            tool_settings,
+            color_panel,
             layer_panel,
             effects,
             tab,
@@ -794,6 +802,7 @@ impl Workspace {
         ));
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
+        this.color_panel.bind(&this);
         this.customization.bind(&this);
         this.preferences.bind(&this);
         this.install_chrome();
@@ -805,7 +814,7 @@ impl Workspace {
     }
 
     fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box) {
-        margins(brushes, 8);
+        margins(brushes, layer_ui::PANEL_CONTENT_INSET as i32);
         let brush_list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         brushes.append(&brush_list);
         for category in brush_categories() {
@@ -831,6 +840,8 @@ impl Workspace {
                 preview.set_paintable(Some(&crate::previews::texture(choice.id, Theme::Dark)));
                 let label = gtk::Label::new(Some(choice.label));
                 label.set_halign(gtk::Align::End);
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                label.set_tooltip_text(Some(choice.label));
                 content.append(&preview);
                 content.append(&label);
                 button.set_child(Some(&content));
@@ -841,6 +852,16 @@ impl Workspace {
         }
         self.customization
             .track(Panel::Brushes, PanelControl::Brushes, &brush_list);
+        self.customization.track(
+            Panel::ToolSettings,
+            PanelControl::ToolSettings,
+            &self.tool_settings.root,
+        );
+        self.customization.track(
+            Panel::Color,
+            PanelControl::ColorWheel,
+            &self.color_panel.root,
+        );
         self.append_panel_fields(Panel::Brushes, brushes);
         margins(sizes, 8);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -1596,6 +1617,8 @@ impl Workspace {
         };
         self.refreshing.set(true);
         if regions & regions::BRUSH != 0 {
+            self.tool_settings.refresh(self, &state.tool_settings);
+            self.color_panel.refresh(&state.colors);
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
             let [r, g, b, a] = state.brush.color;
@@ -1872,7 +1895,11 @@ impl Workspace {
                         content.set_halign(gtk::Align::Center);
                         content.set_valign(gtk::Align::Center);
                         content.append(&gtk::Image::new());
-                        content.append(&gtk::Label::new(None));
+                        let title = gtk::Label::new(None);
+                        if group.panels.len() == 1 {
+                            title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        }
+                        content.append(&title);
                         tab.set_child(Some(&content));
                         self.install_panel_drag(&tab, DockItem::Panel { panel });
                         self.install_context(&tab, ContextTarget::Panel { panel });

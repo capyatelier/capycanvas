@@ -5,6 +5,12 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod color;
+mod tool_settings;
+pub use color::{
+    ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart, hue_color,
+};
+pub use tool_settings::ToolSetting;
 mod cursor;
 mod customization;
 mod interaction;
@@ -41,8 +47,8 @@ pub use layout::{
     ResizeEdge, ResolvedLayout,
 };
 pub use layout::{
-    DropHint, LAYERS_MIN_WIDTH, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE, TabHit, TileLayout,
-    tile_layout,
+    DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
+    TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout,
 };
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
@@ -276,6 +282,7 @@ pub fn ui_catalog() -> UiCatalog {
             "up",
             "down",
             "color",
+            "swap",
             "opacity",
             "grip",
             "check",
@@ -531,6 +538,8 @@ pub struct UiState {
     pub revision: u64,
     pub workspace: WorkspaceState,
     pub brush: BrushState,
+    pub colors: ColorState,
+    pub tool_settings: Vec<ToolSetting>,
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,
     pub adjustments: Vec<AdjustmentChoice>,
@@ -616,6 +625,13 @@ pub enum UiAction {
     },
     SetColor {
         rgba: [f32; 4],
+    },
+    Color {
+        action: ColorAction,
+    },
+    SetToolSetting {
+        id: String,
+        value: f32,
     },
     SelectLayer {
         id: u64,

@@ -72,6 +72,8 @@ impl TileStyle {
 #[serde(rename_all = "snake_case")]
 pub enum PanelControl {
     Brushes,
+    ToolSettings,
+    ColorWheel,
     BrushSize,
     SizePresets,
     BrushOpacity,
@@ -86,7 +88,9 @@ pub enum PanelControl {
 impl PanelControl {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Brushes => "Brushes",
+            Self::Brushes => "Tool Set",
+            Self::ToolSettings => "Tool Settings",
+            Self::ColorWheel => "Color wheel",
             Self::BrushSize => "Brush size",
             Self::SizePresets => "Size presets",
             Self::BrushOpacity => "Brush opacity",
@@ -101,6 +105,8 @@ impl PanelControl {
     }
     pub fn available(panel: Panel) -> &'static [Self] {
         match panel {
+            Panel::ToolSettings => &[Self::ToolSettings],
+            Panel::Color => &[Self::ColorWheel],
             Panel::Brushes => &[
                 Self::Brushes,
                 Self::BrushSize,
@@ -124,9 +130,12 @@ impl PanelControl {
         match panel {
             Panel::Brushes => &[Self::Brushes],
             Panel::Sizes => &[Self::BrushSize, Self::SizePresets],
-            Panel::Layers | Panel::Adjustments | Panel::Properties | Panel::Stats => {
-                Self::available(panel)
-            }
+            Panel::Layers
+            | Panel::Adjustments
+            | Panel::Properties
+            | Panel::Stats
+            | Panel::ToolSettings
+            | Panel::Color => Self::available(panel),
             _ => &[],
         }
     }
@@ -1735,7 +1744,7 @@ mod tests {
                 panel: Panel::Brushes,
             })
             .unwrap();
-        assert_eq!(panel.sections[1][0].label, "Configure Brushes panel…");
+        assert_eq!(panel.sections[1][0].label, "Configure Tool Set panel…");
         assert!(!panel.sections.iter().flatten().any(|i| matches!(
             i.action,
             Some(UiAction::Customize {

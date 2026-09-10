@@ -1080,7 +1080,11 @@ impl Workspace {
 
     fn panel_field(self: &Rc<Self>, control: PanelControl, group: &gtk::Box) -> Option<FieldValue> {
         Some(match control {
-            PanelControl::Adjustments | PanelControl::Properties | PanelControl::Stats => {
+            PanelControl::Adjustments
+            | PanelControl::Properties
+            | PanelControl::Stats
+            | PanelControl::ToolSettings
+            | PanelControl::ColorWheel => {
                 // These schema-driven surfaces already occupy their panel body.
                 return None;
             }

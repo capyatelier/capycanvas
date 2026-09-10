@@ -127,3 +127,4 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .property-divider { margin-top: 3px; margin-bottom: 3px; }
 .property-section { margin-left: 6px; }
 .renderer-stats { margin: 6px; }
+.color-swatch { min-width: 18px; min-height: 20px; padding: 3px; }

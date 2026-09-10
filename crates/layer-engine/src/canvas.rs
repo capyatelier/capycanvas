@@ -194,6 +194,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .map_or(&self.brush, |active| &active.brush)
     }
 
+    /// Editable configuration for the next stroke, independent of an active
+    /// stroke's immutable snapshot. UI edits must not restore old stroke values.
+    pub fn configured_brush(&self) -> &BrushSnapshot {
+        &self.brush
+    }
+
     /// Cursor-only evaluation at current input, sharing the live stroke's
     /// pressure curve, sensors and random sequence. No paint is submitted.
     pub fn cursor_contacts(

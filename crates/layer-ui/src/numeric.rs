@@ -96,7 +96,8 @@ impl NumericControl {
         Self::number(0.25, 4.0, 0.05, 2).unit("×")
     }
     pub fn validate(&self, value: f32, label: &str) -> Result<(), String> {
-        if !value.is_finite() || !(self.min..=self.max).contains(&f64::from(value)) {
+        // Actions and engine parameters are f32, including their endpoints.
+        if !value.is_finite() || !(self.min as f32..=self.max as f32).contains(&value) {
             Err(format!(
                 "{label} must be between {} and {}",
                 self.min, self.max

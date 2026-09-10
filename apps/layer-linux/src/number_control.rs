@@ -46,6 +46,15 @@ impl NumberControl {
     pub fn inline(spec: NumericControl, title: &str) -> Self {
         Self::build(spec, title, "", true)
     }
+    /// Compact editable value for grouped components (e.g. a color wheel).
+    pub fn value_only(spec: NumericControl, title: &str) -> Self {
+        let control = Self::inline(spec, title);
+        control.set_halign(gtk::Align::Center);
+        if let Some(slider) = control.imp().slider.get() {
+            slider.set_visible(false);
+        }
+        control
+    }
     fn build(spec: NumericControl, title: &str, description: &str, inline: bool) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();

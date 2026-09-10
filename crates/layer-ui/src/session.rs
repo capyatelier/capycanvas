@@ -70,7 +70,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn new(renderer: R, document: Document, viewport: [u32; 2]) -> Result<Self, String> {
         let camera = Camera::new([document.width, document.height], viewport);
         let (pen, input) = input_queue(8192);
-        let engine = CanvasEngine::new(
+        let mut engine = CanvasEngine::new(
             renderer,
             document,
             input,
@@ -79,6 +79,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         )
         .map_err(|e| e.to_string())?;
         let brush = default_brush(DefaultBrushPreset::GPen);
+        engine.set_brush(brush.clone()).map_err(error)?;
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
             engine,
@@ -106,6 +107,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     opacity: brush.opacity,
                     color: [0.075, 0.075, 0.07, 1.0],
                 },
+                colors: ColorState::default(),
+                tool_settings: Vec::new(),
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
                 adjustments: effects::catalog(&effect_catalog, &Default::default()),
@@ -1158,6 +1161,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 self.state.brush.diameter = brush.diameter;
                 self.state.brush.opacity = brush.opacity;
+                self.engine.set_brush(brush).map_err(error)?;
                 self.apply_brush()?;
                 (BRUSH, false)
             }
@@ -1174,10 +1178,22 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (BRUSH, false)
             }
             UiAction::SetColor { rgba } => {
-                for value in rgba {
-                    range(value, 0.0, 1.0, "Color")?;
-                }
-                self.state.brush.color = rgba;
+                self.state.colors.set_rgba(rgba)?;
+                self.state.brush.color = self.state.colors.rgba();
+                self.apply_brush()?;
+                (BRUSH, false)
+            }
+            UiAction::Color { action } => {
+                self.state.colors.apply(action)?;
+                self.state.brush.color = self.state.colors.rgba();
+                self.apply_brush()?;
+                (BRUSH, false)
+            }
+            UiAction::SetToolSetting { id, value } => {
+                let brush = tool_settings::edit(self.engine.configured_brush(), &id, value)?;
+                self.state.brush.diameter = brush.diameter;
+                self.state.brush.opacity = brush.opacity;
+                self.engine.set_brush(brush).map_err(error)?;
                 self.apply_brush()?;
                 (BRUSH, false)
             }
@@ -1822,7 +1838,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn apply_brush(&mut self) -> Result<(), String> {
         self.cursor.hover.reset();
         let state = &self.state.brush;
-        let mut brush = default_brush(preset(state.preset)?);
+        let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
         brush.color_rgba_linear = [
@@ -1831,12 +1847,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             srgb_to_linear(state.color[2]),
             state.color[3],
         ];
+        self.state.tool_settings = tool_settings::controls(&brush);
         self.engine.set_brush(brush).map_err(error)?;
-        self.engine.set_tool(if state.tool == Tool::Eraser {
-            StrokeTool::Eraser
-        } else {
-            StrokeTool::Brush
-        });
+        self.engine.set_tool(
+            if state.tool == Tool::Eraser || self.state.colors.transparent() {
+                StrokeTool::Eraser
+            } else {
+                StrokeTool::Brush
+            },
+        );
         Ok(())
     }
 
@@ -2042,13 +2061,6 @@ fn pen_phase(phase: ContactPhase) -> PenPhase {
         ContactPhase::Cancel => PenPhase::Cancel,
     }
 }
-fn range(value: f32, min: f32, max: f32, label: &str) -> Result<(), String> {
-    if !value.is_finite() || !(min..=max).contains(&value) {
-        Err(format!("{label} must be between {min} and {max}"))
-    } else {
-        Ok(())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2112,6 +2124,89 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn tool_edits_preserve_other_parameters_and_the_live_stroke() {
+        let mut s = session();
+        let original = s.engine.configured_brush().clone();
+        s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        for (id, value) in [("flow", 0.35), ("spacing", 0.2), ("size_jitter", 0.3)] {
+            s.dispatch(UiAction::SetToolSetting {
+                id: id.into(),
+                value,
+            })
+            .unwrap();
+        }
+        s.dispatch(UiAction::SetBrushSize { value: 40.0 }).unwrap();
+        s.dispatch(UiAction::SetColor {
+            rgba: [0.8, 0.1, 0.2, 1.],
+        })
+        .unwrap();
+        assert_eq!(s.engine.configured_brush().flow, 0.35);
+        assert_eq!(s.engine.configured_brush().spacing, 0.2);
+        assert_eq!(s.engine.configured_brush().shape.size_jitter, 0.3);
+        assert_eq!(s.engine.configured_brush().diameter, 40.0);
+        assert_eq!(s.engine.brush(), &original);
+        s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert_eq!(
+            s.engine.document().strokes().next().unwrap().brush,
+            original
+        );
+        s.pen(event(&s, 3, PenPhase::Down, 1.0)).unwrap();
+        s.pen(event(&s, 4, PenPhase::Up, 1.0)).unwrap();
+        s.frame(40_000_000, 48_000_000).unwrap();
+        let next = s.engine.document().strokes().nth(1).unwrap();
+        assert_eq!(next.brush.flow, 0.35);
+        assert_eq!(next.brush.diameter, 40.0);
+    }
+
+    #[test]
+    fn shared_color_slots_drive_transparent_paint_without_changing_the_tip() {
+        let mut s = session();
+        let preset = s.state.brush.preset;
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Select {
+                slot: ColorSlot::Background,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetColor {
+            rgba: [0.1, 0.8, 0.3, 1.],
+        })
+        .unwrap();
+        assert_eq!(s.state.colors.background, s.state.brush.color);
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Select {
+                slot: ColorSlot::Transparent,
+            },
+        })
+        .unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 1.0)).unwrap();
+        s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert_eq!(
+            s.engine.document().strokes().next().unwrap().tool,
+            StrokeTool::Eraser
+        );
+        assert_eq!(s.state.brush.preset, preset);
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Component {
+                index: 0,
+                value: 240.0,
+            },
+        })
+        .unwrap();
+        assert_eq!(s.state.colors.slot, ColorSlot::Background);
+        s.pen(event(&s, 3, PenPhase::Down, 1.0)).unwrap();
+        s.pen(event(&s, 4, PenPhase::Up, 1.0)).unwrap();
+        s.frame(40_000_000, 48_000_000).unwrap();
+        assert_eq!(
+            s.engine.document().strokes().nth(1).unwrap().tool,
+            StrokeTool::Brush
+        );
     }
 
     #[test]
@@ -2874,7 +2969,7 @@ mod tests {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
             let menu = s.workspace_menu();
-            assert_eq!(menu.sections[1].len(), 6);
+            assert_eq!(menu.sections[1].len(), Panel::ALL.len() - 1);
             assert_eq!(menu.sections[2].len(), 1);
             assert_eq!(
                 menu.sections[1]

@@ -10,6 +10,7 @@ mod render_thread;
 mod tiles;
 #[cfg(test)]
 mod timing;
+mod tool_panels;
 mod wayland;
 mod workspace;
 

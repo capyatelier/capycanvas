@@ -56,6 +56,180 @@ fn native_test_app(id: &str) -> NativeTestApp {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_tool_and_color_panels() {
+    let app = native_test_app("art.capycanvas.ToolPanels");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(800);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::Color, true)
+        .unwrap();
+    for (panel, x) in [(Panel::ToolSettings, 330.), (Panel::Color, 610.)] {
+        workspace
+            .layout
+            .move_panel(
+                [1200., 900.],
+                panel,
+                DockTarget::Float {
+                    position: [x, 130.],
+                },
+            )
+            .unwrap();
+    }
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(200);
+    for choice in layer_ui::brush_catalog() {
+        w.dispatch(UiAction::SelectBrush { id: choice.id });
+        pump(10);
+        assert!(
+            w.panel_widget(Panel::ToolSettings)
+                .measure(gtk::Orientation::Horizontal, -1)
+                .0
+                <= layer_ui::TOOL_PANEL_MIN_WIDTH as i32,
+            "{} settings are too wide",
+            choice.label
+        );
+    }
+    assert!(
+        w.panel_widget(Panel::Brushes)
+            .measure(gtk::Orientation::Horizontal, -1)
+            .0
+            <= layer_ui::TOOL_PANEL_MIN_WIDTH as i32
+    );
+    w.dispatch(UiAction::SelectBrush {
+        id: layer_core::DefaultBrushPreset::WetWatercolor as u32,
+    });
+    let flow = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-flow")
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap();
+    edit_number(&flow, "25+10");
+    assert!(
+        (state(&w)
+            .tool_settings
+            .iter()
+            .find(|s| s.id == "flow")
+            .unwrap()
+            .value
+            - 0.35)
+            .abs()
+            < 1e-6
+    );
+    let color = w.panel_widget(Panel::Color);
+    click(
+        &find_named(&color, "color-Background")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
+    click(
+        &find_named(&color, "color-Transparent")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    assert!(state(&w).colors.transparent());
+    let hue = find_named(&color, "color-component-0")
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap();
+    edit_number(&hue, "180/2");
+    assert_eq!(state(&w).colors.slot, layer_ui::ColorSlot::Background);
+    assert!((state(&w).colors.components()[0] - 90.0).abs() < 1e-4);
+    click(
+        &find_named(&color, "color-space")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    assert_eq!(state(&w).colors.space, layer_ui::ColorSpace::Hls);
+    let before = state(&w).colors;
+    click(
+        &find_named(&color, "color-swap")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    assert_eq!(state(&w).colors.foreground, before.background);
+    assert_eq!(state(&w).colors.background, before.foreground);
+    click(
+        &find_named(&color, "color-Foreground")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.2, 0.72, 0.34, 1.],
+    });
+    let output = std::path::Path::new("../../artifacts/familiar-workspace");
+    std::fs::create_dir_all(output).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(100);
+        for space in [layer_ui::ColorSpace::Hsv, layer_ui::ColorSpace::Hls] {
+            w.dispatch(UiAction::Color {
+                action: layer_ui::ColorAction::Space { space },
+            });
+            pump(100);
+            capture_reference(
+                &w,
+                output
+                    .join(format!("color-{space:?}-{theme:?}.png"))
+                    .to_str()
+                    .unwrap(),
+                1.0,
+            );
+        }
+    }
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .move_panel(
+            [1200., 900.],
+            Panel::Brushes,
+            DockTarget::Float {
+                position: [320., 150.],
+            },
+        )
+        .unwrap();
+    for float in &mut workspace.layout.floating {
+        if let DockNode::Tabs { panels, .. } = &float.root
+            && (panels.contains(&Panel::Brushes) || panels.contains(&Panel::ToolSettings))
+        {
+            float.width = layer_ui::TOOL_PANEL_MIN_WIDTH;
+            float.height = Some(600.0);
+            float.position = [
+                if panels.contains(&Panel::Brushes) {
+                    260.0
+                } else {
+                    400.0
+                },
+                120.0,
+            ];
+        } else {
+            float.position = [600.0, 120.0];
+        }
+    }
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(150);
+    capture_reference(
+        &w,
+        output.join("three-tile-minimum.png").to_str().unwrap(),
+        1.0,
+    );
+    w.window.close();
+    pump(50);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_runtime_filter_packages() {
     let app = native_test_app("art.capycanvas.RuntimeFilters");
     let w = Workspace::new(&app);

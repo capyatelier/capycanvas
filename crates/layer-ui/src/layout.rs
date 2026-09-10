@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub const TILE_SIZE: f32 = 36.0;
 /// Six standard toolbar tiles, including their five two-pixel gaps.
 pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0;
+pub const PANEL_CONTENT_INSET: f32 = 8.0;
+/// Three standard tiles, two gaps, and the panel's two content insets.
+pub const TOOL_PANEL_MIN_WIDTH: f32 = 3.0 * TILE_SIZE + 2.0 * 2.0 + 2.0 * PANEL_CONTENT_INSET;
 pub const TAB_BAR_HEIGHT: f32 = TILE_SIZE;
 const PANEL_GRIP_HEIGHT: f32 = 20.0;
 /// Shared gesture distances in logical UI pixels, not preferences.
@@ -208,6 +211,8 @@ pub struct DropHint {
 pub enum Panel {
     Toolbar,
     Brushes,
+    ToolSettings,
+    Color,
     Sizes,
     Layers,
     Adjustments,
@@ -222,6 +227,8 @@ impl From<Panel> for String {
         match panel {
             Panel::Toolbar => "toolbar".into(),
             Panel::Brushes => "brushes".into(),
+            Panel::ToolSettings => "tool_settings".into(),
+            Panel::Color => "color".into(),
             Panel::Sizes => "sizes".into(),
             Panel::Layers => "layers".into(),
             Panel::Adjustments => "adjustments".into(),
@@ -237,6 +244,8 @@ impl TryFrom<String> for Panel {
         Ok(match value.as_str() {
             "toolbar" => Self::Toolbar,
             "brushes" => Self::Brushes,
+            "tool_settings" => Self::ToolSettings,
+            "color" => Self::Color,
             "sizes" => Self::Sizes,
             "layers" => Self::Layers,
             "adjustments" => Self::Adjustments,
@@ -272,9 +281,11 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Toolbar,
         Self::Brushes,
+        Self::ToolSettings,
+        Self::Color,
         Self::Sizes,
         Self::Layers,
         Self::Adjustments,
@@ -284,7 +295,9 @@ impl Panel {
     pub fn label(self) -> &'static str {
         match self {
             Self::Toolbar => "Tools",
-            Self::Brushes => "Brushes",
+            Self::Brushes => "Tool Set",
+            Self::ToolSettings => "Tool Settings",
+            Self::Color => "Color",
             Self::Sizes => "Brush size",
             Self::Layers => "Layers",
             Self::Adjustments => "Filters",
@@ -297,6 +310,8 @@ impl Panel {
         match self {
             Self::Toolbar | Self::CustomToolbar(_) => "menu",
             Self::Brushes => "brush",
+            Self::ToolSettings => "settings",
+            Self::Color => "color",
             Self::Sizes => "size",
             Self::Layers => "layers",
             Self::Adjustments => "adjustments",
@@ -514,7 +529,11 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
     for default in PanelConfig::defaults() {
         if matches!(
             default.id,
-            Panel::Adjustments | Panel::Properties | Panel::Stats
+            Panel::Adjustments
+                | Panel::Properties
+                | Panel::Stats
+                | Panel::ToolSettings
+                | Panel::Color
         ) && !panels.iter().any(|p| p.id == default.id)
         {
             panels.push(default);
@@ -1251,7 +1270,7 @@ impl DockLayout {
         let group = next.allocate()?;
         let band = next.allocate()?;
         let edge = match panel {
-            Panel::Brushes | Panel::Sizes => Edge::Left,
+            Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
             Panel::Layers | Panel::Adjustments | Panel::Properties | Panel::Stats => Edge::Right,
             _ => Edge::Top,
         };
@@ -1523,14 +1542,16 @@ impl DockLayout {
     }
 
     fn group_min_width(&self, group: u32) -> f32 {
-        let content = if self
-            .group_panels(group)
-            .is_ok_and(|panels| panels.contains(&Panel::Layers))
-        {
-            LAYERS_MIN_WIDTH
-        } else {
-            0.0
-        };
+        let content = self.group_panels(group).map_or(0.0, |panels| {
+            panels
+                .iter()
+                .map(|p| match p {
+                    Panel::Layers => LAYERS_MIN_WIDTH,
+                    Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
+                    _ => 0.0,
+                })
+                .fold(0.0, f32::max)
+        });
         self.tab_width(group).max(content)
     }
 
@@ -3005,9 +3026,22 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
         } => {
             if *axis == ribbon_axis {
                 let usable = (length - WORKSPACE_SPACING).max(0.0);
-                ribbon_cross_min(first, ribbon_axis, usable * fraction, layout).max(
-                    ribbon_cross_min(second, ribbon_axis, usable * (1.0 - fraction), layout),
-                )
+                let first_length = if *axis == Axis::Horizontal {
+                    split_size(
+                        usable,
+                        *fraction,
+                        tab_min_width(first, layout),
+                        tab_min_width(second, layout),
+                    )
+                } else {
+                    usable * fraction
+                };
+                ribbon_cross_min(first, ribbon_axis, first_length, layout).max(ribbon_cross_min(
+                    second,
+                    ribbon_axis,
+                    usable - first_length,
+                    layout,
+                ))
             } else {
                 let a = ribbon_cross_min(first, ribbon_axis, length, layout);
                 let b = ribbon_cross_min(second, ribbon_axis, length, layout);
@@ -3027,6 +3061,14 @@ fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &Do
         minimum
     }
 }
+fn split_size(usable: f32, fraction: f32, a: f32, b: f32) -> f32 {
+    if a + b <= usable {
+        (usable * fraction).clamp(a, usable - b)
+    } else {
+        usable * a / (a + b)
+    }
+}
+
 fn find_tab(node: &DockNode, panel: Panel) -> Option<(u32, usize, usize)> {
     match node {
         DockNode::Tabs { id, panels, .. } => panels
@@ -3207,11 +3249,7 @@ fn resolve_node(
                 };
                 let a = minimum(first);
                 let b = minimum(second);
-                first_size = if a + b <= usable {
-                    first_size.clamp(a, usable - b)
-                } else {
-                    usable * a / (a + b)
-                };
+                first_size = split_size(usable, *fraction, a, b);
             }
             let a = rest.strip(edge, first_size);
             let divider = rest.strip(edge, gap);
@@ -3232,6 +3270,75 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_panels_fit_three_tiles_and_cannot_shrink_below_them() {
+        assert_eq!(
+            TOOL_PANEL_MIN_WIDTH - 2.0 * PANEL_CONTENT_INSET,
+            3.0 * TILE_SIZE + 4.0
+        );
+        for panel in [Panel::Brushes, Panel::ToolSettings] {
+            let mut layout = DockLayout::default();
+            layout.set_panel_visible(panel, true).unwrap();
+            layout
+                .move_panel(
+                    [1200., 900.],
+                    panel,
+                    DockTarget::Float {
+                        position: [400., 200.],
+                    },
+                )
+                .unwrap();
+            let row = layout
+                .workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+                .groups
+                .into_iter()
+                .find(|g| g.active == panel)
+                .unwrap();
+            layout
+                .resize_floating(
+                    row.id,
+                    ResizeEdge::Right,
+                    row.bounds,
+                    [-1000., 0.],
+                    [1200., 900.],
+                )
+                .unwrap();
+            let row = layout
+                .workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+                .groups
+                .into_iter()
+                .find(|g| g.active == panel)
+                .unwrap();
+            assert_eq!(row.bounds.width, TOOL_PANEL_MIN_WIDTH);
+            layout
+                .move_panel(
+                    [1200., 900.],
+                    panel,
+                    DockTarget::Edge {
+                        edge: Edge::Left,
+                        outer: false,
+                    },
+                )
+                .unwrap();
+            for band in &mut layout.bands {
+                if find_tab(&band.root, panel).is_some() {
+                    band.extent = 1.;
+                }
+            }
+            assert!(
+                layout
+                    .workspace(1200., 900., crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+                    .groups
+                    .iter()
+                    .find(|g| g.active == panel)
+                    .unwrap()
+                    .bounds
+                    .width
+                    >= TOOL_PANEL_MIN_WIDTH
+            );
+        }
+    }
 
     #[test]
     fn layers_minimum_survives_dock_and_floating_resize() {
@@ -5585,7 +5692,14 @@ mod tests {
             matches!(node, DockNode::Tabs {panels, active: Panel::Brushes, ..} if panels.len() == 4)
         );
         layout.select_tab(8, Panel::Layers).unwrap();
-        for panel in Panel::ALL.into_iter().filter(|p| *p != Panel::Stats) {
+        for panel in [
+            Panel::Toolbar,
+            Panel::Brushes,
+            Panel::Sizes,
+            Panel::Layers,
+            Panel::Adjustments,
+            Panel::Properties,
+        ] {
             assert_eq!(
                 layout
                     .resolve(1600.0, 1000.0)
