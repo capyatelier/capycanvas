@@ -8,6 +8,13 @@ export async function checkLayers({ call, evaluate, settle }) {
     await writeFile(`artifacts/ui/layers-web/${name}.png`, Buffer.from(shot.data,"base64"));
   };
   await mkdir("artifacts/ui/layers-web", {recursive:true});
+  const initialCount = await evaluate("layerApp.state().layers.length");
+  await send({op:"new",group:false,clipped:false});
+  await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').click()`);
+  assert.equal(await evaluate("layerApp.state().layers.length"),initialCount);
+  await send({op:"select",id:2,mask:false});
+  assert.ok(await evaluate(`document.querySelector('.layer-footer [aria-label="Delete selected layers"]').disabled`));
+  await send({op:"select",id:1,mask:false});
   // Menus and hover tips resolve typed actions, including remapped/custom keys.
   await evaluate(`(() => {
     window.originalLayerTestSettings = layerApp.state().settings;

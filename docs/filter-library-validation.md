@@ -1,13 +1,13 @@
 # Forty-filter validation
 
 2026-09-10. The original ten plus thirty additional original WGSL filters are
-registered in the shared core and validated in GTK. Web/Android already consume
-the shared catalog/property model, but their categorized preview-picker ports
-and expanded device tests remain outstanding at this milestone.
+registered in the shared core and validated in GTK and web. Both have categorized,
+searchable GPU-preview rows. Android's categorized preview-picker port and expanded
+device tests remain outstanding at this milestone.
 
 ## Correctness and UI
 
-- 48 GPU tests pass; four release-mode benchmarks are opt-in. All forty
+- 50 GPU tests pass; five release-mode benchmarks are opt-in. All forty
   algorithms pass WGSL validation and pixel tests with transparency, zero
   opacity, zero masks, clipping, frozen time and animation where applicable.
 - Every filter's local paint update equals a genuinely uncached full rebuild,
@@ -24,13 +24,19 @@ and expanded device tests remain outstanding at this milestone.
   exercises category/search and Stats, and captures screenshots. Inspected the
   rendered catalog contact sheet and representative GTK picker/property pages.
   Short percentage ranges retain slider controls instead of count spin buttons.
+- The Chrome/WebGPU integration inserts and renders all forty filters, edits
+  generated controls, checks category/search, visible preview pixels, animated
+  markers and live telemetry. Preview rows share one typed-byte atlas transfer;
+  lightweight bitmap views display only their row, not an entire atlas per item.
 - Shared core/engine/UI tests pass, native clippy is clean and wasm compiles.
-  These are not yet expanded web/Android UI or end-to-end refresh-rate claims.
+  These are not yet Android device or end-to-end refresh-rate claims.
+- The [clipped-animation regression](filter-clipping-regression.md) documents the
+  cached-stack compositor fix, independent tiled-reference tests and benchmark.
 
 Generated images, not checked into git:
 `artifacts/filter-library/contact-sheet.png` (five columns, eight rows; names in
 `order.txt`), individual named PNGs alongside it, and GTK screenshots in
-`artifacts/ui/adjustments-gtk/`.
+`artifacts/ui/adjustments-gtk/` and `artifacts/ui/adjustments-web/`.
 
 ## Work avoided and overhead
 

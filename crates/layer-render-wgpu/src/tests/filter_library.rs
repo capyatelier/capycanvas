@@ -274,6 +274,193 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
 }
 
 #[test]
+fn cached_clipping_matches_tiled_composition() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    for case in 0..18 {
+        let mut base = base.clone();
+        base.opacity = 0.63;
+        base.properties.blend = layer_core::LayerBlend::Multiply;
+        base.mask = Some(layer_core::LayerMask::reveal_all(
+            LayerId(90),
+            Point::default(),
+        ));
+        base.mask.as_mut().unwrap().default_coverage = 0.7;
+        let mut effect = filter(BuiltinEffect::HeatHaze);
+        effect.properties.clipped = true;
+        effect.opacity = 0.54;
+        effect.mask = Some(layer_core::LayerMask::reveal_all(
+            LayerId(91),
+            Point::default(),
+        ));
+        effect.mask.as_mut().unwrap().default_coverage = 0.43;
+        Arc::make_mut(effect.effect.as_mut().unwrap())
+            .set("animate", EffectValue::Toggle(true))
+            .unwrap();
+        let mut layers = vec![effect, base];
+        if case >= 3 {
+            let mut clip = filter(BuiltinEffect::GaussianBlur);
+            clip.id = LayerId(4);
+            clip.properties.clipped = true;
+            layers.insert(1, clip);
+        }
+        if case >= 6 {
+            let mut backdrop = setup(&mut r, EXTENT);
+            backdrop.id = LayerId(3);
+            layers.push(backdrop);
+        }
+        if (9..12).contains(&case) {
+            for layer in &mut layers {
+                layer.properties.parent = Some(LayerId(7));
+            }
+            let mut group = Layer::paint(LayerId(7), "Isolated group");
+            group.kind = LayerKind::Group;
+            group.opacity = 0.73;
+            layers.insert(0, group);
+        }
+        if case >= 12 {
+            let mut upper = filter(if case < 15 {
+                BuiltinEffect::Curves
+            } else {
+                BuiltinEffect::GaussianBlur
+            });
+            upper.id = LayerId(8);
+            upper.properties.clipped = case < 15;
+            layers.insert(0, upper);
+        }
+        if case % 3 == 1 {
+            layers
+                .iter_mut()
+                .find(|l| l.id == LayerId(1))
+                .unwrap()
+                .visible = false;
+        }
+        if case % 3 == 2 {
+            layers
+                .iter_mut()
+                .find(|l| l.id == LayerId(2))
+                .unwrap()
+                .mask
+                .as_mut()
+                .unwrap()
+                .show_area = true;
+        }
+        let render = |r: &mut WgpuRasterizer, reset, time| {
+            r.submit(FramePacket {
+                time_seconds: time,
+                view: ViewState {
+                    width_px: EXTENT[0],
+                    height_px: EXTENT[1],
+                    background_rgba_linear: [0.6, 0.3, 0.15, 0.8],
+                    ..test_view()
+                },
+                document_extent: EXTENT,
+                layers: &layers,
+                dabs: &[],
+                dab_batches: &[],
+                reset_layers: reset,
+                composite_all: true,
+            })
+            .unwrap();
+        };
+        render(&mut r, true, 0.);
+        for time in [0., 0.5] {
+            r.scene.as_mut().unwrap().set_tiled_composition(false);
+            render(&mut r, false, time);
+            let optimized = image(&mut r);
+            r.scene.as_mut().unwrap().set_tiled_composition(true);
+            render(&mut r, false, time);
+            let reference = image(&mut r);
+            let max_error = optimized
+                .iter()
+                .zip(&reference)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(
+                max_error <= 1,
+                "case {case}, time {time}: {max_error} byte error"
+            );
+        }
+    }
+}
+
+#[test]
+fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let backdrop = setup(&mut r, EXTENT);
+    let mut base = backdrop.clone();
+    base.id = LayerId(3);
+    base.opacity = 0.6;
+    let mut heat = filter(BuiltinEffect::HeatHaze);
+    heat.properties.clipped = true;
+    let mut layers = vec![heat, base, backdrop];
+    submit(&mut r, EXTENT, &layers, 0., true, true, None);
+    image(&mut r);
+    for animate in [false, true] {
+        Arc::make_mut(layers[0].effect.as_mut().unwrap())
+            .set("animate", EffectValue::Toggle(animate))
+            .unwrap();
+        submit(&mut r, EXTENT, &layers, 0., false, false, None);
+        image(&mut r);
+        let storage = r.scene.as_ref().unwrap().image_cache_bytes();
+        for (i, point) in [[40., 40.], [255., 128.], [380., 250.]]
+            .into_iter()
+            .enumerate()
+        {
+            let work = r.scene.as_ref().unwrap().composition_work();
+            let filter = r.scene.as_ref().unwrap().image_work();
+            let time = (i + 1) as f32 / 120.;
+            submit(
+                &mut r,
+                EXTENT,
+                &layers,
+                time,
+                false,
+                false,
+                Some((point, 8.)),
+            );
+            let local = image(&mut r);
+            let after = r.scene.as_ref().unwrap().composition_work();
+            assert_eq!(after[0] - work[0], 1, "refresh backdrop once per update");
+            let rect = PixelRect {
+                min_x: (point[0] - 9.).max(0.) as u32,
+                min_y: (point[1] - 9.).max(0.) as u32,
+                max_x: (point[0] + 9.) as u32,
+                max_y: (point[1] + 9.) as u32,
+            }
+            .intersect(PixelRect::full(EXTENT));
+            let tile_pixels: u64 = page_coordinates(rect)
+                .map(|p| page_rect(p).intersect(PixelRect::full(EXTENT)).area())
+                .sum();
+            assert_eq!(
+                after[1] - work[1],
+                tile_pixels,
+                "refresh only the touched tiles"
+            );
+            assert_eq!(after[3], work[3], "keep composition bindings and buffers");
+            assert_eq!(r.scene.as_ref().unwrap().image_cache_bytes(), storage);
+            let updated_filter = r.scene.as_ref().unwrap().image_work();
+            assert_eq!(
+                updated_filter[0], filter[0],
+                "backdrop is not the filter input"
+            );
+            assert_eq!(updated_filter[1] - filter[1], u64::from(animate));
+            if !animate {
+                assert!(after[2] - work[2] < 4096, "blend only local damage");
+            }
+            r.scene.as_mut().unwrap().force_image_rebuild();
+            submit(&mut r, EXTENT, &layers, time, false, true, None);
+            assert_eq!(
+                image(&mut r),
+                local,
+                "backdrop paint at {point:?}, animated={animate}"
+            );
+        }
+    }
+}
+
+#[test]
 fn every_filter_incremental_update_matches_a_forced_full_rebuild() {
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
@@ -322,6 +509,114 @@ fn every_filter_incremental_update_matches_a_forced_full_rebuild() {
 /// The full and local cases paint the identical dab into resident artwork.
 /// Only the dirty region changes, so the comparison includes tracking overhead
 /// without conflating it with allocation, compilation or GPU readback.
+#[test]
+#[ignore = "release-mode physical GPU benchmark"]
+fn clipped_animation_latency() {
+    use std::time::Instant;
+    let summary = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        format!(
+            "{:.6},{:.6},{:.6}",
+            v[v.len() / 2],
+            v[v.len() * 95 / 100],
+            v[v.len() * 99 / 100]
+        )
+    };
+    let mut r = WgpuRasterizer::new().unwrap();
+    let mut report = String::from(
+        "extent,backdrop,clipped,mode,cpu_median,cpu_p95,cpu_p99,gpu_median,gpu_p95,gpu_p99,complete_median,complete_p95,complete_p99,backdrop_pixels,filter_pixels,cache_bytes\n",
+    );
+    for extent in [[2048, 1536], [4096, 4096]] {
+        let base = setup(&mut r, extent);
+        for (backdrop, clipped) in [(false, false), (false, true), (true, false), (true, true)] {
+            for mode in [
+                "animation",
+                "base-paint",
+                "backdrop-paint",
+                "backdrop-paint-animated",
+            ] {
+                if !backdrop && mode != "animation" {
+                    continue;
+                }
+                let animate = matches!(mode, "animation" | "backdrop-paint-animated");
+                let painting_backdrop = mode.starts_with("backdrop-paint");
+                let mut effect = filter(BuiltinEffect::HeatHaze);
+                effect.properties.clipped = clipped;
+                Arc::make_mut(effect.effect.as_mut().unwrap())
+                    .set("animate", EffectValue::Toggle(animate))
+                    .unwrap();
+                let mut layers = vec![effect, base.clone()];
+                if backdrop {
+                    layers[1].opacity = 0.65;
+                    for i in 0..3 {
+                        let mut l = base.clone();
+                        l.id = LayerId(3 + i);
+                        l.opacity = 0.7;
+                        l.properties.blend = layer_core::LayerBlend::Multiply;
+                        layers.push(l);
+                    }
+                }
+                if painting_backdrop {
+                    layers[1].id = LayerId(3);
+                    layers[2].id = LayerId(1);
+                }
+                submit(&mut r, extent, &layers, 0., true, true, None);
+                r.wait_idle().unwrap();
+                r.set_telemetry_enabled(true);
+                let (mut cpu, mut complete) = (Vec::new(), Vec::new());
+                let (mut backdrop_pixels, mut filter_pixels) = (0, 0);
+                for i in 0..320 {
+                    let scene = r.scene.as_ref().unwrap();
+                    let before = [scene.composition_work()[1], scene.image_pass_pixels()];
+                    let start = Instant::now();
+                    // Cross a tile boundary, so incremental tests cover multiple
+                    // dirty tiles and neighborhood expansion, not a best case.
+                    let paint = (mode != "animation")
+                        .then_some(([extent[0] as f32 / 2., extent[1] as f32 / 2.], 12.));
+                    submit(
+                        &mut r,
+                        extent,
+                        &layers,
+                        i as f32 / 120.,
+                        false,
+                        false,
+                        paint,
+                    );
+                    let ms = start.elapsed().as_secs_f64() * 1000.;
+                    r.wait_idle().unwrap();
+                    if i >= 64 {
+                        cpu.push(ms);
+                        complete.push(start.elapsed().as_secs_f64() * 1000.);
+                    }
+                    let scene = r.scene.as_ref().unwrap();
+                    backdrop_pixels = scene.composition_work()[1] - before[0];
+                    filter_pixels = scene.image_pass_pixels() - before[1];
+                }
+                let gpu = r
+                    .telemetry()
+                    .gpu
+                    .ordered()
+                    .into_iter()
+                    .map(f64::from)
+                    .collect();
+                let line = format!(
+                    "{}x{},{backdrop},{clipped},{mode},{},{},{},{backdrop_pixels},{filter_pixels},{}\n",
+                    extent[0],
+                    extent[1],
+                    summary(cpu),
+                    summary(gpu),
+                    summary(complete),
+                    r.scene.as_ref().unwrap().image_cache_bytes()
+                );
+                eprint!("{line}");
+                report.push_str(&line);
+            }
+        }
+    }
+    std::fs::create_dir_all("../../artifacts/benchmarks").unwrap();
+    std::fs::write("../../artifacts/benchmarks/clipped-animation.csv", report).unwrap();
+}
+
 #[test]
 #[ignore = "release-mode physical GPU benchmark"]
 fn filter_library_latency() {

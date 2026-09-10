@@ -26,7 +26,9 @@ impl<B: CanvasRenderer> UiSession<B> {
         let doc = self.engine.document();
         let request = layer_render::FilterPreviewRequest {
             request_id,
-            target: doc.active_layer,
+            target: doc
+                .clipping_stack_top(doc.active_layer)
+                .ok_or("Select a layer first")?,
             size,
             extent: [doc.width, doc.height],
             view: self.engine.view(),
@@ -156,6 +158,9 @@ pub struct AdjustmentChoice {
     pub tile_cells: [u32; 2],
     pub category: layer_core::FilterCategory,
     pub category_label: &'static str,
+    /// Capability, independent of whether a particular layer has frozen time.
+    pub animated: bool,
+    pub tooltip: String,
 }
 pub(super) fn catalog(picker: &FilterPickerState) -> Vec<AdjustmentChoice> {
     let query = picker.search.as_deref().unwrap_or("").trim().to_lowercase();
@@ -182,6 +187,12 @@ pub(super) fn catalog(picker: &FilterPickerState) -> Vec<AdjustmentChoice> {
             tile_cells: [3, 2],
             category: id.category(),
             category_label: id.category().label(),
+            animated: id.program().time,
+            tooltip: if id.program().time {
+                format!("{} · Animated", id.label())
+            } else {
+                id.label().into()
+            },
         })
         .collect()
 }
@@ -438,7 +449,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             EffectAction::Insert { effect } => {
                 let doc = self.engine.document();
                 let current = doc.layer(doc.active_layer).ok_or("Select a layer first")?;
-                let index = doc.layers.iter().position(|l| l.id == current.id).unwrap();
+                let top = doc.clipping_stack_top(current.id).unwrap();
+                let index = doc.layers.iter().position(|l| l.id == top).unwrap();
                 let parent = current.properties.parent;
                 let id = self.engine.allocate_layer_id();
                 let mut layer = Layer::paint(id, effect.label());

@@ -20,6 +20,7 @@ pub struct LayerPanel {
     alpha: gtk::ToggleButton,
     lock: gtk::ToggleButton,
     mask_action: gtk::Button,
+    delete: gtk::Button,
     reference: gtk::ToggleButton,
     clip: gtk::ToggleButton,
     context: gtk::PopoverMenu,
@@ -745,6 +746,7 @@ impl LayerPanel {
             ),
             reference,
             clip,
+            delete: button("layer-delete-symbolic", "Delete selected layers"),
             context,
             owner,
             rows,
@@ -899,6 +901,19 @@ impl LayerPanel {
             }
         ));
         self.footer.append(&import);
+        self.delete.set_widget_name("delete-selected-layers");
+        w.bind_action_tooltip(
+            &self.delete,
+            UiAction::Layer {
+                action: A::DeleteSelected,
+            },
+        );
+        self.delete.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| action(&w, A::DeleteSelected)
+        ));
+        self.footer.append(&self.delete);
         let more = button("layer-more-symbolic", "Layer actions");
         more.set_hexpand(true);
         more.set_halign(gtk::Align::End);
@@ -1049,6 +1064,7 @@ impl LayerPanel {
         self.lock.set_sensitive(controls.edit_lock);
         self.clip.set_sensitive(controls.clip);
         self.mask_action.set_sensitive(controls.mask);
+        self.delete.set_sensitive(state.layer_tools.can_delete);
         self.reference
             .set_active(state.layer_tools.references_selected);
         self.reference

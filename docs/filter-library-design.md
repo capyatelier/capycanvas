@@ -161,8 +161,10 @@ compilation. Row image and pipeline caches survive category/search changes.
 
 See [forty-filter validation](filter-library-validation.md) for all measured
 latencies, incremental correctness, memory, artwork and remaining platform gates.
-Web/Android categorized preview-picker ports and expanded platform benchmarks
-remain to be done; compiling their shared Rust catalog is not a completed port.
+The web categorized preview picker now passes the forty-filter browser integration
+test, including search, generated properties, visible preview pixels and animation
+markers. Android's picker port and expanded platform performance benchmarks remain
+to be done; compiling its shared Rust catalog is not a completed port.
 
 ## Validation gates
 

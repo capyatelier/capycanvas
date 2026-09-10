@@ -259,11 +259,20 @@ impl EffectPanels {
                 let label = gtk::Label::new(Some(choice.label));
                 label.set_xalign(1.);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                let caption = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                caption.set_halign(gtk::Align::End);
+                if choice.animated {
+                    let icon = gtk::Image::from_icon_name("layer-animation-symbolic");
+                    icon.set_pixel_size(12);
+                    icon.add_css_class("dim-label");
+                    caption.append(&icon);
+                }
+                caption.append(&label);
                 body.append(&picture);
-                body.append(&label);
+                body.append(&caption);
                 let button = gtk::Button::builder()
                     .child(&body)
-                    .tooltip_text(choice.label)
+                    .tooltip_text(&choice.tooltip)
                     .build();
                 button.add_css_class("flat");
                 button.add_css_class("filter-row");

@@ -57,8 +57,21 @@ pub(super) struct Scene {
     pub effect_passes: u64,
     images: images::ImageStages,
     stop_before: Option<(usize, bool)>,
+    #[cfg(test)]
+    tiled_composition: bool,
 }
 impl Scene {
+    #[cfg(test)]
+    pub fn set_tiled_composition(&mut self, enabled: bool) {
+        self.tiled_composition = enabled;
+    }
+    fn cached_composition(&self) -> bool {
+        #[cfg(test)]
+        if self.tiled_composition {
+            return false;
+        }
+        true
+    }
     #[cfg(test)]
     pub fn force_image_rebuild(&mut self) {
         self.images = images::ImageStages::default();
@@ -74,6 +87,15 @@ impl Scene {
     #[cfg(test)]
     pub fn image_cache_bytes(&self) -> u64 {
         self.images.storage_bytes()
+    }
+    #[cfg(test)]
+    pub fn composition_work(&self) -> [u64; 4] {
+        [
+            self.images.backdrop_updates,
+            self.images.backdrop_pixels,
+            self.images.composition_pixels,
+            self.images.composition_builds,
+        ]
     }
     pub fn scratch_bytes(&self) -> u64 {
         self.pool.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64 * 4
@@ -195,6 +217,8 @@ impl Scene {
             effect_passes: 0,
             images: images::ImageStages::default(),
             stop_before: None,
+            #[cfg(test)]
+            tiled_composition: false,
         }
     }
     fn alloc(&mut self, r: &WgpuRasterizer, color: wgpu::Color) -> usize {
@@ -591,23 +615,26 @@ impl Scene {
         // An image boundary already contains its full input stack, final mask
         // and layer properties. Start above the latest completed boundary.
         let checkpoint = packet.layers.iter().enumerate().find(|(i, l)| {
-            l.visible
+            self.cached_composition()
+                && l.visible
                 && l.properties.parent == parent
-                && !l.properties.clipped
                 && l.effect
                     .as_ref()
                     .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
                 && self.stop_before.is_none_or(|(stop, _)| *i > stop)
-                && self.images.output(l.id).is_some()
+                && self.images.checkpoint(*i, l).is_some()
         });
-        if let Some((_, l)) = checkpoint {
+        if let Some((i, l)) = checkpoint {
             self.free(output);
-            output = self.image_tile(
-                r,
-                self.images.output(l.id).unwrap(),
-                packet.document_extent,
-                tile,
-            );
+            self.jobs.pop(); // Discard the unused initial clear as well.
+            let (pixels, pending_stack) = self.images.checkpoint(i, l).unwrap();
+            output = self.image_tile(r, pixels, packet.document_extent, tile);
+            stack = pending_stack.map(|(pixels, base)| {
+                (
+                    self.image_tile(r, pixels, packet.document_extent, tile),
+                    base,
+                )
+            });
         }
         let mut siblings = packet
             .layers
@@ -933,13 +960,12 @@ impl Scene {
         }
         self.jobs.clear();
         self.used.fill(false);
-        // A topmost full-image checkpoint is already the final composition.
-        // One region copy replaces a tile draw + copy for every document tile.
-        if let Some(top) = packet
-            .layers
-            .iter()
-            .find(|l| l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background)
-            && !top.properties.clipped
+        // Completed image boundaries include their surrounding composition.
+        // Copy only the changed region; clipping uses the same final path.
+        if self.cached_composition()
+            && let Some(top) = packet.layers.iter().find(|l| {
+                l.visible && l.properties.parent.is_none() && l.kind != LayerKind::Background
+            })
             && top
                 .effect
                 .as_ref()
@@ -949,7 +975,7 @@ impl Scene {
                     .layers
                     .iter()
                     .any(|l| l.mask.as_ref().is_some_and(|m| m.enabled && m.show_area)))
-            && let Some(source) = self.images.output_texture(top.id)
+            && let Some(source) = self.images.scene_texture(top)
         {
             let origin = wgpu::Origin3d {
                 x: dirty.min_x,

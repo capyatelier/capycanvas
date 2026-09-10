@@ -188,6 +188,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                 LayerButton(host,"folder","New group",action=obj("type" to "layer","action" to obj("op" to "new","group" to true,"clipped" to false)))
                 LayerButton(host,"mask","Add layer mask",enabled=controls.getBoolean("mask"),action=active?.let { obj("type" to "layer","action" to obj("op" to "add_mask","id" to it.getLong("id"),"replace" to false)) })
                 LayerButton(host,"image","Import image as layer") { import.launch("image/*") }
+                LayerButton(host,"delete","Delete selected layers",enabled=view.getBoolean("can_delete"),action=obj("type" to "layer","action" to obj("op" to "delete_selected")))
                 Spacer(Modifier.weight(1f))
                 LayerButton(host,"more","Layer actions") { active?.let { contextMenu(it,it.getBoolean("mask_selected"),panelOrigin+Offset(0f,40f)) } }
             }

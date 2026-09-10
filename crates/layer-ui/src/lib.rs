@@ -267,6 +267,8 @@ pub fn ui_catalog() -> UiCatalog {
             "mask",
             "image",
             "more",
+            "delete",
+            "animation",
             "undo",
             "redo",
             "plus",

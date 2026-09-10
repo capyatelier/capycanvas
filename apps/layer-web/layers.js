@@ -55,6 +55,9 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     file.value = "";
   };
   footer.append(glyphButton("image", "Import image as layer", () => file.click()), file);
+  const deleteAction = () => ({ op: "delete_selected" });
+  const deleteButton = glyphButton("delete", "Delete selected layers", () => send(deleteAction()), "", deleteAction);
+  footer.append(deleteButton);
   const more = glyphButton("more", "Layer actions", () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
     clientX: more.getBoundingClientRect().left, clientY: more.getBoundingClientRect().top })));
   more.classList.add("layer-more"); menu(more, active, () => active()?.mask_selected ?? false); footer.append(more);
@@ -132,6 +135,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
     if (current) { opacity.update(current.opacity); blend.value = current.blend; }
     opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask;
+    deleteButton.disabled = !state().layer_tools.can_delete;
     for (const { b, property, capability } of toggles) {
       const reference = capability === "reference";
       b.disabled = !(reference ? view.can_reference : controls[capability]);

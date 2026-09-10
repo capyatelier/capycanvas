@@ -18,6 +18,7 @@ pub struct LayersView {
     pub tool: LayerCanvasTool,
     pub has_selection: bool,
     pub can_reference: bool,
+    pub can_delete: bool,
     pub references_selected: bool,
     pub reference_action_label: &'static str,
     /// Header target remains available even inside a collapsed group.
@@ -976,8 +977,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             let enabled = match &action {
                 A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0)).is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
-                A::DeleteSelected => doc.delete_layers_edit(&roots).is_ok(),
-                A::Delete { .. } => doc.delete_layers_edit(&[l.id]).is_ok(),
+                A::DeleteSelected => doc.can_delete_layers(&roots),
+                A::Delete { .. } => doc.can_delete_layers(&[l.id]),
                 A::DuplicateSelected => {
                     !roots.is_empty()
                         && roots.iter().all(|id| {

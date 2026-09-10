@@ -43,8 +43,11 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
                 .clickable { host.dispatch(choice.getJSONObject("action")) }.padding(4.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 SharedIcon(choice.getString("icon"), null, Modifier.size(24.dp))
-                Text(choice.getString("label"), maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    color = colors.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (choice.getBoolean("animated")) SharedIcon("animation", choice.getString("tooltip"), Modifier.size(12.dp).alpha(.55f))
+                    Text(choice.getString("label"), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        color = colors.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
             }
         }
     }

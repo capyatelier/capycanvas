@@ -74,6 +74,17 @@ impl CanvasRenderer for WebRenderer {
             .unwrap_or_default()
     }
     type Error = GpuRasterError;
+    fn request_filter_previews(
+        &mut self,
+        request: layer_render::FilterPreviewRequest,
+    ) -> Result<bool, Self::Error> {
+        self.renderer()?.request_filter_previews(request)
+    }
+    fn take_filter_previews(
+        &mut self,
+    ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
+        self.0.as_mut()?.renderer.take_filter_previews()
+    }
     fn request_thumbnail(
         &mut self,
         id: u64,
@@ -151,6 +162,40 @@ fn phase(value: u8) -> Result<PenPhase, JsValue> {
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn filter_preview_revision(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.filter_preview_revision())
+    }
+    pub fn request_filter_previews(
+        &mut self,
+        request: u64,
+        filters: JsValue,
+        width: u32,
+        height: u32,
+    ) -> Result<bool, JsValue> {
+        if !self.gpu_ready() {
+            return Ok(false);
+        }
+        let filters = serde_wasm_bindgen::from_value(filters).map_err(js)?;
+        self.session
+            .request_filter_previews(request, filters, [width, height])
+            .map_err(js)
+    }
+    pub fn take_filter_previews(&mut self) -> Result<JsValue, JsValue> {
+        let Some(result) = self.session.renderer_mut().take_filter_previews() else {
+            return Ok(JsValue::NULL);
+        };
+        let result = result.map_err(js)?;
+        let image = result.image;
+        // One typed byte transfer, not a JavaScript number/object per channel.
+        // Views of the returned atlas share this array in the browser.
+        let header = serialize(&(image.request_id, image.width, image.height, result.filters))?;
+        js_sys::Reflect::set(
+            &header,
+            &JsValue::from_str("bytes"),
+            &js_sys::Uint8Array::from(image.bytes.as_slice()),
+        )?;
+        Ok(header)
+    }
     pub fn action_tooltip(&self, label: &str, action: JsValue) -> Result<String, JsValue> {
         let action = serde_wasm_bindgen::from_value(action).map_err(js)?;
         let state = self.session.state();

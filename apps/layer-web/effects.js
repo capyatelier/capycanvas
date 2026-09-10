@@ -1,13 +1,69 @@
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
 export function createEffectPanels({app,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged}) {
   const send=action=>dispatch({type:"effect",action});
-  const adjustments=element("div","adjustment-grid");adjustments.dataset.control="adjustments";
-  for(const choice of state().adjustments) {
-    const tile=button("",()=>dispatch(choice.action),"adjustment-tile");
-    tile.dataset.effect=choice.id;tile.title=choice.label;
-    tile.style.width=`${choice.tile_cells[0]*36}px`;tile.style.height=`${choice.tile_cells[1]*36}px`;
-    tile.append(icon(choice.icon),element("span","",choice.label));adjustments.append(tile);
+  const adjustments=element("div","filter-picker");adjustments.dataset.control="adjustments";
+  const pickerHeader=element("div","filter-picker-header"),category=element("select"),search=element("input"),list=element("div","filter-picker-list");
+  const pickerAction=action=>dispatch({type:"filter_picker",action});
+  const searchButton=button("",()=>{pickerAction({op:"toggle_search"});if(!search.hidden)search.focus();});searchButton.append(icon("search"));
+  for(const c of state().filter_categories){const option=element("option","",c.label);option.value=c.id??"";category.append(option);}
+  category.onchange=()=>pickerAction({op:"category",category:category.value||null});
+  search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
+  search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
+  pickerHeader.append(category,search,searchButton);adjustments.append(pickerHeader,list);
+  const rows=new Map();let visibleIds="",request=0n,pending=null,polling=false;
+  function refreshPicker(){
+    const s=state(),picker=s.filter_picker;
+    category.hidden=picker.search!=null;category.value=picker.category??"";
+    search.hidden=picker.search==null;search.placeholder=picker.search_label;searchButton.title=picker.search_label;
+    if(search.value!==(picker.search??""))search.value=picker.search??"";
+    const ids=s.adjustments.map(c=>c.id).join(",");if(ids===visibleIds)return;visibleIds=ids;
+    const children=[];let section;
+    for(const choice of s.adjustments){
+      if(section!==choice.category){children.push(element("h3","filter-category",choice.category_label));section=choice.category;}
+      let row=rows.get(choice.id);
+      if(!row){
+        const node=button("",()=>dispatch(choice.action),"filter-row"),canvas=element("canvas"),label=element("span","",choice.label);
+        // Already-rasterized GPU previews: display tiny bitmap rows, without
+        // allocating another accelerated drawing context for every list item.
+        canvas.getContext("2d",{willReadFrequently:true});
+        node.dataset.effect=choice.id;node.title=choice.tooltip;canvas.setAttribute("aria-hidden","true");canvas.draggable=false;
+        if(choice.animated){const mark=icon("animation");mark.classList.add("filter-animation");mark.setAttribute("aria-hidden","true");label.prepend(mark);}
+        node.append(canvas,label);row={node,canvas,key:null};rows.set(choice.id,row);
+      }
+      children.push(row.node);
+    }
+    if(!children.length)children.push(element("p","dim",picker.empty_label));list.replaceChildren(...children);contentChanged("adjustments");
   }
+  const previewKey=()=>{
+    const width=Math.min(512,Math.max(80,Math.round(Math.max(1,list.clientWidth-12)*devicePixelRatio))),height=Math.min(128,Math.round(40*devicePixelRatio));
+    return {width,height,key:`${app.filter_preview_revision().map(String).join(":")}:${width}:${height}`};
+  };
+  function pollPreviews(){
+    polling=false;if(!pending)return;
+    try {
+      const result=app.take_filter_previews();
+      if(result){
+        const job=pending;pending=null;
+        const [id,width,height,filters]=result;
+        if(id===job.id&&job.key===previewKey().key){
+          const bytes=result.bytes,rowHeight=height/filters.length,rowBytes=width*rowHeight*4;
+          filters.forEach((id,i)=>{const row=rows.get(id);if(!row)return;row.canvas.width=width;row.canvas.height=rowHeight;
+            const pixels=new Uint8ClampedArray(bytes.buffer,bytes.byteOffset+i*rowBytes,rowBytes);
+            row.canvas.getContext("2d").putImageData(new ImageData(pixels,width,rowHeight),0,0);row.key=job.key;});
+        }
+      }
+    }catch(error){pending=null;console.warn("Filter previews unavailable",error);}
+    if(pending){polling=true;requestAnimationFrame(pollPreviews);}
+  }
+  setInterval(()=>{
+    if(document.hidden||!adjustments.isConnected||!adjustments.clientHeight)return;
+    if(pending){if(!polling){polling=true;requestAnimationFrame(pollPreviews);}return;}
+    try {
+      const info=previewKey(),viewport=panels.get("adjustments").getBoundingClientRect(),filters=[];
+      for(const choice of state().adjustments){const row=rows.get(choice.id),rect=row?.node.getBoundingClientRect();if(rect?.height&&rect.bottom>Math.max(0,viewport.top)&&rect.top<Math.min(innerHeight,viewport.bottom)&&row.key!==info.key)filters.push(choice.id);if(filters.length===8)break;}
+      if(filters.length){const id=++request;if(app.request_filter_previews(id,filters,info.width,info.height)){pending={id,key:info.key};polling=true;requestAnimationFrame(pollPreviews);}}
+    }catch(error){console.warn("Filter previews unavailable",error);}
+  },200);
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
   const title=element("h3"),body=element("div","property-controls");properties.append(title,body);panels.get("properties").append(properties);
@@ -44,6 +100,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     return {node:graph,update:c=>{control=c;path.setAttribute("d",c.plot.map(([x,y],i)=>`${i?"L":"M"}${x*200} ${(1-y)*200}`).join(" "));points.replaceChildren(...c.value.value.map(([x,y])=>svg("circle",{cx:x*200,cy:(1-y)*200,r:3.5})));}};
   }
   function refresh(){
+    refreshPicker();
     const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
     const next=JSON.stringify([String(view.layer),view.controls.map(c=>[c.key,c.kind,c.label,c.section])]);
     if(schema!==next){

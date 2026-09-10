@@ -68,7 +68,7 @@ chrome.stdio[4].on("data", (data) => {
       );
     else if (
       event.method === "Runtime.consoleAPICalled" &&
-      event.params.type === "error"
+      ["error", "warning"].includes(event.params.type)
     )
       errors.push(
         event.params.args.map((a) => a.value || a.description).join(" "),

@@ -1989,6 +1989,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.tool = self.layer_interaction.tool;
         let references = self.reference_selection();
         self.state.layer_tools.can_reference = !references.is_empty();
+        self.state.layer_tools.can_delete =
+            doc.can_delete_layers(&doc.layer_roots(&self.layer_interaction.selected));
         self.state.layer_tools.references_selected = !references.is_empty()
             && references
                 .iter()
@@ -2132,6 +2134,70 @@ mod tests {
                 layer_core::BuiltinEffect::ALL.len()
             );
             assert_eq!(s.engine.document().revision, revision);
+            for choice in &s.state.adjustments {
+                assert_eq!(choice.animated, choice.id.program().time);
+                assert_eq!(choice.tooltip.contains("Animated"), choice.animated);
+            }
+        }
+    }
+
+    #[test]
+    fn filter_insertion_preserves_clipping_stack_and_delete_capabilities() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            for _ in 0..2 {
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::New {
+                        group: false,
+                        clipped: true,
+                    },
+                })
+                .unwrap();
+            }
+            let clips: Vec<_> = s
+                .engine
+                .document()
+                .layers
+                .iter()
+                .filter(|l| l.properties.clipped)
+                .map(|l| l.id)
+                .collect();
+            let top = clips[0];
+            s.dispatch(UiAction::SetLayerVisibility {
+                id: top.0,
+                visible: false,
+            })
+            .unwrap();
+            for selected in [LayerId(1), clips[1], top] {
+                s.dispatch(UiAction::SelectLayer { id: selected.0 })
+                    .unwrap();
+                assert_eq!(
+                    s.state.layer_tools.can_delete,
+                    selected != LayerId(1),
+                    "base cannot be deleted without its clips"
+                );
+                s.dispatch(UiAction::Effect {
+                    action: EffectAction::Insert {
+                        effect: layer_core::BuiltinEffect::HeatHaze,
+                    },
+                })
+                .unwrap();
+                let doc = s.engine.document();
+                assert_eq!(doc.layers[0].id, doc.active_layer);
+                assert_eq!(doc.layers[1].id, top);
+                for clip in &clips {
+                    assert_eq!(doc.clipping_base(*clip), Some(LayerId(1)));
+                }
+                assert!(s.state.layer_tools.can_delete);
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::DeleteSelected,
+                })
+                .unwrap();
+                assert_eq!(s.engine.document().layers[0].id, top);
+            }
+            s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+            assert!(!s.state.layer_tools.can_delete, "paper is protected");
         }
     }
 

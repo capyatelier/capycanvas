@@ -364,6 +364,25 @@ fn native_layer_panel_review() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(700);
+    let delete = find_named(w.layer_panel.root.upcast_ref(), "delete-selected-layers")
+        .unwrap()
+        .downcast::<gtk::Button>()
+        .unwrap();
+    let count = state(&w).layers.len();
+    send(
+        &w,
+        A::New {
+            group: false,
+            clipped: false,
+        },
+    );
+    assert!(delete.is_sensitive());
+    delete.emit_clicked();
+    pump(80);
+    assert_eq!(state(&w).layers.len(), count);
+    w.dispatch(UiAction::SelectLayer { id: 2 });
+    assert!(!delete.is_sensitive());
+    w.dispatch(UiAction::SelectLayer { id: 1 });
     let dir = "../../artifacts/ui/layers-gtk";
     std::fs::create_dir_all(dir).unwrap();
     w.dispatch(UiAction::SetTheme {

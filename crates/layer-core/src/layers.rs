@@ -5,6 +5,34 @@ use super::*;
 mod organization_tests {
     use super::*;
     #[test]
+    fn clipping_stack_top_respects_siblings_and_hidden_members() {
+        let mut doc = Document::new("stack", 100, 100);
+        let mut group = Layer::paint(LayerId(7), "Group");
+        group.kind = LayerKind::Group;
+        let mut clip = Layer::paint(LayerId(3), "Hidden clip");
+        clip.visible = false;
+        clip.properties.parent = Some(group.id);
+        clip.properties.clipped = true;
+        let mut second = clip.clone();
+        second.id = LayerId(4);
+        let mut base = doc.layers[0].clone();
+        base.properties.parent = Some(group.id);
+        // Storage can interleave unrelated roots; only sibling order matters.
+        doc.layers = vec![
+            group,
+            clip,
+            Layer::paint(LayerId(8), "Other root"),
+            second,
+            base,
+            doc.layers[1].clone(),
+        ];
+        assert_eq!(doc.clipping_stack_top(LayerId(1)), Some(LayerId(3)));
+        assert_eq!(doc.clipping_stack_top(LayerId(4)), Some(LayerId(3)));
+        assert_eq!(doc.clipping_stack_top(LayerId(8)), Some(LayerId(8)));
+        assert_eq!(doc.clipping_stack_top(LayerId(99)), None);
+    }
+
+    #[test]
     fn grouping_and_ungrouping_preserve_order_and_world_coordinates() {
         let mut doc = Document::new("groups", 100, 100);
         doc.apply(Edit::InsertLayer {
@@ -270,7 +298,26 @@ impl Document {
             .filter(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
             .map(|l| l.id)
     }
-    pub fn delete_layers_edit(&self, roots: &[LayerId]) -> Result<Edit, DocumentError> {
+    /// Insert ordinary adjustments above this sibling stack, never between its
+    /// clipping base and attached layers. Hidden clips still own their place.
+    pub fn clipping_stack_top(&self, id: LayerId) -> Option<LayerId> {
+        let index = self.layers.iter().position(|l| l.id == id)?;
+        let parent = self.layers[index].properties.parent;
+        Some(
+            self.layers[..index]
+                .iter()
+                .rev()
+                .filter(|l| l.properties.parent == parent)
+                .take_while(|l| l.properties.clipped)
+                .last()
+                .map_or(id, |l| l.id),
+        )
+    }
+    /// Capability checks must not clone the document or construct undo edits.
+    pub fn can_delete_layers(&self, roots: &[LayerId]) -> bool {
+        self.deletable_layer_ids(roots).is_ok()
+    }
+    fn deletable_layer_ids(&self, roots: &[LayerId]) -> Result<BTreeSet<LayerId>, DocumentError> {
         if roots.is_empty() {
             return Err(DocumentError::InvalidLayerOperation("Select layers first"));
         }
@@ -292,6 +339,17 @@ impl Document {
                 "Include the clipped layers above this base",
             ));
         }
+        if !self
+            .layers
+            .iter()
+            .any(|l| l.kind == LayerKind::Paint && !ids.contains(&l.id))
+        {
+            return Err(DocumentError::LastPaintLayer);
+        }
+        Ok(ids)
+    }
+    pub fn delete_layers_edit(&self, roots: &[LayerId]) -> Result<Edit, DocumentError> {
+        let ids = self.deletable_layer_ids(roots)?;
         let edit = Edit::Batch(
             self.ordered_layers()
                 .into_iter()
