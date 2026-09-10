@@ -93,6 +93,10 @@ border beside the step buttons. No GNOME artwork or fonts are vendored; web
 uses locally installed Adwaita Sans with a system-font fallback. Font metrics on
 other systems, native browser color/select popups, OS window icons, and the absence
 of an OS close button in web content are intentional platform differences.
+For outlined SVGs, put `transparent-fill foreground-stroke` on each path,
+circle or rectangle, not only its parent group: GTK's symbolic recoloring
+otherwise fills the child shapes. The native/web pixel check includes hollow
+eye centers in both themes to catch this independently of layout measurements.
 
 Canvas cursors are shared Rust presentation data: brush-size outline (default),
 outline with cross, cross, dot, or none. GTK's canvas worker draws the vectors in

@@ -289,10 +289,10 @@ export async function checkParity({ call, evaluate, settle }) {
     ...Array.from({ length: 12 }, (_, i) => [234 + i, 400]),
     ...Array.from({ length: 16 }, (_, i) => [500, toolbar[1] + toolbar[3] + i]),
   ];
-  const pixels = async (name) => {
+  const pixels = async (name, samples = points) => {
     const png = await readFile(`${dir}/${name}.png`);
     return evaluate(
-      `(async () => {const image=new Image();image.src='data:image/png;base64,${png.toString("base64")}';await image.decode();const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return ${JSON.stringify(points)}.map(([x,y])=>Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3));})()`,
+      `(async () => {const image=new Image();image.src='data:image/png;base64,${png.toString("base64")}';await image.decode();const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return ${JSON.stringify(samples)}.map(([x,y])=>Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3));})()`,
     );
   };
   const shadow = {};
@@ -319,6 +319,19 @@ export async function checkParity({ call, evaluate, settle }) {
       maxDelta <= 3,
       `${theme} panel/shadow pixels differ by ${maxDelta}/255`,
     );
+    // GTK symbolic recoloring applies per SVG shape: classes only on a
+    // parent <g> incorrectly filled these outlines. A hollow center is mostly
+    // background even with GTK/Skia's different antialiasing of this tiny hole.
+    const eyes = nativeColumns.filter((_, i) => i % 2 === 0).flatMap(({ bounds: [x, y, w, h] }) =>
+      [[x - 3, y + h / 2], [x + w / 2, y + h / 2]]);
+    const foreground = metrics[theme][".layer-row > button"][0].color.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const distance = (a, b) => Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+    for (const host of ["gtk", "web"]) {
+      const samples = await pixels(`${host}-${theme}`, eyes);
+      for (let i = 0; i < samples.length; i += 2)
+        assert.ok(distance(samples[i], samples[i + 1]) < .5 * distance(samples[i], foreground),
+          `${host} ${theme} eye ${i / 2} must have a hollow center`);
+    }
   }
 
   // Pen-first chrome: no browser selection/tap/focus decorations, but a real
