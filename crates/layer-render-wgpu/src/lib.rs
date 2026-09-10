@@ -24,6 +24,8 @@ mod canvas_preview;
 mod color_sample;
 mod effect_validation;
 mod effects;
+#[cfg(test)]
+mod flood;
 mod layer_masks;
 #[cfg(test)]
 mod layer_tests;

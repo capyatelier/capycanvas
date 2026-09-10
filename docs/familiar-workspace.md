@@ -578,6 +578,52 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   (actual WebGPU drawing and replay) and `--gpu-compatibility` (strict non-null
   layouts plus startup-failure recovery). No physical Android/iPad selection
   validation is claimed; new tool UI rollout still awaits GTK review.
+- Auto Select / bucket Fill: the GPU connected-region primitive is validated
+  but **not connected to production tools yet**. It is currently test-only
+  (`flood.rs` / `flood.wgsl`), so it adds no startup or drawing work. Three
+  dispatches classify and join pixels within 16×16 blocks, merge connections
+  across block boundaries, then pack the seed component and reduce its bounds.
+  This is original WGSL, informed by [GPU connected-component labeling research](https://federicobolelli.it/media/publications/pdfs/2024tpds.pdf).
+  No external shader implementation was imported. Four-connected neighbors
+  avoid leaks through diagonal corners; tolerance compares every pixel to the
+  fixed seed in premultiplied sRGB including alpha, ignoring hidden transparent
+  RGB. It does not drift gradually across a color ramp.
+- Region validation compares every output pixel and bounds against an independent
+  test-only CPU flood oracle for 108 size/pattern/seed combinations: solid,
+  checkerboard, isolated cells, one-pixel serpentine corridors, noise and a wall
+  with a gap. Additional tests cover tolerance, transparency, invalid requests,
+  and several differently sized requests queued together while reusing scratch.
+  Runtime rasterization remains GPU-only; the oracle is not a CPU fallback.
+- Region storage: reusable parents cost four bytes per source pixel; immutable
+  output costs half a byte per pixel plus a 32-byte header and row/alignment
+  padding, with a separate 32-byte bounds/count summary. At 2048×1536 this is
+  12 MiB scratch plus approximately 1.5 MiB per retained result. Encoding has no
+  pixel readback or wait. The benchmark allocates a result and bindings per
+  **request**, not per drawing frame; the parent buffer is reused. This does not
+  yet account for source composition, history persistence or selection display.
+- Isolated release benchmark, 2048×1536, last 120 of 150 samples on the test
+  workstation; each triplet is median/p95/p99 milliseconds. Completion includes
+  an explicit **test-only** queue wait. Pipeline creation and source preparation
+  occur before timing; these are primitive costs, not end-to-end tool latency:
+
+  | Region source | CPU | GPU | Completed |
+  | --- | --- | --- | --- |
+  | Solid | 0.017 / 0.022 / 0.187 | 0.265 / 0.290 / 0.292 | 0.339 / 0.368 / 0.490 |
+  | Line-art cells | 0.017 / 0.018 / 0.023 | 0.149 / 0.151 / 0.153 | 0.204 / 0.209 / 0.328 |
+  | One-pixel maze | 0.017 / 0.021 / 0.067 | 0.268 / 0.335 / 0.421 | 0.328 / 0.418 / 0.490 |
+  | Noise | 0.016 / 0.051 / 0.150 | 0.081 / 0.083 / 0.084 | 0.137 / 0.177 / 0.275 |
+
+  First Solid completion was 5.139ms, versus 0.35–0.45ms for the subsequent
+  fixtures. No claim of cold-start or tablet latency is implied. Repeat with
+  `cargo test -p layer-render-wgpu --release connected_region_latency --lib -- --ignored --nocapture --test-threads=1`.
+- Region integration remaining: immutable selection coverage shared with strokes,
+  masks and operations; asynchronous durable history without rerunning against
+  changed artwork; a GPU selection outline; source selection for editing layer,
+  visible artwork and reference layers; shared settings/input and GTK review.
+  [CSP's reference-layer workflow](https://help.clip-studio.com/en-us/manual_en/180_layers/Reference_layers.htm)
+  motivates separating the line-art source from the layer receiving color.
+  Gap closing, edge expansion and antialiasing need explicit follow-up rather
+  than being silently conflated with color tolerance.
 - Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, rulers, remaining shortcuts
   and full functional/performance validation.
