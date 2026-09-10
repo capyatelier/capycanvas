@@ -334,6 +334,7 @@ pub enum Panel {
     Adjustments,
     Properties,
     Stats,
+    Navigator,
     CustomToolbar(u32),
 }
 
@@ -350,6 +351,7 @@ impl From<Panel> for String {
             Panel::Adjustments => "adjustments".into(),
             Panel::Properties => "properties".into(),
             Panel::Stats => "stats".into(),
+            Panel::Navigator => "navigator".into(),
             Panel::CustomToolbar(id) => format!("toolbar:{id}"),
         }
     }
@@ -367,6 +369,7 @@ impl TryFrom<String> for Panel {
             "adjustments" => Self::Adjustments,
             "properties" => Self::Properties,
             "stats" => Self::Stats,
+            "navigator" => Self::Navigator,
             _ => {
                 let id: u32 = value
                     .strip_prefix("toolbar:")
@@ -393,7 +396,7 @@ impl Panel {
     /// New native panel bodies remain GTK-only until their review is complete.
     /// Keep their saved identities, but do not offer unimplemented host views.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        !matches!(self, Self::ToolSettings | Self::Color)
+        !matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
             || matches!(platform, crate::Platform::Gtk | crate::Platform::Generic)
     }
     pub fn kind(self) -> PanelKind {
@@ -403,7 +406,7 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Toolbar,
         Self::Brushes,
         Self::ToolSettings,
@@ -413,6 +416,7 @@ impl Panel {
         Self::Adjustments,
         Self::Properties,
         Self::Stats,
+        Self::Navigator,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -424,7 +428,8 @@ impl Panel {
             Self::Layers => "Layers",
             Self::Adjustments => "Filters",
             Self::Properties => "Properties",
-            Self::Stats => "Stats for nerds",
+            Self::Stats => "Diagnostics",
+            Self::Navigator => "Navigator",
             Self::CustomToolbar(_) => "Toolbar",
         }
     }
@@ -439,6 +444,7 @@ impl Panel {
             Self::Adjustments => "adjustments",
             Self::Properties => "properties",
             Self::Stats => "stats",
+            Self::Navigator => "navigator",
         }
     }
 }
@@ -658,6 +664,7 @@ fn read_panel_registry<'de, D: serde::Deserializer<'de>>(
                 | Panel::Stats
                 | Panel::ToolSettings
                 | Panel::Color
+                | Panel::Navigator
         ) && !panels.iter().any(|p| p.id == default.id)
         {
             panels.push(default);
@@ -1395,7 +1402,11 @@ impl DockLayout {
         let band = next.allocate()?;
         let edge = match panel {
             Panel::Brushes | Panel::ToolSettings | Panel::Color | Panel::Sizes => Edge::Left,
-            Panel::Layers | Panel::Adjustments | Panel::Properties | Panel::Stats => Edge::Right,
+            Panel::Layers
+            | Panel::Adjustments
+            | Panel::Properties
+            | Panel::Stats
+            | Panel::Navigator => Edge::Right,
             _ => Edge::Top,
         };
         next.bands.push(DockBand {
@@ -1672,6 +1683,7 @@ impl DockLayout {
                 .map(|p| match p {
                     Panel::Layers => LAYERS_MIN_WIDTH,
                     Panel::Brushes | Panel::ToolSettings => TOOL_PANEL_MIN_WIDTH,
+                    Panel::Navigator => 192.0,
                     _ => 0.0,
                 })
                 .fold(0.0, f32::max)
@@ -1742,8 +1754,13 @@ impl DockLayout {
             DockItem::Tile { .. } => unreachable!(),
         };
         let whole = moving.len() == source_len;
-        if matches!(target, DockTarget::Tab {group, ..} if group == source_group) && whole {
-            return Ok(());
+        if let DockTarget::Tab { group, index } = target
+            && group == source_group
+        {
+            let index = index.unwrap_or(source_len).min(source_len);
+            if whole || index == source_index || index == source_index + 1 {
+                return Ok(());
+            }
         }
         let moving_id = if whole || matches!(target, DockTarget::Tab { .. }) {
             source_group
@@ -1983,6 +2000,12 @@ impl DockLayout {
                 }
             }
         }
+        // Removing and reinserting at the same place may create new split IDs,
+        // regroup same-axis splits and reset fractions to 0.5. Keep the original
+        // tree (and all manually sized heights/widths) when placement is unchanged.
+        if self.same_placement(&next) {
+            return Ok(());
+        }
         if let DockTarget::Split {
             group,
             edge: Edge::Left | Edge::Right,
@@ -2017,6 +2040,49 @@ impl DockLayout {
         next.validate()?;
         *self = next;
         Ok(())
+    }
+
+    /// Dock topology without sizing or binary split association: A/(B/C) and
+    /// (A/B)/C describe the same column. Floating geometry/order still matters.
+    pub(crate) fn same_placement(&self, other: &Self) -> bool {
+        #[derive(PartialEq)]
+        enum Part<'a> {
+            Band(Edge),
+            Split(Axis),
+            Tabs(u32, &'a [Panel]),
+            End,
+        }
+        fn append<'a>(node: &'a DockNode, parent: Option<Axis>, out: &mut Vec<Part<'a>>) {
+            match node {
+                DockNode::Tabs { id, panels, .. } => out.push(Part::Tabs(*id, panels)),
+                DockNode::Split {
+                    axis,
+                    first,
+                    second,
+                    ..
+                } => {
+                    let nested = parent != Some(*axis);
+                    if nested {
+                        out.push(Part::Split(*axis));
+                    }
+                    append(first, Some(*axis), out);
+                    append(second, Some(*axis), out);
+                    if nested {
+                        out.push(Part::End);
+                    }
+                }
+            }
+        }
+        fn order(layout: &DockLayout) -> Vec<Part<'_>> {
+            let mut out = Vec::new();
+            for band in &layout.bands {
+                out.push(Part::Band(band.edge));
+                append(&band.root, None, &mut out);
+                out.push(Part::End);
+            }
+            out
+        }
+        self.floating == other.floating && order(self) == order(other)
     }
 
     /// A single multi-column section determines a sidebar's natural width;
@@ -5128,6 +5194,120 @@ mod tests {
         assert_eq!(layout, before);
     }
     const VIEWPORT: [f32; 2] = [1200.0, 900.0];
+
+    #[test]
+    fn same_slot_drops_preserve_sizes_ids_and_active_tabs() {
+        let viewport = [1800.0, 1200.0];
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let mut original = DockLayout::default();
+            original.bands[0].extent = 560.0;
+            let DockNode::Split {
+                axis: direction,
+                fraction,
+                second,
+                ..
+            } = &mut original.bands[0].root
+            else {
+                unreachable!()
+            };
+            *direction = axis;
+            *fraction = 0.26;
+            **second = DockNode::Split {
+                id: 9,
+                axis,
+                fraction: 0.41,
+                first: second.clone(),
+                second: Box::new(DockNode::Tabs {
+                    id: 10,
+                    panels: vec![Panel::Color],
+                    active: Panel::Color,
+                    tab_style: crate::TabStyle::default(),
+                }),
+            };
+            original.next_id = 11;
+            original.validate().unwrap();
+            let leading = if axis == Axis::Vertical {
+                Edge::Top
+            } else {
+                Edge::Left
+            };
+            let trailing = if axis == Axis::Vertical {
+                Edge::Bottom
+            } else {
+                Edge::Right
+            };
+            for (source, target, edge) in [
+                (5, 6, leading),
+                (6, 5, trailing),
+                (6, 10, leading),
+                (10, 6, trailing),
+            ] {
+                for item in [
+                    DockItem::Group { group: source },
+                    DockItem::Panel {
+                        panel: original.group_panels(source).unwrap()[0],
+                    },
+                ] {
+                    let mut next = original.clone();
+                    next.move_item(
+                        viewport,
+                        item,
+                        DockTarget::Split {
+                            group: target,
+                            edge,
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(next, original, "same slot in {axis:?}: {item:?}");
+                }
+            }
+            let mut reordered = original.clone();
+            reordered
+                .move_item(
+                    viewport,
+                    DockItem::Group { group: 10 },
+                    DockTarget::Split {
+                        group: 5,
+                        edge: leading,
+                    },
+                )
+                .unwrap();
+            assert!(
+                !reordered.same_placement(&original),
+                "real reorder must still work"
+            );
+        }
+        let original = DockLayout::default();
+        for (panel, index) in [
+            (Panel::Adjustments, Some(1)),
+            (Panel::Adjustments, Some(2)),
+            (Panel::Properties, None),
+        ] {
+            let mut next = original.clone();
+            next.move_panel(viewport, panel, DockTarget::Tab { group: 8, index })
+                .unwrap();
+            assert_eq!(
+                next, original,
+                "no tab activation or fit reset for same-slot drops"
+            );
+        }
+        // A full band dropped at its current priority/edge retains its extent
+        // and ID rather than becoming a newly allocated default-width band.
+        let mut next = original.clone();
+        next.bands.retain(|band| band.id == 7);
+        next.bands[0].extent = 315.0;
+        let original = next.clone();
+        next.move_item(
+            viewport,
+            DockItem::Group { group: 8 },
+            DockTarget::Edge {
+                edge: Edge::Right,
+                outer: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(next, original);
+    }
     #[test]
     fn side_drops_preserve_widths_while_vertical_drops_share_height() {
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {

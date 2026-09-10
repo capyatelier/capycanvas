@@ -98,9 +98,8 @@ impl GpuCanvas {
         )?;
         let surround = self.session.state().palette.surround_linear;
         self.session.renderer_mut().surround = surround;
-        let mut changed = self
-            .session
-            .frame(now_ns, now_ns.saturating_add(8_333_333))?;
+        let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
+        let mut changed = self.session.frame(now_ns, presentation_ns)?;
         changed.regions |= resized.regions;
         self.needs_present = false;
         #[cfg(test)]
@@ -148,12 +147,14 @@ fn extent(area: &gtk::Picture) -> [u32; 2] {
     ]
 }
 
-/// Independent 120 Hz pacing, not GTK's scene frame clock (which can fall back
-/// to 60 Hz when only our child changes). timerfd uses absolute kernel intervals;
+/// Independent display pacing (120 Hz fallback), not GTK's scene frame clock
+/// which can fall back to 60 Hz when only our child changes. Uses the compositor's
+/// presentation phase when available. timerfd uses absolute kernel intervals;
 /// missed expirations coalesce, preserving input without replaying stale frames.
 pub const FRAME_NS: u64 = 8_333_333;
 pub fn schedule(
     deadline_ns: u64,
+    period_ns: u64,
     mut frame: impl FnMut() -> gtk::glib::ControlFlow + 'static,
 ) -> u64 {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -172,8 +173,8 @@ pub fn schedule(
     let first = deadline_ns.max(gtk::glib::monotonic_time().max(0) as u64 * 1000 + 1);
     let interval = libc::itimerspec {
         it_interval: libc::timespec {
-            tv_sec: 0,
-            tv_nsec: FRAME_NS as _,
+            tv_sec: (period_ns / 1_000_000_000) as _,
+            tv_nsec: (period_ns % 1_000_000_000) as _,
         },
         it_value: libc::timespec {
             tv_sec: (first / 1_000_000_000) as _,

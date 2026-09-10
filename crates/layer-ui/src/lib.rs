@@ -5,6 +5,8 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod navigator;
+pub use navigator::NavigatorGeometry;
 mod color;
 mod tool_settings;
 mod tools;
@@ -153,7 +155,9 @@ pub const MENUS: &[MenuSpec] = &[
     MenuSpec {
         label: "View",
         sections: &[
-            &[CommandId::FitCanvas],
+            &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
+            &[CommandId::RotateLeft, CommandId::RotateRight],
+            &[CommandId::FlipHorizontal, CommandId::FlipVertical],
             &[CommandId::ZenMode, CommandId::ToggleTheme],
             &[CommandId::ResetLayout],
         ],
@@ -246,6 +250,11 @@ pub fn ui_catalog() -> UiCatalog {
             "grip",
             "check",
             "fit",
+            "navigator",
+            "rotate-left",
+            "rotate-right",
+            "flip-horizontal",
+            "flip-vertical",
             const { ZenIcon::LookingUp.icon() },
             const { ZenIcon::FacingForward.icon() },
             const { ZenIcon::Bathing.icon() },
@@ -317,6 +326,12 @@ pub enum CommandId {
     NewToolbar,
     ManageToolbars,
     FitCanvas,
+    ZoomIn,
+    ZoomOut,
+    RotateLeft,
+    RotateRight,
+    FlipHorizontal,
+    FlipVertical,
     Settings,
     ToggleTheme,
     AddLayer,
@@ -340,7 +355,10 @@ impl CommandId {
     }
     /// Retained on/off commands can be presented as checkable menu items.
     pub fn is_toggle(self) -> bool {
-        matches!(self, Self::ZenMode | Self::ToggleTheme)
+        matches!(
+            self,
+            Self::ZenMode | Self::ToggleTheme | Self::FlipHorizontal | Self::FlipVertical
+        )
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
@@ -357,6 +375,12 @@ impl CommandId {
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
+            Self::ZoomIn => "plus",
+            Self::ZoomOut => "minus",
+            Self::RotateLeft => "rotate-left",
+            Self::RotateRight => "rotate-right",
+            Self::FlipHorizontal => "flip-horizontal",
+            Self::FlipVertical => "flip-vertical",
             Self::ZenMode => ZenIcon::LookingUp.icon(),
             Self::Settings => "settings",
             Self::AddLayer => "plus",
@@ -366,7 +390,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 34] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -384,6 +408,12 @@ impl CommandId {
         Self::NewToolbar,
         Self::ManageToolbars,
         Self::FitCanvas,
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::RotateLeft,
+        Self::RotateRight,
+        Self::FlipHorizontal,
+        Self::FlipVertical,
         Self::ToggleTheme,
         Self::Settings,
         Self::AddLayer,
@@ -421,6 +451,12 @@ impl CommandId {
             Self::NewToolbar => "New Toolbar…",
             Self::ManageToolbars => "Manage Toolbars…",
             Self::FitCanvas => "Fit canvas",
+            Self::ZoomIn => "Zoom in",
+            Self::ZoomOut => "Zoom out",
+            Self::RotateLeft => "Rotate view 90° left",
+            Self::RotateRight => "Rotate view 90° right",
+            Self::FlipHorizontal => "Flip view horizontally",
+            Self::FlipVertical => "Flip view vertically",
             Self::Settings => "Preferences",
             Self::ToggleTheme => "Dark Mode",
             Self::AddLayer => "New layer",
@@ -537,6 +573,11 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    Navigator {
+        phase: ContactPhase,
+        position: [f32; 2],
+        viewport: [f32; 2],
+    },
     FilterPicker {
         action: FilterPickerAction,
     },

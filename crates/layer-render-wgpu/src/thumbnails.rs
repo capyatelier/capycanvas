@@ -70,17 +70,56 @@ impl WgpuRasterizer {
         request_id: u64,
         reply: impl FnOnce(Result<ReadbackImage, GpuRasterError>) + Send + 'static,
     ) {
-        let (texture, view) = create_target(
-            &self.device,
-            [width, height],
-            EXPORT_FORMAT,
-            "UI image sRGB",
-        );
+        let target = UiImageTarget::new(&self.device, [width, height]);
+        target.encode(&mut encoder, &self.pipelines.export, source);
+        self.uploads.finish(&encoder);
+        self.queue.submit([encoder.finish()]);
+        target.map(request_id, reply);
+    }
+}
+
+/// Reusable bounded output and staging buffer. The owner must consume the map
+/// completion before encoding into it again; no fences or blocking waits.
+pub(super) struct UiImageTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    buffer: wgpu::Buffer,
+    stride: u32,
+}
+impl UiImageTarget {
+    pub fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
+        let (texture, view) = create_target(device, size, EXPORT_FORMAT, "UI image sRGB");
+        let stride = (size[0] * 4).div_ceil(256) * 256;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("small UI image readback"),
+            size: stride as u64 * size[1] as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            texture,
+            view,
+            buffer,
+            stride,
+        }
+    }
+    pub fn size(&self) -> [u32; 2] {
+        [self.texture.width(), self.texture.height()]
+    }
+    pub fn storage_bytes(&self) -> u64 {
+        u64::from(self.texture.height()) * u64::from(self.texture.width() * 4 + self.stride)
+    }
+    pub fn encode(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        source: &wgpu::BindGroup,
+    ) {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("UI image color conversion"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -93,33 +132,32 @@ impl WgpuRasterizer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines.export);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, source, &[]);
             pass.draw(0..3, 0..1);
         }
-        let stride = (width * 4).div_ceil(256) * 256;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("small UI image readback"),
-            size: stride as u64 * height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         encoder.copy_texture_to_buffer(
-            texture.as_image_copy(),
+            self.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
+                buffer: &self.buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(height),
+                    bytes_per_row: Some(self.stride),
+                    rows_per_image: Some(self.texture.height()),
                 },
             },
-            texture.size(),
+            self.texture.size(),
         );
-        self.uploads.finish(&encoder);
-        self.queue.submit([encoder.finish()]);
-        let ready = buffer.clone();
-        buffer
+    }
+    pub fn map(
+        &self,
+        request_id: u64,
+        reply: impl FnOnce(Result<ReadbackImage, GpuRasterError>) + Send + 'static,
+    ) {
+        let [width, height] = self.size();
+        let stride = self.stride;
+        let ready = self.buffer.clone();
+        self.buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 let image = result
@@ -134,7 +172,6 @@ impl WgpuRasterizer {
                             bytes.extend_from_slice(&row[..width as usize * 4]);
                         }
                         drop(data);
-                        ready.unmap();
                         Ok(ReadbackImage {
                             request_id,
                             width,
@@ -143,6 +180,9 @@ impl WgpuRasterizer {
                             bytes,
                         })
                     });
+                // A persistent staging buffer must also be reusable after a
+                // failed mapped-range access, not only after successful copies.
+                ready.unmap();
                 reply(image);
             });
     }

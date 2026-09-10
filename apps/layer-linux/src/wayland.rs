@@ -1,6 +1,12 @@
 //! Our child surface only. GTK retains its connection, parent, input and chrome.
 use gtk::{gdk, glib::translate::*, prelude::*};
-use std::ptr::NonNull;
+use std::{
+    ptr::NonNull,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     backend::{Backend, ObjectId},
@@ -9,8 +15,70 @@ use wayland_client::{
         wl_compositor, wl_region, wl_registry, wl_subcompositor, wl_subsurface, wl_surface,
     },
 };
-#[cfg(test)]
 use wayland_protocols::wp::presentation_time::client::{wp_presentation, wp_presentation_feedback};
+
+/// The compositor's display phase, not the frequency of GTK scene updates.
+/// One small sample per second suffices; no locks on the input thread.
+#[derive(Default)]
+pub struct FrameClock {
+    phase_ns: AtomicU64,
+    period_ns: AtomicU64,
+}
+impl FrameClock {
+    pub fn period(&self) -> u64 {
+        match self.period_ns.load(Ordering::Relaxed) {
+            n @ 1_000_000..=1_000_000_000 => n,
+            _ => crate::canvas::FRAME_NS,
+        }
+    }
+    pub fn deadline(&self, now: u64) -> Option<u64> {
+        let phase = self.phase_ns.load(Ordering::Acquire);
+        if phase == 0 {
+            return None;
+        }
+        let period = self.period();
+        // Leave half a refresh interval for the canvas and GTK overlay to be
+        // ready together. An unphased timer can repeatedly miss the same vblank.
+        let base = phase.saturating_sub(period / 2);
+        Some(if base > now {
+            base
+        } else {
+            base + ((now - base) / period + 1) * period
+        })
+    }
+    pub fn presentation(&self, now: u64) -> u64 {
+        let phase = self.phase_ns.load(Ordering::Acquire);
+        let period = self.period();
+        if phase == 0 {
+            now + period
+        } else if phase > now {
+            phase
+        } else {
+            phase + ((now - phase) / period + 1) * period
+        }
+    }
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+    #[test]
+    fn display_phase_survives_idle_and_period_changes() {
+        let clock = FrameClock::default();
+        assert_eq!(clock.deadline(0), None);
+        assert_eq!(clock.period(), crate::canvas::FRAME_NS);
+        for period in [8_333_333, 16_666_667, 6_944_444] {
+            let phase = 10_000_000_000;
+            clock.period_ns.store(period, Ordering::Relaxed);
+            clock.phase_ns.store(phase, Ordering::Release);
+            for now in [phase, phase + period / 2, phase + period * 1234 + 1] {
+                let next = clock.deadline(now).unwrap();
+                assert!(next > now && next - now <= period);
+                assert_eq!((next + period / 2 - phase) % period, 0);
+            }
+        }
+    }
+}
 
 unsafe extern "C" {
     fn gdk_wayland_display_get_wl_display(display: *mut gdk::ffi::GdkDisplay) -> *mut libc::c_void;
@@ -87,12 +155,16 @@ pub struct Child {
     events: EventQueue<Events>,
     state: Events,
     geometry: Option<Geometry>,
-    #[cfg(test)]
     presentation: Option<wp_presentation::WpPresentation>,
+    #[cfg(not(test))]
+    last_feedback: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
 struct Events {
+    clock: Arc<FrameClock>,
+    monotonic: bool,
+    feedback_pending: bool,
     #[cfg(test)]
     presented: Vec<[u64; 4]>,
 }
@@ -122,7 +194,6 @@ impl Child {
         subsurface.place_below(&parent);
         subsurface.set_desync();
         subcompositor.destroy();
-        #[cfg(test)]
         let presentation = globals.bind(&qh, 1..=1, ()).ok();
         Ok(Self {
             surface,
@@ -131,8 +202,9 @@ impl Child {
             events,
             state: Events::default(),
             geometry: None,
-            #[cfg(test)]
             presentation,
+            #[cfg(not(test))]
+            last_feedback: None,
         })
     }
 
@@ -167,9 +239,26 @@ impl Child {
         self.connection.flush().map_err(error)
     }
 
-    #[cfg(test)]
-    pub fn feedback(&self, id: u64) {
+    pub fn clock(&self) -> Arc<FrameClock> {
+        self.state.clock.clone()
+    }
+    pub fn feedback_pending(&self) -> bool {
+        self.state.feedback_pending
+    }
+
+    pub fn feedback(&mut self, id: u64) {
+        #[cfg(not(test))]
+        {
+            if self
+                .last_feedback
+                .is_some_and(|t| t.elapsed().as_secs() < 1)
+            {
+                return;
+            }
+            self.last_feedback = Some(std::time::Instant::now());
+        }
         if let Some(presentation) = &self.presentation {
+            self.state.feedback_pending = true;
             presentation.feedback(&self.surface, &self.events.handle(), id);
         }
     }
@@ -185,7 +274,6 @@ impl Drop for Child {
         // The caller drops the Vulkan surface/swapchain BEFORE this object.
         self.subsurface.destroy();
         self.surface.destroy();
-        #[cfg(test)]
         if let Some(presentation) = &self.presentation {
             presentation.destroy();
         }
@@ -213,15 +301,26 @@ wayland_client::delegate_noop!(Events: ignore wl_subcompositor::WlSubcompositor)
 wayland_client::delegate_noop!(Events: ignore wl_subsurface::WlSubsurface);
 wayland_client::delegate_noop!(Events: ignore wl_surface::WlSurface);
 wayland_client::delegate_noop!(Events: ignore wl_region::WlRegion);
-#[cfg(test)]
-wayland_client::delegate_noop!(Events: ignore wp_presentation::WpPresentation);
-#[cfg(test)]
+impl Dispatch<wp_presentation::WpPresentation, ()> for Events {
+    fn event(
+        state: &mut Self,
+        _: &wp_presentation::WpPresentation,
+        event: wp_presentation::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_presentation::Event::ClockId { clk_id } = event {
+            state.monotonic = clk_id == libc::CLOCK_MONOTONIC as u32;
+        }
+    }
+}
 impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, u64> for Events {
     fn event(
         state: &mut Self,
         _: &wp_presentation_feedback::WpPresentationFeedback,
         event: wp_presentation_feedback::Event,
-        id: &u64,
+        _id: &u64,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -233,15 +332,29 @@ impl Dispatch<wp_presentation_feedback::WpPresentationFeedback, u64> for Events 
             ..
         } = event
         {
-            state.presented.push([
-                *id,
-                ((u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo)) * 1_000_000_000
-                    + u64::from(tv_nsec),
-                u64::from(refresh),
-                1,
-            ]);
+            state.feedback_pending = false;
+            let time = ((u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo)) * 1_000_000_000
+                + u64::from(tv_nsec);
+            if state.monotonic
+                && (time.saturating_sub(state.clock.phase_ns.load(Ordering::Relaxed))
+                    >= 1_000_000_000
+                    || u64::from(refresh) != state.clock.period_ns.load(Ordering::Relaxed))
+            {
+                state
+                    .clock
+                    .period_ns
+                    .store(u64::from(refresh), Ordering::Relaxed);
+                state
+                    .clock
+                    .phase_ns
+                    .store(if refresh > 0 { time } else { 0 }, Ordering::Release);
+            }
+            #[cfg(test)]
+            state.presented.push([*_id, time, u64::from(refresh), 1]);
         } else if matches!(event, wp_presentation_feedback::Event::Discarded) {
-            state.presented.push([*id, 0, 0, 0]);
+            state.feedback_pending = false;
+            #[cfg(test)]
+            state.presented.push([*_id, 0, 0, 0]);
         }
     }
 }

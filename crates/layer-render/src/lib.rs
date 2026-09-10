@@ -194,6 +194,12 @@ pub struct EffectValidationResult {
     pub result: Result<(), String>,
 }
 
+/// Small cached canvas overview; no image means the requested revision is current.
+pub struct CanvasPreview {
+    pub revision: u64,
+    pub image: Option<ReadbackImage>,
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -230,6 +236,18 @@ pub trait CanvasRenderer {
         Ok(())
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        None
+    }
+    /// Bounded document overview, sampled from the current GPU composition.
+    /// An accepted request always produces a reply; unchanged revisions carry
+    /// no image and perform no GPU work. Only one request may be in flight.
+    fn request_canvas_preview(
+        &mut self,
+        _known_revision: Option<u64>,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    fn take_canvas_preview(&mut self) -> Option<Result<CanvasPreview, Self::Error>> {
         None
     }
     fn request_filter_previews(

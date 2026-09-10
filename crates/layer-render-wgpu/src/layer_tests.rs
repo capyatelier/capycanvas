@@ -94,6 +94,95 @@ fn left_mask(id: u64) -> LayerMask {
 }
 
 #[test]
+fn navigator_preview_reuses_composition_and_tracks_paint_mask_and_camera() {
+    let mut r = WgpuRasterizer::new().unwrap();
+    let mut layer = Layer::paint(LayerId(1), "paint");
+    layer.mask = Some(left_mask(9));
+    submit(
+        &mut r,
+        &[layer.clone()],
+        &[dab([1.0, 0.0, 0.0, 0.5])],
+        &[batch(1)],
+        true,
+    );
+    let await_preview = |r: &mut WgpuRasterizer| {
+        let start = std::time::Instant::now();
+        loop {
+            r.device.poll(wgpu::PollType::Poll).unwrap();
+            if let Some(result) = r.take_canvas_preview() {
+                break result.unwrap();
+            }
+            assert!(start.elapsed().as_secs() < 10, "preview map timed out");
+            std::thread::yield_now();
+        }
+    };
+    assert!(r.request_canvas_preview(None).unwrap());
+    assert!(
+        !r.request_canvas_preview(None).unwrap(),
+        "one in-flight map"
+    );
+    let first = await_preview(&mut r);
+    let image = first.image.unwrap();
+    assert_eq!([image.width, image.height], [256, 256]);
+    let at = |image: &ReadbackImage, x: usize, y: usize| -> [u8; 4] {
+        image.bytes[y * image.stride as usize + x * 4..][..4]
+            .try_into()
+            .unwrap()
+    };
+    let original = at(&image, 60, 128);
+    assert_eq!(&original[..3], &[255, 0, 0]);
+    assert!(original[3].abs_diff(128) <= 1);
+    assert_eq!(at(&image, 190, 128), [0; 4]);
+    let pixels = r.metrics.composited_pixels;
+    let mut camera = view();
+    camera.document_to_surface = [-1.0, 0.0, 0.0, 1.0, 100.0, 50.0];
+    for _ in 0..8 {
+        r.submit(FramePacket {
+            view: camera,
+            layers: &[layer.clone()],
+            document_extent: [128, 128],
+            dabs: &[],
+            dab_batches: &[],
+            reset_layers: false,
+            composite_all: false,
+            time_seconds: 0.0,
+        })
+        .unwrap();
+        assert!(r.request_canvas_preview(Some(first.revision)).unwrap());
+        assert!(await_preview(&mut r).image.is_none());
+    }
+    assert_eq!(
+        r.metrics.composited_pixels, pixels,
+        "camera and overview never rebuild composition"
+    );
+    // Live provisional ink changes the overview before pen-up, using the same target.
+    let mut b = batch(1);
+    b.kind = DabBatchKind::Preview;
+    submit(
+        &mut r,
+        &[layer.clone()],
+        &[dab([0.0, 0.0, 1.0, 1.0])],
+        &[b],
+        false,
+    );
+    assert!(r.request_canvas_preview(Some(first.revision)).unwrap());
+    let painted = await_preview(&mut r);
+    assert_ne!(painted.revision, first.revision);
+    assert_eq!(
+        at(painted.image.as_ref().unwrap(), 60, 128),
+        [0, 0, 255, 255]
+    );
+    assert_eq!(at(painted.image.as_ref().unwrap(), 190, 128), [0; 4]);
+    // Removing the provisional stroke restores the persistent masked image.
+    submit(&mut r, &[layer], &[], &[], false);
+    assert!(r.request_canvas_preview(Some(painted.revision)).unwrap());
+    assert_eq!(
+        at(await_preview(&mut r).image.as_ref().unwrap(), 60, 128),
+        original
+    );
+}
+
+#[test]
 fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
     let mut r = WgpuRasterizer::new().unwrap();
     let mut base = Layer::paint(LayerId(1), "base");

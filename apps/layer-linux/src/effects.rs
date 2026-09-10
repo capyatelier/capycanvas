@@ -62,6 +62,7 @@ impl EffectPanels {
         let adjustments = gtk::Box::new(gtk::Orientation::Vertical, 6);
         adjustments.add_css_class("filter-picker");
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        header.add_css_class("filter-picker-header");
         let category = gtk::DropDown::from_strings(&[]);
         category.set_hexpand(true);
         let search_entry = gtk::SearchEntry::builder()
@@ -74,11 +75,13 @@ impl EffectPanels {
         header.append(&search_entry);
         header.append(&search_button);
         let picker_body = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        picker_body.add_css_class("filter-picker-body");
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .child(&picker_body)
             .build();
+        scroller.add_css_class("filter-picker-scroll");
         adjustments.append(&header);
         adjustments.append(&scroller);
         let properties = gtk::Box::new(gtk::Orientation::Vertical, 6);

@@ -47,6 +47,8 @@ pub struct UiSession<R: CanvasRenderer> {
     pen: InputProducer<PenEvent>,
     input_pending: bool,
     touch: TouchGesture,
+    navigator_drag: Option<[f32; 2]>,
+    navigator_preview: crate::navigator::Preview,
     system_theme: Theme,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -87,6 +89,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             pen,
             input_pending: false,
             touch: TouchGesture::default(),
+            navigator_drag: None,
+            navigator_preview: Default::default(),
             system_theme: Theme::Light,
             logical_viewport: None,
             initial_fit: true,
@@ -144,6 +148,19 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn state(&self) -> &UiState {
         &self.state
+    }
+    pub fn poll_navigator_preview(
+        &mut self,
+        now_ns: u64,
+        visible: bool,
+    ) -> Result<Option<layer_render::ReadbackImage>, String> {
+        self.navigator_preview
+            .poll(self.engine.backend_mut(), now_ns, visible)
+    }
+    /// UI hosts may retain their animation clock while live thumbnails change.
+    /// Camera-only motion does not make the document overview animated.
+    pub fn navigator_updates_continuously(&self) -> bool {
+        self.input_pending || self.engine.has_active_stroke() || self.wants_continuous_frames()
     }
     pub fn set_platform(&mut self, platform: Platform) {
         self.state.platform = platform;
@@ -784,7 +801,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .move_item(viewport, drag.item, hint.target)?;
             }
             self.workspace_drag = None;
-            self.workspace_history.finish(&self.state.workspace);
+            self.workspace_history
+                .finish_move(&mut self.state.workspace);
             self.interaction.keep_chrome_until_contact = false;
         }
         Ok(())
@@ -895,7 +913,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let mut probe = self.state.workspace.layout.clone();
         probe.move_item(viewport, item, hint.target.clone()).ok()?;
-        Some(hint)
+        (probe != self.state.workspace.layout).then_some(hint)
     }
     pub fn engine(&self) -> &CanvasEngine<R> {
         &self.engine
@@ -969,7 +987,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .get(index + 1)
                         .is_some_and(|layer| layer.kind == LayerKind::Paint)
             }
-            CommandId::FitCanvas => idle,
+            CommandId::FitCanvas
+            | CommandId::RotateLeft
+            | CommandId::RotateRight
+            | CommandId::FlipHorizontal
+            | CommandId::FlipVertical => idle,
+            CommandId::ZoomIn => idle && self.state.camera.zoom < 16.0,
+            CommandId::ZoomOut => idle && self.state.camera.zoom > 0.02,
             _ => true,
         };
         let selected = (self.layer_interaction.tool == LayerCanvasTool::Paint
@@ -980,6 +1004,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | (CommandId::Move, LayerCanvasTool::Move)
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+            || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
+            || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
                 && self.state.settings.theme.unwrap_or(self.system_theme) == Theme::Dark);
         (enabled, selected)
@@ -1015,6 +1041,48 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::Navigator {
+                phase,
+                position,
+                viewport,
+            } => {
+                if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
+                    self.navigator_drag = None;
+                    (0, false)
+                } else {
+                    self.require_idle()?;
+                    if !position.into_iter().all(f32::is_finite) {
+                        return Err("Invalid Navigator position".into());
+                    }
+                    let doc = self.engine.document();
+                    let camera = &mut self.state.camera;
+                    let geometry =
+                        NavigatorGeometry::new(camera, [doc.width, doc.height], viewport)
+                            .ok_or("Invalid Navigator size")?;
+                    let point = geometry.document_point(position);
+                    if phase == ContactPhase::Down {
+                        self.navigator_drag = None;
+                        if geometry.image.contains(position[0], position[1]) {
+                            let [x, y] = camera.work_area_center();
+                            let center = camera.input_transform().map(layer_core::Point { x, y });
+                            self.navigator_drag =
+                                Some(if geometry.in_work_area(camera, position) {
+                                    [center.x - point[0], center.y - point[1]]
+                                } else {
+                                    [0.0; 2]
+                                });
+                        }
+                    }
+                    if let Some(offset) = self.navigator_drag {
+                        camera.center_on([point[0] + offset[0], point[1] + offset[1]]);
+                        self.initial_fit = false;
+                        self.sync_camera();
+                        (CAMERA, true)
+                    } else {
+                        (0, false)
+                    }
+                }
+            }
             UiAction::FilterPicker { action } => {
                 self.state.filter_picker.apply(action);
                 self.state.adjustments =
@@ -1855,6 +1923,36 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.sync_camera();
                 Ok((CAMERA, true))
             }
+            CommandId::ZoomIn
+            | CommandId::ZoomOut
+            | CommandId::RotateLeft
+            | CommandId::RotateRight
+            | CommandId::FlipHorizontal
+            | CommandId::FlipVertical => {
+                self.initial_fit = false;
+                let camera = &mut self.state.camera;
+                match command {
+                    CommandId::FlipHorizontal | CommandId::FlipVertical => {
+                        camera.flip(command == CommandId::FlipHorizontal)
+                    }
+                    _ => {
+                        let center = camera.work_area_center();
+                        let scale = match command {
+                            CommandId::ZoomIn => 2.0_f32.sqrt(),
+                            CommandId::ZoomOut => 0.5_f32.sqrt(),
+                            _ => 1.0,
+                        };
+                        let rotation = match command {
+                            CommandId::RotateLeft => -std::f32::consts::FRAC_PI_2,
+                            CommandId::RotateRight => std::f32::consts::FRAC_PI_2,
+                            _ => 0.0,
+                        };
+                        camera.gesture(center, center, scale, rotation)?;
+                    }
+                }
+                self.sync_camera();
+                Ok((CAMERA, true))
+            }
             CommandId::Settings | CommandId::KeyboardShortcuts | CommandId::About => {
                 self.state.customization = CustomizationState::default();
                 self.open_settings(match command {
@@ -2227,9 +2325,20 @@ mod tests {
         composites: usize,
         validation: Option<layer_render::EffectValidationRequest>,
         validation_result: Option<layer_render::EffectValidationResult>,
+        preview_requests: Vec<Option<u64>>,
+        preview_reply: Option<layer_render::CanvasPreview>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn request_canvas_preview(&mut self, known: Option<u64>) -> Result<bool, Self::Error> {
+            self.preview_requests.push(known);
+            Ok(true)
+        }
+        fn take_canvas_preview(
+            &mut self,
+        ) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
+            self.preview_reply.take().map(Ok)
+        }
         fn request_effect_validation(
             &mut self,
             request: layer_render::EffectValidationRequest,
@@ -2275,6 +2384,115 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn navigator_drags_without_jump_and_outside_click_recenters() {
+        let mut s = UiSession::new(
+            Recorder::default(),
+            Document::new("test", 2048, 1536),
+            [1000, 1000],
+        )
+        .unwrap();
+        s.state.camera.work_area = [200.0, 50.0, 400.0, 300.0];
+        s.state.camera.zoom = 2.0;
+        s.state.camera.rotation = 0.3;
+        s.state.camera.center_on([1000.0, 700.0]);
+        let doc_revision = s.engine.document().revision;
+        for flipped in [[false, false], [true, false], [false, true], [true, true]] {
+            s.state.camera.flipped = flipped;
+            s.state.camera.center_on([1000.0, 700.0]);
+            let doc = s.engine.document();
+            let g =
+                NavigatorGeometry::new(&s.state.camera, [doc.width, doc.height], [264.0, 200.0])
+                    .unwrap();
+            let middle = [
+                g.work_area.iter().map(|p| p[0]).sum::<f32>() * 0.25 + 2.0,
+                g.work_area.iter().map(|p| p[1]).sum::<f32>() * 0.25,
+            ];
+            let action = |phase, position| UiAction::Navigator {
+                phase,
+                position,
+                viewport: [264.0, 200.0],
+            };
+            let before = s.state.camera.translation;
+            s.dispatch(action(ContactPhase::Down, middle)).unwrap();
+            assert!(
+                before
+                    .into_iter()
+                    .zip(s.state.camera.translation)
+                    .all(|(a, b)| (a - b).abs() < 0.001)
+            );
+            let moved = [middle[0] + 16.0, middle[1] + 8.0];
+            s.dispatch(action(ContactPhase::Move, moved)).unwrap();
+            let [x, y] = s.state.camera.work_area_center();
+            let center = s
+                .state
+                .camera
+                .input_transform()
+                .map(layer_core::Point { x, y });
+            assert!((center.x - 1128.0).abs() < 0.001 && (center.y - 764.0).abs() < 0.001);
+            s.dispatch(action(ContactPhase::Up, moved)).unwrap();
+            let before = s.state.camera.clone();
+            s.dispatch(action(ContactPhase::Move, middle)).unwrap();
+            assert_eq!(s.state.camera, before);
+            let point = [g.image.x + 5.0, g.image.y + 5.0];
+            s.dispatch(action(ContactPhase::Down, point)).unwrap();
+            let center = s
+                .state
+                .camera
+                .input_transform()
+                .map(layer_core::Point { x, y });
+            let expected = g.document_point(point);
+            assert!(
+                (center.x - expected[0]).abs() < 0.001 && (center.y - expected[1]).abs() < 0.001
+            );
+            s.dispatch(action(ContactPhase::Cancel, point)).unwrap();
+        }
+        for id in [
+            CommandId::ZoomIn,
+            CommandId::ZoomOut,
+            CommandId::RotateLeft,
+            CommandId::RotateRight,
+            CommandId::FlipHorizontal,
+            CommandId::FlipVertical,
+        ] {
+            let change = invoke(&mut s, id);
+            assert!(change.canvas_wake && change.regions & regions::CAMERA != 0);
+        }
+        assert_eq!(s.engine.document().revision, doc_revision);
+    }
+
+    #[test]
+    fn navigator_previews_are_visible_only_throttled_and_single_flight() {
+        let mut s = session();
+        s.poll_navigator_preview(0, false).unwrap();
+        assert!(s.renderer_mut().preview_requests.is_empty());
+        s.poll_navigator_preview(0, true).unwrap();
+        for now in [1, 66_666_667, 1_000_000_000] {
+            s.poll_navigator_preview(now, true).unwrap();
+        }
+        assert_eq!(s.renderer_mut().preview_requests, [None]);
+        s.renderer_mut().preview_reply = Some(layer_render::CanvasPreview {
+            revision: 42,
+            image: None,
+        });
+        s.poll_navigator_preview(1_000_000_000, false).unwrap();
+        assert_eq!(s.renderer_mut().preview_requests, [None]);
+        s.poll_navigator_preview(1_000_000_000, true).unwrap();
+        assert_eq!(s.renderer_mut().preview_requests, [None, Some(42)]);
+        s.renderer_mut().preview_reply = Some(layer_render::CanvasPreview {
+            revision: 42,
+            image: None,
+        });
+        invoke(&mut s, CommandId::ZoomIn);
+        s.poll_navigator_preview(1_010_000_000, true).unwrap();
+        assert_eq!(s.renderer_mut().preview_requests.len(), 2);
+        s.poll_navigator_preview(1_067_000_000, true).unwrap();
+        assert_eq!(
+            s.renderer_mut().preview_requests,
+            [None, Some(42), Some(42)]
+        );
     }
 
     #[test]
@@ -4545,6 +4763,64 @@ mod tests {
         }
     }
     #[test]
+    fn same_slot_drag_and_tearoff_restore_geometry_without_history_on_every_host() {
+        let viewport = [1200.0, 900.0];
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for tearoff in [false, true] {
+                let mut app = session();
+                app.set_platform(platform);
+                let baseline = app.state.workspace.clone();
+                let item = DockItem::Group { group: 5 };
+                let bounds = app
+                    .layout(viewport)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == 5)
+                    .unwrap()
+                    .bounds;
+                let drag = |app: &mut UiSession<_>, phase, position| {
+                    app.dispatch(UiAction::DragWorkspace {
+                        item,
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                };
+                drag(
+                    &mut app,
+                    ContactPhase::Down,
+                    [bounds.x + 70.0, bounds.y + 12.0],
+                );
+                if tearoff {
+                    drag(&mut app, ContactPhase::Move, [600.0, 400.0]);
+                    assert_eq!(app.state.workspace.layout.floating.len(), 1);
+                }
+                let neighbor = app
+                    .layout(viewport)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == 6)
+                    .unwrap()
+                    .bounds;
+                let destination = [
+                    neighbor.x + neighbor.width * 0.5,
+                    neighbor.y + TAB_BAR_HEIGHT + 3.0,
+                ];
+                drag(&mut app, ContactPhase::Move, destination);
+                drag(&mut app, ContactPhase::Up, destination);
+                assert_eq!(
+                    app.state.workspace, baseline,
+                    "{platform:?}, tearoff={tearoff}"
+                );
+                assert!(!app.command(CommandId::UndoWorkspace).enabled);
+                assert!(app.workspace_drag.is_none());
+            }
+        }
+    }
+
+    #[test]
     fn floating_gestures_update_live_preserve_grab_offset_and_coalesce_history() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
@@ -6238,7 +6514,9 @@ mod tests {
         assert_eq!(
             serde_json::to_value(MENUS).unwrap()[1]["sections"],
             serde_json::json!([
-                ["fit_canvas"],
+                ["zoom_in", "zoom_out", "fit_canvas"],
+                ["rotate_left", "rotate_right"],
+                ["flip_horizontal", "flip_vertical"],
                 ["zen_mode", "toggle_theme"],
                 ["reset_layout"]
             ])

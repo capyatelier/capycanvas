@@ -215,6 +215,8 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Lasso" => key("m", false, false),
         "command.Move" => key("o", false, false),
         "command.FitCanvas" => key("f", false, false),
+        "command.ZoomIn" => key("=", true, false),
+        "command.ZoomOut" => key("-", true, false),
         "command.ZenMode" => key("tab", false, false),
         "command.Undo" => key("z", true, false),
         "command.Redo" => return vec![key("z", true, true), key("y", true, false)],

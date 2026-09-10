@@ -12,6 +12,9 @@ pub struct Camera {
     pub viewport: [u32; 2],
     pub zoom: f32,
     pub rotation: f32,
+    /// Document-axis reflections; affect presentation and input, never pixels.
+    #[serde(default)]
+    pub flipped: [bool; 2],
     pub translation: [f32; 2],
     /// Fitting bounds in physical full-window coordinates; updating these does
     /// not itself move the current view.
@@ -25,6 +28,7 @@ impl Camera {
             viewport,
             zoom: 1.0,
             rotation: 0.0,
+            flipped: [false; 2],
             translation: [0.0; 2],
             work_area: [0.0, 0.0, viewport[0] as f32, viewport[1] as f32],
         };
@@ -33,16 +37,12 @@ impl Camera {
     }
 
     pub fn fit(&mut self, document: [u32; 2]) {
-        let [x, y, width, height] = self.work_area;
+        let [_, _, width, height] = self.work_area;
         self.zoom = ((width * 0.9 / document[0].max(1) as f32)
             .min(height * 0.9 / document[1].max(1) as f32))
         .clamp(0.02, 16.0);
         self.rotation = 0.0;
-        self.translation = [
-            x + (width - document[0] as f32 * self.zoom) * 0.5,
-            y + (height - document[1] as f32 * self.zoom) * 0.5,
-        ];
-        self.revision += 1;
+        self.center_on([document[0] as f32 * 0.5, document[1] as f32 * 0.5]);
     }
 
     pub fn resize(&mut self, viewport: [u32; 2]) {
@@ -99,27 +99,61 @@ impl Camera {
 
     pub fn document_to_surface(&self) -> [f32; 6] {
         let (sin, cos) = self.rotation.sin_cos();
+        let x = if self.flipped[0] {
+            -self.zoom
+        } else {
+            self.zoom
+        };
+        let y = if self.flipped[1] {
+            -self.zoom
+        } else {
+            self.zoom
+        };
         [
-            cos * self.zoom,
-            sin * self.zoom,
-            -sin * self.zoom,
-            cos * self.zoom,
+            cos * x,
+            sin * x,
+            -sin * y,
+            cos * y,
             self.translation[0],
             self.translation[1],
         ]
     }
 
     pub fn input_transform(&self) -> ViewTransform {
-        let (sin, cos) = self.rotation.sin_cos();
-        let a = cos / self.zoom;
-        let b = -sin / self.zoom;
-        let c = -b;
-        let d = a;
-        let [x, y] = self.translation;
+        let [a, b, c, d, x, y] = self.document_to_surface();
+        let determinant = a * d - b * c;
+        let [a, b, c, d] = [
+            d / determinant,
+            -b / determinant,
+            -c / determinant,
+            a / determinant,
+        ];
         ViewTransform {
             revision: self.revision,
             surface_to_document: [a, b, c, d, -a * x - c * y, -b * x - d * y],
         }
+    }
+
+    pub fn work_area_center(&self) -> [f32; 2] {
+        let [x, y, width, height] = self.work_area;
+        [x + width * 0.5, y + height * 0.5]
+    }
+
+    pub fn center_on(&mut self, point: [f32; 2]) {
+        let [a, b, c, d, _, _] = self.document_to_surface();
+        let [x, y] = self.work_area_center();
+        self.translation = [
+            x - a * point[0] - c * point[1],
+            y - b * point[0] - d * point[1],
+        ];
+        self.revision += 1;
+    }
+
+    pub fn flip(&mut self, horizontal: bool) {
+        let [x, y] = self.work_area_center();
+        let center = self.input_transform().map(layer_core::Point { x, y });
+        self.flipped[usize::from(!horizontal)] ^= true;
+        self.center_on([center.x, center.y]);
     }
 
     pub fn view(&self) -> ViewState {
@@ -239,6 +273,53 @@ mod tests {
         let before = camera.clone();
         assert!(camera.gesture([0.0; 2], [f32::NAN, 0.0], 1.0, 0.0).is_err());
         assert_eq!(camera, before);
+    }
+    #[test]
+    fn reflected_views_preserve_center_and_input_roundtrip() {
+        let mut camera = Camera::new([2048, 1536], [1200, 900]);
+        camera.work_area = [220.0, 48.0, 650.0, 810.0];
+        camera
+            .gesture([300.0, 200.0], [280.0, 170.0], 2.0, 0.6)
+            .unwrap();
+        let [x, y] = camera.work_area_center();
+        let center = camera.input_transform().map(Point { x, y });
+        for horizontal in [true, false, true, false] {
+            camera.flip(horizontal);
+            near(center, camera.input_transform().map(Point { x, y }));
+            let forward = ViewTransform {
+                revision: 0,
+                surface_to_document: camera.document_to_surface(),
+            };
+            for point in [
+                Point { x: 0.0, y: 0.0 },
+                Point {
+                    x: 1372.0,
+                    y: 561.0,
+                },
+            ] {
+                near(point, camera.input_transform().map(forward.map(point)));
+            }
+            let anchor = camera.input_transform().map(Point { x: 125.0, y: 220.0 });
+            let mut moved = camera.clone();
+            moved
+                .gesture([125.0, 220.0], [200.0, 350.0], 1.7, 0.6)
+                .unwrap();
+            near(
+                anchor,
+                moved.input_transform().map(Point { x: 200.0, y: 350.0 }),
+            );
+        }
+        assert_eq!(camera.flipped, [false; 2]);
+        camera.flip(true);
+        camera.fit([2048, 1536]);
+        assert_eq!(camera.flipped, [true, false]);
+        near(
+            Point {
+                x: 1024.0,
+                y: 768.0,
+            },
+            camera.input_transform().map(Point { x, y }),
+        );
     }
     #[test]
     fn two_fingers_rotate_zoom_and_pan_without_lifecycle_jumps() {

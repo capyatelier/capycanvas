@@ -1,8 +1,8 @@
 //! GPU-resident implementation of Layer's GPU canvas contract.
 //!
 //! The current dry brush uses instanced quads and fixed-function blending. All
-//! paint-layer and composite pixels remain in GPU textures until an explicit
-//! export readback. Destination-aware brush stages can be added beside this
+//! paint-layer and composite pixels remain in GPU textures. Explicit export and
+//! bounded asynchronous UI thumbnails are the only readbacks. Destination-aware brush stages can be added beside this
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
 use layer_core::{
@@ -19,6 +19,7 @@ use layer_render::{
 };
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
+mod canvas_preview;
 mod effect_validation;
 mod effects;
 mod layer_masks;
@@ -562,6 +563,8 @@ pub struct WgpuRasterizer {
     layer_masks: layer_masks::MaskRenderer,
     scene: Option<scene::Scene>,
     thumbnails: thumbnails::Thumbnails,
+    canvas_preview: canvas_preview::CanvasOverview,
+    composite_revision: u64,
     filter_previews: Option<scene::FilterPreviews>,
     effect_validation: Option<effect_validation::Pending>,
     validated_effects: Option<effects::Effects>,
@@ -794,6 +797,8 @@ impl WgpuRasterizer {
             validated_effects: None,
             last_style_base: 0,
             filter_source_epoch: 0,
+            canvas_preview: canvas_preview::CanvasOverview::new(),
+            composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
             images: Default::default(),
             paint_layers: Vec::with_capacity(8),
@@ -3501,6 +3506,7 @@ impl CanvasRenderer for WgpuRasterizer {
             + m.destination_storage_bytes
             + m.paint_state_storage_bytes
             + m.composite_storage_bytes
+            + self.canvas_preview.storage_bytes()
             + self.layer_masks.pages.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64;
         if let Some(scene) = &self.scene {
             t.effect_passes = scene.effect_passes;
@@ -3517,6 +3523,12 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.take()
+    }
+    fn request_canvas_preview(&mut self, known_revision: Option<u64>) -> Result<bool, Self::Error> {
+        self.start_canvas_preview(known_revision)
+    }
+    fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
+        self.canvas_preview.take()
     }
     fn request_filter_previews(
         &mut self,
@@ -4269,6 +4281,9 @@ impl CanvasRenderer for WgpuRasterizer {
             .layers
             .iter()
             .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated()));
+        if !dirty.is_empty() || animated {
+            self.composite_revision = self.composite_revision.wrapping_add(1);
+        }
         if (!dirty.is_empty() || animated) && needs_scene(packet.layers) {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             scene.style_base = packet.dab_batches.len();

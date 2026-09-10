@@ -781,7 +781,7 @@ impl Settings {
                 row(
                     TotalZen,
                     "Total zen",
-                    "Hide docked controls; reveal them at screen edges.",
+                    "",
                     PreferenceKind::Switch {
                         active: self.total_zen,
                     },
@@ -1421,6 +1421,7 @@ mod copy_tests {
                 PreferenceId::PanSpeed,
                 PreferenceId::ZoomSpeed,
                 PreferenceId::Renderer,
+                PreferenceId::TotalZen,
                 PreferenceId::ZenIcon,
             ] {
                 assert!(settings.field(id, platform).unwrap().description.is_empty());

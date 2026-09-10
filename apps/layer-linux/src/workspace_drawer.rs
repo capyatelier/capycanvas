@@ -66,6 +66,7 @@ enum Body {
     Sizes(crate::tool_panels::SizePanel),
     Layers(Rc<LayerPanel>),
     Effects(Panel, Rc<EffectPanels>),
+    Navigator(crate::navigator::Navigator),
 }
 impl Body {
     fn widget(&self) -> gtk::Widget {
@@ -75,6 +76,7 @@ impl Body {
             Self::Color(v) => v.root.clone().upcast(),
             Self::Sizes(v) => v.root.clone().upcast(),
             Self::Layers(v) => v.root.clone().upcast(),
+            Self::Navigator(v) => v.root.clone().upcast(),
             Self::Effects(panel, v) => match panel {
                 Panel::Adjustments => v.adjustments.clone().upcast(),
                 Panel::Properties => v.properties.clone().upcast(),
@@ -87,6 +89,9 @@ impl Body {
             Self::Tools(_) => regions::BRUSH | regions::SETTINGS,
             Self::Settings(_) | Self::Color(_) | Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
+            Self::Navigator(_) => {
+                regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS
+            }
         };
         if regions & inputs == 0 {
             return false;
@@ -97,6 +102,7 @@ impl Body {
             Self::Color(v) => v.refresh(&state.colors),
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
+            Self::Navigator(v) => v.refresh(state),
             Self::Effects(_, v) => v.refresh(w, state),
         }
         true
@@ -158,6 +164,11 @@ impl View {
                         Body::Color(v)
                     }
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
+                    Panel::Navigator => {
+                        let v = crate::navigator::Navigator::new(&w.navigator_images);
+                        v.bind(w);
+                        Body::Navigator(v)
+                    }
                     Panel::Layers => {
                         let v = Rc::new(LayerPanel::new());
                         v.bind(w);

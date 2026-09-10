@@ -96,6 +96,7 @@ pub enum PanelControl {
     Adjustments,
     Properties,
     Stats,
+    Navigator,
 }
 impl PanelControl {
     pub fn label(self) -> &'static str {
@@ -112,7 +113,8 @@ impl PanelControl {
             Self::LayerOpacity => "Layer opacity",
             Self::Adjustments => "Filters",
             Self::Properties => "Properties",
-            Self::Stats => "Stats for nerds",
+            Self::Stats => "Diagnostics",
+            Self::Navigator => "Navigator",
         }
     }
     pub fn available(panel: Panel) -> &'static [Self] {
@@ -135,6 +137,7 @@ impl PanelControl {
             Panel::Adjustments => &[Self::Adjustments],
             Panel::Properties => &[Self::Properties],
             Panel::Stats => &[Self::Stats],
+            Panel::Navigator => &[Self::Navigator],
             _ => &[],
         }
     }
@@ -146,6 +149,7 @@ impl PanelControl {
             | Panel::Adjustments
             | Panel::Properties
             | Panel::Stats
+            | Panel::Navigator
             | Panel::ToolSettings
             | Panel::Color => Self::available(panel),
             _ => &[],
@@ -783,6 +787,13 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::NewWindow => "Open another drawing window",
                 CommandId::KeyboardShortcuts => "Customize application shortcuts",
                 CommandId::About => "Application information and links",
+                CommandId::ZoomIn | CommandId::ZoomOut => "Change the canvas viewing scale",
+                CommandId::RotateLeft | CommandId::RotateRight => {
+                    "Rotate the view without changing the image"
+                }
+                CommandId::FlipHorizontal | CommandId::FlipVertical => {
+                    "Mirror the view without changing the image"
+                }
             }
             .into(),
             command.icon().unwrap_or(match command {

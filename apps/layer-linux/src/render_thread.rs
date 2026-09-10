@@ -54,6 +54,7 @@ enum Command {
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
+    CanvasPreview(Option<u64>),
     FilterPreviews(layer_render::FilterPreviewRequest),
     Frame(Box<Frame>),
     Asset(AssetId, [u32; 3], PixelFormat, Vec<u8>),
@@ -65,6 +66,7 @@ enum Command {
 enum Reply {
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
+    CanvasPreview(Result<layer_render::CanvasPreview, String>),
     FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
     Error(String),
     Readback(ReadbackImage),
@@ -73,6 +75,7 @@ enum Reply {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    pub(super) clock: Arc<crate::wayland::FrameClock>,
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
     telemetry_enabled: bool,
     commands: mpsc::Sender<Command>,
@@ -82,6 +85,8 @@ pub struct RenderWorker {
     outlines: HashMap<AssetId, TipOutline>,
     readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
+    canvas_preview: Option<Result<layer_render::CanvasPreview, String>>,
+    canvas_preview_pending: bool,
     filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
     filter_previews_pending: bool,
     effect_validation_pending: bool,
@@ -120,7 +125,7 @@ impl RenderWorker {
             .spawn(move || {
                 let result = Worker::new(parent, area).and_then(|mut worker| {
                     let outlines = worker.renderer.cursor_outlines();
-                    if started.send(Ok(outlines)).is_err() {
+                    if started.send(Ok((outlines, worker.child.clock()))).is_err() {
                         return Ok(());
                     }
                     #[cfg(test)]
@@ -149,6 +154,11 @@ impl RenderWorker {
                                 .send(Reply::Thumbnail(image.map_err(error)?))
                                 .map_err(error)?;
                         }
+                        if let Some(image) = worker.renderer.take_canvas_preview() {
+                            reply
+                                .send(Reply::CanvasPreview(image.map_err(error)))
+                                .map_err(error)?;
+                        }
                         while let Some(image) = worker.renderer.take_filter_previews() {
                             reply
                                 .send(Reply::FilterPreviews(image.map_err(error)))
@@ -162,6 +172,8 @@ impl RenderWorker {
                             || worker.renderer.filter_previews_pending()
                             || worker.pending_present
                             || worker.renderer.thumbnails_pending()
+                            || worker.renderer.canvas_preview_pending()
+                            || worker.child.feedback_pending()
                         {
                             receiver.recv_timeout(Duration::from_millis(8))
                         } else {
@@ -226,6 +238,19 @@ impl RenderWorker {
                                 .renderer
                                 .request_thumbnail(id, target)
                                 .map_err(error)?,
+                            Command::CanvasPreview(known) => {
+                                let result = worker.renderer.request_canvas_preview(known);
+                                if !matches!(result, Ok(true)) {
+                                    reply
+                                        .send(Reply::CanvasPreview(Err(result
+                                            .err()
+                                            .map(error)
+                                            .unwrap_or_else(|| {
+                                                "Canvas preview is not ready".into()
+                                            }))))
+                                        .map_err(error)?;
+                                }
+                            }
                             Command::Frame(frame) => {
                                 #[cfg(test)]
                                 timing.begin(frame.queued_ns);
@@ -270,14 +295,15 @@ impl RenderWorker {
             })
             .map_err(error)?;
         // Initialization only; never wait this way during drawing.
-        let outlines = match start.recv().map_err(error).and_then(|result| result) {
-            Ok(outlines) => outlines,
+        let (outlines, clock) = match start.recv().map_err(error).and_then(|result| result) {
+            Ok(value) => value,
             Err(error) => {
                 let _ = thread.join();
                 return Err(error);
             }
         };
         Ok(Self {
+            clock,
             telemetry,
             telemetry_enabled: false,
             commands,
@@ -287,6 +313,8 @@ impl RenderWorker {
             outlines,
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
+            canvas_preview: None,
+            canvas_preview_pending: false,
             filter_previews: VecDeque::new(),
             filter_previews_pending: false,
             effect_validation_pending: false,
@@ -311,6 +339,10 @@ impl RenderWorker {
                     self.effect_validation = Some(result);
                 }
                 Reply::Thumbnail(image) => self.thumbnails.push_back(image),
+                Reply::CanvasPreview(image) => {
+                    self.canvas_preview = Some(image);
+                    self.canvas_preview_pending = false;
+                }
                 Reply::FilterPreviews(image) => {
                     self.filter_previews_pending = false;
                     self.filter_previews.push_back(image);
@@ -371,6 +403,20 @@ impl CanvasRenderer for RenderWorker {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.pop_front().map(Ok)
+    }
+    fn request_canvas_preview(&mut self, known_revision: Option<u64>) -> Result<bool, Self::Error> {
+        if self.canvas_preview_pending {
+            return Ok(false);
+        }
+        self.send(Command::CanvasPreview(known_revision))?;
+        self.canvas_preview_pending = true;
+        Ok(true)
+    }
+    fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
+        self.ready().ok()?;
+        self.canvas_preview
+            .take()
+            .map(|result| result.map_err(|_| BackendError("Canvas preview unavailable")))
     }
     fn request_filter_previews(
         &mut self,
@@ -673,6 +719,8 @@ impl Worker {
         self.renderer.queue().submit([encoder.finish()]);
         #[cfg(test)]
         self.child.feedback(timing.as_ref().map_or(0, |t| t.id()));
+        #[cfg(not(test))]
+        self.child.feedback(0);
         self.renderer.queue().present(target);
         #[cfg(test)]
         if let Some(timing) = timing {

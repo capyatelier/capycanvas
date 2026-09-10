@@ -3,6 +3,7 @@ mod effects;
 mod image_selector;
 mod input;
 mod layers;
+mod navigator;
 mod number_control;
 mod preferences;
 mod previews;

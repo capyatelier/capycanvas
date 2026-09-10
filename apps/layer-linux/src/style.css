@@ -48,6 +48,9 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
 .dock-panel button { border-radius: 6px; min-height: 1.66em; padding: 4px 12px; }
 .dock-panel image { -gtk-icon-size: 14px; }
+.navigator-controls button { min-width: 24px; min-height: 28px; padding: 0; margin: 0; }
+.navigator-controls image { -gtk-icon-size: 16px; }
+.navigator-overview { color: var(--accent-color); }
 .number-control { font-size: var(--ui-text-size); }
 .layers-panel { padding: 0; }
 .layer-header, .layer-footer { padding: 4px 6px; }
@@ -138,7 +141,9 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 /* Reset is a normal menu action, with a dim trailing default value. */
 .preference-reset { font-weight: 400; }
 /* Adjustment tiles share the editor's compact 36px tool-cell rhythm. */
-.filter-picker { margin: 6px; }
+/* Inset content, not the scroller: its scrollbar belongs at the panel edge. */
+.filter-picker-header { margin: 6px 6px 0; }
+.filter-picker-body { margin: 0 6px 6px; }
 .filter-picker .filter-row { padding: 3px 6px; min-width: 0; min-height: 0; font-weight: normal; }
 .filter-category { margin: 8px; font-weight: bold; opacity: .55; }
 .effect-properties { margin: 6px; }

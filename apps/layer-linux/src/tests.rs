@@ -177,7 +177,11 @@ fn native_tool_drawers() {
                 assert_eq!(state(&w).brush.diameter, 36.0);
                 assert_eq!(w.size_number.value(), 36.0);
             }
-            if *id == *ids.last().unwrap() {
+            if controls[ids.iter().position(|t| t == id).unwrap()]
+                == (ToolbarControl::Panel {
+                    panel: Panel::Stats,
+                })
+            {
                 w.dispatch(UiAction::SetLayerOpacity {
                     id: None,
                     opacity: if theme == Theme::Dark { 0.9 } else { 1.0 },
@@ -246,6 +250,25 @@ fn native_tool_drawers() {
         filter_texture(w.effects.adjustments.upcast_ref()),
         filter_texture(w.drawer.effects().unwrap().adjustments.upcast_ref())
     );
+    for root in [
+        w.effects.adjustments.clone(),
+        w.drawer.effects().unwrap().adjustments.clone(),
+    ] {
+        let scroll = find_css(root.upcast_ref(), "filter-picker-scroll").unwrap();
+        let bounds = scroll.compute_bounds(&root).unwrap();
+        assert_eq!(bounds.x(), 0.0);
+        assert_eq!(
+            bounds.width(),
+            root.width() as f32,
+            "Filters scrollbar reaches the panel edge in docks and drawers"
+        );
+        let header = find_css(root.upcast_ref(), "filter-picker-header").unwrap();
+        assert_eq!(
+            header.compute_bounds(&root).unwrap().x(),
+            6.0,
+            "moving the scrollbar preserves content padding"
+        );
+    }
     let requests = w.effects.preview_requests();
     assert!(requests > 0);
     click(&filter_button);
@@ -323,6 +346,232 @@ fn native_tool_drawers() {
     }
     w.window.close();
     pump(50);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
+fn native_navigator() {
+    let app = native_test_app("art.capycanvas.NavigatorReview");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(800);
+    w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetPanelVisible {
+            panel: Panel::Navigator,
+            visible: true,
+        },
+    });
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let mut workspace = state(&w).workspace;
+    let layers = workspace.layout.panel_group(Panel::Layers).unwrap();
+    workspace
+        .layout
+        .move_panel(
+            viewport,
+            Panel::Navigator,
+            DockTarget::Split {
+                group: layers,
+                edge: Edge::Top,
+            },
+        )
+        .unwrap();
+    let navigator = workspace.layout.panel_group(Panel::Navigator).unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::Stats, true)
+        .unwrap();
+    workspace
+        .layout
+        .move_panel(
+            viewport,
+            Panel::Stats,
+            DockTarget::Tab {
+                group: navigator,
+                index: None,
+            },
+        )
+        .unwrap();
+    workspace
+        .layout
+        .select_tab(navigator, Panel::Navigator)
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(250);
+    w.dispatch(UiAction::SetBrushSize { value: 96.0 });
+    let mut sequence = 0;
+    for (row, rgba) in [
+        [0.75, 0.18, 0.2, 1.0],
+        [0.18, 0.55, 0.36, 1.0],
+        [0.2, 0.36, 0.75, 1.0],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        w.dispatch(UiAction::SetColor { rgba });
+        let camera = state(&w).camera;
+        let m = camera.document_to_surface();
+        for i in 0..32 {
+            let x = 200.0 + i as f32 * 50.0;
+            let y = 350.0 + row as f32 * 350.0 + (i as f32 * 0.2).sin() * 120.0;
+            sequence += 1;
+            w.gpu
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .session
+                .pen(PenEvent {
+                    device_id: 91,
+                    sequence,
+                    timestamp_ns: glib::monotonic_time() as u64 * 1000,
+                    view_revision: camera.revision,
+                    surface_position: Point {
+                        x: m[0] * x + m[2] * y + m[4],
+                        y: m[1] * x + m[3] * y + m[5],
+                    },
+                    pressure: 1.0,
+                    tilt_radians: [0.0; 2],
+                    twist_radians: 0.0,
+                    distance: 0.0,
+                    phase: if i == 0 {
+                        PenPhase::Down
+                    } else if i == 31 {
+                        PenPhase::Up
+                    } else {
+                        PenPhase::Move
+                    },
+                    tool: ToolKind::Pen,
+                    flags: SampleFlags::PRIMARY,
+                })
+                .unwrap();
+        }
+        w.wake();
+        pump(250);
+    }
+    pump(400);
+    let original = w
+        .navigator_images
+        .texture()
+        .expect("live document overview");
+    assert_eq!([original.width(), original.height()], [256, 192]);
+    let doc_revision = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .revision;
+    let zoom = state(&w).camera.zoom;
+    let button = |id: CommandId| {
+        find_named(w.navigator.root.upcast_ref(), &format!("navigator-{id:?}"))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+    };
+    for _ in 0..3 {
+        click(&button(CommandId::ZoomIn));
+    }
+    click(&button(CommandId::RotateRight));
+    click(&button(CommandId::FlipHorizontal));
+    pump(300);
+    assert!((state(&w).camera.zoom - zoom * 8.0_f32.sqrt()).abs() < 0.001);
+    assert_eq!(state(&w).camera.flipped, [true, false]);
+    assert!(button(CommandId::FlipHorizontal).has_css_class("selected-tool"));
+    assert_eq!(
+        w.navigator_images.texture(),
+        Some(original.clone()),
+        "camera-only commands reuse the exact texture"
+    );
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .revision,
+        doc_revision
+    );
+    let overview = find_named(w.navigator.root.upcast_ref(), "navigator-overview").unwrap();
+    assert!(
+        w.navigator.root.measure(gtk::Orientation::Horizontal, -1).0 <= 192,
+        "compact control row must fit minimum panel width"
+    );
+    let size = [overview.width() as f32, overview.height() as f32];
+    let g = NavigatorGeometry::new(&state(&w).camera, [2048, 1536], size).unwrap();
+    let position = [
+        g.image.x + g.image.width * 0.3,
+        g.image.y + g.image.height * 0.65,
+    ];
+    w.dispatch(UiAction::Navigator {
+        phase: ContactPhase::Down,
+        position,
+        viewport: size,
+    });
+    w.dispatch(UiAction::Navigator {
+        phase: ContactPhase::Move,
+        position: [position[0] + 10.0, position[1]],
+        viewport: size,
+    });
+    w.dispatch(UiAction::Navigator {
+        phase: ContactPhase::Up,
+        position,
+        viewport: size,
+    });
+    pump(200);
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::RestoreSettings {
+            settings: Settings {
+                theme: Some(theme),
+                ..Settings::default()
+            },
+        });
+        pump(250);
+        capture_reference(&w, &format!("{dir}/navigator-{theme:?}.png"), 1.0);
+    }
+    // A second projection shares the same image/cache producer.
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .insert_tools(
+            Panel::Toolbar,
+            None,
+            &[ToolbarControl::Panel {
+                panel: Panel::Navigator,
+            }],
+        )
+        .unwrap();
+    let tile = workspace
+        .layout
+        .panel(Panel::Toolbar)
+        .unwrap()
+        .tiles()
+        .last()
+        .unwrap()
+        .id;
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(150);
+    click(
+        &find_named(w.surface.upcast_ref(), &format!("tile-{tile}"))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap(),
+    );
+    pump(300);
+    assert!(
+        find_named(w.surface.upcast_ref(), "drawer-panel-Navigator")
+            .unwrap()
+            .is_mapped()
+    );
+    assert_eq!(w.navigator_images.texture(), Some(original));
+    capture_reference(&w, &format!("{dir}/navigator-drawer.png"), 1.0);
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    w.window.close();
+    pump(80);
 }
 
 #[test]
@@ -2865,6 +3114,71 @@ fn native_zen_floating_targets() {
     );
     assert_eq!(state(&w).workspace.layout.floating.len(), 1);
     w.window.close();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
+fn native_same_slot_drop() {
+    let app = native_test_app("art.capycanvas.SameSlotDrop");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    for tearoff in [false, true] {
+        let root = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == 5)
+            .unwrap()
+            .root
+            .clone();
+        let before = root.compute_bounds(&w.surface).unwrap();
+        let mut baseline = state(&w).workspace;
+        baseline.layout.measurements.clear();
+        let grip = find_css(root.upcast_ref(), "panel-grip").unwrap();
+        let origin = grip
+            .compute_point(&w.surface, &gtk::graphene::Point::new(3.0, 3.0))
+            .unwrap();
+        let drag = begin_workspace_drag(&w, &grip, 3.0, 3.0);
+        if tearoff {
+            drag.update([(600.0 - origin.x()) as f64, (400.0 - origin.y()) as f64]);
+            pump(120);
+            assert_eq!(state(&w).workspace.layout.floating.len(), 1);
+        }
+        let neighbor = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.id == 6)
+            .unwrap()
+            .bounds;
+        drag.update([
+            (neighbor.x + neighbor.width * 0.5 - origin.x()) as f64,
+            (neighbor.y + TAB_BAR_HEIGHT + 3.0 - origin.y()) as f64,
+        ]);
+        pump(80);
+        drag.end();
+        pump(350);
+        let mut after = state(&w).workspace;
+        after.layout.measurements.clear();
+        assert_eq!(after, baseline, "tearoff={tearoff}");
+        let root = w
+            .groups
+            .borrow()
+            .iter()
+            .find(|g| g.id == 5)
+            .unwrap()
+            .root
+            .clone();
+        let after = root.compute_bounds(&w.surface).unwrap();
+        assert_eq!(
+            [after.x(), after.y(), after.width(), after.height()],
+            [before.x(), before.y(), before.width(), before.height()]
+        );
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    }
+    w.window.destroy();
     pump(100);
 }
 
@@ -6419,6 +6733,16 @@ fn native_frame_pacing() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1500);
+    if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetPanelVisible {
+                panel: Panel::Navigator,
+                visible: true,
+            },
+        });
+        pump(300);
+        assert!(w.navigator_images.texture().is_some());
+    }
     if let Ok(mode) = std::env::var("LAYER_PACING_ZEN") {
         assert!(matches!(mode.as_str(), "normal" | "partial"));
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
@@ -6542,6 +6866,12 @@ fn native_frame_pacing() {
             pump(2);
         }
         if preset.is_some() {
+            if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
+                assert!(
+                    w.navigator_images.updating(),
+                    "live preview retains GTK timing"
+                );
+            }
             w.input.send(
                 &w,
                 PenEvent {
@@ -6559,6 +6889,10 @@ fn native_frame_pacing() {
             });
         }
         pump(150);
+        assert!(
+            !w.navigator_images.updating(),
+            "idle preview releases GTK timing"
+        );
         let stats = worker_stats.lock().unwrap();
         assert!(
             stats.cpu.len() > 100,
@@ -6579,6 +6913,7 @@ fn native_frame_pacing() {
             "brush": name, "viewport": camera.viewport, "brush_size": 384, "stroke_seconds": 6,
             "path": "app-owned Wayland Vulkan subsurface",
             "cursor": std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0"),
+            "navigator": std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1"),
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,
             "frame_handler_cpu": stats.frame_handler_cpu,

@@ -383,8 +383,59 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   p99 is higher, still below 8.33ms; these short runs do not establish a fixed
   GPU overhead or measure physical tablet latency. Reports are the temporary
   `capy-zen-normal-pacing.json` and `capy-zen-partial-pacing.json` files.
+- Navigator is implemented on GTK, with shared camera reflection/rotation, work-area
+  geometry, drag/recenter behavior and six navigation commands. Diagnostics is its
+  intended companion tab. The new default workspace is still pending; Navigator is
+  available through the panel picker and as a dedicated tool drawer tile.
+- Navigator samples the existing GPU composition, including provisional strokes,
+  clipping/masks and filters. One persistent 256px-long-side output/staging pair
+  serves all its views; one request may be in flight, capped at 15Hz when visible.
+  Unchanged composition returns only its revision, with no GPU pass/readback;
+  camera-only motion updates eight small native outline rectangles.
+  At 256×192 the GPU target/staging storage is 384KiB, plus a 192KiB returned CPU
+  image and GTK's small texture upload. Maximum square target/staging storage is
+  512KiB. Canvas pixels are not copied to GTK for normal drawing/panning.
+- Intermittent native thumbnail updates exposed a presentation-scheduling issue:
+  an arbitrary-phase canvas timer could repeatedly miss the compositor deadline
+  when GTK restarted its idle clock. Use actual Wayland presentation phase/period
+  (one sample per second, 120Hz fallback) and retain GTK's update clock only during
+  visible live-thumbnail changes. Do not force GTK redraws. Panning remains driven
+  independently of GTK. Regression assertions verify live/idle clock ownership.
+- Serial release measurements on the private 120Hz Wayland display, six seconds
+  each, 384px G-Pen, synthetic input with real child-surface presentation feedback:
+
+  | Navigator | Operation | CPU worker median/p95/p99 ms | Canvas GPU median/p95/p99 ms | GTK handler median/p95/p99 ms | Displayed Hz |
+  | --- | --- | --- | --- | --- | --- |
+  | Hidden | Draw | 0.311 / 0.596 / 0.773 | 0.150 / 0.326 / 1.483 | 0.014 / 0.036 / 0.048 | 119.97 |
+  | Hidden | Pan | 0.168 / 0.376 / 0.472 | 0.067 / 0.147 / 0.293 | 0.005 / 0.021 / 0.029 | 119.65 |
+  | Visible | Draw | 0.285 / 0.560 / 0.705 | 0.138 / 0.330 / 0.602 | 0.013 / 0.035 / 0.046 | 119.14 |
+  | Visible | Pan | 0.167 / 0.367 / 0.457 | 0.101 / 0.180 / 0.783 | 0.009 / 0.021 / 0.026 | 119.69 |
+
+  Navigator-on runs discarded three/two presentations, respectively; this is
+  approximately 120Hz, not a guarantee that every refresh displays a new frame.
+  GPU timestamps cover canvas submissions, not the separate thumbnail or GTK
+  passes; end presentation includes their scheduling impact. No physical input
+  latency or mobile performance is claimed. Reports are temporary
+  `capy-navigator-verified-{0,1}-{GPen,Pan}.json` files, not checked-in artifacts.
+- Navigator validation: shared camera/geometry/cache tests, native dark/light
+  dock/drawer captures, live/idle timing assertions, and GPU checks of provisional
+  strokes, masks, transparency and unchanged camera revisions. The layer GPU suite
+  passes eight correctness tests (its separate latency benchmark remains ignored).
+  Native `native_navigator` and `native_tool_drawers` pass; the latter now covers
+  twelve tile types. Captures remain under `artifacts/familiar-workspace/` (ignored).
+- GTK Filters now insets its header/list contents, not the scroll container;
+  the scrollbar reaches the panel edge like Layers. Native dock/drawer geometry
+  checks preserve six-pixel content insets. Total zen has no description, from
+  the shared preferences schema.
+- Same-slot drops preserve sizes, IDs, active tabs and layout history. The shared
+  move path compares dock placement independently of split fractions and equivalent
+  same-axis binary nesting. Dropping back after temporary tear-off restores the
+  original layout too. Resize gestures and actual reorders keep their normal
+  behavior. Native handle tests verify exact before/after bounds; shared tests
+  exercise nested rows/columns, individual/group moves and all three host profiles.
+  Current shared UI suite: 177 passing tests; strict UI/renderer/GTK Clippy passes.
 - Still to implement: the new default layout, missing canvas tools/commands,
-  collapsible columns, the full application menus, Navigator, rulers, shortcuts
+  collapsible columns, the full application menus, rulers, remaining shortcuts
   and full functional/performance validation.
 - The complete eight-tool ribbon is currently exercised by the GTK review test;
   the shipped default toolbar/layout will change when its remaining tools and

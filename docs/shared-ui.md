@@ -464,8 +464,11 @@ Vulkan brush engine, viewport/cursor presenter and swapchain. `wayland.rs` owns
 the child surface/protocol lifetime, not GTK's connection or parent. No host
 module duplicates brush rules or manipulates canvas pixels.
 `previews.rs` embeds the shared swatches. `main.rs` owns application lifetime. The canvas stays parented while dock
-wrappers change. Controls and divider handles are reused. A 120 Hz timer handles
+wrappers change. Controls and divider handles are reused. A timer handles
 input/frame preparation and native control refresh, then stops when idle.
+Its period and phase come from the child surface's Wayland presentation feedback
+(sampled once per second), with a 120Hz fallback when unavailable. Prepare half a
+refresh interval before presentation, independently of GTK's scene-update rate.
 At most two paint frames are in flight; when busy, pen records remain queued.
 The GPU worker sleeps when idle. No GPU wait, image import or canvas pixel copy
 runs on GTK's drawing/input hot path. The shared cursor geometry is drawn in the
@@ -473,6 +476,16 @@ same GPU viewport pass; the browser uses its equivalent SVG paths.
 The web has the equivalent native DOM host in `app.js` and a small Wasm bridge
 in `src/lib.rs`. There is no cross-toolkit widget framework or second action
 dispatcher.
+
+Navigator camera/drag geometry and preview scheduling live in the shared UI core.
+The GPU renderer downsamples the existing document composition into a persistent
+256px-long-side target and asynchronous staging buffer. One producer supplies all
+docked/drawer views, at most 15 times per second while visible and changed;
+view-only pan/zoom/rotation/reflection reuses the image. GTK draws the work-area
+outline with small scene rectangles, not a newly rasterized bitmap per frame.
+While live painting/animation updates thumbnails, GTK retains its update clock
+without forcing redraws. This avoids restarting its idle clock for each 15Hz image;
+the clock is released after painting stops or Navigator becomes hidden.
 
 ## Primary references
 

@@ -65,6 +65,19 @@ impl WorkspaceHistory {
             self.record(before, state);
         }
     }
+    pub fn finish_move(&mut self, state: &mut WorkspaceState) {
+        if self
+            .gesture
+            .as_ref()
+            .is_some_and(|before| before.layout.same_placement(&state.layout))
+        {
+            // A temporary tear-off may have changed sizes/IDs before a drop
+            // back into the original slot. Restore the pre-drag layout exactly.
+            self.cancel(state);
+        } else {
+            self.finish(state);
+        }
+    }
     pub fn cancel(&mut self, state: &mut WorkspaceState) {
         if let Some(mut before) = self.gesture.take() {
             before

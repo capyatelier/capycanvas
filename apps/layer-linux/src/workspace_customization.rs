@@ -1149,6 +1149,7 @@ impl Workspace {
             PanelControl::Adjustments
             | PanelControl::Properties
             | PanelControl::Stats
+            | PanelControl::Navigator
             | PanelControl::ToolSettings
             | PanelControl::ColorWheel => {
                 // These schema-driven surfaces already occupy their panel body.

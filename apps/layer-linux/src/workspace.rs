@@ -690,6 +690,8 @@ pub struct Workspace {
     color: gtk::ColorDialogButton,
     tool_settings: crate::tool_panels::ToolSettings,
     color_panel: crate::tool_panels::ColorPanel,
+    navigator: crate::navigator::Navigator,
+    navigator_images: Rc<crate::navigator::Images>,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
     tab: gtk::Label,
@@ -775,6 +777,8 @@ impl Workspace {
         let tool_set = crate::tool_panels::ToolSet::new();
         let tool_settings = crate::tool_panels::ToolSettings::new();
         let color_panel = crate::tool_panels::ColorPanel::new();
+        let navigator_images = Rc::new(crate::navigator::Images::default());
+        let navigator = crate::navigator::Navigator::new(&navigator_images);
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layer_panel = crate::layers::LayerPanel::new();
         let effects = Rc::new(crate::effects::EffectPanels::new());
@@ -825,6 +829,7 @@ impl Workspace {
                 (Panel::Adjustments, effects.adjustments.clone().upcast()),
                 (Panel::Properties, scroll(&effects.properties)),
                 (Panel::Stats, scroll(&effects.stats)),
+                (Panel::Navigator, navigator.root.clone().upcast()),
             ],
             commands: RefCell::new(Vec::new()),
             menus: RefCell::new(Vec::new()),
@@ -836,6 +841,8 @@ impl Workspace {
             color,
             tool_settings,
             color_panel,
+            navigator,
+            navigator_images,
             layer_panel,
             effects,
             tab,
@@ -860,6 +867,8 @@ impl Workspace {
         *this.surface.imp().owner.borrow_mut() = Rc::downgrade(&this);
         this.build_controls(&brushes, &sizes);
         this.color_panel.bind(&this);
+        this.navigator.bind(&this);
+        this.navigator_images.bind(&this);
         this.customization.bind(&this);
         this.preferences.bind(&this);
         this.install_chrome();
@@ -871,6 +880,11 @@ impl Workspace {
     }
 
     fn build_controls(self: &Rc<Self>, brushes: &gtk::Box, sizes: &gtk::Box) {
+        self.customization.track(
+            Panel::Navigator,
+            PanelControl::Navigator,
+            &self.navigator.root,
+        );
         margins(brushes, layer_ui::PANEL_CONTENT_INSET as i32);
         let brush_list = &self.tool_set.root;
         brushes.append(brush_list);
@@ -1485,84 +1499,105 @@ impl Workspace {
         if self.ticking.replace(true) {
             return;
         }
-        let first = crate::canvas::schedule(
-            self.frame_deadline.get(),
-            glib::clone!(
-                #[weak(rename_to = this)]
-                self,
-                #[upgrade_or]
-                glib::ControlFlow::Break,
-                move || {
-                    #[cfg(test)]
-                    let frame_start = std::time::Instant::now();
-                    let area = &this.area;
-                    if !area.is_mapped() {
-                        this.ticking.set(false);
-                        return glib::ControlFlow::Break;
-                    }
-                    // The first wake can precede initial allocation.
-                    // Fit the document only once the real canvas extent exists.
-                    if area.width() <= 1 || area.height() <= 1 {
-                        return glib::ControlFlow::Continue;
-                    }
-                    let now = glib::monotonic_time().max(0) as u64 * 1000;
-                    // Retain pacing across short pan/hover bursts as well as ink.
-                    let previous = this.frame_deadline.get();
-                    #[cfg(test)]
-                    if previous != 0
-                        && let Some(gpu) = this.gpu.borrow().as_ref()
-                    {
-                        gpu.session
-                            .engine()
-                            .backend()
-                            .stats
-                            .lock()
-                            .unwrap()
-                            .wake_lateness
-                            .push(now.saturating_sub(previous) as f64 / 1_000_000.0);
-                    }
-                    let period = crate::canvas::FRAME_NS;
-                    let next = if previous == 0 {
-                        now + period
-                    } else {
-                        previous + ((now.saturating_sub(previous) / period) + 1) * period
-                    };
-                    this.frame_deadline.set(next);
-                    this.input.flush(&this);
-                    let result = this.gpu.borrow_mut().as_mut().map(|g| g.render(area, now));
-                    match result {
-                        Some(Ok(change)) => this.changed(Ok(change)),
-                        Some(Err(error)) => {
-                            this.gpu_error(&error);
+        let now = glib::monotonic_time().max(0) as u64 * 1000;
+        let (deadline, period) = self
+            .gpu
+            .borrow()
+            .as_ref()
+            .map(|g| {
+                let clock = &g.session.engine().backend().clock;
+                (
+                    clock.deadline(now).unwrap_or(self.frame_deadline.get()),
+                    clock.period(),
+                )
+            })
+            .unwrap_or((self.frame_deadline.get(), crate::canvas::FRAME_NS));
+        let first =
+            crate::canvas::schedule(
+                deadline,
+                period,
+                glib::clone!(
+                    #[weak(rename_to = this)]
+                    self,
+                    #[upgrade_or]
+                    glib::ControlFlow::Break,
+                    move || {
+                        #[cfg(test)]
+                        let frame_start = std::time::Instant::now();
+                        let area = &this.area;
+                        if !area.is_mapped() {
                             this.ticking.set(false);
                             return glib::ControlFlow::Break;
                         }
-                        None => {}
+                        // The first wake can precede initial allocation.
+                        // Fit the document only once the real canvas extent exists.
+                        if area.width() <= 1 || area.height() <= 1 {
+                            return glib::ControlFlow::Continue;
+                        }
+                        let now = glib::monotonic_time().max(0) as u64 * 1000;
+                        // Retain pacing across short pan/hover bursts as well as ink.
+                        let previous = this.frame_deadline.get();
+                        #[cfg(test)]
+                        if previous != 0
+                            && let Some(gpu) = this.gpu.borrow().as_ref()
+                        {
+                            gpu.session
+                                .engine()
+                                .backend()
+                                .stats
+                                .lock()
+                                .unwrap()
+                                .wake_lateness
+                                .push(now.saturating_sub(previous) as f64 / 1_000_000.0);
+                        }
+                        let next = if previous == 0 {
+                            now + period
+                        } else {
+                            previous + ((now.saturating_sub(previous) / period) + 1) * period
+                        };
+                        this.frame_deadline.set(next);
+                        this.input.flush(&this);
+                        let result = this.gpu.borrow_mut().as_mut().map(|g| g.render(area, now));
+                        match result {
+                            Some(Ok(change)) => this.changed(Ok(change)),
+                            Some(Err(error)) => {
+                                this.gpu_error(&error);
+                                this.ticking.set(false);
+                                return glib::ControlFlow::Break;
+                            }
+                            None => {}
+                        }
+                        let active = this.input.has_pending()
+                            || this.gpu.borrow().as_ref().is_some_and(|g| {
+                                g.session.wants_continuous_frames() || g.needs_present
+                            });
+                        #[cfg(test)]
+                        if let Some(gpu) = this.gpu.borrow().as_ref() {
+                            gpu.session
+                                .engine()
+                                .backend()
+                                .stats
+                                .lock()
+                                .unwrap()
+                                .frame_handler_cpu
+                                .push(frame_start.elapsed().as_secs_f64() * 1000.0);
+                        }
+                        if active {
+                            if this.gpu.borrow().as_ref().is_some_and(|g| {
+                                g.session.engine().backend().clock.period() != period
+                            }) {
+                                this.ticking.set(false);
+                                this.wake();
+                                return glib::ControlFlow::Break;
+                            }
+                            glib::ControlFlow::Continue
+                        } else {
+                            this.ticking.set(false);
+                            glib::ControlFlow::Break
+                        }
                     }
-                    let active = this.input.has_pending()
-                        || this.gpu.borrow().as_ref().is_some_and(|g| {
-                            g.session.wants_continuous_frames() || g.needs_present
-                        });
-                    #[cfg(test)]
-                    if let Some(gpu) = this.gpu.borrow().as_ref() {
-                        gpu.session
-                            .engine()
-                            .backend()
-                            .stats
-                            .lock()
-                            .unwrap()
-                            .frame_handler_cpu
-                            .push(frame_start.elapsed().as_secs_f64() * 1000.0);
-                    }
-                    if active {
-                        glib::ControlFlow::Continue
-                    } else {
-                        this.ticking.set(false);
-                        glib::ControlFlow::Break
-                    }
-                }
-            ),
-        );
+                ),
+            );
         // schedule may advance an expired deadline after a genuinely idle gap.
         // Keep our next deadline aligned with the actual kernel timer phase.
         self.frame_deadline.set(first);
@@ -1616,6 +1651,11 @@ impl Workspace {
             return;
         };
         self.refreshing.set(true);
+        if regions & (regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS)
+            != 0
+        {
+            self.navigator.refresh(&state);
+        }
         if regions & (regions::BRUSH | regions::SETTINGS) != 0 {
             self.tool_set.refresh(self, &state.tool_set, state.theme);
         }
