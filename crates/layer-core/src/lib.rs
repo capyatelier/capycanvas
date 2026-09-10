@@ -15,7 +15,11 @@ pub use presets::{
     WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET, WATERCOLOR_TRANSPORT_SHORT_NARROW_ASSET, default_brush,
 };
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::Arc,
+};
 
 pub type Revision = u64;
 
@@ -1125,7 +1129,7 @@ pub struct Document {
     pub active_layer: LayerId,
     pub active_mask: bool,
     pub selection: Option<Selection>,
-    pub reference_layer: Option<LayerId>,
+    pub reference_layers: BTreeSet<LayerId>,
     pub revision: Revision,
     strokes: BTreeMap<StrokeId, Stroke>,
     next_layer_id: u64,
@@ -1158,7 +1162,7 @@ impl Document {
             active_layer: paint_id,
             active_mask: false,
             selection: None,
-            reference_layer: None,
+            reference_layers: BTreeSet::new(),
             revision: 0,
             strokes: BTreeMap::new(),
             next_layer_id: 3,
@@ -1259,14 +1263,14 @@ impl Document {
             Edit::SetSelection(selection) => {
                 Edit::SetSelection(std::mem::replace(&mut self.selection, selection))
             }
-            Edit::SetReference(reference) => {
-                if let Some(id) = reference {
+            Edit::SetReferences(references) => {
+                for &id in &references {
                     let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
                     if !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage) {
                         return Err(DocumentError::NotDrawable(id));
                     }
                 }
-                Edit::SetReference(std::mem::replace(&mut self.reference_layer, reference))
+                Edit::SetReferences(std::mem::replace(&mut self.reference_layers, references))
             }
             Edit::InsertLayer { index, layer } => {
                 if self.layer(layer.id).is_some() {
@@ -1300,10 +1304,8 @@ impl Document {
                 let removed = self.layers.remove(index);
                 let selected = self.active_layer == id;
                 let mask_selected = self.active_mask;
-                let reference = self.reference_layer == Some(id);
-                if reference {
-                    self.reference_layer = None;
-                }
+                let references = self.reference_layers.clone();
+                let reference = self.reference_layers.remove(&id);
                 if self.active_layer == id {
                     self.active_mask = false;
                     self.active_layer = self
@@ -1324,7 +1326,7 @@ impl Document {
                     ]);
                 }
                 if reference {
-                    inverse.push(Edit::SetReference(Some(id)));
+                    inverse.push(Edit::SetReferences(references));
                 }
                 Edit::Batch(inverse)
             }
@@ -1428,7 +1430,7 @@ pub enum Edit {
     ReplaceLayer(Box<Layer>),
     SetMaskTarget(bool),
     SetSelection(Option<Selection>),
-    SetReference(Option<LayerId>),
+    SetReferences(BTreeSet<LayerId>),
     InsertLayer { index: usize, layer: Layer },
     RemoveLayer { id: LayerId },
     MoveLayer { id: LayerId, to: usize },

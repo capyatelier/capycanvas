@@ -337,6 +337,7 @@ function place(node, rect) {
   });
 }
 function tabLabel(tab, view) {
+  tab.classList.toggle("icon-only-tab", !view.tab.show_name);
   if (view.tab.show_icon) tab.append(icon(view.icon));
   if (view.tab.show_name) tab.append(element("span", "", view.title));
 }

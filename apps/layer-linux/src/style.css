@@ -42,13 +42,19 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .layer-list { background: transparent; }
 .layer-list > row { padding: 0; margin: 0; border-radius: 0; }
 .layer-row { min-height: 36px; padding: 2px 4px; border-radius: 0; }
-.layer-row.selected { background: alpha(var(--window-fg-color), .08); }
-.layers-panel button.layer-thumbnail { min-width: 28px; min-height: 28px; padding: 0; border: 2px solid transparent; border-radius: 3px; background: var(--input-bg); }
-.layers-panel button.layer-thumbnail.selected { border-color: var(--window-fg-color); }
-.layers-panel button.layer-link { min-width: 14px; }
+.layer-row.selected { background: alpha(var(--accent-bg-color), .22); }
+.layers-panel button.layer-column { min-width: 20px; }
+.layers-panel button.layer-thumbnail { min-width: 28px; min-height: 28px; padding: 0; border: 1px solid transparent; border-radius: 3px; background: var(--input-bg); }
+.layers-panel button.layer-folder { background: transparent; }
+.layers-panel button.layer-folder:hover { background: alpha(var(--window-fg-color), .08); }
+.layer-folder image { -gtk-icon-size: 28px; }
+.layer-clipping { min-width: 3px; background: #e999a5; border-radius: 1px; margin: 4px 0; }
+.layer-name-entry { min-width: 0; padding: 0 2px; min-height: 24px; border-radius: 4px; }
+.layers-panel button.layer-link { min-width: 12px; }
 .layer-link image { -gtk-icon-size: 12px; }
 .layer-drop-before { box-shadow: inset 0 2px var(--accent-color); }
 .layer-drop-after { box-shadow: inset 0 -2px var(--accent-color); }
+.layer-drop-into { box-shadow: inset 0 0 0 2px var(--accent-color); }
 .dock-panel .number-labels { padding-left: 6px; }
 .number-control button.number-value, .number-control entry.number-entry { min-height: 20px; padding: 2px 6px; font-weight: 400; font-feature-settings: "tnum"; }
 .number-control entry.number-entry { border: 0; border-radius: 6px; background: var(--input-bg); }
@@ -62,6 +68,8 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .dock-panel .number-control scale { min-height: 24px; padding: 0; margin: 0 6px; }
 .dock-panel .number-control scale highlight { background: mix(var(--panel-bg), var(--window-fg-color), .5); }
 .dock-panel .number-control scale slider { min-width: 0; min-height: 0; padding: 0; border: 0; margin: 0; opacity: 0; }
+.dock-panel .number-inline scale { margin: 0; }
+.number-inline button.number-value, .number-inline entry.number-entry { padding: 2px 3px; }
 .number-control.error entry { box-shadow: inset 0 0 0 1px #e55; }
 .number-preference { padding: 12px 14px; }
 .image-preference { padding: 12px 14px; }
@@ -79,6 +87,7 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .toolbar-controls.vertical > .panel-grip, .panel-footer > .panel-grip { -gtk-icon-transform: translateY(-1.6px) rotate(90deg); }
 .dock-panel .caption { font-size: 1em; }
 .dock-tabs button { border-radius: 6px 6px 0 0; min-height: 28px; padding: 4px 8px; }
+.dock-tabs button.icon-only-tab { min-width: 20px; }
 .dock-tabs button.selected-tool { background: var(--panel-bg); }
 .tab-joins { color: var(--panel-bg); }
 .dock-panel entry, .dock-panel dropdown > button { background: var(--input-bg); }

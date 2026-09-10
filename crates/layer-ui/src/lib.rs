@@ -430,6 +430,8 @@ pub struct LayerState {
     pub opacity: f32,
     pub selected: bool,
     pub mask_selected: bool,
+    /// Content/mask target, independent of the selected row set.
+    pub editing: bool,
     pub has_mask: bool,
     pub mask_enabled: bool,
     pub mask_linked: bool,

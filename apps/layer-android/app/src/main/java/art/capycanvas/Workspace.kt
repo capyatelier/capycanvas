@@ -366,12 +366,13 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     group.array("panels").values().forEachIndexed { index, id ->
                         val p = panels[id.toString()] ?: return@forEachIndexed
                         val selected = id == active
+                        val content = p.getJSONObject("tab")
                         val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id))
                             .onGloballyPositioned { coords ->
                                 val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
                                 dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index,
                                     "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
-                            }.height(36.dp).zIndex(if (selected) 1f else 0f)
+                            }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier).zIndex(if (selected) 1f else 0f)
                             .drawBehind {
                                 if (selected) {
                                     val r = 6.dp.toPx(); val w = size.width; val h = size.height
@@ -386,8 +387,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                             }
                             .combinedClickable(onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to id)) },
                                 onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 8.dp)
-                        Row(tab, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            val content = p.getJSONObject("tab")
+                        Row(tab, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
                             if (content.getBoolean("show_icon")) SharedIcon(p.getString("icon"), if (content.getBoolean("show_name")) null else p.getString("title"), Modifier.testTag("tab-icon-$id"))
                             if (content.getBoolean("show_name")) Text(p.getString("title"), Modifier.testTag("tab-name-$id"), fontWeight = FontWeight.Bold)
                         }

@@ -1950,6 +1950,11 @@ impl Workspace {
                 icon.set_visible(tab.show_icon);
                 label.set_label(config.title());
                 label.set_visible(tab.show_name);
+                if tab.show_name {
+                    button.remove_css_class("icon-only-tab");
+                } else {
+                    button.add_css_class("icon-only-tab");
+                }
                 button.set_tooltip_text(Some(config.title()));
                 button.update_property(&[gtk::accessible::Property::Label(config.title())]);
                 selected(button, *panel == group.active);

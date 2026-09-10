@@ -17,6 +17,10 @@ pub enum LayerCanvasTool {
 pub struct LayersView {
     pub tool: LayerCanvasTool,
     pub has_selection: bool,
+    pub can_reference: bool,
+    pub references_selected: bool,
+    /// Header target remains available even inside a collapsed group.
+    pub editing_layer: Option<LayerState>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -29,6 +33,12 @@ pub enum LayerAction {
         id: u64,
         mask: bool,
     },
+    /// Toggle row selection without changing the content/mask editing target.
+    ToggleSelection {
+        id: u64,
+    },
+    /// Mark the selected paint layers, or unmark them if all are references.
+    ReferenceSelection,
     Rename {
         id: u64,
         name: String,
@@ -114,6 +124,8 @@ pub enum LayerAction {
 pub(super) struct LayerInteraction {
     pub tool: LayerCanvasTool,
     pub collapsed: BTreeSet<LayerId>,
+    pub selected: BTreeSet<LayerId>,
+    pub editing: Option<LayerId>,
     pub path: Vec<Point>,
     original: Option<Layer>,
     solo: Option<Vec<(LayerId, bool)>>,
@@ -145,6 +157,19 @@ impl LayerInteraction {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn reference_selection(&self) -> BTreeSet<LayerId> {
+        self.layer_interaction
+            .selected
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.engine
+                    .document()
+                    .layer(*id)
+                    .is_some_and(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
+            })
+            .collect()
+    }
     /// Hosts decode a file; ownership, placement and undo remain shared policy.
     pub fn import_layer_image(
         &mut self,
@@ -232,11 +257,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .position(|l| l.id == LayerId(id))
                     .ok_or("Unknown layer")?;
-                return self.layer_action(LayerAction::Reparent {
+                self.layer_action(LayerAction::Reparent {
                     id,
                     parent,
                     index: index.saturating_sub(usize::from(from < index)) as u32,
-                });
+                })?;
+                if into {
+                    self.layer_interaction.collapsed.remove(&LayerId(target));
+                }
             }
             LayerAction::New { group, clipped } => {
                 let doc = self.engine.document();
@@ -270,6 +298,26 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerAction::Select { id, mask } => {
                 self.engine.set_active_layer(LayerId(id)).map_err(error)?;
                 self.layer_edit(Edit::SetMaskTarget(mask))?;
+                self.layer_interaction.selected = BTreeSet::from([LayerId(id)]);
+            }
+            LayerAction::ToggleSelection { id } => {
+                let id = LayerId(id);
+                self.engine.document().layer(id).ok_or("Unknown layer")?;
+                if !self.layer_interaction.selected.remove(&id) {
+                    self.layer_interaction.selected.insert(id);
+                }
+            }
+            LayerAction::ReferenceSelection => {
+                let targets = self.reference_selection();
+                let mut references = self.engine.document().reference_layers.clone();
+                if targets.iter().all(|id| references.contains(id)) {
+                    references.retain(|id| !targets.contains(id));
+                } else {
+                    references.extend(targets);
+                }
+                if references != self.engine.document().reference_layers {
+                    self.layer_edit(Edit::SetReferences(references))?;
+                }
             }
             LayerAction::Tool { tool } => {
                 self.layer_interaction.tool = tool;
@@ -302,13 +350,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer.properties.locked = value;
                 self.layer_edit(Edit::ReplaceLayer(Box::new(layer)))?;
             }
-            LayerAction::Reference { id } => self.layer_edit(Edit::SetReference(
-                if self.engine.document().reference_layer == Some(LayerId(id)) {
-                    None
-                } else {
-                    Some(LayerId(id))
-                },
-            ))?,
+            LayerAction::Reference { id } => {
+                let mut references = self.engine.document().reference_layers.clone();
+                if !references.remove(&LayerId(id)) {
+                    references.insert(LayerId(id));
+                }
+                self.layer_edit(Edit::SetReferences(references))?;
+            }
             LayerAction::Solo { id } => {
                 let next = if let Some(previous) = self.layer_interaction.solo.take() {
                     previous
@@ -772,7 +820,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     check(
                         "Use as fill reference",
                         LayerAction::Reference { id },
-                        self.engine.document().reference_layer == Some(l.id),
+                        self.engine.document().reference_layers.contains(&l.id),
                     ),
                     item("Solo / restore", LayerAction::Solo { id }),
                 ],

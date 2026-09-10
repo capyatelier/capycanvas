@@ -872,7 +872,7 @@ impl Customization {
                     let names: Vec<_> = state.layers.iter().map(|l| l.label.as_str()).collect();
                     input.set_model(Some(&gtk::StringList::new(&names)));
                     input.set_selected(
-                        state.layers.iter().position(|l| l.selected).unwrap_or(0) as u32
+                        state.layers.iter().position(|l| l.editing).unwrap_or(0) as u32
                     );
                 }
                 Some(FieldValue::LayerOpacity(input)) => {

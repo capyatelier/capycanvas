@@ -84,6 +84,14 @@ impl NumericControl {
             ..Self::number(0.5, 2048.0, 1.0, 1).unit("px")
         }
     }
+    /// Compact layer header: display 0–100 without a unit; keep stored precision.
+    pub fn layer_opacity() -> Self {
+        Self {
+            digits: 0,
+            unit: String::new(),
+            ..Self::percent()
+        }
+    }
     pub fn pressure() -> Self {
         Self::number(0.25, 4.0, 0.05, 2).unit("×")
     }

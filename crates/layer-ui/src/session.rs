@@ -1859,48 +1859,63 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn refresh_document(&mut self) {
         let doc = self.engine.document();
+        let interaction = &mut self.layer_interaction;
+        if interaction.editing != Some(doc.active_layer) {
+            interaction.editing = Some(doc.active_layer);
+            interaction.selected = std::collections::BTreeSet::from([doc.active_layer]);
+        }
+        interaction.selected.retain(|id| doc.layer(*id).is_some());
+        let layer_state = |l: &layer_core::Layer| LayerState {
+            id: l.id.0,
+            label: l.name.to_string(),
+            editable: l.kind == LayerKind::Paint,
+            visible: l.visible,
+            opacity: l.opacity,
+            selected: self.layer_interaction.selected.contains(&l.id),
+            editing: l.id == doc.active_layer,
+            mask_selected: l.id == doc.active_layer && doc.active_mask,
+            has_mask: l.mask.is_some(),
+            mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
+            mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
+            show_mask_area: l.mask.as_ref().is_some_and(|m| m.show_area),
+            alpha_locked: l.properties.alpha_locked,
+            locked: doc.is_locked(l.id),
+            clipped: l.properties.clipped,
+            reference: doc.reference_layers.contains(&l.id),
+            group: l.kind == LayerKind::Group,
+            depth: self.layer_interaction.depth(doc, l),
+            collapsed: self.layer_interaction.collapsed.contains(&l.id),
+            blend: l.properties.blend as u32,
+            blend_label: l.properties.blend.label().into(),
+            paint_revision: l
+                .strokes
+                .last()
+                .map_or(0, |id| id.0)
+                .wrapping_mul(4099)
+                .wrapping_add(l.operations.len() as u64),
+            mask_revision: l.mask.as_ref().map_or(0, |m| {
+                m.id.0
+                    .wrapping_mul(65537)
+                    .wrapping_add(m.strokes.last().map_or(0, |id| id.0) * 2)
+                    .wrapping_add(u64::from(m.inverted))
+            }),
+            mask_id: l.mask.as_ref().map(|m| m.id.0),
+        };
+        self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
         self.state.layers = doc
             .ordered_layers()
             .into_iter()
             .filter(|l| !self.layer_interaction.hidden_by_group(doc, l))
-            .map(|l| LayerState {
-                id: l.id.0,
-                label: l.name.to_string(),
-                editable: l.kind == LayerKind::Paint,
-                visible: l.visible,
-                opacity: l.opacity,
-                selected: l.id == doc.active_layer,
-                mask_selected: l.id == doc.active_layer && doc.active_mask,
-                has_mask: l.mask.is_some(),
-                mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
-                mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
-                show_mask_area: l.mask.as_ref().is_some_and(|m| m.show_area),
-                alpha_locked: l.properties.alpha_locked,
-                locked: doc.is_locked(l.id),
-                clipped: l.properties.clipped,
-                reference: doc.reference_layer == Some(l.id),
-                group: l.kind == LayerKind::Group,
-                depth: self.layer_interaction.depth(doc, l),
-                collapsed: self.layer_interaction.collapsed.contains(&l.id),
-                blend: l.properties.blend as u32,
-                blend_label: l.properties.blend.label().into(),
-                paint_revision: l
-                    .strokes
-                    .last()
-                    .map_or(0, |id| id.0)
-                    .wrapping_mul(4099)
-                    .wrapping_add(l.operations.len() as u64),
-                mask_revision: l.mask.as_ref().map_or(0, |m| {
-                    m.id.0
-                        .wrapping_mul(65537)
-                        .wrapping_add(m.strokes.last().map_or(0, |id| id.0) * 2)
-                        .wrapping_add(u64::from(m.inverted))
-                }),
-                mask_id: l.mask.as_ref().map(|m| m.id.0),
-            })
+            .map(layer_state)
             .collect();
         self.state.layer_tools.has_selection = doc.selection.is_some();
         self.state.layer_tools.tool = self.layer_interaction.tool;
+        let references = self.reference_selection();
+        self.state.layer_tools.can_reference = !references.is_empty();
+        self.state.layer_tools.references_selected = !references.is_empty()
+            && references
+                .iter()
+                .all(|id| doc.reference_layers.contains(id));
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
             title: "Untitled".into(),
@@ -1987,6 +2002,90 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn layer_row_selection_references_and_editing_are_independent() {
+        let mut s = session();
+        let send = |s: &mut UiSession<Recorder>, action| {
+            s.dispatch(UiAction::Layer { action }).unwrap();
+        };
+        send(
+            &mut s,
+            LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        );
+        let second = s.engine.document().active_layer;
+        send(
+            &mut s,
+            LayerAction::AddMask {
+                id: second.0,
+                replace: false,
+            },
+        );
+        send(&mut s, LayerAction::ToggleSelection { id: 1 });
+        assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 2);
+        assert_eq!(s.engine.document().active_layer, second);
+        assert!(s.engine.document().active_mask);
+        send(&mut s, LayerAction::ReferenceSelection);
+        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        assert!(s.state.layer_tools.references_selected);
+        // The editing target can be unselected and remains editable.
+        send(&mut s, LayerAction::ToggleSelection { id: second.0 });
+        assert!(
+            s.state
+                .layers
+                .iter()
+                .any(|l| l.editing && !l.selected && l.mask_selected)
+        );
+        send(&mut s, LayerAction::ReferenceSelection);
+        assert_eq!(
+            s.engine.document().reference_layers,
+            std::collections::BTreeSet::from([second])
+        );
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        send(&mut s, LayerAction::Delete { id: 1 });
+        assert!(!s.engine.document().reference_layers.contains(&LayerId(1)));
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        send(&mut s, LayerAction::Select { id: 1, mask: false });
+        assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
+        assert!(s.state.layers.iter().any(|l| l.id == 1 && l.editing));
+    }
+
+    #[test]
+    fn dropping_into_a_closed_group_expands_it_without_changing_edit_target() {
+        let mut s = session();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: true,
+                clipped: false,
+            },
+        })
+        .unwrap();
+        let group = s.engine.document().active_layer;
+        for action in [
+            LayerAction::Collapse { id: group.0 },
+            LayerAction::Select { id: 1, mask: false },
+            LayerAction::Drop {
+                id: 1,
+                target: group.0,
+                fraction: 0.5,
+            },
+        ] {
+            s.dispatch(UiAction::Layer { action }).unwrap();
+        }
+        assert!(!s.layer_interaction.collapsed.contains(&group));
+        assert_eq!(s.engine.document().active_layer, LayerId(1));
+        assert!(
+            s.state
+                .layers
+                .iter()
+                .any(|l| l.id == 1 && l.depth == 1 && l.editing)
+        );
     }
 
     #[test]

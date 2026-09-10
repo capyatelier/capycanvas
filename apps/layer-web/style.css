@@ -167,6 +167,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tab-list > .dock-tab { flex: none; }
 .dock-tab { position: relative; white-space: nowrap; cursor: grab; height: 36px; min-height: 36px; padding: 4px 8px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; touch-action: none; }
 .panel-grip { touch-action: none; }
+.dock-tab.icon-only-tab { width: 36px; justify-content: center; }
 .drag-source { opacity: .5; }
 .dock-tab[aria-selected="true"], .dock-tab[aria-selected="true"]:hover { background: var(--panel); z-index: 1; }
 /* Concave lower shoulders join the selected tab to the panel, without borders. */

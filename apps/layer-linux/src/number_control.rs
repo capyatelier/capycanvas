@@ -40,11 +40,22 @@ glib::wrapper! {
 }
 impl NumberControl {
     pub fn new(spec: NumericControl, title: &str, description: &str) -> Self {
+        Self::build(spec, title, description, false)
+    }
+    /// One-line slider with only an editable value. Numeric policy is unchanged.
+    pub fn inline(spec: NumericControl, title: &str) -> Self {
+        Self::build(spec, title, "", true)
+    }
+    fn build(spec: NumericControl, title: &str, description: &str, inline: bool) -> Self {
         let control: Self = glib::Object::new();
         control.imp().spec.set(spec.clone()).unwrap();
         control.set_orientation(gtk::Orientation::Vertical);
         control.set_hexpand(true);
         control.add_css_class("number-control");
+        if inline {
+            control.add_css_class("number-inline");
+            control.set_tooltip_text(Some(title));
+        }
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let labels = gtk::Box::new(gtk::Orientation::Vertical, 0);
         labels.set_hexpand(true);
@@ -58,7 +69,9 @@ impl NumberControl {
         label.set_tooltip_text(Some(title));
         label.add_css_class("number-title");
         labels.append(&label);
-        header.append(&labels);
+        if !inline {
+            header.append(&labels);
+        }
         control.append(&header);
         if !description.is_empty() {
             let description = gtk::Label::new(Some(description));
@@ -212,12 +225,16 @@ impl NumberControl {
                     }
                 }
             ));
-            track.append(&minus);
-            track.append(&slider);
-            track.append(&plus);
-            control.append(&track);
+            if inline {
+                header.prepend(&slider);
+            } else {
+                track.append(&minus);
+                track.append(&slider);
+                track.append(&plus);
+                control.append(&track);
+                control.imp().steps.set([minus, plus]).unwrap();
+            }
             control.imp().slider.set(slider).unwrap();
-            control.imp().steps.set([minus, plus]).unwrap();
         }
         control.set_value(spec.min);
         control

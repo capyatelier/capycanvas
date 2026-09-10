@@ -6,9 +6,9 @@ Status: GTK layer/masking review build implemented; the broader workflow roadmap
 
 Implemented: compact virtualized layer rows; separate content/mask thumbnails and link control; paint layers, isolated groups, reorder/reparent, rename, duplicate/delete, visibility/opacity, locks, reference designation and seven blends. Lasso selections and Lasso Fill provide the initial selection path. Imported images become editable paint layers. Masks support selection initialization, incremental reveal/erase painting, independent/linked translation, inspection, inversion, clear, enable/disable, Delete and Apply with undo. Clipped siblings share the unclipped base alpha. Commands and gestures use shared Rust state; GTK supplies widgets and file decoding.
 
-Still planned, not exposed as working tools in this build: reference-aware Bucket Fill; multi-layer selection/mixed values; selection add/subtract and painted-mask-to-selection; constraining ordinary strokes to temporary selections; group flatten/merge/ungroup; project persistence for the new model; corresponding web/Android layer panels. The reference designation currently records the intended source; it does not perform bucket filling. Apply Mask is available on paint layers, including imported images, not isolated groups. This review is for the layer/masking UI and compositor, not a claim that every acceptance scenario below is finished.
+Checkbox multi-selection and multiple reference designations are implemented independently of the editing target. The lighthouse header button marks selected paint layers (or clears their reference flags when all are references). The remaining header controls edit the drawing target's owner, not the checked set. Still planned, not exposed as working tools in this build: reference-aware Bucket Fill; bulk property editing/mixed values and moving multiple selected rows together; selection add/subtract and painted-mask-to-selection; constraining ordinary strokes to temporary selections; group flatten/merge/ungroup; project persistence for the new model; corresponding web/Android layer panels. Reference designation records sources but does not perform bucket filling. Apply Mask is available on paint layers, including imported images, not isolated groups. This review is not a claim that every acceptance scenario below is finished.
 
-The GTK Layers minimum is **226 logical pixels**: six standard 36-pixel toolbar tiles and five 2-pixel gaps. The shared docking allocator enforces it for docked/floating groups, including when Layers is an inactive tab. Compact buttons use 24-pixel targets, thumbnail artwork starts at 28 pixels, and controls keep 6-pixel horizontal inset. Names/metadata and the blend label ellipsize. Rows stay compact (about 40 pixels with the two-line metadata). No extra mask row or unused mask slot is added.
+The GTK Layers minimum is **226 logical pixels**: six standard 36-pixel toolbar tiles and five 2-pixel gaps. The shared docking allocator enforces it for docked/floating groups, including when Layers is an inactive tab. Header/footer buttons use 24-pixel targets; fixed eye and selection columns use 20-pixel targets. Thumbnail artwork starts at 28 pixels, and controls keep 6-pixel horizontal inset. Thumbnail-to-name spacing is 8 pixels, matching panel-tab name padding. Names/metadata and the blend label ellipsize. Rows stay compact (about 40 pixels with two-line metadata). No extra mask row or unused mask slot is added.
 
 GPU implementation lives in the existing renderer crate: `layer_masks.rs`/`selection.wgsl` maintain sparse R8 coverage, and `scene.rs`/`scene.wgsl` compose tiles. Aligned Normal paint+mask is one source-over shader draw. Translations, clipping, groups and other blends share reusable tile-sized scratch surfaces, not full-canvas buffers per layer. Export excludes inspection tint. Apply Mask resolves displayed watercolor pigment before clearing its latent material state. Native previews asynchronously download only 32×32 pixels for visible rows; drawing never waits for them.
 
@@ -68,18 +68,16 @@ Retain Capy's existing panel container, tab-group behavior, theme tokens, 11pt t
 
 ```text
 ┌ Existing Layers panel tab ──────────┐
-│ [Normal             ▾] [α] [clip]  │  Selected-layer controls
-│ Opacity                      100%  │
-│ [−] ───────────────────────── [+]  │  Existing compact slider
+│ [Normal      ▾]  ━━━━━━━━ 100      │  Equal blend/opacity halves
+│ [α-lock] [lock] [clip] [reference] │
 │                                    │
-│ eye  ▾ [group] Character            │
-│ eye      [paint]      Linework      │
-│                      Reference 🔒  │
-│ eye      ↳ [paint]    Shading       │
+│ eye  □ [open folder] Character     │
+│ eye  ⚑     [paint]   Linework   🔒  │
+│ eye  □     ▏[paint]  Shading        │  Pastel-red clipping stripe
 │                      Multiply 65%  │  Only non-default metadata
-│ eye      [paint]      Skin      α  │
-│ eye      [paint]─[mask] Texture     │  Link between edit targets
-│ eye  [swatch] Background           │
+│ eye  □     [paint]   Skin       α  │
+│ eye  ✎     [paint]─[mask] Texture  │  Link between edit targets
+│ eye  □ [swatch] Background         │
 │                                    │
 │ [new layer] [group] [mask] [more]   │  Icons with tooltips
 └────────────────────────────────────┘
@@ -87,35 +85,35 @@ Retain Capy's existing panel container, tab-group behavior, theme tokens, 11pt t
 
 The diagram is structural, not pixel-accurate; words and symbols stand for our own icons. Use the compact dimensions specified in the GTK review-build section. Paired thumbnails and their link control are functional hit targets, not decorations to hide when width runs out. Names can ellipsize, but the active content/mask target must remain visible.
 
-Retain 6-unit outer/control spacing; this compact panel intentionally uses smaller buttons than the 36-unit tool ribbons. The blend field flexes before icon targets compress. Enforce the shared minimum rather than clipping controls. Native touch targets may need more room than the thumbnail artwork. These are Capy dimensions, not measurements of CSP or Photoshop.
+Retain 6-unit outer/control spacing; this compact panel intentionally uses smaller buttons than the 36-unit tool ribbons. Blend and opacity split their row equally. Opacity uses the reusable inline numeric presentation: slider plus editable whole-number readout, no visible title, unit or step buttons; its tooltip identifies the control. Expressions and stored precision still use shared numeric policy. Enforce the shared minimum rather than clipping controls. These are Capy dimensions, not measurements of CSP or Photoshop.
 
-Use one continuous list surface: no rounded card or permanent border around each row. Selection supplies a subdued accent background, while an independent high-contrast border identifies the active thumbnail. The fixed header/footer keep their positions as the list scrolls. A second line, when present, uses the same 11pt panel font in a secondary color; it does not make the row taller.
+Use one continuous list surface: no rounded card or permanent border around each row. Selection uses the same blue tint as the selected brush. Four contrasting corner marks identify the editing thumbnail independently, including single-thumbnail rows. These marks render above the preview, not behind opaque image pixels. The fixed header/footer keep their positions as the list scrolls. Secondary metadata uses the same 11pt panel font in a secondary color.
 
 ### Layer rows
 
-- Visibility is an eye control, not the checkbox used for multi-selection. Keep it present when hidden. A hidden ancestor is an inherited state, not a rewrite of each child's visibility.
+- Visibility and checkbox controls form two fixed columns, including nested rows. Indent only the thumbnails and names. A hidden ancestor is an inherited state, not a rewrite of each child's visibility. The selection column shows a pencil for the editing layer, otherwise a lighthouse for reference layers, otherwise a checked/unchecked box; all remain clickable. If the editing layer is also a reference, the pencil takes precedence and the tooltip identifies both roles.
 - Show content and mask thumbnails side by side when a mask exists. The selected target has a clear outline. A disabled mask has an unmistakable overlay mark. Do not add an empty mask slot or a second list row when no mask exists. A chain/link icon joins the thumbnails when linked; a subdued broken-link icon occupies the same slot when unlinked. Clicking that slot toggles linkage without changing the selected target or moving anything. Tooltips/accessibility labels say Link mask to layer or Unlink mask from layer; the mask menu exposes the same toggle.
-- Let the name ellipsize, with the full name available in its tooltip, Rename editor and accessible label. Use modest, consistent tree indentation (prototype 12 units per level) and a distinct disclosure target. Do not conflate a clipping marker with group nesting. Deep-tree testing must establish a usable content minimum before implementation; do not introduce a custom frozen-column tree/scroller in this first design.
-- Show badges only for meaningful states: lock, Alpha lock, fill reference, clipping, and special read-only content. Put non-default blend/opacity beneath the name, for example `Multiply · 65%`; omit `Normal · 100%`. Badges can share that metadata line instead of taking the remaining name width.
-- A clipping marker identifies the base relationship. A group disclosure expands/collapses without changing the editing target.
+- Let the name ellipsize, with the full name available in its tooltip and inline Rename editor. Indent thumbnail/name content by 8 pixels per level, capped at 24 pixels to preserve the 226-pixel minimum; eye/selection columns never move.
+- Put non-default blend/opacity beneath the name, for example `Multiply · 65%`; omit `Normal · 100%`. Lock indicators belong on the right, references in the selection column, and clipping is a bold pastel-red stripe before the thumbnail—not metadata text.
+- The thumbnail-sized open/closed folder is the single group disclosure button. It has no resting background and expands/collapses without changing the editing target. Header controls retain their target even when its containing group is collapsed.
 - Content selection on a paint layer means paint; mask selection means boundary editing. While editing a mask, show a compact contextual label such as `Editing Skin mask` with a visible route back to content. This can reuse the contextual tool surface; it is not a permanent extra panel row.
 - The mask thumbnail can use white for visible coverage and black for hidden coverage. This is a visualization of one alpha channel, not an instruction to paint with black/white: any paint color reveals, while transparent ink/erasing hides.
 - Paint thumbnails show content over a subtle checkerboard before the owner's mask/opacity/blend, independent of visibility so hidden rows remain recognizable. Use a stable document-coordinate thumbnail frame initially; cropped-content thumbnail modes are deferred. Group thumbnails may use a folder glyph initially. Background and suggestion rows retain explicit kinds and core-defined editing restrictions.
 
 ### Selection and movement
 
-Row selection, the active content/mask target and the fill reference are independent. Tapping a different row's name selects its content; tapping either thumbnail explicitly selects that target. Tapping the already-active row's name leaves its current target unchanged. Header blend/opacity always edit the owner layer, never silently become mask-strength controls. Multi-selection shows mixed property values instead of pretending every selected layer matches the active one.
+Row selection, the active content/mask target and reference layers are independent. Tapping a row name selects that row and its content; tapping either thumbnail explicitly selects that target. Tapping the already-active, selected row's name leaves its current target unchanged. Double-click names to rename in place (Enter or focus loss commits; Escape cancels). Header blend/opacity always edit the drawing target's owner, never mask strength. Checkbox clicks toggle selection without changing that drawing target. Bulk property controls with mixed values are deferred.
 
-Mouse/pen dragging on row content reorders; on touch, ordinary list drags scroll and a trailing reorder grip starts movement. Target thumbnails must still accept taps without moving a layer. Recognizer timing is native, but selection, drag ownership, destination validation and results are shared Rust behavior. More → Select layers provides modifier-free multi-selection; a visible count and Finish action make that mode explicit. Scrolling and reordering remain distinguishable while multi-selecting.
+Mouse/pen dragging anywhere on a row reorders it using a translucent native drag preview; on touch, ordinary list drags scroll and the trailing grip starts movement. Thumbnail taps still select targets. Native gestures handle device recognition and drag presentation; shared Rust owns selection and move validation/results. Ordinary state updates retain row widgets so a selection change cannot interrupt double-clicks or drags. There is no separate multi-selection mode.
 
-Drop hints distinguish above/below a row from inside a group. Move the selected normalized layer set together, including owned masks. Never reuse the workspace's floating-panel docking behavior, tear-off thresholds or tab-merging rules for artwork layers. A clip move previews its resulting base; invalid destinations are rejected before commit.
+Drop hints distinguish above/below a row from inside a group. A successful drop into a collapsed group opens it. A drag moves its source layer (or group subtree), including owned masks; moving multiple checked rows together is deferred. Never reuse workspace floating-panel docking or tear-off rules for artwork layers. Invalid destinations are rejected before commit.
 
 ### Placement of actions
 
 | Location | Controls / commands |
 | --- | --- |
-| Always visible above list | Blend, opacity, Alpha lock, Clip to layer below; core disables inapplicable controls with a reason |
-| Always visible in row | Visibility, content/mask targets, link toggle when masked, group disclosure, important state badges |
+| Always visible above list | Blend, inline opacity; Alpha lock, edit lock, Clip to layer below, selected-layer reference toggle |
+| Always visible in row | Fixed eye/selection columns, content/mask targets, mask link, clickable open/closed folder, right-side lock (edit lock takes precedence over alpha lock), clipping stripe |
 | Bottom action strip | New paint layer, new group, add mask, more actions |
 | More / row context menu | New regular layer, New clipping layer, rename, duplicate, Alpha lock, lock, group/ungroup, select layers, select contents, solo/restore, use as fill reference, merge and delete |
 | Mask context menu | Show mask area, Enable mask, Link mask to layer; selection/reveal/hide/invert operations; Apply mask to layer and Delete mask in the final section |
@@ -123,7 +121,7 @@ Drop hints distinguish above/below a row from inside a group. Move the selected 
 | Fill-tool controls | Lasso Fill / Bucket Fill, active destination layer, current color; bucket also shows Reference, tolerance and edge expansion |
 | Separate Layer Properties panel | Deferred until additional effects, transform or mask-refinement controls justify it |
 
-Use separators between creation, organization, protection, and destructive actions. The visible More button provides access without hover, right-click, or long-press. Context menus dispatch the same commands as direct controls. More acts on the current target/selection; a row context menu first establishes its target, preserving an existing multi-selection when invoked on one of its members.
+Use separators between creation, organization, protection, and destructive actions. The visible More button provides access without hover, right-click, or long-press. Context menus dispatch the same commands as direct controls. More and row context menus establish a single editing target; the lighthouse header action operates on the checked set without changing the editing target.
 
 Do not duplicate the header and mask menu in a separate inspector for this MVP. If a Layer Properties panel is added later, it edits selected artwork, not the existing drawer for configuring which controls a built-in workspace panel displays. Keep Delete and merge in the menu initially; no new filter strip, Fill-opacity field, effect buttons or unsupported placeholders. Mask linkage is now a required direct row control.
 

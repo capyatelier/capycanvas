@@ -289,6 +289,246 @@ fn native_layer_panel_review() {
     });
     pump(300);
     capture_reference(&w, &format!("{dir}/04-compact-light.png"), 1.);
+    // Exercise the native row controls, including virtual-row identity across
+    // selection changes (double clicks must not lose their GTK gesture).
+    let row = |id| find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{id}")).unwrap();
+    let label = find_css(&row(1), "layer-name").unwrap();
+    let controllers = label.observe_controllers();
+    let rename = (0..controllers.n_items())
+        .find_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+        .unwrap();
+    rename.emit_by_name::<()>("released", &[&1i32, &5f64, &10f64]);
+    pump(100);
+    assert_eq!(label, find_css(&row(1), "layer-name").unwrap());
+    rename.emit_by_name::<()>("released", &[&2i32, &5f64, &10f64]);
+    pump(100);
+    let entry: gtk::Entry = find_css(&row(1), "layer-name-entry")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    assert!(entry.is_mapped());
+    entry.set_text("Atmosphere wash");
+    capture_reference(&w, &format!("{dir}/06-inline-rename.png"), 1.);
+    entry.emit_activate();
+    pump(100);
+    assert_eq!(
+        state(&w).layers.iter().find(|l| l.id == 1).unwrap().label,
+        "Atmosphere wash"
+    );
+    send(
+        &w,
+        A::Select {
+            id: texture,
+            mask: true,
+        },
+    );
+    send(
+        &w,
+        A::New {
+            group: true,
+            clipped: false,
+        },
+    );
+    let outer = state(&w).layers.iter().find(|l| l.editing).unwrap().id;
+    send(
+        &w,
+        A::Rename {
+            id: outer,
+            name: "Character".into(),
+        },
+    );
+    send(
+        &w,
+        A::New {
+            group: true,
+            clipped: false,
+        },
+    );
+    let inner = state(&w).layers.iter().find(|l| l.editing).unwrap().id;
+    send(
+        &w,
+        A::Rename {
+            id: inner,
+            name: "Fabric details".into(),
+        },
+    );
+    send(&w, A::Collapse { id: inner });
+    let source_row = row(texture);
+    let preview = crate::layers::drag_preview(&source_row, state(&w).palette.panel).unwrap();
+    let snapshot = gtk::Snapshot::new();
+    preview.snapshot(
+        &snapshot,
+        source_row.width() as f64,
+        source_row.height() as f64,
+    );
+    let node = snapshot
+        .to_node()
+        .expect("drag preview contains the row image");
+    w.window
+        .renderer()
+        .unwrap()
+        .render_texture(&node, None)
+        .save_to_png(format!("{dir}/10-drag-preview.png"))
+        .unwrap();
+    let controllers = source_row.observe_controllers();
+    let drag = (0..controllers.n_items())
+        .find_map(|i| controllers.item(i).and_downcast::<gtk::DragSource>())
+        .unwrap();
+    assert!(
+        drag.emit_by_name::<Option<gdk::ContentProvider>>("prepare", &[&80f64, &18f64])
+            .is_some()
+    );
+    let target = row(inner);
+    let controllers = target.observe_controllers();
+    let drop = (0..controllers.n_items())
+        .find_map(|i| controllers.item(i).and_downcast::<gtk::DropTarget>())
+        .unwrap();
+    let y = target.height() as f64 / 2.;
+    drop.emit_by_name::<gdk::DragAction>("enter", &[&80f64, &y]);
+    pump(100);
+    assert!(target.has_css_class("layer-drop-into"));
+    capture_reference(&w, &format!("{dir}/07-group-drop-target.png"), 1.);
+    assert!(drop.emit_by_name::<bool>(
+        "drop",
+        &[
+            &glib::BoxedValue(format!("capy-layer:{texture}").to_value()),
+            &80f64,
+            &y
+        ]
+    ));
+    pump(150);
+    assert!(
+        !state(&w)
+            .layers
+            .iter()
+            .find(|l| l.id == inner)
+            .unwrap()
+            .collapsed
+    );
+    send(
+        &w,
+        A::Select {
+            id: texture,
+            mask: true,
+        },
+    );
+    // Both fixed columns stay aligned at every nesting depth.
+    let x = row(1)
+        .first_child()
+        .unwrap()
+        .compute_bounds(&w.layer_panel.root)
+        .unwrap()
+        .x();
+    for id in [texture, inner, outer] {
+        assert_eq!(
+            row(id)
+                .first_child()
+                .unwrap()
+                .compute_bounds(&w.layer_panel.root)
+                .unwrap()
+                .x(),
+            x
+        );
+    }
+    let skin = state(&w)
+        .layers
+        .iter()
+        .find(|l| l.label == "Skin base")
+        .unwrap()
+        .id;
+    for id in [1, skin] {
+        click(
+            &row(id)
+                .first_child()
+                .unwrap()
+                .next_sibling()
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap(),
+        );
+    }
+    send(&w, A::ReferenceSelection);
+    click(
+        &row(texture)
+            .first_child()
+            .unwrap()
+            .next_sibling()
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap(),
+    );
+    let current = state(&w);
+    assert!(
+        current
+            .layers
+            .iter()
+            .any(|l| l.id == texture && l.editing && l.mask_selected && !l.selected)
+    );
+    assert_eq!(current.layers.iter().filter(|l| l.reference).count(), 3);
+    send(
+        &w,
+        A::Lock {
+            id: skin,
+            value: true,
+        },
+    );
+    edit_number(&w.layer_panel.opacity, "25*2");
+    pump(100);
+    assert_eq!(
+        state(&w)
+            .layers
+            .iter()
+            .find(|l| l.id == texture)
+            .unwrap()
+            .opacity,
+        0.5
+    );
+    assert_eq!(
+        state(&w)
+            .layers
+            .iter()
+            .find(|l| l.id == skin)
+            .unwrap()
+            .opacity,
+        1.
+    );
+    edit_number(&w.layer_panel.opacity, "100");
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Dark),
+    });
+    pump(300);
+    assert!(
+        w.layer_panel
+            .root
+            .measure(gtk::Orientation::Horizontal, -1)
+            .0
+            <= layer_ui::LAYERS_MIN_WIDTH as i32
+    );
+    capture_reference(&w, &format!("{dir}/08-groups-selection-dark.png"), 1.);
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Light),
+    });
+    pump(300);
+    capture_reference(&w, &format!("{dir}/09-groups-selection-light.png"), 1.);
+    send(&w, A::Collapse { id: outer });
+    assert!(!state(&w).layers.iter().any(|l| l.editing));
+    assert_eq!(
+        state(&w).layer_tools.editing_layer.as_ref().unwrap().id,
+        texture
+    );
+    edit_number(&w.layer_panel.opacity, "50");
+    pump(100);
+    assert_eq!(
+        state(&w)
+            .layer_tools
+            .editing_layer
+            .as_ref()
+            .unwrap()
+            .opacity,
+        0.5
+    );
+    edit_number(&w.layer_panel.opacity, "100");
+    send(&w, A::Collapse { id: outer });
     for _ in 0..110 {
         send(
             &w,
@@ -854,6 +1094,10 @@ fn native_group_tab_styles() {
                     let expected = layout.tab_presentation(*panel);
                     assert_eq!(icon.is_visible(), expected.show_icon);
                     assert_eq!(label.is_visible(), expected.show_name);
+                    if !expected.show_name {
+                        let bounds = button.compute_bounds(&w.surface).unwrap();
+                        assert_eq!(bounds.width(), bounds.height(), "icon-only tabs are square");
+                    }
                     assert_eq!(label.text(), layout.panel(*panel).unwrap().title());
                     assert_eq!(
                         button.compute_bounds(&w.surface).unwrap().height(),
