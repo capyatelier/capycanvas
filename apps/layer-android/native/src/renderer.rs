@@ -13,6 +13,16 @@ impl Renderer {
 }
 impl CanvasRenderer for Renderer {
     type Error = GpuRasterError;
+    fn request_thumbnail(
+        &mut self,
+        id: u64,
+        target: layer_core::LayerId,
+    ) -> Result<(), Self::Error> {
+        self.gpu()?.request_thumbnail(id, target)
+    }
+    fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        self.0.as_mut()?.take_thumbnail()
+    }
     fn tip_outline(&self, id: &AssetId) -> Option<&TipOutline> {
         self.0.as_ref()?.tip_outline(id)
     }

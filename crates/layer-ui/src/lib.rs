@@ -41,14 +41,17 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::UiSession;
+pub use session::{LayerControls, UiSession};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup,
     PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
     SettingsPage, ShortcutEditor, TextConstraint, ZenIcon, ZenRevealMode,
 };
-pub use shortcuts::{KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow};
+pub use shortcuts::{
+    KeyChord, ShortcutAction, ShortcutCapture, ShortcutDefinition, ShortcutRow, TextEditAction,
+    TextEditMenuItem, text_edit_menu,
+};
 pub use theme::{HexColor, Theme, ThemePalette};
 pub use workspace::WorkspaceState;
 
@@ -140,6 +143,12 @@ pub const TOOLBAR_CONTROLS: &[ToolbarControl] = &[
         command: CommandId::Eraser,
     },
     ToolbarControl::Command {
+        command: CommandId::Lasso,
+    },
+    ToolbarControl::Command {
+        command: CommandId::Move,
+    },
+    ToolbarControl::Command {
         command: CommandId::Undo,
     },
     ToolbarControl::Command {
@@ -219,6 +228,8 @@ pub struct UiCatalog {
     pub brush_sizes: &'static [f32],
     pub brush_size: NumericControl,
     pub opacity: NumericControl,
+    pub layer_opacity: NumericControl,
+    pub layer_blends: Vec<&'static str>,
     pub pressure: NumericControl,
 }
 pub fn ui_catalog() -> UiCatalog {
@@ -231,6 +242,22 @@ pub fn ui_catalog() -> UiCatalog {
         icons: &[
             "brush",
             "eraser",
+            "lasso",
+            "move",
+            "alpha-lock",
+            "clip",
+            "reference",
+            "selection-checked",
+            "selection-empty",
+            "eye",
+            "eye-hidden",
+            "lock",
+            "folder",
+            "folder-open",
+            "link",
+            "mask",
+            "image",
+            "more",
             "undo",
             "redo",
             "plus",
@@ -275,6 +302,11 @@ pub fn ui_catalog() -> UiCatalog {
         brush_sizes: BRUSH_SIZES,
         brush_size: NumericControl::brush_size(),
         opacity: NumericControl::percent(),
+        layer_opacity: NumericControl::layer_opacity(),
+        layer_blends: layer_core::LayerBlend::ALL
+            .iter()
+            .map(|b| b.label())
+            .collect(),
         pressure: NumericControl::pressure(),
     }
 }
@@ -298,6 +330,8 @@ pub enum Tool {
 pub enum CommandId {
     Brush,
     Eraser,
+    Lasso,
+    Move,
     Undo,
     Redo,
     UndoWorkspace,
@@ -334,6 +368,8 @@ impl CommandId {
         Some(match self {
             Self::Brush => "brush",
             Self::Eraser => "eraser",
+            Self::Lasso => "lasso",
+            Self::Move => "move",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
@@ -346,9 +382,11 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::Brush,
         Self::Eraser,
+        Self::Lasso,
+        Self::Move,
         Self::Undo,
         Self::Redo,
         Self::UndoWorkspace,
@@ -378,6 +416,8 @@ impl CommandId {
         match self {
             Self::Brush => "Brush",
             Self::Eraser => "Eraser",
+            Self::Lasso => "Lasso selection",
+            Self::Move => "Move",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::UndoWorkspace => "Undo Workspace Change",
@@ -408,6 +448,7 @@ pub struct CommandState {
     pub enabled: bool,
     pub selected: bool,
     pub shortcut: String,
+    pub tooltip: String,
     pub bindings: Vec<KeyChord>,
 }
 
@@ -430,6 +471,8 @@ pub struct LayerState {
     pub opacity: f32,
     pub selected: bool,
     pub mask_selected: bool,
+    /// Checked-selection precedence is shared across native hosts.
+    pub selection_icon: &'static str,
     /// Content/mask target, independent of the selected row set.
     pub editing: bool,
     pub has_mask: bool,
@@ -441,6 +484,8 @@ pub struct LayerState {
     pub clipped: bool,
     pub reference: bool,
     pub group: bool,
+    /// Paper is the bottom anchor; dropping there always inserts above it.
+    pub can_drop_below: bool,
     pub depth: u32,
     pub collapsed: bool,
     pub blend: u32,

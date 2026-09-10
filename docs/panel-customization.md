@@ -47,9 +47,10 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   Its content replaces the header with a 20px bottom-center drag strip using
   the horizontal grip glyph. The strip's menu includes that panel's Configure
   and Hide actions; configuration opens the same live two-column drawer.
-  Tearing off a single panel hides its tab immediately. During that drag,
-  docking alone restores its original hide flag, while merging into a group
-  clears the flag and adopts that group's display style. Dropping on the canvas
+  Tearing off a single panel hides its tab immediately. Docking a lone floating
+  built-in panel shows its tab again, including when it was floated in an earlier
+  drag. There is no saved pre-floating hide flag. Merging into a group clears the
+  flag and adopts that group's display style. Dropping on the canvas
   keeps the tab hidden; the menu can show it again. Moving an already-floating
   panel preserves its current choice. Multi-tab groups always show their tabs.
 - A ribbon tile targets that tile: **Remove Tool**, **Insert Tools…**.

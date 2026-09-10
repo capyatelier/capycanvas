@@ -20,11 +20,11 @@ export function createPreferences({ element, button, icon, numberField, panelFra
     const input = target.closest('input[type="text"]');
     if (input) {
       const start = input.selectionStart, end = input.selectionEnd, original = input.value;
-      for (const [label, operation] of [["Cut", "cut"], ["Copy", "copy"], ["Paste", "paste"], ["Select All", "select"]]) {
-        const item = button(label, async () => {
+      for (const {label, action: operation, shortcut} of view().text_edit_menu) {
+        const item = button("", async () => {
           dismissContext(); input.focus(); input.setSelectionRange(start, end);
           try {
-            if (operation === "select") { input.select(); return; }
+            if (operation === "select_all") { input.select(); return; }
             if (operation === "copy" || operation === "cut") await navigator.clipboard.writeText(original.slice(start, end));
             const replacement = operation === "paste" ? await navigator.clipboard.readText() : "";
             if (operation !== "copy" && input.value === original) {
@@ -34,7 +34,8 @@ export function createPreferences({ element, button, icon, numberField, panelFra
           } catch { error.textContent = "Clipboard access was denied by your browser."; }
         });
         item.setAttribute("role", "menuitem");
-        item.disabled = ["cut", "copy"].includes(operation) ? start === end : operation === "select" && !original;
+        item.append(element("span", "command-label", label), element("span", "shortcut-hint", shortcut));
+        item.disabled = ["cut", "copy"].includes(operation) ? start === end : operation === "select_all" && !original;
         context.append(item);
       }
       context.append(element("hr"));
@@ -47,7 +48,7 @@ export function createPreferences({ element, button, icon, numberField, panelFra
     });
     reset.dataset.reset = row.id; reset.setAttribute("role", "menuitem");
     reset.disabled = !row.reset.enabled;
-    reset.append(element("span", "command-label", row.reset.label), element("span", "shortcut-hint", row.reset.value));
+    reset.append(element("span", "command-label", row.reset.label), element("span", "shortcut-hint", row.reset.hint));
     context.append(reset); context.showPopover();
     const rect = context.getBoundingClientRect();
     context.style.left = `${Math.max(6, Math.min(x, innerWidth - rect.width - 6))}px`;

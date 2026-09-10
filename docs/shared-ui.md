@@ -390,6 +390,31 @@ Escape cancels recording; Tab can be reassigned like other shortcuts, but retain
 native focus navigation inside settings and text editors. Platform-global
 shortcuts are not inhibited. Browser-reserved bindings are rejected by the core.
 
+Shortcut presentation also belongs to Rust. `Settings::action_shortcut` resolves
+typed action identity (including registered parameterized actions), never a
+translated label. `action_tooltip` returns `Label (Shortcut)` or just the label
+when unbound. Command and toolbar views carry their complete tooltip; other
+action buttons request it on hover, so remapping does not leave stale hints.
+GTK/Web/Android display these strings without joining keys themselves.
+
+All application context-menu families—workspace, groups/panels, ribbons/tiles,
+Zen and layer/mask menus—pass through the same recursive shortcut annotation.
+Toolbar configuration options use it too. The core owns their labels, selected
+and enabled state, actions, sections and hints. Preference-reset hints retain
+the default value alongside any assigned shortcut. Entries without bindings do
+not invent defaults. GTK retains its native check indicator when a hint is
+present. Web and Android render the same menu models. Native text editing is
+separate from canvas commands: Cut/Copy/Paste/Select All copy and conventional
+hints come from `text_edit_menu`, while the host text editor owns execution and
+selection. OS-provided text-selection menus remain platform-owned. Translation
+infrastructure is still deferred; this removes host-owned context-menu copy,
+not a claim that the application is already localized.
+
+Android tooltips use Material's [TooltipBox](https://developer.android.com/develop/ui/compose/components/tooltip)
+with explicit hover activation. They do not consume touch holds reserved for
+dragging or context menus. Their layout wrapper preserves parent sizing and
+grid weights. No shortcut lookup runs on the stroke-input path.
+
 Applied settings emit a durable `HostRequest::SaveSettings`; GTK writes atomically
 on GIO's I/O pool and web uses localStorage. Completion/error returns through
 `CompleteRequest`. `RestoreSettings` validates without emitting another save.

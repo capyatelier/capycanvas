@@ -2,7 +2,7 @@
 use crate::{number_control::NumberControl, workspace::Workspace};
 use gtk::{gdk, gio, glib, prelude::*};
 use layer_render::CanvasRenderer;
-use layer_ui::{LayerAction as A, LayerCanvasTool, LayerState, NumericControl, UiAction, UiState};
+use layer_ui::{LayerAction as A, LayerState, NumericControl, UiAction, UiState};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -19,6 +19,7 @@ pub struct LayerPanel {
     blend: gtk::DropDown,
     alpha: gtk::ToggleButton,
     lock: gtk::ToggleButton,
+    mask_action: gtk::Button,
     reference: gtk::ToggleButton,
     clip: gtk::ToggleButton,
     context: gtk::PopoverMenu,
@@ -77,12 +78,19 @@ fn row_state(item: &gtk::ListItem) -> Option<LayerState> {
 fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::DrawingArea) {
     let button = button("image-x-generic-symbolic", tooltip);
     button.add_css_class("layer-thumbnail");
+    button.set_valign(gtk::Align::Center);
     let picture = gtk::Picture::new();
     picture.set_can_shrink(true);
     picture.set_content_fit(gtk::ContentFit::Contain);
     picture.set_size_request(28, 28);
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&picture));
+    // The 32px asynchronous texture must not participate in measurement.
+    // Empty/rebound rows and loaded previews occupy the same 28px square.
+    let size = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    size.set_size_request(28, 28);
+    overlay.set_child(Some(&size));
+    overlay.add_overlay(&picture);
+    overlay.set_measure_overlay(&picture, false);
     // Above the thumbnail, so opaque image pixels cannot obscure the marks.
     let frame = gtk::DrawingArea::new();
     frame.set_can_target(false);
@@ -131,12 +139,23 @@ fn finish_name(
     let row = row_state(item);
     let name = entry.text().to_string();
     stack.set_visible_child_name("name");
-    if !cancel
-        && let (Some(row), Some(w)) = (row, owner.borrow().upgrade())
-        && name.trim() != row.label
-        && !name.trim().is_empty()
-    {
-        action(&w, A::Rename { id: row.id, name });
+    if let (Some(row), Some(w)) = (row, owner.borrow().upgrade()) {
+        // Another row may have started renaming while this entry lost focus.
+        if w.gpu
+            .borrow()
+            .as_ref()
+            .is_none_or(|g| g.session.state().layer_tools.rename_layer != Some(row.id))
+        {
+            return;
+        }
+        action(
+            &w,
+            if cancel || name.trim() == row.label || name.trim().is_empty() {
+                A::CancelRename
+            } else {
+                A::Rename { id: row.id, name }
+            },
+        );
     }
 }
 fn row_drag(
@@ -207,11 +226,16 @@ pub(crate) fn drag_preview(
         row.height() as f32,
     )))
 }
-fn drop_hint(root: &gtk::Box, group: bool, y: f64) {
+fn drop_hint(root: &gtk::Box, state: Option<LayerState>, y: f64) {
     for class in ["layer-drop-before", "layer-drop-after", "layer-drop-into"] {
         root.remove_css_class(class);
     }
-    let fraction = y / root.height().max(1) as f64;
+    let group = state.as_ref().is_some_and(|s| s.group);
+    let fraction = if state.as_ref().is_some_and(|s| s.can_drop_below) {
+        y / root.height().max(1) as f64
+    } else {
+        0.
+    };
     root.add_css_class(if group && (0.25..0.75).contains(&fraction) {
         "layer-drop-into"
     } else if fraction < 0.5 {
@@ -219,6 +243,32 @@ fn drop_hint(root: &gtk::Box, group: bool, y: f64) {
     } else {
         "layer-drop-after"
     });
+}
+fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
+    if kind == 0 {
+        return UiAction::SetLayerVisibility {
+            id: row.id,
+            visible: !row.visible,
+        };
+    }
+    UiAction::Layer {
+        action: match kind {
+            1 => A::ToggleSelection { id: row.id },
+            2 if row.group => A::Collapse { id: row.id },
+            2 => A::Select {
+                id: row.id,
+                mask: false,
+            },
+            3 => A::LinkMask {
+                id: row.id,
+                value: !row.mask_linked,
+            },
+            _ => A::Select {
+                id: row.id,
+                mask: true,
+            },
+        },
+    }
 }
 impl LayerPanel {
     pub fn new() -> Self {
@@ -265,11 +315,12 @@ impl LayerPanel {
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         let alpha = toggle("layer-alpha-lock-symbolic", "Alpha lock");
         let lock = toggle("changes-prevent-symbolic", "Lock editing");
-        let clip = toggle("layer-down-symbolic", "Clip to layer below");
+        let clip = toggle("layer-clip-symbolic", "Clip to layer below");
         let reference = toggle(
             "layer-reference-symbolic",
             "Use selected layers as references",
         );
+        reference.add_css_class("layer-reference");
         for b in [&alpha, &lock, &clip, &reference] {
             actions.append(b);
         }
@@ -354,6 +405,33 @@ impl LayerPanel {
                     (&link, 3),
                     (&mask, 4),
                 ] {
+                    b.connect_query_tooltip(glib::clone!(
+                        #[weak]
+                        item,
+                        #[strong]
+                        owner,
+                        #[upgrade_or]
+                        false,
+                        move |button, _, _, _, tooltip| {
+                            let Some(row) = row_state(&item) else {
+                                return false;
+                            };
+                            let Some(w) = owner.borrow().upgrade() else {
+                                return false;
+                            };
+                            let gpu = w.gpu.borrow();
+                            let Some(g) = gpu.as_ref() else {
+                                return false;
+                            };
+                            let state = g.session.state();
+                            tooltip.set_text(Some(&state.settings.action_tooltip(
+                                &button.tooltip_text().unwrap_or_default(),
+                                &row_button_action(&row, kind),
+                                state.platform,
+                            )));
+                            true
+                        }
+                    ));
                     b.connect_clicked(glib::clone!(
                         #[weak]
                         item,
@@ -364,30 +442,7 @@ impl LayerPanel {
                             let Some(w) = owner.borrow().upgrade() else {
                                 return;
                             };
-                            if kind == 0 {
-                                w.dispatch(UiAction::SetLayerVisibility {
-                                    id: row.id,
-                                    visible: !row.visible,
-                                });
-                                return;
-                            }
-                            let a = match kind {
-                                1 => A::ToggleSelection { id: row.id },
-                                2 if row.group => A::Collapse { id: row.id },
-                                2 => A::Select {
-                                    id: row.id,
-                                    mask: false,
-                                },
-                                3 => A::LinkMask {
-                                    id: row.id,
-                                    value: !row.mask_linked,
-                                },
-                                _ => A::Select {
-                                    id: row.id,
-                                    mask: true,
-                                },
-                            };
-                            action(&w, a);
+                            w.dispatch(row_button_action(&row, kind));
                         }
                     ));
                 }
@@ -396,22 +451,32 @@ impl LayerPanel {
                 click.connect_released(glib::clone!(
                     #[weak]
                     item,
+                    #[weak]
+                    root,
+                    #[weak]
+                    name,
                     #[strong]
                     owner,
-                    #[weak]
-                    name_stack,
-                    #[weak]
-                    name_entry,
-                    move |_, n, _, _| {
+                    move |_, n, x, y| {
+                        // Only empty space/text selects. Buttons and the rename
+                        // entry keep their own actions, including touch checks.
+                        let picked = root.pick(x, y, gtk::PickFlags::DEFAULT);
+                        let mut target = picked.clone();
+                        while let Some(widget) = target {
+                            if widget.is::<gtk::Button>() || widget.is::<gtk::Entry>() {
+                                return;
+                            }
+                            if widget == root {
+                                break;
+                            }
+                            target = widget.parent();
+                        }
                         let Some(row) = row_state(&item) else { return };
                         let Some(w) = owner.borrow().upgrade() else {
                             return;
                         };
-                        if n == 2 {
-                            name_entry.set_text(&row.label);
-                            name_stack.set_visible_child_name("edit");
-                            name_entry.grab_focus();
-                            name_entry.select_region(0, -1);
+                        if n == 2 && picked.as_ref() == Some(name.upcast_ref()) {
+                            action(&w, A::BeginRename { id: row.id });
                         } else if !row.editing || !row.selected {
                             action(
                                 &w,
@@ -423,7 +488,7 @@ impl LayerPanel {
                         }
                     }
                 ));
-                name.add_controller(click);
+                root.add_controller(click);
                 name_entry.connect_activate(glib::clone!(
                     #[weak]
                     item,
@@ -524,7 +589,7 @@ impl LayerPanel {
                     #[upgrade_or]
                     gdk::DragAction::empty(),
                     move |_, _, y| {
-                        drop_hint(&root, row_state(&item).is_some_and(|s| s.group), y);
+                        drop_hint(&root, row_state(&item), y);
                         gdk::DragAction::MOVE
                     }
                 ));
@@ -536,7 +601,7 @@ impl LayerPanel {
                     #[upgrade_or]
                     gdk::DragAction::empty(),
                     move |_, _, y| {
-                        drop_hint(&root, row_state(&item).is_some_and(|s| s.group), y);
+                        drop_hint(&root, row_state(&item), y);
                         gdk::DragAction::MOVE
                     }
                 ));
@@ -668,6 +733,10 @@ impl LayerPanel {
             blend,
             alpha,
             lock,
+            mask_action: button(
+                "image-x-generic-symbolic",
+                "Add mask from selection, or reveal all",
+            ),
             reference,
             clip,
             context,
@@ -712,22 +781,9 @@ impl LayerPanel {
                     clipped: false,
                 },
             ),
-            (
-                "edit-select-all-symbolic",
-                "Lasso selection",
-                A::Tool {
-                    tool: LayerCanvasTool::Select,
-                },
-            ),
-            (
-                "layer-move-symbolic",
-                "Move layer or mask",
-                A::Tool {
-                    tool: LayerCanvasTool::Move,
-                },
-            ),
         ] {
             let b = button(icon, label);
+            w.bind_action_tooltip(&b, UiAction::Layer { action: a.clone() });
             b.connect_clicked(glib::clone!(
                 #[weak]
                 w,
@@ -735,10 +791,43 @@ impl LayerPanel {
             ));
             self.footer.append(&b);
         }
-        let mask = button(
-            "image-x-generic-symbolic",
-            "Add mask from selection, or reveal all",
+        let mask = &self.mask_action;
+        w.bind_dynamic_action_tooltip(mask, |s| {
+            Some(UiAction::Layer {
+                action: A::AddMask {
+                    id: s.layer_tools.editing_layer.as_ref()?.id,
+                    replace: false,
+                },
+            })
+        });
+        w.bind_action_tooltip(
+            self.reference.upcast_ref(),
+            UiAction::Layer {
+                action: A::ReferenceSelection,
+            },
         );
+        for (button, kind) in [(&self.alpha, 0), (&self.lock, 1), (&self.clip, 2)] {
+            w.bind_dynamic_action_tooltip(button, move |s| {
+                let row = s.layer_tools.editing_layer.as_ref()?;
+                let id = row.id;
+                Some(UiAction::Layer {
+                    action: match kind {
+                        0 => A::AlphaLock {
+                            id,
+                            value: !row.alpha_locked,
+                        },
+                        1 => A::Lock {
+                            id,
+                            value: !row.locked,
+                        },
+                        _ => A::Clip {
+                            id,
+                            value: !row.clipped,
+                        },
+                    },
+                })
+            });
+        }
         mask.connect_clicked(glib::clone!(
             #[weak]
             w,
@@ -748,7 +837,7 @@ impl LayerPanel {
                 }
             }
         ));
-        self.footer.append(&mask);
+        self.footer.append(mask);
         let import = button("document-open-symbolic", "Import image as layer");
         import.connect_clicked(glib::clone!(
             #[weak]
@@ -944,14 +1033,37 @@ impl LayerPanel {
             self.opacity.set_value(l.opacity as f64);
             self.blend.set_selected(l.blend);
             self.alpha.set_active(l.alpha_locked);
-            self.alpha.set_sensitive(l.editable);
             self.lock.set_active(l.locked);
             self.clip.set_active(l.clipped);
         }
+        let controls = state.layer_tools.controls;
+        self.opacity.set_sensitive(controls.opacity);
+        self.blend.set_sensitive(controls.blend);
+        self.alpha.set_sensitive(controls.alpha_lock);
+        self.lock.set_sensitive(controls.edit_lock);
+        self.clip.set_sensitive(controls.clip);
+        self.mask_action.set_sensitive(controls.mask);
         self.reference
             .set_active(state.layer_tools.references_selected);
         self.reference
             .set_sensitive(state.layer_tools.can_reference);
+        self.reference
+            .set_tooltip_text(Some(state.layer_tools.reference_action_label));
+        let rename = state.layer_tools.rename_layer.and_then(|id| {
+            self.rows
+                .borrow()
+                .values()
+                .find(|row| row.id.get() == id)
+                .cloned()
+        });
+        if let Some(row) = rename
+            && row.name_stack.visible_child_name().as_deref() != Some("edit")
+        {
+            row.name_entry.set_text(&row.name.text());
+            row.name_stack.set_visible_child_name("edit");
+            row.name_entry.grab_focus();
+            row.name_entry.select_region(0, -1);
+        }
         self.updating.set(false);
     }
     fn update_previews(&self, w: &Workspace) {
@@ -992,6 +1104,9 @@ impl LayerPanel {
                     .borrow_mut()
                     .insert((id, mask), (revision, texture));
             }
+        }
+        if g.session.engine().has_pending_document_edits() {
+            return;
         }
         for row in rows {
             let Some(state) = g
@@ -1042,7 +1157,7 @@ impl LayerPanel {
         }
     }
     fn menu(&self, w: &Rc<Workspace>, anchor: &gtk::Widget, id: u64, mask: bool, x: f64, y: f64) {
-        action(w, A::Select { id, mask });
+        action(w, A::Context { id, mask });
         let menu = w
             .gpu
             .borrow()
@@ -1100,19 +1215,12 @@ impl Row {
         self.content_frame
             .set_visible(s.editing && !s.mask_selected);
         self.mask_frame.set_visible(s.mask_selected);
-        self.selection.set_icon_name(if s.editing {
-            "layer-brush-symbolic"
-        } else if s.reference {
-            "layer-reference-symbolic"
-        } else if s.selected {
-            "layer-selection-checked-symbolic"
-        } else {
-            "layer-selection-empty-symbolic"
-        });
+        let drawing_target = s.editing && (s.editable || s.mask_selected);
+        self.selection.set_icon_name(s.selection_icon);
         self.selection
-            .set_tooltip_text(Some(if s.editing && s.reference {
+            .set_tooltip_text(Some(if drawing_target && s.reference {
                 "Drawing target · Reference layer · Click to select"
-            } else if s.editing {
+            } else if drawing_target {
                 "Drawing target · Click to select"
             } else if s.reference {
                 "Reference layer · Click to select"
@@ -1157,7 +1265,11 @@ impl Row {
         } else {
             self.content.remove_css_class("layer-folder");
             self.content.set_child(Some(&self.content_preview));
-            self.content.set_tooltip_text(Some("Edit layer content"));
+            self.content.set_tooltip_text(Some(if s.editable {
+                "Edit layer content"
+            } else {
+                "Select paper"
+            }));
         }
         self.lock.set_icon_name(Some(if s.locked {
             "changes-prevent-symbolic"

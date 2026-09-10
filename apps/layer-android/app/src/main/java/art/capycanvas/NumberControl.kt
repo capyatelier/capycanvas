@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.text.style.TextAlign
@@ -32,7 +34,7 @@ import org.json.JSONObject
  * opens the keyboard. */
 @Composable internal fun NumericSetting(label: String, value: Float, control: JSONObject,
     modifier: Modifier = Modifier, enabled: Boolean = true, description: String = "",
-    settings: Boolean = false, id: String = label, onChange: (Float) -> Unit) {
+    settings: Boolean = false, id: String = label, inline: Boolean = false, onChange: (Float) -> Unit) {
     val host = LocalCanvasHost.current
     val colors = LocalPalette.current
     val focus = LocalFocusManager.current
@@ -47,6 +49,12 @@ import org.json.JSONObject
     var error by remember { mutableStateOf<String?>(null) }
     val height = if (settings) 48.dp else if (ranged) 24.dp else 32.dp
     val valuePadding = if (settings) 12.dp else 6.dp
+    val measurer = rememberTextMeasurer()
+    val widest = remember(inline, control.toString()) {
+        if (inline) listOf(control.number("min"), control.number("max")).map { resolve(it, obj("type" to "format")).getString("text") }
+            .maxBy { it.length }.replace(Regex("[0-9]"), "8") else ""
+    }
+    val fixedWidth = if (inline) with(LocalDensity.current) { measurer.measure(widest, LocalTextStyle.current).size.width.toDp() } + valuePadding * 2 else 0.dp
     fun apply(op: JSONObject): Boolean = try {
         val next = resolve(shown.number("value"), op)
         val changed = next.number("value") != shown.number("value")
@@ -71,7 +79,7 @@ import org.json.JSONObject
         }
     }
     val field: @Composable () -> Unit = {
-        BasicTextField(text, { text = it }, Modifier.then(if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (control.optString("unit").isEmpty()) 60.dp else 80.dp)).height(height)
+        BasicTextField(text, { text = it }, Modifier.then(if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (control.optString("unit").isEmpty()) 60.dp else 80.dp)).height(height)
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) finish()
                 focused = it.isFocused; host.editingText = focused
@@ -86,6 +94,20 @@ import org.json.JSONObject
             keyboardActions = KeyboardActions(onDone = { if (finish()) focus.clearFocus() }),
             decorationBox = { input -> Box(Modifier.fillMaxSize().background(colors.input, RoundedCornerShape(6.dp)).padding(horizontal = valuePadding), contentAlignment = Alignment.CenterEnd) { input() } })
     }
+    val valueControl: @Composable () -> Unit = {
+        if (editing) field()
+        else Box(Modifier.then(if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(RoundedCornerShape(6.dp)).clickable(enabled = enabled) {
+            val edit = shown.getString("edit"); text = TextFieldValue(edit, TextRange(0, edit.length)); editing = true
+        }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = Alignment.CenterEnd) { Text(shown.getString("text")) }
+    }
+    if (inline) {
+        Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            EditorSlider(shown.number("fill"), { finish(true); apply(obj("type" to "position", "position" to it)) }, Modifier.weight(1f),
+                enabled = enabled, label = label, height = height, inactiveTrackColor = colors.input, showThumb = false, activeTrackColor = colors.sliderFill)
+            valueControl()
+        }
+        return
+    }
     Column(modifier.widthIn(max = if (settings) 600.dp else 1000.dp).fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Column(Modifier.weight(1f).padding(start = if (settings) 0.dp else 6.dp).testTag("preference-label-$id"), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -93,10 +115,7 @@ import org.json.JSONObject
                 if (description.isNotEmpty()) Text(description, color = colors.settingsSecondary, fontSize = 14.sp, lineHeight = 20.sp)
             }
             if (!ranged) Row(Modifier.clip(RoundedCornerShape(6.dp)).background(colors.input), verticalAlignment = Alignment.CenterVertically) { field(); step(-1, "minus"); step(1, "plus") }
-            else if (editing) field()
-            else Box(Modifier.height(height).clip(RoundedCornerShape(6.dp)).clickable(enabled = enabled) {
-                val edit = shown.getString("edit"); text = TextFieldValue(edit, TextRange(0, edit.length)); editing = true
-            }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = Alignment.CenterEnd) { Text(shown.getString("text")) }
+            else valueControl()
         }
         if (ranged) Row(Modifier.fillMaxWidth().padding(top = if (settings) 3.dp else 0.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             step(-1, "minus")

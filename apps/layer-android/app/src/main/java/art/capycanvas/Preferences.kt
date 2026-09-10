@@ -294,7 +294,7 @@ private fun JSONObject.settingsRoute(): String = objectOrNull("shortcut_editor")
             DropdownMenuItem(text = {
                 Row(Modifier.widthIn(min = 240.dp, max = 380.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(currentReset.getString("label"), Modifier.weight(1f), color = colors.text.copy(alpha = if (enabled) 1f else .38f))
-                    Text(currentReset.getString("value"), color = colors.settingsSecondary.copy(alpha = if (enabled) 1f else .38f))
+                    Text(currentReset.getString("hint"), color = colors.settingsSecondary.copy(alpha = if (enabled) 1f else .38f))
                 }
             }, enabled = enabled, modifier = Modifier.testTag("preference-reset"), onClick = {
                 open = false

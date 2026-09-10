@@ -63,6 +63,16 @@ impl WebRenderer {
 
 impl CanvasRenderer for WebRenderer {
     type Error = GpuRasterError;
+    fn request_thumbnail(
+        &mut self,
+        id: u64,
+        target: layer_core::LayerId,
+    ) -> Result<(), Self::Error> {
+        self.renderer()?.request_thumbnail(id, target)
+    }
+    fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        self.0.as_mut()?.renderer.take_thumbnail()
+    }
     fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {
         self.0.as_ref()?.renderer.tip_outline(asset)
     }
@@ -130,6 +140,58 @@ fn phase(value: u8) -> Result<PenPhase, JsValue> {
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn action_tooltip(&self, label: &str, action: JsValue) -> Result<String, JsValue> {
+        let action = serde_wasm_bindgen::from_value(action).map_err(js)?;
+        let state = self.session.state();
+        Ok(state
+            .settings
+            .action_tooltip(label, &action, state.platform))
+    }
+    pub fn layer_menu(&self, id: u64, mask: bool) -> Result<JsValue, JsValue> {
+        serialize(&self.session.layer_menu(id, mask).map_err(js)?)
+    }
+    pub fn request_layer_thumbnail(&mut self, request: u64, target: u64) -> Result<bool, JsValue> {
+        if !self.gpu_ready() || self.session.engine().has_pending_document_edits() {
+            return Ok(false);
+        }
+        self.session
+            .renderer_mut()
+            .request_thumbnail(request, layer_core::LayerId(target))
+            .map_err(js)?;
+        Ok(true)
+    }
+    pub fn take_layer_thumbnail(&mut self) -> Result<JsValue, JsValue> {
+        let Some(result) = self.session.renderer_mut().take_thumbnail() else {
+            return Ok(JsValue::NULL);
+        };
+        let image = result.map_err(js)?;
+        serialize(&(image.request_id, image.width, image.height, image.bytes))
+    }
+    pub fn import_layer_image(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+    ) -> Result<JsValue, JsValue> {
+        self.session
+            .import_layer_image(
+                name,
+                HostImage {
+                    width,
+                    height,
+                    stride: width * 4,
+                    format: layer_render::PixelFormat::Rgba8Srgb,
+                    bytes,
+                },
+            )
+            .map_err(js)?;
+        serialize(&layer_ui::UiChange {
+            regions: layer_ui::regions::DOCUMENT,
+            canvas_wake: true,
+            revision: self.session.state().revision,
+        })
+    }
     /// Display-only hover data, independent of the high-rate paint queue.
     pub fn cursor_input(&mut self, sample: &[f64]) {
         let event = (sample.len() == 7).then(|| PenEvent {
@@ -477,7 +539,12 @@ impl WebApp {
             .map_err(js)?;
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;
+        let mut overlay = Vec::new();
+        self.session.append_layer_overlay(&mut overlay);
+        let scale = self.canvas.width() as f32 / self.canvas.client_width().max(1) as f32;
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
+        gpu.presenter
+            .set_cursor(gpu.renderer.device(), &overlay, scale);
         let target = match gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,

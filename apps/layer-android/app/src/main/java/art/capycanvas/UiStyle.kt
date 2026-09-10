@@ -8,6 +8,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.selection.selectable
@@ -25,9 +28,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
+import org.json.JSONObject
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.TextRange
@@ -202,12 +208,45 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
         }
     }
 }
+/** Hover only: touch holds remain available for editing and context menus. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable internal fun HoverTip(label: String, modifier: Modifier = Modifier,
+    resolve: (((String) -> Unit) -> Unit)? = null, content: @Composable () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val state = rememberTooltipState()
+    var text by remember(label) { mutableStateOf(label) }
+    val currentResolve by rememberUpdatedState(resolve)
+    LaunchedEffect(hovered, label) {
+        if (hovered) {
+            currentResolve?.invoke { text = it }
+            delay(500)
+            state.show()
+        } else state.dismiss()
+    }
+    Box(modifier, propagateMinConstraints = true) {
+    TooltipBox(modifier = Modifier.hoverable(interaction),
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(text) } }, state = state,
+        focusable = false, enableUserInput = false, content = content)
+    }
+}
+
+@Composable internal fun ActionTip(host: CanvasHost, label: String, action: JSONObject,
+    modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    HoverTip(label, modifier, resolve = { reply ->
+        host.query(obj("type" to "action_tooltip", "label" to label, "action" to action)) { reply(it as? String ?: label) }
+    }, content = content)
+}
+
 @Composable internal fun IconTile(name: String, label: String, selected: Boolean = false,
     enabled: Boolean = true, modifier: Modifier = Modifier, onLongClick: (() -> Unit)? = null, fill: Color? = null, iconSize: Dp = 16.dp, selectedColor: Color? = null, onClick: () -> Unit) {
     val colors = LocalPalette.current
-    Box(modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, RoundedCornerShape(6.dp))
+    HoverTip(label, modifier) {
+    Box(Modifier.size(36.dp).alpha(if (enabled) 1f else 0.4f).background(if (selected) selectedColor ?: colors.active else Color.Transparent, RoundedCornerShape(6.dp))
         .combinedClickable(enabled = enabled, role = Role.Button, onClickLabel = label, onLongClick = onLongClick, onClick = onClick), contentAlignment = Alignment.Center) {
         SharedIcon(name, label, modifier = Modifier.size(iconSize), fill = fill)
+    }
     }
 }
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkParity } from "./parity.mjs";
+import { checkLayers } from "./layers.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup } from "./gpu.test.mjs";
@@ -164,7 +165,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--toolbar-manager")) {
+  if (process.argv.includes("--layers")) {
+    await checkLayers({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--toolbar-manager")) {
     await checkToolbarManager({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--tab-styles")) {
@@ -337,7 +341,7 @@ try {
     assert.ok((await evaluate("layerApp.state().camera.zoom")) > beforeZoom);
     await click('[data-command="fit_canvas"]');
     assert.equal(await evaluate("layerApp.state().brush.diameter"), 96);
-    await click('[data-command="add_layer"]');
+    await click('.layer-footer [aria-label="New layer"]');
     assert.equal(await evaluate("layerApp.state().layers.length"), 3);
     await click('[data-command="undo"]');
     assert.equal(await evaluate("layerApp.state().layers.length"), 2);
@@ -657,7 +661,7 @@ try {
       );
       assert.equal(spacing.firstX, 0);
       assert.equal(spacing.firstY, 0);
-      assert.deepEqual(spacing.gaps, [2, 2, 2, 2, 2]);
+      assert.deepEqual(spacing.gaps, Array(7).fill(2));
       assert.equal(
         await evaluate(
           "(()=>{const [a,b]=[...document.querySelectorAll('.brush-choice')].slice(0,2).map(n=>n.getBoundingClientRect());return b.top-a.bottom;})()",
@@ -669,7 +673,7 @@ try {
       assert.equal(spacing.tabHeight, spacing.tileHeight);
       assert.equal(spacing.tabHeight, 36);
       const chromeGeometry = await evaluate(`(() => {
-      const strip=document.querySelector('.toolbar-controls'),panel=strip.parentElement,box=strip.getBoundingClientRect(),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tabGrip=document.querySelector('.dock-tabs>.panel-grip').getBoundingClientRect(),zen=document.querySelector('#header-start>button').getBoundingClientRect();
+      const strip=document.querySelector('.toolbar-controls'),panel=strip.parentElement,box=strip.getBoundingClientRect(),grip=strip.querySelector('.panel-grip').getBoundingClientRect(),tabGrip=document.querySelector('.dock-tabs>.panel-grip').getBoundingClientRect(),zen=document.querySelector('#zen-button').getBoundingClientRect();
       return {gripSize:[grip.width,grip.height],tabGripSize:[tabGrip.width,tabGrip.height],overflow:[panel.scrollWidth-panel.clientWidth,panel.scrollHeight-panel.clientHeight],top:box.top,above:zen.top,below:box.top-zen.bottom};
     })()`);
       assert.deepEqual(chromeGeometry.gripSize, [20, 36]);

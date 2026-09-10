@@ -104,6 +104,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         wake()
     }
     fun invoke(command: String) = dispatch(obj("type" to "invoke", "command" to command))
+    fun importLayer(name: String, width: Int, height: Int, rgba: ByteArray) = post {
+        Native.importLayer(handle, name, width, height, rgba)
+        publish(true)
+        wake()
+    }
     fun customize(action: JSONObject) = dispatch(obj("type" to "customize", "action" to action))
     fun preference(action: JSONObject) = dispatch(obj("type" to "preferences", "action" to action))
     fun query(query: JSONObject, reply: (Any?) -> Unit) = post {

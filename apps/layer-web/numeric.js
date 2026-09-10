@@ -1,6 +1,6 @@
 // Native text/range controls around Rust's numeric policy. No expression,
 // range-mapping, unit-formatting or rounding rules are duplicated here.
-export function createNumberField({ control, label, resolve, onChange, icon }) {
+export function createNumberField({ control, label, resolve, onChange, icon, inline = false }) {
   const node = (tag, cls) => { const el = document.createElement(tag); el.className = cls; return el; };
   const root = node("div", `number-control number-${control.kind}`);
   const header = node("div", "number-header"), labels = node("div", "number-labels");
@@ -24,6 +24,15 @@ export function createNumberField({ control, label, resolve, onChange, icon }) {
   const ranged = control.kind === "slider";
   if (ranged) { track.append(minus, slider, plus); root.append(track); }
   else { valueBox.classList.add("number-spin"); valueBox.append(minus, plus); }
+  if (inline) {
+    root.classList.add("number-inline"); root.title = label;
+    labels.remove(); minus.remove(); plus.remove();
+    root.replaceChildren(track, valueBox);
+    const measure = node("span", "number-measure");
+    measure.textContent = [control.min, control.max].map(value => resolve({ control, value, operation: { type: "format" } }).text)
+      .sort((a, b) => b.length - a.length)[0].replace(/\d/g, "8");
+    valueBox.append(measure);
+  }
   let value = control.min, display, editing = false, disabled = false;
   function show(next) {
     value = next.value; display = next; valueButton.textContent = next.text;

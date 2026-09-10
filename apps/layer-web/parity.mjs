@@ -399,9 +399,9 @@ export async function checkParity({ call, evaluate, settle }) {
         0.4,
     ) < 0.001,
   );
-  await click('[data-command="add_layer"]');
+  await click('.layer-footer [aria-label="New layer"]');
   assert.equal(await evaluate("layerApp.state().layers.length"), 3);
-  await click('[data-command="delete_layer"]');
+  await evaluate("layerApp.dispatch({type:'layer',action:{op:'delete_selected'}})");
   await click('[data-command="settings"]');
   await click('[data-settings-page="input"]');
   await click('#setting-pressure .number-value');

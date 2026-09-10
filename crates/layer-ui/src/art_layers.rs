@@ -19,8 +19,40 @@ pub struct LayersView {
     pub has_selection: bool,
     pub can_reference: bool,
     pub references_selected: bool,
+    pub reference_action_label: &'static str,
     /// Header target remains available even inside a collapsed group.
     pub editing_layer: Option<LayerState>,
+    pub rename_layer: Option<u64>,
+    pub controls: LayerControls,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct LayerControls {
+    pub opacity: bool,
+    pub blend: bool,
+    pub alpha_lock: bool,
+    pub edit_lock: bool,
+    pub clip: bool,
+    pub mask: bool,
+    pub move_layer: bool,
+    pub fill: bool,
+}
+impl LayerControls {
+    pub(super) fn for_layer(doc: &Document, l: &Layer) -> Self {
+        let unlocked = !doc.is_locked(l.id);
+        let editable = l.kind != LayerKind::Background;
+        Self {
+            opacity: unlocked,
+            blend: editable && unlocked,
+            alpha_lock: l.kind == LayerKind::Paint && unlocked,
+            edit_lock: editable && !l.properties.parent.is_some_and(|p| doc.is_locked(p)),
+            clip: editable
+                && unlocked
+                && (l.properties.clipped || doc.clipping_base(l.id).is_some()),
+            mask: editable && unlocked,
+            move_layer: editable && unlocked,
+            fill: l.kind == LayerKind::Paint && unlocked && !doc.active_mask,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -37,7 +69,46 @@ pub enum LayerAction {
     ToggleSelection {
         id: u64,
     },
-    /// Mark the selected paint layers, or unmark them if all are references.
+    Context {
+        id: u64,
+        mask: bool,
+    },
+    BeginRename {
+        id: u64,
+    },
+    CancelRename,
+    SelectAllLayers {
+        selected: bool,
+    },
+    GroupSelected,
+    Ungroup {
+        id: u64,
+    },
+    DeleteSelected,
+    DuplicateSelected,
+    Visibility {
+        id: u64,
+        value: bool,
+    },
+    ShowParents {
+        id: u64,
+    },
+    ShowAll,
+    SoloSelected,
+    Clear {
+        id: u64,
+    },
+    CopyMask {
+        id: u64,
+    },
+    PasteMask {
+        id: u64,
+    },
+    MaskSelection {
+        id: u64,
+        hide: bool,
+    },
+    /// Checked selections add references; the lone editing target toggles off.
     ReferenceSelection,
     Rename {
         id: u64,
@@ -126,6 +197,7 @@ pub(super) struct LayerInteraction {
     pub collapsed: BTreeSet<LayerId>,
     pub selected: BTreeSet<LayerId>,
     pub editing: Option<LayerId>,
+    clipboard_mask: Option<(LayerMask, Point, Vec<layer_core::Stroke>)>,
     pub path: Vec<Point>,
     original: Option<Layer>,
     solo: Option<Vec<(LayerId, bool)>>,
@@ -157,16 +229,24 @@ impl LayerInteraction {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn reference_action_removes(&self) -> bool {
+        let doc = self.engine.document();
+        self.layer_interaction.selected.len() == 1
+            && self.layer_interaction.selected.contains(&doc.active_layer)
+            && doc.reference_layers.contains(&doc.active_layer)
+    }
     pub(super) fn reference_selection(&self) -> BTreeSet<LayerId> {
         self.layer_interaction
             .selected
             .iter()
             .copied()
             .filter(|id| {
-                self.engine
-                    .document()
-                    .layer(*id)
-                    .is_some_and(|l| matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
+                self.engine.document().layer(*id).is_some_and(|l| {
+                    matches!(
+                        l.kind,
+                        LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
+                    )
+                })
             })
             .collect()
     }
@@ -224,7 +304,144 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(layer.clone())
     }
     pub(super) fn layer_action(&mut self, action: LayerAction) -> Result<(), String> {
+        let hide_selection = matches!(action, LayerAction::MaskSelection { hide: true, .. });
+        let action = if let LayerAction::MaskSelection { id, .. } = action {
+            if self.engine.document().selection.is_none() {
+                return Err("Make a selection first".into());
+            }
+            LayerAction::AddMask { id, replace: true }
+        } else {
+            action
+        };
         match action {
+            LayerAction::Visibility { id, value } => self.layer_edit(Edit::SetLayerVisibility {
+                id: LayerId(id),
+                visible: value,
+            })?,
+            LayerAction::ShowParents { id } => {
+                let mut parent = Some(LayerId(id));
+                let mut edits = Vec::new();
+                while let Some(id) = parent {
+                    let layer = self.engine.document().layer(id).ok_or("Unknown layer")?;
+                    edits.push(Edit::SetLayerVisibility { id, visible: true });
+                    parent = layer.properties.parent;
+                }
+                self.layer_edit(Edit::Batch(edits))?;
+            }
+            LayerAction::ShowAll => self.layer_edit(Edit::Batch(
+                self.engine
+                    .document()
+                    .layers
+                    .iter()
+                    .map(|l| Edit::SetLayerVisibility {
+                        id: l.id,
+                        visible: true,
+                    })
+                    .collect(),
+            ))?,
+            LayerAction::Context { id, mask } => {
+                let selected = self.layer_interaction.selected.clone();
+                self.layer_action(LayerAction::Select { id, mask })?;
+                self.layer_interaction.editing = Some(LayerId(id));
+                if selected.contains(&LayerId(id)) {
+                    self.layer_interaction.selected = selected;
+                }
+            }
+            LayerAction::BeginRename { id } => {
+                self.editable_layer(id)?;
+                self.state.layer_tools.rename_layer = Some(id);
+            }
+            LayerAction::CancelRename => self.state.layer_tools.rename_layer = None,
+            LayerAction::SelectAllLayers { selected } => {
+                self.layer_interaction.selected = self
+                    .engine
+                    .document()
+                    .layers
+                    .iter()
+                    .filter(|l| selected && l.kind != LayerKind::Background)
+                    .map(|l| l.id)
+                    .collect();
+            }
+            LayerAction::GroupSelected => {
+                let roots = self
+                    .engine
+                    .document()
+                    .layer_roots(&self.layer_interaction.selected);
+                let id = self.engine.allocate_layer_id();
+                let edit = self
+                    .engine
+                    .document()
+                    .group_layers_edit(&roots, id)
+                    .map_err(error)?;
+                self.layer_edit(edit)?;
+                self.layer_interaction.selected = BTreeSet::from([id]);
+            }
+            LayerAction::Ungroup { id } => {
+                let doc = self.engine.document();
+                let children = doc
+                    .layers
+                    .iter()
+                    .filter(|l| l.properties.parent == Some(LayerId(id)))
+                    .map(|l| l.id)
+                    .collect();
+                let edit = doc.ungroup_layer_edit(LayerId(id)).map_err(error)?;
+                self.layer_edit(edit)?;
+                self.layer_interaction.editing = Some(self.engine.document().active_layer);
+                self.layer_interaction.selected = children;
+                self.layer_interaction.collapsed.remove(&LayerId(id));
+            }
+            LayerAction::DeleteSelected => {
+                let doc = self.engine.document();
+                let edit = doc
+                    .delete_layers_edit(&doc.layer_roots(&self.layer_interaction.selected))
+                    .map_err(error)?;
+                self.layer_edit(edit)?;
+            }
+            LayerAction::CopyMask { id } => {
+                let doc = self.engine.document();
+                let mask = doc
+                    .layer(LayerId(id))
+                    .and_then(|l| l.mask.clone())
+                    .ok_or("No mask")?;
+                let strokes = mask
+                    .strokes
+                    .iter()
+                    .map(|id| doc.stroke(*id).cloned().ok_or("Missing mask stroke"))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.layer_interaction.clipboard_mask =
+                    Some((mask.clone(), doc.layer_offset(mask.id), strokes));
+            }
+            LayerAction::PasteMask { id } => {
+                let mut layer = self.editable_layer(id)?;
+                let (mut mask, origin, strokes) = self
+                    .layer_interaction
+                    .clipboard_mask
+                    .clone()
+                    .ok_or("Copy a mask first")?;
+                let parent = layer.properties.parent.map_or(Point::default(), |id| {
+                    self.engine.document().layer_offset(id)
+                });
+                mask.offset = Point {
+                    x: origin.x - parent.x,
+                    y: origin.y - parent.y,
+                };
+                mask.id = self.engine.allocate_layer_id();
+                mask.show_area = false;
+                mask.strokes = Default::default();
+                let target = mask.id;
+                layer.mask = Some(mask);
+                let mut edits = vec![Edit::ReplaceLayer(Box::new(layer))];
+                for mut stroke in strokes {
+                    stroke.id = self.engine.allocate_stroke_id();
+                    stroke.layer_id = target;
+                    edits.push(Edit::InsertStroke(Box::new(stroke)));
+                }
+                edits.extend([
+                    Edit::SetActiveLayer { id: LayerId(id) },
+                    Edit::SetMaskTarget(true),
+                ]);
+                self.layer_edit(Edit::Batch(edits))?;
+            }
             LayerAction::FillSelection => {
                 let selection = self
                     .engine
@@ -296,6 +513,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ]))?;
             }
             LayerAction::Select { id, mask } => {
+                self.state.layer_tools.rename_layer = None;
                 self.engine.set_active_layer(LayerId(id)).map_err(error)?;
                 self.layer_edit(Edit::SetMaskTarget(mask))?;
                 self.layer_interaction.selected = BTreeSet::from([LayerId(id)]);
@@ -310,10 +528,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerAction::ReferenceSelection => {
                 let targets = self.reference_selection();
                 let mut references = self.engine.document().reference_layers.clone();
-                if targets.iter().all(|id| references.contains(id)) {
+                if self.reference_action_removes() {
                     references.retain(|id| !targets.contains(id));
                 } else {
                     references.extend(targets);
+                    self.layer_interaction.selected =
+                        BTreeSet::from([self.engine.document().active_layer]);
                 }
                 if references != self.engine.document().reference_layers {
                     self.layer_edit(Edit::SetReferences(references))?;
@@ -347,6 +567,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .layer(LayerId(id))
                     .ok_or("Unknown layer")?
                     .clone();
+                if layer.kind == LayerKind::Background
+                    || layer
+                        .properties
+                        .parent
+                        .is_some_and(|p| self.engine.document().is_locked(p))
+                {
+                    return Err("This layer is protected".into());
+                }
                 layer.properties.locked = value;
                 self.layer_edit(Edit::ReplaceLayer(Box::new(layer)))?;
             }
@@ -357,23 +585,39 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.layer_edit(Edit::SetReferences(references))?;
             }
-            LayerAction::Solo { id } => {
-                let next = if let Some(previous) = self.layer_interaction.solo.take() {
+            a @ (LayerAction::Solo { .. } | LayerAction::SoloSelected) => {
+                let next: Vec<_> = if let Some(previous) = self.layer_interaction.solo.take() {
                     previous
+                        .into_iter()
+                        .filter(|(id, _)| self.engine.document().layer(*id).is_some())
+                        .collect()
                 } else {
                     let doc = self.engine.document();
+                    let roots = if let LayerAction::Solo { id } = a {
+                        vec![LayerId(id)]
+                    } else {
+                        doc.layer_roots(&self.layer_interaction.selected)
+                    };
+                    if roots.is_empty() {
+                        return Err("Select layers first".into());
+                    }
                     self.layer_interaction.solo =
                         Some(doc.layers.iter().map(|l| (l.id, l.visible)).collect());
-                    let mut keep = BTreeSet::from([LayerId(id)]);
-                    for l in doc.ordered_layers() {
-                        if l.properties.parent.is_some_and(|p| keep.contains(&p)) {
-                            keep.insert(l.id);
+                    let mut keep = doc.layer_subtrees(&roots);
+                    // A clipped layer still needs its base during isolation.
+                    for id in keep.clone() {
+                        if doc.layer(id).is_some_and(|l| l.properties.clipped)
+                            && let Some(base) = doc.clipping_base(id)
+                        {
+                            keep.insert(base);
                         }
                     }
-                    let mut parent = doc.layer(LayerId(id)).and_then(|l| l.properties.parent);
-                    while let Some(p) = parent {
-                        keep.insert(p);
-                        parent = doc.layer(p).and_then(|l| l.properties.parent);
+                    for id in roots {
+                        let mut parent = doc.layer(id).and_then(|l| l.properties.parent);
+                        while let Some(p) = parent {
+                            keep.insert(p);
+                            parent = doc.layer(p).and_then(|l| l.properties.parent);
+                        }
                     }
                     doc.layers
                         .iter()
@@ -391,43 +635,46 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .collect(),
                 ))?;
             }
-            LayerAction::Duplicate { id } => {
-                let source = self.editable_layer(id)?;
-                let index = self
-                    .engine
-                    .document()
+            a @ (LayerAction::Duplicate { .. } | LayerAction::DuplicateSelected) => {
+                let doc = self.engine.document();
+                let roots = if let LayerAction::Duplicate { id } = a {
+                    vec![LayerId(id)]
+                } else {
+                    doc.layer_roots(&self.layer_interaction.selected)
+                };
+                if roots.is_empty() {
+                    return Err("Select layers first".into());
+                }
+                for &id in &roots {
+                    if doc.layer(id).ok_or("Unknown layer")?.kind == LayerKind::Background {
+                        return Err("The background cannot be duplicated".into());
+                    }
+                }
+                let index = doc
                     .layers
                     .iter()
-                    .position(|l| l.id == source.id)
+                    .position(|l| roots.contains(&l.id))
                     .unwrap();
-                let mut members = BTreeSet::from([source.id]);
+                let members = doc.layer_subtrees(&roots);
                 let sources: Vec<_> = self
                     .engine
                     .document()
                     .ordered_layers()
                     .into_iter()
-                    .filter_map(|l| {
-                        if l.id == source.id
-                            || l.properties.parent.is_some_and(|p| members.contains(&p))
-                        {
-                            members.insert(l.id);
-                            Some(l.clone())
-                        } else {
-                            None
-                        }
-                    })
+                    .filter(|l| members.contains(&l.id))
+                    .cloned()
                     .collect();
                 let ids: std::collections::BTreeMap<_, _> = sources
                     .iter()
                     .map(|l| (l.id, self.engine.allocate_layer_id()))
                     .collect();
-                let root_id = ids[&source.id];
+                let root_id = ids[&roots[0]];
                 let mut edits = Vec::new();
                 for (offset, source) in sources.iter().enumerate() {
                     let new_id = ids[&source.id];
                     let mut copy = source.clone();
                     copy.id = new_id;
-                    if source.id.0 == id {
+                    if roots.contains(&source.id) {
                         copy.name = format!("{} copy", source.name).into();
                     }
                     copy.properties.parent = copy
@@ -464,31 +711,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 edits.push(Edit::SetActiveLayer { id: root_id });
                 self.layer_edit(Edit::Batch(edits))?;
+                self.layer_interaction.editing = Some(root_id);
+                self.layer_interaction.selected = roots.iter().map(|id| ids[id]).collect();
             }
             LayerAction::Delete { id } => {
-                let layer = self.editable_layer(id)?;
-                self.check_dependents(layer.id)?;
-                let mut ids = BTreeSet::from([layer.id]);
-                for _ in 0..self.engine.document().layers.len() {
-                    for l in &self.engine.document().layers {
-                        if l.properties.parent.is_some_and(|p| ids.contains(&p)) {
-                            ids.insert(l.id);
-                        }
-                    }
-                }
-                if ids.iter().any(|id| self.engine.document().is_locked(*id)) {
-                    return Err("A layer in this group is locked".into());
-                }
-                let edits = self
+                let edit = self
                     .engine
                     .document()
-                    .ordered_layers()
-                    .into_iter()
-                    .rev()
-                    .filter(|l| ids.contains(&l.id))
-                    .map(|l| Edit::RemoveLayer { id: l.id })
-                    .collect();
-                self.layer_edit(Edit::Batch(edits))?;
+                    .delete_layers_edit(&[LayerId(id)])
+                    .map_err(error)?;
+                self.layer_edit(edit)?;
             }
             LayerAction::Reparent { id, parent, index } => {
                 let mut layer = self.editable_layer(id)?;
@@ -554,6 +786,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             other => {
                 let id = match &other {
                     LayerAction::Rename { id, .. }
+                    | LayerAction::Clear { id }
                     | LayerAction::AlphaLock { id, .. }
                     | LayerAction::Clip { id, .. }
                     | LayerAction::Blend { id, .. }
@@ -583,6 +816,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                             return Err("Use a name of 1–128 characters".into());
                         }
                         layer.name = name.into();
+                        self.state.layer_tools.rename_layer = None;
+                    }
+                    LayerAction::Clear { .. } => {
+                        if layer.kind != LayerKind::Paint {
+                            return Err("Choose a paint layer".into());
+                        }
+                        layer.strokes.clear();
+                        layer.operations.clear();
+                        layer.asset = None;
                     }
                     LayerAction::AlphaLock { value, .. } => {
                         if layer.kind != LayerKind::Paint {
@@ -627,6 +869,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 LayerMask::reveal_all(self.engine.allocate_layer_id(), offset);
                             mask.linked = linked;
                             if let Some(selection) = &self.engine.document().selection {
+                                let mut selection = selection.clone();
+                                selection.inverted ^= hide_selection;
                                 let parent_offset = self.engine.document().layer_offset(layer.id);
                                 mask.initial = Some(selection.translated(Point {
                                     x: -(parent_offset.x - layer.properties.offset.x + offset.x),
@@ -675,6 +919,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     LayerAction::ShowMask { value, .. } => {
                         layer.mask.as_mut().ok_or("No mask")?.show_area = value;
+                        if value {
+                            self.engine.set_active_layer(LayerId(id)).map_err(error)?;
+                            self.layer_edit(Edit::SetMaskTarget(true))?;
+                        }
                     }
                     LayerAction::InvertMask { .. } => {
                         let m = layer.mask.as_mut().ok_or("No mask")?;
@@ -710,26 +958,143 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub fn layer_menu(&self, id: u64, mask: bool) -> Result<ContextMenu, String> {
-        let l = self
-            .engine
-            .document()
-            .layer(LayerId(id))
-            .ok_or("Unknown layer")?;
-        let item = |label: &str, action: LayerAction| {
-            ContextMenuItem::command(label, UiAction::Layer { action })
+        use LayerAction as A;
+        let doc = self.engine.document();
+        let l = doc.layer(LayerId(id)).ok_or("Unknown layer")?;
+        let locked = doc.is_locked(l.id);
+        let paint = l.kind == LayerKind::Paint;
+        let editable = l.kind != LayerKind::Background;
+        let controls = LayerControls::for_layer(doc, l);
+        let roots = doc.layer_roots(&self.layer_interaction.selected);
+        let multiple = roots.len() > 1;
+        let parent = if l.kind == LayerKind::Group {
+            Some(l.id)
+        } else {
+            l.properties.parent
         };
-        let check = |label: &str, action: LayerAction, value: bool| {
-            let mut i = item(label, action);
-            i.selected = Some(value);
-            i
+        let item = |label: &str, action: A| {
+            let enabled = match &action {
+                A::GroupSelected => doc.group_layers_edit(&roots, LayerId(0)).is_ok(),
+                A::Ungroup { .. } => doc.ungroup_layer_edit(l.id).is_ok(),
+                A::DeleteSelected => doc.delete_layers_edit(&roots).is_ok(),
+                A::Delete { .. } => doc.delete_layers_edit(&[l.id]).is_ok(),
+                A::DuplicateSelected => {
+                    !roots.is_empty()
+                        && roots.iter().all(|id| {
+                            doc.layer(*id)
+                                .is_some_and(|l| l.kind != LayerKind::Background)
+                        })
+                }
+                A::Duplicate { .. } | A::Select { .. } | A::ShowMask { .. } => editable,
+                A::CopyMask { .. } => l.mask.is_some(),
+                A::PasteMask { .. } => {
+                    editable && !locked && self.layer_interaction.clipboard_mask.is_some()
+                }
+                A::New { clipped, .. } => {
+                    !parent.is_some_and(|p| doc.is_locked(p))
+                        && (!clipped
+                            || matches!(l.kind, LayerKind::Paint | LayerKind::ImportedImage))
+                }
+                A::Reference { .. } => matches!(
+                    l.kind,
+                    LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
+                ),
+                A::ReferenceSelection => !self.reference_selection().is_empty(),
+                A::Lock { .. } => controls.edit_lock,
+                A::AlphaLock { .. } | A::Clear { .. } => controls.alpha_lock,
+                A::Clip { .. } => controls.clip,
+                A::MaskSelection { .. } => editable && !locked && doc.selection.is_some(),
+                A::ApplyMask { .. } => {
+                    paint && !locked && l.mask.as_ref().is_some_and(|m| m.enabled)
+                }
+                A::InvertSelection | A::Deselect => doc.selection.is_some(),
+                A::FillSelection => controls.fill && doc.selection.is_some(),
+                A::Tool {
+                    tool: LayerCanvasTool::LassoFill,
+                } => controls.fill,
+                A::Tool {
+                    tool: LayerCanvasTool::Select,
+                } => true,
+                A::Visibility { .. }
+                | A::ShowParents { .. }
+                | A::ShowAll
+                | A::SelectAllLayers { .. } => true,
+                A::SoloSelected => !roots.is_empty() || self.layer_interaction.solo.is_some(),
+                _ => editable && !locked,
+            };
+            let mut item = ContextMenuItem::command(label, UiAction::Layer { action });
+            item.enabled = enabled;
+            item
         };
-        let mut sections = if mask {
+        let check = |label: &str, action, checked| {
+            let mut item = item(label, action);
+            item.selected = Some(checked);
+            item
+        };
+        let mask_selection = || {
+            vec![
+                item(
+                    if l.mask.is_some() {
+                        "Replace mask: reveal selection"
+                    } else {
+                        "Mask: reveal selection"
+                    },
+                    A::MaskSelection { id, hide: false },
+                ),
+                item(
+                    if l.mask.is_some() {
+                        "Replace mask: hide selection"
+                    } else {
+                        "Mask: hide selection"
+                    },
+                    A::MaskSelection { id, hide: true },
+                ),
+            ]
+        };
+        let sections = if !editable {
+            vec![
+                vec![
+                    item(
+                        "New layer",
+                        A::New {
+                            group: false,
+                            clipped: false,
+                        },
+                    ),
+                    item(
+                        "New group",
+                        A::New {
+                            group: true,
+                            clipped: false,
+                        },
+                    ),
+                ],
+                vec![
+                    check(
+                        "Show paper",
+                        A::Visibility {
+                            id,
+                            value: !l.visible,
+                        },
+                        l.visible,
+                    ),
+                    item("Show all layers", A::ShowAll),
+                    item(
+                        "Lasso selection",
+                        A::Tool {
+                            tool: LayerCanvasTool::Select,
+                        },
+                    ),
+                ],
+            ]
+        } else if mask {
             let m = l.mask.as_ref().ok_or("No mask")?;
             vec![
                 vec![
+                    item("Edit layer content", A::Select { id, mask: false }),
                     check(
                         "Show mask area",
-                        LayerAction::ShowMask {
+                        A::ShowMask {
                             id,
                             value: !m.show_area,
                         },
@@ -737,7 +1102,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     ),
                     check(
                         "Enable mask",
-                        LayerAction::EnableMask {
+                        A::EnableMask {
                             id,
                             value: !m.enabled,
                         },
@@ -745,158 +1110,218 @@ impl<R: CanvasRenderer> UiSession<R> {
                     ),
                     check(
                         "Link mask to layer",
-                        LayerAction::LinkMask {
+                        A::LinkMask {
                             id,
                             value: !m.linked,
                         },
                         m.linked,
                     ),
                 ],
+                mask_selection(),
                 vec![
-                    item(
-                        "Replace mask from selection",
-                        LayerAction::AddMask { id, replace: true },
-                    ),
-                    item("Invert mask", LayerAction::InvertMask { id }),
-                    item("Reveal all", LayerAction::ClearMask { id, reveal: true }),
-                    item("Hide all", LayerAction::ClearMask { id, reveal: false }),
+                    item("Copy mask", A::CopyMask { id }),
+                    item("Replace with copied mask", A::PasteMask { id }),
+                    item("Invert mask", A::InvertMask { id }),
+                    item("Reveal all", A::ClearMask { id, reveal: true }),
+                    item("Hide all", A::ClearMask { id, reveal: false }),
                 ],
                 vec![
-                    item("Apply mask to layer", LayerAction::ApplyMask { id }),
-                    item("Delete mask", LayerAction::DeleteMask { id }),
+                    item("Apply mask to layer", A::ApplyMask { id }),
+                    item("Delete mask", A::DeleteMask { id }),
                 ],
             ]
         } else {
+            let mut organization = vec![
+                item(
+                    if l.kind == LayerKind::Group {
+                        "Rename group…"
+                    } else {
+                        "Rename layer…"
+                    },
+                    A::BeginRename { id },
+                ),
+                item(
+                    if multiple {
+                        "Duplicate selected layers"
+                    } else {
+                        "Duplicate"
+                    },
+                    if multiple {
+                        A::DuplicateSelected
+                    } else {
+                        A::Duplicate { id }
+                    },
+                ),
+                item("Group selected layers", A::GroupSelected),
+            ];
+            if l.kind == LayerKind::Group {
+                organization.push(item("Ungroup", A::Ungroup { id }));
+            }
+            let mask_menu = if l.mask.is_some() {
+                let mut sections = self.layer_menu(id, true)?.sections;
+                sections[0][0] = item("Edit mask", A::Select { id, mask: true });
+                sections
+            } else {
+                vec![
+                    vec![item("Add mask", A::AddMask { id, replace: false })],
+                    mask_selection(),
+                    vec![item("Paste mask", A::PasteMask { id })],
+                ]
+            };
+            let selection = vec![
+                vec![
+                    item("Select all layers", A::SelectAllLayers { selected: true }),
+                    item(
+                        "Clear layer selection",
+                        A::SelectAllLayers { selected: false },
+                    ),
+                ],
+                vec![
+                    item(
+                        "Lasso selection",
+                        A::Tool {
+                            tool: LayerCanvasTool::Select,
+                        },
+                    ),
+                    item(
+                        "Lasso Fill",
+                        A::Tool {
+                            tool: LayerCanvasTool::LassoFill,
+                        },
+                    ),
+                    item("Fill selection", A::FillSelection),
+                    item("Invert selection", A::InvertSelection),
+                    item("Deselect pixels", A::Deselect),
+                ],
+            ];
+            let visibility = vec![vec![
+                check(
+                    "Show layer",
+                    A::Visibility {
+                        id,
+                        value: !l.visible,
+                    },
+                    l.visible,
+                ),
+                item("Show layer and parent groups", A::ShowParents { id }),
+                check(
+                    "Isolate selected layers",
+                    A::SoloSelected,
+                    self.layer_interaction.solo.is_some(),
+                ),
+                item("Show all layers", A::ShowAll),
+            ]];
+            let mut protection = Vec::new();
+            if paint {
+                protection.push(check(
+                    "Alpha lock",
+                    A::AlphaLock {
+                        id,
+                        value: !l.properties.alpha_locked,
+                    },
+                    l.properties.alpha_locked,
+                ));
+            }
+            protection.extend([
+                check(
+                    "Lock editing",
+                    A::Lock {
+                        id,
+                        value: !l.properties.locked,
+                    },
+                    l.properties.locked,
+                ),
+                check(
+                    "Clip to layer below",
+                    A::Clip {
+                        id,
+                        value: !l.properties.clipped,
+                    },
+                    l.properties.clipped,
+                ),
+                if multiple {
+                    item("Use selected layers as references", A::ReferenceSelection)
+                } else {
+                    check(
+                        "Use as reference",
+                        A::Reference { id },
+                        doc.reference_layers.contains(&l.id),
+                    )
+                },
+            ]);
+            let mut destructive = Vec::new();
+            if paint {
+                destructive.push(item("Clear layer", A::Clear { id }));
+            }
+            destructive.push(item(
+                if multiple {
+                    "Delete selected layers"
+                } else if l.kind == LayerKind::Group {
+                    "Delete group and contents"
+                } else {
+                    "Delete layer"
+                },
+                if multiple {
+                    A::DeleteSelected
+                } else {
+                    A::Delete { id }
+                },
+            ));
             vec![
                 vec![
                     item(
                         "New layer",
-                        LayerAction::New {
+                        A::New {
                             group: false,
                             clipped: false,
                         },
                     ),
                     item(
                         "New clipping layer",
-                        LayerAction::New {
+                        A::New {
                             group: false,
                             clipped: true,
                         },
                     ),
                     item(
                         "New group",
-                        LayerAction::New {
+                        A::New {
                             group: true,
                             clipped: false,
                         },
                     ),
-                    item("Duplicate", LayerAction::Duplicate { id }),
                 ],
+                organization,
+                protection,
                 vec![
-                    check(
-                        "Alpha lock",
-                        LayerAction::AlphaLock {
-                            id,
-                            value: !l.properties.alpha_locked,
-                        },
-                        l.properties.alpha_locked,
-                    ),
-                    check(
-                        "Lock",
-                        LayerAction::Lock {
-                            id,
-                            value: !l.properties.locked,
-                        },
-                        l.properties.locked,
-                    ),
-                    check(
-                        "Clip to layer below",
-                        LayerAction::Clip {
-                            id,
-                            value: !l.properties.clipped,
-                        },
-                        l.properties.clipped,
-                    ),
-                    check(
-                        "Use as fill reference",
-                        LayerAction::Reference { id },
-                        self.engine.document().reference_layers.contains(&l.id),
-                    ),
-                    item("Solo / restore", LayerAction::Solo { id }),
-                ],
-                vec![
-                    item("Add mask", LayerAction::AddMask { id, replace: false }),
+                    ContextMenuItem::submenu("Mask", mask_menu),
+                    ContextMenuItem::submenu("Selection", selection),
+                    ContextMenuItem::submenu("Visibility", visibility),
                     item(
-                        "Move content / mask",
-                        LayerAction::Tool {
+                        "Move layer / mask",
+                        A::Tool {
                             tool: LayerCanvasTool::Move,
                         },
                     ),
                 ],
-                vec![
-                    item(
-                        "Lasso selection",
-                        LayerAction::Tool {
-                            tool: LayerCanvasTool::Select,
-                        },
-                    ),
-                    item(
-                        "Lasso Fill",
-                        LayerAction::Tool {
-                            tool: LayerCanvasTool::LassoFill,
-                        },
-                    ),
-                    item("Fill selection", LayerAction::FillSelection),
-                    item("Deselect", LayerAction::Deselect),
-                ],
-                vec![item("Delete layer", LayerAction::Delete { id })],
+                destructive,
             ]
         };
-        let locked = self.engine.document().is_locked(l.id);
-        let paint = l.kind == LayerKind::Paint;
-        for item in sections.iter_mut().flatten() {
-            if let Some(UiAction::Layer { action }) = &item.action {
-                item.enabled = match action {
-                    LayerAction::ShowMask { .. }
-                    | LayerAction::Solo { .. }
-                    | LayerAction::Lock { .. } => l.kind != LayerKind::Background,
-                    LayerAction::New { .. } => !locked,
-                    LayerAction::Deselect
-                    | LayerAction::FillSelection
-                    | LayerAction::InvertSelection => {
-                        self.engine.document().selection.is_some() && !locked
-                    }
-                    LayerAction::ApplyMask { .. } => {
-                        paint && !locked && l.mask.as_ref().is_some_and(|m| m.enabled)
-                    }
-                    LayerAction::AlphaLock { .. } | LayerAction::Reference { .. } => {
-                        paint && !locked
-                    }
-                    LayerAction::AddMask { replace: true, .. } => {
-                        !locked && self.engine.document().selection.is_some()
-                    }
-                    LayerAction::Delete { .. } => {
-                        !locked
-                            && l.kind != LayerKind::Background
-                            && self.check_dependents(l.id).is_ok()
-                            && (!paint
-                                || self
-                                    .engine
-                                    .document()
-                                    .layers
-                                    .iter()
-                                    .filter(|l| l.kind == LayerKind::Paint)
-                                    .count()
-                                    > 1)
-                    }
-                    _ => !locked && l.kind != LayerKind::Background,
-                };
-            }
-        }
         Ok(ContextMenu {
-            title: format!("{} {}", l.name, if mask { "mask" } else { "layer" }),
+            title: format!(
+                "{} {}",
+                l.name,
+                if mask {
+                    "mask"
+                } else if l.kind == LayerKind::Group {
+                    "group"
+                } else {
+                    "layer"
+                }
+            ),
             sections,
-        })
+        }
+        .with_shortcuts(&self.state.settings, self.state.platform))
     }
     pub(super) fn layer_pen(&mut self, event: PenEvent) -> Result<(), String> {
         let p = self
@@ -907,9 +1332,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         match event.phase {
             PenPhase::Down => {
                 self.layer_interaction.path.clear();
+                let doc = self.engine.document();
+                let layer = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
+                let controls = LayerControls::for_layer(doc, layer);
+                match self.layer_interaction.tool {
+                    LayerCanvasTool::Move if !controls.move_layer => return Ok(()),
+                    LayerCanvasTool::LassoFill if !controls.fill => return Ok(()),
+                    _ => (),
+                }
                 self.layer_interaction.path.push(p);
-                self.layer_interaction.original =
-                    Some(self.editable_layer(self.engine.document().active_layer.0)?);
+                self.layer_interaction.original = Some(layer.clone());
             }
             PenPhase::Move | PenPhase::Up => {
                 if self.layer_interaction.path.is_empty() {
@@ -994,10 +1426,13 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
         let matrix = self.state.camera.view().document_to_surface;
+        let scale = self
+            .logical_viewport
+            .map_or(1., |v| self.state.camera.viewport[0] as f32 / v[0]);
         let transform = |p: Point| {
             [
-                matrix[0] * p.x + matrix[2] * p.y + matrix[4],
-                matrix[1] * p.x + matrix[3] * p.y + matrix[5],
+                (matrix[0] * p.x + matrix[2] * p.y + matrix[4]) / scale,
+                (matrix[1] * p.x + matrix[3] * p.y + matrix[5]) / scale,
             ]
         };
         let mut path = |points: &[Point], closed: bool| {

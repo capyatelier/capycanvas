@@ -132,15 +132,49 @@ impl NumberControl {
                 .width_chars(3)
                 .max_width_chars(10)
                 .build();
+            if inline {
+                // Reserve the full formatted range, not the current value's
+                // digit count. Expressions scroll inside this same footprint.
+                let chars = [spec.min, spec.max]
+                    .into_iter()
+                    .filter_map(|v| spec.resolve(v, NumericOperation::Format).ok())
+                    .map(|v| v.text.chars().count())
+                    .max()
+                    .unwrap_or(1) as i32;
+                value_label.set_width_chars(chars);
+                value_label.set_max_width_chars(chars);
+                entry.set_width_chars(chars);
+                entry.set_max_width_chars(chars);
+            }
             gtk::prelude::EditableExt::set_alignment(&entry, 1.0);
             entry.add_css_class("number-entry");
             let stack = gtk::Stack::new();
-            stack.set_hhomogeneous(false);
+            stack.set_hhomogeneous(inline);
             stack.set_vhomogeneous(false);
             stack.set_halign(gtk::Align::End);
             stack.set_valign(gtk::Align::Center);
             stack.add_named(&display, Some("value"));
             stack.add_named(&entry, Some("entry"));
+            if inline {
+                // GTK's width-chars uses average character width, which can be
+                // narrower than digits. Measure the widest formatted value too.
+                let reserve = gtk::Button::new();
+                reserve.add_css_class("number-value");
+                reserve.add_css_class("flat");
+                let text = [spec.min, spec.max]
+                    .into_iter()
+                    .filter_map(|v| spec.resolve(v, NumericOperation::Format).ok())
+                    .map(|v| v.text)
+                    .max_by_key(|v| v.len())
+                    .unwrap_or_default();
+                reserve.set_label(
+                    &text
+                        .chars()
+                        .map(|c| if c.is_ascii_digit() { '8' } else { c })
+                        .collect::<String>(),
+                );
+                stack.add_named(&reserve, Some("measure"));
+            }
             header.append(&stack);
             display.connect_clicked(glib::clone!(
                 #[weak]
@@ -152,7 +186,9 @@ impl NumberControl {
                         .resolve(control.value(), NumericOperation::Format)
                         .unwrap();
                     let entry = imp.entry.get().unwrap();
-                    entry.set_width_chars(value.edit.chars().count().clamp(3, 10) as i32);
+                    if !control.has_css_class("number-inline") {
+                        entry.set_width_chars(value.edit.chars().count().clamp(3, 10) as i32);
+                    }
                     entry.set_text(&value.edit);
                     imp.stack.get().unwrap().set_visible_child_name("entry");
                     entry.grab_focus();

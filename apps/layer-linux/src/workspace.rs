@@ -515,7 +515,7 @@ struct NativeMenu {
     commands: Vec<CommandId>,
     accelerators: Vec<String>,
 }
-fn native_accelerator(chord: &KeyChord) -> String {
+pub(crate) fn native_accelerator(chord: &KeyChord) -> String {
     let name = match chord.key.as_str() {
         " " | "space" => "space",
         "arrowleft" => "Left",
@@ -967,12 +967,50 @@ impl Workspace {
 
     pub fn action_button(self: &Rc<Self>, label: &str, action: UiAction) -> gtk::Button {
         let button = gtk::Button::with_label(label);
+        self.bind_action_tooltip(&button, action.clone());
         button.connect_clicked(glib::clone!(
             #[weak(rename_to = this)]
             self,
             move |_| this.dispatch(action.clone())
         ));
         button
+    }
+    pub fn bind_action_tooltip(self: &Rc<Self>, button: &gtk::Button, action: UiAction) {
+        self.bind_dynamic_action_tooltip(button, move |_| Some(action.clone()));
+    }
+    pub fn bind_dynamic_action_tooltip(
+        self: &Rc<Self>,
+        button: &impl IsA<gtk::Button>,
+        action: impl Fn(&layer_ui::UiState) -> Option<UiAction> + 'static,
+    ) {
+        let button = button.as_ref();
+        button.set_has_tooltip(true);
+        button.connect_query_tooltip(glib::clone!(
+            #[weak(rename_to = this)]
+            self,
+            #[upgrade_or]
+            false,
+            move |button, _, _, _, tooltip| {
+                let label = button
+                    .tooltip_text()
+                    .or_else(|| button.label())
+                    .unwrap_or_default();
+                let gpu = this.gpu.borrow();
+                let Some(g) = gpu.as_ref() else {
+                    return false;
+                };
+                let state = g.session.state();
+                let Some(action) = action(state) else {
+                    return false;
+                };
+                tooltip.set_text(Some(&state.settings.action_tooltip(
+                    &label,
+                    &action,
+                    state.platform,
+                )));
+                true
+            }
+        ));
     }
     fn command_button(self: &Rc<Self>, command: CommandId) -> gtk::Button {
         let button = self.action_button(command.label(), UiAction::Invoke { command });

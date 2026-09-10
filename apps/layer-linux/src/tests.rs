@@ -293,14 +293,17 @@ fn native_layer_panel_review() {
     // selection changes (double clicks must not lose their GTK gesture).
     let row = |id| find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{id}")).unwrap();
     let label = find_css(&row(1), "layer-name").unwrap();
-    let controllers = label.observe_controllers();
+    let controllers = row(1).observe_controllers();
     let rename = (0..controllers.n_items())
-        .find_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+        .find(|g| g.button() == 1)
         .unwrap();
-    rename.emit_by_name::<()>("released", &[&1i32, &5f64, &10f64]);
+    let label_bounds = label.compute_bounds(&row(1)).unwrap();
+    let (label_x, label_y) = (label_bounds.x() as f64 + 5., label_bounds.y() as f64 + 5.);
+    rename.emit_by_name::<()>("released", &[&1i32, &label_x, &label_y]);
     pump(100);
     assert_eq!(label, find_css(&row(1), "layer-name").unwrap());
-    rename.emit_by_name::<()>("released", &[&2i32, &5f64, &10f64]);
+    rename.emit_by_name::<()>("released", &[&2i32, &label_x, &label_y]);
     pump(100);
     let entry: gtk::Entry = find_css(&row(1), "layer-name-entry")
         .unwrap()
@@ -529,6 +532,217 @@ fn native_layer_panel_review() {
     );
     edit_number(&w.layer_panel.opacity, "100");
     send(&w, A::Collapse { id: outer });
+    // Menus are the same shared commands as direct controls. Exercise their
+    // native activation, not just the underlying Rust enum.
+    let more: gtk::Button = w
+        .layer_panel
+        .footer
+        .last_child()
+        .unwrap()
+        .downcast()
+        .unwrap();
+    let popover: gtk::PopoverMenu = w.layer_panel.root.last_child().unwrap().downcast().unwrap();
+    let open_menu = |id, mask, name: &str| {
+        send(&w, A::Context { id, mask });
+        click(&more);
+        pump(120);
+        capture_reference(&w, &format!("{dir}/{name}.png"), 1.);
+        capture_popover(popover.upcast_ref(), &format!("{dir}/{name}-menu.png"));
+    };
+    open_menu(texture, true, "11-mask-context");
+    let activate = |label| {
+        let action = menu_action(&popover.menu_model().unwrap(), label).unwrap();
+        popover.activate_action(&action, None).unwrap();
+        popover.popdown();
+        pump(150);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    };
+    activate("Copy mask");
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Dark),
+    });
+    open_menu(texture, false, "12-layer-context");
+    activate("Rename layer…");
+    let name: gtk::Entry = find_css(&row(texture), "layer-name-entry")
+        .unwrap()
+        .downcast()
+        .unwrap();
+    assert!(name.is_mapped());
+    name.set_text("Fabric · copied silhouette");
+    name.emit_activate();
+    pump(150);
+    // Clear an imported texture (no brush strokes) must invalidate its GPU
+    // source and thumbnail. Undo restores the exact pixels and attached mask.
+    let pixels = || {
+        let button = find_css(&row(texture), "layer-thumbnail").unwrap();
+        fn picture(w: &gtk::Widget) -> Option<gtk::Picture> {
+            if let Ok(p) = w.clone().downcast() {
+                return Some(p);
+            }
+            let mut child = w.first_child();
+            while let Some(c) = child {
+                child = c.next_sibling();
+                if let Some(p) = picture(&c) {
+                    return Some(p);
+                }
+            }
+            None
+        }
+        let t: gdk::Texture = picture(&button)
+            .unwrap()
+            .paintable()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        let mut bytes = vec![0; t.width() as usize * t.height() as usize * 4];
+        t.download(&mut bytes, t.width() as usize * 4);
+        bytes
+    };
+    pump(250);
+    let before = pixels();
+    send(&w, A::Clear { id: texture });
+    pump(250);
+    assert!(
+        pixels() != before,
+        "Clear must update imported-image GPU thumbnails"
+    );
+    capture_reference(&w, &format!("{dir}/13-cleared-texture.png"), 1.);
+    click(&command(&w, CommandId::Undo));
+    pump(250);
+    assert!(pixels() == before, "Undo restores exact imported pixels");
+    send(
+        &w,
+        A::New {
+            group: false,
+            clipped: false,
+        },
+    );
+    let copied = state(&w).layer_tools.editing_layer.unwrap().id;
+    send(&w, A::PasteMask { id: copied });
+    send(
+        &w,
+        A::Select {
+            id: copied,
+            mask: false,
+        },
+    );
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.9, 0.2, 0.5, 1.],
+    });
+    polygon(
+        &w,
+        &[[0., 0.], [2048., 0.], [2048., 1536.], [0., 1536.]],
+        T::Select,
+    );
+    send(&w, A::FillSelection);
+    send(&w, A::Deselect);
+    send(
+        &w,
+        A::Rename {
+            id: copied,
+            name: "Copied mask · independent layer".into(),
+        },
+    );
+    capture_reference(&w, &format!("{dir}/14-copied-mask.png"), 1.);
+    send(&w, A::ToggleSelection { id: texture });
+    click(&more);
+    capture_popover(
+        popover.upcast_ref(),
+        &format!("{dir}/15-multi-layer-menu.png"),
+    );
+    activate("Group selected layers");
+    let grouped = state(&w).layers.iter().find(|l| l.selected).unwrap().id;
+    open_menu(grouped, false, "16-group-context");
+    activate("Ungroup");
+    assert!(!state(&w).layers.iter().any(|l| l.id == grouped));
+    // The opacity track keeps its bounds for every digit count and text edit.
+    let header = w.layer_panel.opacity.first_child().unwrap();
+    let slider: gtk::Scale = header.first_child().unwrap().downcast().unwrap();
+    let mut width = None;
+    for value in [1., 9., 10., 99., 100.] {
+        w.dispatch(UiAction::SetLayerOpacity {
+            id: None,
+            opacity: value / 100.,
+        });
+        pump(60);
+        let now = slider.compute_bounds(&header).unwrap();
+        if let Some(previous) = width {
+            assert_eq!(now.width(), previous);
+        }
+        width = Some(now.width());
+    }
+    let value_stack: gtk::Stack = header.last_child().unwrap().downcast().unwrap();
+    click(&value_stack.visible_child().unwrap().downcast().unwrap());
+    pump(60);
+    let entry: gtk::Entry = value_stack.visible_child().unwrap().downcast().unwrap();
+    entry.set_text("50*2");
+    pump(60);
+    assert_eq!(
+        slider.compute_bounds(&header).unwrap().width(),
+        width.unwrap()
+    );
+    entry.emit_activate();
+    pump(60);
+    assert_eq!(
+        slider.compute_bounds(&header).unwrap().width(),
+        width.unwrap()
+    );
+    // Async preview arrival cannot change the thumbnail's geometry.
+    let thumbnail = find_css(&row(texture), "layer-thumbnail").unwrap();
+    let overlay: gtk::Overlay = thumbnail
+        .clone()
+        .downcast::<gtk::Button>()
+        .unwrap()
+        .child()
+        .unwrap()
+        .downcast()
+        .unwrap();
+    let image: gtk::Picture = overlay
+        .child()
+        .unwrap()
+        .next_sibling()
+        .unwrap()
+        .downcast()
+        .unwrap();
+    let paintable = image.paintable();
+    let before = thumbnail.compute_bounds(&row(texture)).unwrap();
+    image.set_paintable(None::<&gdk::Paintable>);
+    pump(30);
+    let empty = thumbnail.compute_bounds(&row(texture)).unwrap();
+    image.set_paintable(paintable.as_ref());
+    pump(30);
+    let loaded = thumbnail.compute_bounds(&row(texture)).unwrap();
+    assert_eq!(
+        (before.width(), before.height()),
+        (empty.width(), empty.height())
+    );
+    assert_eq!(
+        (before.width(), before.height()),
+        (loaded.width(), loaded.height())
+    );
+    assert_eq!(loaded.width(), loaded.height());
+    // Paper is selectable, exposes only meaningful controls, and is anchored.
+    let paper = row(2);
+    click(
+        &find_css(&paper, "layer-thumbnail")
+            .unwrap()
+            .downcast()
+            .unwrap(),
+    );
+    assert_eq!(state(&w).layer_tools.editing_layer.unwrap().id, 2);
+    assert!(
+        state(&w)
+            .layers
+            .iter()
+            .find(|l| l.id == 2)
+            .unwrap()
+            .selected
+    );
+    assert!(w.layer_panel.opacity.is_sensitive());
+    assert!(!state(&w).layer_tools.controls.mask);
+    capture_reference(&w, &format!("{dir}/17-paper-selected.png"), 1.);
+    open_menu(2, false, "18-paper-context");
+    popover.popdown();
     for _ in 0..110 {
         send(
             &w,
@@ -3903,6 +4117,68 @@ fn native_hidden_tabs() {
             &w,
             &format!("{dir}/tab-restored-floating-{theme:?}.png"),
             1.0,
+        );
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetTabHidden {
+                panel,
+                hidden: true,
+            },
+        });
+        pump(100);
+        let before_dock = state(&w).workspace;
+        let grip = footer().compute_bounds(&w.surface).unwrap();
+        for (phase, position) in [
+            (
+                layer_ui::ContactPhase::Down,
+                [grip.x() + grip.width() * 0.5, grip.y() + 10.],
+            ),
+            (
+                layer_ui::ContactPhase::Move,
+                [viewport[0] - 1., viewport[1] * 0.5],
+            ),
+            (
+                layer_ui::ContactPhase::Up,
+                [viewport[0] - 1., viewport[1] * 0.5],
+            ),
+        ] {
+            w.dispatch(UiAction::DragWorkspace {
+                item: DockItem::Group { group },
+                phase,
+                position,
+                viewport,
+                tabs: vec![],
+            });
+        }
+        pump(150);
+        assert!(!state(&w).workspace.layout.panel(panel).unwrap().hide_tab);
+        assert_eq!(
+            w.groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .tabs
+                .len(),
+            1
+        );
+        assert!(
+            find_named(
+                w.surface.upcast_ref(),
+                &format!("panel-footer-grip-{group}")
+            )
+            .is_none()
+        );
+        capture_reference(
+            &w,
+            &format!("{dir}/tab-shown-after-docking-{theme:?}.png"),
+            1.0,
+        );
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(before_dock).unwrap()
         );
     }
     w.window.destroy();

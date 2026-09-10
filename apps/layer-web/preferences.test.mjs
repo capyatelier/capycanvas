@@ -32,11 +32,11 @@ export async function checkPreferences({ call, evaluate, settle }) {
         tile:document.querySelector('.tile-button').getBoundingClientRect().height,
         preview:document.querySelector('.brush-preview').getBoundingClientRect().height,
         slider:document.querySelector('.size-controls input[type=range]').getBoundingClientRect().height,
-        layerIconButton:document.querySelector('.layer-tools button').getBoundingClientRect().height};
+        layerIconButton:document.querySelector('.layer-flags button').getBoundingClientRect().height};
     })()`);
     for (const size of metrics.fonts) assert.ok(Math.abs(size - points * 4 / 3) < .02, `panel text ${size} should be ${points}pt`);
     assert.equal(metrics.step, 16);
-    assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 28);
+    assert.equal(metrics.tool, 16); assert.equal(metrics.tile, 36); assert.equal(metrics.preview, 40); assert.equal(metrics.slider, 24); assert.equal(metrics.layerIconButton, 24);
   }
   assert.equal(await evaluate("document.querySelector('#zen-button svg').getBoundingClientRect().width"), await evaluate("layerApp.app.catalog().zen_icon_size"));
   assert.equal(await evaluate("document.querySelector('#zen-button svg').dataset.asset"), 'zen-looking-up');

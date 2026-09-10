@@ -1266,7 +1266,10 @@ impl Document {
             Edit::SetReferences(references) => {
                 for &id in &references {
                     let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-                    if !matches!(layer.kind, LayerKind::Paint | LayerKind::ImportedImage) {
+                    if !matches!(
+                        layer.kind,
+                        LayerKind::Paint | LayerKind::ImportedImage | LayerKind::Group
+                    ) {
                         return Err(DocumentError::NotDrawable(id));
                     }
                 }
@@ -1278,7 +1281,12 @@ impl Document {
                 }
                 let id = layer.id;
                 self.validate_layer(&layer)?;
-                self.layers.insert(index.min(self.layers.len()), layer);
+                let bottom = self
+                    .layers
+                    .iter()
+                    .position(|l| l.kind == LayerKind::Background)
+                    .unwrap_or(self.layers.len());
+                self.layers.insert(index.min(bottom), layer);
                 Edit::RemoveLayer { id }
             }
             Edit::RemoveLayer { id } => {
@@ -1336,8 +1344,16 @@ impl Document {
                     .iter()
                     .position(|layer| layer.id == id)
                     .ok_or(DocumentError::MissingLayer(id))?;
+                if self.layers[from].kind == LayerKind::Background {
+                    return Err(DocumentError::ProtectedLayer(id));
+                }
                 let layer = self.layers.remove(from);
-                self.layers.insert(to.min(self.layers.len()), layer);
+                let bottom = self
+                    .layers
+                    .iter()
+                    .position(|l| l.kind == LayerKind::Background)
+                    .unwrap_or(self.layers.len());
+                self.layers.insert(to.min(bottom), layer);
                 Edit::MoveLayer { id, to: from }
             }
             Edit::SetLayerOpacity { id, opacity } => {
@@ -1370,10 +1386,8 @@ impl Document {
                 }
             }
             Edit::SetActiveLayer { id } => {
-                let target = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-                if target.kind == LayerKind::Background {
-                    return Err(DocumentError::NotDrawable(id));
-                }
+                // Selection is not permission to paint (Paper has properties too).
+                self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
                 let previous = self.active_layer;
                 let mask = self.active_mask;
                 self.active_mask = false;

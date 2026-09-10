@@ -41,9 +41,10 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .layer-icon image { -gtk-icon-size: 16px; }
 .layer-list { background: transparent; }
 .layer-list > row { padding: 0; margin: 0; border-radius: 0; }
-.layer-row { min-height: 36px; padding: 2px 4px; border-radius: 0; }
+.layer-row { min-height: 36px; padding: 2px 6px; border-radius: 0; }
 .layer-row.selected { background: alpha(var(--accent-bg-color), .22); }
-.layers-panel button.layer-column { min-width: 20px; }
+.layers-panel button.layer-column { min-width: 24px; }
+.layers-panel button.layer-reference:checked { background: alpha(var(--window-fg-color), .12); color: var(--window-fg-color); }
 .layers-panel button.layer-thumbnail { min-width: 28px; min-height: 28px; padding: 0; border: 1px solid transparent; border-radius: 3px; background: var(--input-bg); }
 .layers-panel button.layer-folder { background: transparent; }
 .layers-panel button.layer-folder:hover { background: alpha(var(--window-fg-color), .08); }

@@ -3549,6 +3549,15 @@ impl CanvasRenderer for WgpuRasterizer {
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         let mut view = packet.view;
+        self.thumbnails.paper = packet
+            .layers
+            .iter()
+            .find(|l| l.kind == LayerKind::Background)
+            .map(|l| {
+                let mut color = view.background_rgba_linear;
+                color[3] *= l.opacity;
+                (l.id, color)
+            });
         if let Some(background) = packet
             .layers
             .iter()
@@ -6262,6 +6271,100 @@ mod tests {
             transport: None,
             deform: BrushDeform::default(),
         }
+    }
+
+    #[test]
+    fn thumbnails_frame_nontransparent_pixels_and_show_paper_and_checkerboard() {
+        let mut r = WgpuRasterizer::new().expect("physical GPU required");
+        let mut paper = Layer::paint(LayerId(2), "Paper");
+        paper.kind = LayerKind::Background;
+        let paint = Layer::paint(LayerId(1), "Small mark");
+        let mut layers = vec![paint, paper];
+        let mut dab = test_dab([40., 100.], [1., 0., 0., 1.], 1.);
+        dab.radii = [3., 6.];
+        let mut batch = DabBatch {
+            stroke_id: StrokeId(1),
+            layer_id: LayerId(1),
+            kind: DabBatchKind::Persistent,
+            stroke_start: true,
+            stroke_end: true,
+            first_dab: 0,
+            dab_count: 1,
+            style: test_style(BrushExecution::Dry),
+            damage: Rect {
+                min: Point { x: 32., y: 92. },
+                max: Point { x: 48., y: 108. },
+            },
+        };
+        let frame =
+            |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch]| {
+                r.submit(FramePacket {
+                    view: test_view(),
+                    document_extent: [128, 128],
+                    layers,
+                    dabs,
+                    dab_batches: batches,
+                    reset_layers: false,
+                    composite_all: true,
+                })
+                .unwrap();
+            };
+        let preview = |r: &mut WgpuRasterizer, id| {
+            r.request_thumbnail(7, LayerId(id)).unwrap();
+            r.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .unwrap();
+            r.take_thumbnail().expect("mapped thumbnail").unwrap().bytes
+        };
+        frame(&mut r, &layers, &[dab], std::slice::from_ref(&batch));
+        let image = preview(&mut r, 1);
+        let red = image
+            .chunks_exact(4)
+            .filter(|p| p[0] > 200 && p[1] < 100)
+            .count();
+        assert!(
+            red > 150,
+            "small antialiased 6x12 mark must fill the preview, got {red} pixels"
+        );
+        let colored_rows: Vec<_> = image
+            .chunks_exact(32 * 4)
+            .enumerate()
+            .filter(|(_, row)| row.chunks_exact(4).any(|p| p[0] > p[1].saturating_add(5)))
+            .map(|(y, _)| y)
+            .collect();
+        assert!(
+            colored_rows.last().unwrap() - colored_rows.first().unwrap() >= 27,
+            "crop retains antialias fringe and fills height"
+        );
+        assert!(image.chunks_exact(4).all(|p| p[3] == 255));
+        assert_ne!(
+            image[0],
+            image[4 * 4],
+            "checker squares remain visible beside cropped mark"
+        );
+        assert!(
+            preview(&mut r, 2)
+                .chunks_exact(4)
+                .all(|p| p[..3] == [255; 3])
+        );
+        layers[1].opacity = 0.;
+        frame(&mut r, &layers, &[], &[]);
+        let transparent_paper = preview(&mut r, 2);
+        assert_ne!(transparent_paper[0], transparent_paper[4 * 4]);
+        assert!(
+            transparent_paper
+                .chunks_exact(4)
+                .all(|p| p[0] == p[1] && p[1] == p[2])
+        );
+        // Previously allocated pages must not contribute empty bounds after erase.
+        batch.style.mode = DabMode::Erase;
+        dab.radii = [10., 10.];
+        frame(&mut r, &layers, &[dab], &[batch]);
+        let empty = preview(&mut r, 1);
+        assert_eq!(empty, transparent_paper);
     }
 
     #[test]

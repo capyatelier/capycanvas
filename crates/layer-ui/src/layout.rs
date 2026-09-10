@@ -1561,6 +1561,16 @@ impl DockLayout {
         {
             return Err("Top and bottom docks only support standalone toolbars".into());
         }
+        // Crossing back from floating to docked restores a header, not the
+        // hidden-tab preference from an earlier drag. Toolbar grips and
+        // multi-tab groups keep their existing rules.
+        if previous_float.is_some()
+            && moving.len() == 1
+            && selected.kind() == PanelKind::Content
+            && dock_edge.is_some()
+        {
+            next.panel_mut(selected)?.hide_tab = false;
+        }
         let source = before.groups.iter().find(|g| g.id == source_group);
         let tile_size = next.panel(selected)?.tile_style.size();
         let moved_width = if tiles {
@@ -4174,6 +4184,81 @@ mod tests {
     }
 
     #[test]
+    fn docking_a_lone_floating_panel_shows_its_tab_for_every_dock_target() {
+        let viewport = [1600., 1200.];
+        for hidden in [false, true] {
+            for target_kind in 0..4 {
+                let mut layout = DockLayout::default();
+                let item = DockItem::Panel {
+                    panel: Panel::Sizes,
+                };
+                layout
+                    .move_item(
+                        viewport,
+                        item,
+                        DockTarget::Float {
+                            position: [800., 500.],
+                        },
+                    )
+                    .unwrap();
+                layout.panel_mut(Panel::Sizes).unwrap().hide_tab = hidden;
+                let group = layout.panel_group(Panel::Layers).unwrap();
+                let target = match target_kind {
+                    0 => DockTarget::Edge {
+                        edge: Edge::Right,
+                        outer: true,
+                    },
+                    1 => DockTarget::BesideBand {
+                        band: layout
+                            .bands
+                            .iter()
+                            .find(|b| b.edge == Edge::Right)
+                            .unwrap()
+                            .id,
+                    },
+                    2 => DockTarget::Split {
+                        group,
+                        edge: Edge::Bottom,
+                    },
+                    _ => DockTarget::Tab { group, index: None },
+                };
+                layout.move_item(viewport, item, target).unwrap();
+                assert!(!layout.panel(Panel::Sizes).unwrap().hide_tab);
+                let resolved = layout.workspace(
+                    viewport[0],
+                    viewport[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                );
+                let docked = resolved
+                    .groups
+                    .iter()
+                    .find(|g| g.panels.contains(&Panel::Sizes))
+                    .unwrap();
+                assert!(!docked.floating && docked.tabs_visible);
+                assert!(docked.footer_grip.is_none());
+            }
+        }
+        // Moving a manually hidden docked panel between docks does not cross
+        // the floating boundary and must retain the user's hide-tab choice.
+        let mut layout = DockLayout::default();
+        layout.panel_mut(Panel::Sizes).unwrap().hide_tab = true;
+        layout
+            .move_item(
+                viewport,
+                DockItem::Panel {
+                    panel: Panel::Sizes,
+                },
+                DockTarget::Edge {
+                    edge: Edge::Right,
+                    outer: true,
+                },
+            )
+            .unwrap();
+        assert!(layout.panel(Panel::Sizes).unwrap().hide_tab);
+    }
+
+    #[test]
     fn floating_groups_share_tabs_size_from_content_and_survive_hidden_docks() {
         let viewport = [1200.0, 900.0];
         let resolve = |layout: &DockLayout| {
@@ -4882,6 +4967,12 @@ mod tests {
     fn standalone_ribbons_wrap_grow_and_unwrap_without_changing_saved_extent() {
         for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
             let mut layout = DockLayout::default();
+            // This geometry fixture explicitly exercises six tiles.
+            if let PanelContent::Toolbar { tiles, .. } =
+                &mut layout.panel_mut(Panel::Toolbar).unwrap().content
+            {
+                tiles.truncate(6);
+            }
             layout.bands.retain(|b| b.id == 1);
             layout.bands[0].edge = edge;
             let horizontal = matches!(edge, Edge::Top | Edge::Bottom);
@@ -4912,7 +5003,7 @@ mod tests {
                     g.bounds.width,
                     g.bounds.height,
                     g.axis,
-                    TOOL_TILE_COUNT,
+                    layout.panel(Panel::Toolbar).unwrap().tiles().len(),
                     true,
                     TileStyle::Small,
                 );

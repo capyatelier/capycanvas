@@ -828,6 +828,7 @@ impl Customization {
                 for (button, tile) in toolbar.buttons.iter().zip(&view.tiles) {
                     selected(button, tile.choice.selected);
                     button.set_sensitive(tile.enabled);
+                    button.set_tooltip_text(Some(&tile.tooltip));
                 }
             }
             toolbar.palette.load_from_string(&format!(
@@ -1326,7 +1327,7 @@ impl Workspace {
             sections: Vec<Vec<layer_ui::ContextMenuItem>>,
             prefix: &str,
             actions: &gtk::gio::SimpleActionGroup,
-            children: &mut Vec<(String, gtk::Button)>,
+            children: &mut Vec<(String, gtk::Widget)>,
         ) -> gtk::gio::Menu {
             let root = gtk::gio::Menu::new();
             for (s, items) in sections.into_iter().enumerate() {
@@ -1353,10 +1354,6 @@ impl Workspace {
                     };
                     action.set_enabled(item.enabled);
                     if !item.hint.is_empty() {
-                        let button = gtk::Button::new();
-                        button.add_css_class("flat");
-                        button.add_css_class("workspace-menu-item");
-                        button.set_action_name(Some(&format!("context.{id}")));
                         let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
                         let title = gtk::Label::builder()
                             .label(&item.label)
@@ -1369,7 +1366,19 @@ impl Workspace {
                         hint.set_max_width_chars(28);
                         row.append(&title);
                         row.append(&hint);
-                        button.set_child(Some(&row));
+                        let button: gtk::Widget = if item.selected.is_some() {
+                            let button = gtk::CheckButton::new();
+                            button.set_action_name(Some(&format!("context.{id}")));
+                            button.set_child(Some(&row));
+                            button.upcast()
+                        } else {
+                            let button = gtk::Button::new();
+                            button.add_css_class("flat");
+                            button.set_action_name(Some(&format!("context.{id}")));
+                            button.set_child(Some(&row));
+                            button.upcast()
+                        };
+                        button.add_css_class("workspace-menu-item");
                         model.set_attribute_value("custom", Some(&id.to_variant()));
                         children.push((id.clone(), button));
                     }

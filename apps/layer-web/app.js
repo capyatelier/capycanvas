@@ -3,6 +3,7 @@ import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
 import { createNumberField } from "./numeric.js";
+import { createLayerPanel } from "./layers.js";
 
 // The static packager fills this map with fingerprinted artwork filenames.
 const assetPaths = {};
@@ -32,7 +33,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization;
+let refreshPreferences, customization, layerPanel;
 let gpuStarting = false;
 let gpuReady = false;
 let servicingRequests = false;
@@ -70,8 +71,8 @@ function button(text, action, className = "") {
   node.addEventListener("click", action);
   return node;
 }
-function numberField(control, label, onChange) {
-  return createNumberField({ control, label, onChange, icon, resolve: request => app.number_input(request) });
+function numberField(control, label, onChange, inline = false) {
+  return createNumberField({ control, label, onChange, inline, icon, resolve: request => app.number_input(request) });
 }
 // Overlay scrollbars do not take width away from previews or tiles. Scrolling
 // itself stays in the browser; this one thumb also supports pointer dragging.
@@ -532,6 +533,7 @@ function buildPanels() {
         "brush-choice",
       );
       choice.dataset.brush = brush.id;
+      choice.onpointerenter = () => { choice.title = app.action_tooltip(brush.label, { type: "select_brush", id: brush.id }); };
       choice.dataset.category = category;
       const preview = element("img", "brush-preview");
       preview.src = asset(`brush-previews/${brush.id}-${state.theme}.png`);
@@ -556,6 +558,7 @@ function buildPanels() {
       "size-button",
     );
     choice.title = `${value} px`;
+    choice.onpointerenter = () => { choice.title = app.action_tooltip(`${value} px`, { type: "set_brush_size", value }); };
     choice.dataset.size = value;
     const dot = element("span", "size-dot");
     dot.style.width =
@@ -569,19 +572,7 @@ function buildPanels() {
     sizeButtons.set(value, choice);
   }
   panels.get("sizes").append(controls, grid);
-  const layers = element("div", "layers-content");
-  const tools = element("div", "layer-tools");
-  tools.dataset.control = "layer_actions";
-  for (const id of catalog.layer_commands) tools.append(iconButton(id));
-  const rows = element("div", "layer-rows");
-  rows.dataset.control = "layers";
-  rows.id = "layer-rows";
-  const layerOpacity = numberField(catalog.opacity, "Layer opacity", opacity => dispatch({ type: "set_layer_opacity", opacity }));
-  layerOpacity.id = "layer-opacity";
-  const opacityRow = element("div", "layer-opacity-control");
-  opacityRow.dataset.control = "layer_opacity"; opacityRow.append(layerOpacity);
-  layers.append(tools, rows, opacityRow);
-  panels.get("layers").append(layers);
+  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField });
 }
 function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 128)) customization.refresh();
@@ -599,55 +590,7 @@ function update(regions) {
     const tab = state.tabs[0];
     $("document-title").textContent =
       `${tab.title} · ${tab.width} × ${tab.height}`;
-    const container = $("layer-rows");
-    const key = JSON.stringify(
-      state.layers.map(({ id, label, editable }) => [
-        String(id),
-        label,
-        editable,
-      ]),
-    );
-    if (container.dataset.key !== key) {
-      container.dataset.key = key;
-      container.replaceChildren(
-        ...state.layers.map((layer) => {
-          const row = element(
-            "div",
-            `layer-row ${layer.selected ? "selected" : ""}`,
-          );
-          row.dataset.layer = String(layer.id);
-          const visible = element("input");
-          visible.type = "checkbox";
-          visible.checked = layer.visible;
-          visible.setAttribute("aria-label", `Show ${layer.label}`);
-          visible.addEventListener("change", () =>
-            dispatch({
-              type: "set_layer_visibility",
-              id: layer.id,
-              visible: visible.checked,
-            }),
-          );
-          const select = button(
-            "",
-            () => dispatch({ type: "select_layer", id: layer.id }),
-            "layer-select",
-          );
-          select.disabled = !layer.editable;
-          select.textContent = layer.label;
-          row.append(visible, select);
-          return row;
-        }),
-      );
-    }
-    for (const [index, layer] of state.layers.entries()) {
-      const row = container.children[index];
-      row.classList.toggle("selected", layer.selected);
-      row.querySelector("input").checked = layer.visible;
-      row
-        .querySelector("button")
-        .setAttribute("aria-pressed", String(layer.selected));
-    }
-    $("layer-opacity").update(state.layers.find((l) => l.selected).opacity);
+    layerPanel.refresh();
   }
   if (regions & (1 | 4 | 128)) arrange();
   if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();
@@ -655,7 +598,7 @@ function update(regions) {
     for (const command of state.commands)
       for (const node of commands.get(command.id) || []) {
         node.disabled = !command.enabled;
-        node.title = command.label;
+        node.title = command.tooltip;
         node.setAttribute("aria-label", command.label);
         node.setAttribute("aria-pressed", String(command.selected));
         if (node.dataset.icon === "true") {

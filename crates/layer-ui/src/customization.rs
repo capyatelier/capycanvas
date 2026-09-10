@@ -396,7 +396,7 @@ impl ContextMenuItem {
     fn edit(label: impl Into<String>, action: CustomizationAction) -> Self {
         Self::command(label, UiAction::Customize { action })
     }
-    fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
+    pub(crate) fn submenu(label: &str, sections: Vec<Vec<Self>>) -> Self {
         Self {
             label: label.into(),
             selected: None,
@@ -411,6 +411,27 @@ impl ContextMenuItem {
 pub struct ContextMenu {
     pub title: String,
     pub sections: Vec<Vec<ContextMenuItem>>,
+}
+impl ContextMenu {
+    pub(crate) fn with_shortcuts(mut self, settings: &Settings, platform: Platform) -> Self {
+        fn visit(sections: &mut [Vec<ContextMenuItem>], settings: &Settings, platform: Platform) {
+            for item in sections.iter_mut().flatten() {
+                if let Some(action) = &item.action {
+                    let shortcut = settings.action_shortcut(action, platform);
+                    if !shortcut.is_empty() && item.hint != shortcut {
+                        item.hint = if item.hint.is_empty() {
+                            shortcut
+                        } else {
+                            format!("{} · {shortcut}", item.hint)
+                        };
+                    }
+                }
+                visit(&mut item.sections, settings, platform);
+            }
+        }
+        visit(&mut self.sections, settings, platform);
+        self
+    }
 }
 impl DockLayout {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
@@ -680,6 +701,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
             match command {
                 CommandId::Brush => "Paint with the current brush",
                 CommandId::Eraser => "Erase paint from the active layer",
+                CommandId::Lasso => "Draw a freehand selection",
+                CommandId::Move => "Move the editing layer or its mask",
                 CommandId::Undo => "Undo the last change",
                 CommandId::Redo => "Restore the last undone change",
                 CommandId::UndoWorkspace => "Undo the last workspace change",
@@ -797,6 +820,7 @@ pub struct TileView {
     #[serde(flatten)]
     pub choice: ToolChoice,
     pub enabled: bool,
+    pub tooltip: String,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PanelView {
@@ -847,6 +871,11 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
             };
             TileView {
                 id: tile.id,
+                tooltip: state.settings.action_tooltip(
+                    &choice.label,
+                    &tile.control.action(),
+                    state.platform,
+                ),
                 choice,
                 enabled,
             }
@@ -861,7 +890,12 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         toolbar_options: if panel.kind() == PanelKind::Tiles {
             let mut options = state.workspace.layout.toolbar_options(panel)?;
             options[0].remove(0); // The configuration column is already open.
-            options
+            ContextMenu {
+                title: String::new(),
+                sections: options,
+            }
+            .with_shortcuts(&state.settings, state.platform)
+            .sections
         } else {
             Vec::new()
         },
@@ -1497,7 +1531,7 @@ mod tests {
         }
         assert!(layout.panel(custom).unwrap().tiles().is_empty());
         assert_eq!(
-            &layout.panel(Panel::Toolbar).unwrap().tiles()[6..]
+            &layout.panel(Panel::Toolbar).unwrap().tiles()[TOOLBAR_CONTROLS.len()..]
                 .iter()
                 .map(|t| t.id)
                 .collect::<Vec<_>>(),

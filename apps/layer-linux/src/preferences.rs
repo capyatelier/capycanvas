@@ -235,27 +235,22 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
     }
     if let Some(text) = editor {
         let editing = gtk::gio::Menu::new();
-        for (name, label, command, enabled) in [
-            (
-                "cut",
-                "Cut",
-                "clipboard.cut",
-                text.selection_bounds().is_some() && text.is_editable(),
-            ),
-            (
-                "copy",
-                "Copy",
-                "clipboard.copy",
-                text.selection_bounds().is_some(),
-            ),
-            ("paste", "Paste", "clipboard.paste", text.is_editable()),
-            (
-                "select-all",
-                "Select All",
-                "selection.select-all",
-                !text.text().is_empty(),
-            ),
-        ] {
+        for item in layer_ui::text_edit_menu(layer_ui::Platform::Gtk) {
+            use layer_ui::TextEditAction as E;
+            let (name, command, enabled) = match item.action {
+                E::Cut => (
+                    "cut",
+                    "clipboard.cut",
+                    text.selection_bounds().is_some() && text.is_editable(),
+                ),
+                E::Copy => ("copy", "clipboard.copy", text.selection_bounds().is_some()),
+                E::Paste => ("paste", "clipboard.paste", text.is_editable()),
+                E::SelectAll => (
+                    "select-all",
+                    "selection.select-all",
+                    !text.text().is_empty(),
+                ),
+            };
             let action = gtk::gio::SimpleAction::new(name, None);
             action.set_enabled(enabled);
             action.connect_activate(glib::clone!(
@@ -266,7 +261,12 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
                 }
             ));
             actions.add_action(&action);
-            editing.append(Some(label), Some(&format!("field.{name}")));
+            let entry = gtk::gio::MenuItem::new(Some(item.label), Some(&format!("field.{name}")));
+            entry.set_attribute_value(
+                "accel",
+                Some(&crate::workspace::native_accelerator(&item.key).to_variant()),
+            );
+            editing.append_item(&entry);
         }
         root.append_section(None, &editing);
     }
@@ -288,7 +288,7 @@ fn show_reset_menu(w: &Rc<Workspace>, widget: &gtk::Widget, id: PreferenceId, x:
         .xalign(0.0)
         .hexpand(true)
         .build();
-    let value = gtk::Label::new(Some(&reset.value));
+    let value = gtk::Label::new(Some(&reset.hint));
     value.add_css_class("dim-label");
     labels.append(&title);
     labels.append(&value);

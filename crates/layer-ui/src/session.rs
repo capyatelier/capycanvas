@@ -6,7 +6,7 @@ use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurv
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
-pub use art_layers::{LayerAction, LayerCanvasTool, LayersView};
+pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView};
 
 const ZEN_CORNER_GUARD: f32 = 300.0;
 
@@ -15,7 +15,6 @@ struct WorkspaceDrag {
     original: DockItem,
     item: DockItem,
     panel: Panel,
-    hide_tab: bool,
     source: Bounds,
     floating: Option<u32>,
     offset: [f32; 2],
@@ -134,10 +133,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
-        match target {
+        Ok(match target {
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
             _ => self.state.workspace.layout.context_menu(target),
-        }
+        }?
+        .with_shortcuts(&self.state.settings, self.state.platform))
     }
     pub fn workspace_menu(&self) -> ContextMenu {
         let command = |id: CommandId| {
@@ -168,6 +168,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ],
             ],
         }
+        .with_shortcuts(&self.state.settings, self.state.platform)
     }
     pub fn toolbar_prompt(&self) -> Option<crate::customization::ToolbarPromptView> {
         self.state.customization.toolbar_prompt.as_ref().map(|p| {
@@ -255,7 +256,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             &dabs,
             &self.state.camera,
             scale,
-            self.state.settings.cursor,
+            if self.layer_interaction.tool == LayerCanvasTool::Paint {
+                self.state.settings.cursor
+            } else {
+                CursorMode::Cross
+            },
             view,
             svg,
         );
@@ -642,15 +647,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     DockItem::Panel { panel } => panel,
                     _ => source.active,
                 },
-                hide_tab: self
-                    .state
-                    .workspace
-                    .layout
-                    .panel(match item {
-                        DockItem::Panel { panel } => panel,
-                        _ => source.active,
-                    })?
-                    .hide_tab,
                 source: source.bounds,
                 floating: (whole && source.floating).then_some(source.id),
                 offset: [position[0] - source.bounds.x, position[1] - source.bounds.y],
@@ -716,14 +712,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             if drag.moved
                 && let Some(hint) = self.drop_hint(viewport, position, tabs, item, None)
             {
-                let merging = matches!(hint.target, DockTarget::Tab { .. });
                 self.state
                     .workspace
                     .layout
                     .move_item(viewport, drag.item, hint.target)?;
-                if !merging {
-                    self.state.workspace.layout.panel_mut(drag.panel)?.hide_tab = drag.hide_tab;
-                }
             }
             self.workspace_drag = None;
             self.workspace_history.finish(&self.state.workspace);
@@ -853,13 +845,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             icon: self.command_icon(id),
             id,
             label: id.label(),
+            tooltip: self.state.settings.action_tooltip(
+                id.label(),
+                &UiAction::Invoke { command: id },
+                self.state.platform,
+            ),
             enabled,
             selected,
             bindings: self.state.settings.keys(&id.shortcut_id()),
             shortcut: self
                 .state
                 .settings
-                .shortcut_label(&id.shortcut_id(), self.state.platform),
+                .action_shortcut(&UiAction::Invoke { command: id }, self.state.platform),
         }
     }
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
@@ -907,10 +904,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::FitCanvas => idle,
             _ => true,
         };
-        let selected = matches!(
-            (id, self.state.brush.tool),
-            (CommandId::Brush, Tool::Brush) | (CommandId::Eraser, Tool::Eraser)
-        ) || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+        let selected = (self.layer_interaction.tool == LayerCanvasTool::Paint
+            && matches!(
+                (id, self.state.brush.tool),
+                (CommandId::Brush, Tool::Brush) | (CommandId::Eraser, Tool::Eraser)
+            ))
+            || matches!(
+                (id, self.layer_interaction.tool),
+                (CommandId::Lasso, LayerCanvasTool::Select)
+                    | (CommandId::Move, LayerCanvasTool::Move)
+            )
+            || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::ToggleTheme
                 && self.state.settings.theme.unwrap_or(self.system_theme) == Theme::Dark);
         (enabled, selected)
@@ -1144,17 +1148,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SelectLayer { id } => {
                 self.require_idle()?;
-                let layer = self
-                    .engine
-                    .document()
-                    .layer(LayerId(id))
-                    .ok_or("Unknown layer")?;
-                if layer.kind == LayerKind::Background {
-                    return Err("The canvas background is not a paint layer".into());
-                }
-                if self.engine.document().active_layer != LayerId(id) {
-                    self.engine.set_active_layer(LayerId(id)).map_err(error)?;
-                }
+                self.layer_action(LayerAction::Select { id, mask: false })?;
                 (0, true)
             }
             UiAction::SetLayerVisibility { id, visible } => {
@@ -1170,6 +1164,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = id
                     .map(LayerId)
                     .unwrap_or(self.engine.document().active_layer);
+                if self.engine.document().is_locked(id) {
+                    return Err("This layer is locked".into());
+                }
                 self.engine.set_layer_opacity(id, opacity).map_err(error)?;
                 (0, true)
             }
@@ -1619,6 +1616,16 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Lasso | CommandId::Move => {
+                self.layer_action(LayerAction::Tool {
+                    tool: if command == CommandId::Lasso {
+                        LayerCanvasTool::Select
+                    } else {
+                        LayerCanvasTool::Move
+                    },
+                })?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
             CommandId::Brush | CommandId::Eraser => {
                 self.layer_interaction.tool = LayerCanvasTool::Paint;
                 self.state.layer_tools.tool = LayerCanvasTool::Paint;
@@ -1850,11 +1857,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Static presentation data changes with the applied keymap/platform,
         // not every pen event or frame's command-availability update.
         for command in &mut self.state.commands {
+            command.tooltip = self.state.settings.action_tooltip(
+                command.label,
+                &UiAction::Invoke {
+                    command: command.id,
+                },
+                self.state.platform,
+            );
             command.bindings = self.state.settings.keys(&command.id.shortcut_id());
-            command.shortcut = self
-                .state
-                .settings
-                .shortcut_label(&command.id.shortcut_id(), self.state.platform);
+            command.shortcut = self.state.settings.action_shortcut(
+                &UiAction::Invoke {
+                    command: command.id,
+                },
+                self.state.platform,
+            );
         }
     }
     fn refresh_document(&mut self) {
@@ -1872,6 +1888,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             visible: l.visible,
             opacity: l.opacity,
             selected: self.layer_interaction.selected.contains(&l.id),
+            selection_icon: if self.layer_interaction.selected.contains(&l.id)
+                && (self.layer_interaction.selected.len() > 1 || l.id != doc.active_layer)
+            {
+                "layer-selection-checked-symbolic"
+            } else if doc.reference_layers.contains(&l.id) {
+                "layer-reference-symbolic"
+            } else if l.id == doc.active_layer && (l.kind == LayerKind::Paint || doc.active_mask) {
+                "layer-brush-symbolic"
+            } else {
+                "layer-selection-empty-symbolic"
+            },
             editing: l.id == doc.active_layer,
             mask_selected: l.id == doc.active_layer && doc.active_mask,
             has_mask: l.mask.is_some(),
@@ -1883,6 +1910,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             clipped: l.properties.clipped,
             reference: doc.reference_layers.contains(&l.id),
             group: l.kind == LayerKind::Group,
+            can_drop_below: l.kind != LayerKind::Background,
             depth: self.layer_interaction.depth(doc, l),
             collapsed: self.layer_interaction.collapsed.contains(&l.id),
             blend: l.properties.blend as u32,
@@ -1892,7 +1920,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .last()
                 .map_or(0, |id| id.0)
                 .wrapping_mul(4099)
-                .wrapping_add(l.operations.len() as u64),
+                .wrapping_add(l.operations.len() as u64 * 2)
+                .wrapping_add(u64::from(l.asset.is_some()))
+                .wrapping_add(if l.kind == LayerKind::Background {
+                    u64::from(l.opacity.to_bits())
+                } else {
+                    0
+                }),
             mask_revision: l.mask.as_ref().map_or(0, |m| {
                 m.id.0
                     .wrapping_mul(65537)
@@ -1902,6 +1936,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_id: l.mask.as_ref().map(|m| m.id.0),
         };
         self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
+        self.state.layer_tools.controls = doc
+            .layer(doc.active_layer)
+            .map(|l| art_layers::LayerControls::for_layer(doc, l))
+            .unwrap_or_default();
         self.state.layers = doc
             .ordered_layers()
             .into_iter()
@@ -1915,7 +1953,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.references_selected = !references.is_empty()
             && references
                 .iter()
-                .all(|id| doc.reference_layers.contains(id));
+                .any(|id| doc.reference_layers.contains(id));
+        self.state.layer_tools.reference_action_label = if self.reference_action_removes() {
+            "Stop using this layer as a reference"
+        } else {
+            "Use selected layers as references"
+        };
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
             title: "Untitled".into(),
@@ -2032,6 +2075,24 @@ mod tests {
         send(&mut s, LayerAction::ReferenceSelection);
         assert_eq!(s.engine.document().reference_layers.len(), 2);
         assert!(s.state.layer_tools.references_selected);
+        assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
+        assert_eq!(
+            s.state
+                .layer_tools
+                .editing_layer
+                .as_ref()
+                .unwrap()
+                .selection_icon,
+            "layer-reference-symbolic"
+        );
+        send(&mut s, LayerAction::ToggleSelection { id: 1 });
+        assert!(
+            s.state
+                .layers
+                .iter()
+                .filter(|l| l.selected)
+                .all(|l| l.selection_icon == "layer-selection-checked-symbolic")
+        );
         // The editing target can be unselected and remains editable.
         send(&mut s, LayerAction::ToggleSelection { id: second.0 });
         assert!(
@@ -2040,10 +2101,39 @@ mod tests {
                 .iter()
                 .any(|l| l.editing && !l.selected && l.mask_selected)
         );
+        assert_eq!(
+            s.state
+                .layers
+                .iter()
+                .find(|l| l.id == 1)
+                .unwrap()
+                .selection_icon,
+            "layer-selection-checked-symbolic"
+        );
+        assert_eq!(
+            s.state
+                .layers
+                .iter()
+                .find(|l| l.editing)
+                .unwrap()
+                .selection_icon,
+            "layer-reference-symbolic"
+        );
+        // A checked reference is an add operation, never a surprising removal.
+        send(&mut s, LayerAction::ReferenceSelection);
+        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
+        assert_eq!(s.engine.document().active_layer, second);
+        assert!(s.engine.document().active_mask);
+        // Only the sole editing target toggles reference use off.
+        assert_eq!(
+            s.state.layer_tools.reference_action_label,
+            "Stop using this layer as a reference"
+        );
         send(&mut s, LayerAction::ReferenceSelection);
         assert_eq!(
             s.engine.document().reference_layers,
-            std::collections::BTreeSet::from([second])
+            std::collections::BTreeSet::from([LayerId(1)])
         );
         s.engine.undo().unwrap();
         assert_eq!(s.engine.document().reference_layers.len(), 2);
@@ -2054,6 +2144,199 @@ mod tests {
         send(&mut s, LayerAction::Select { id: 1, mask: false });
         assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
         assert!(s.state.layers.iter().any(|l| l.id == 1 && l.editing));
+        assert_eq!(
+            s.state
+                .layers
+                .iter()
+                .find(|l| l.id == 1)
+                .unwrap()
+                .selection_icon,
+            "layer-reference-symbolic"
+        );
+    }
+
+    #[test]
+    fn canvas_tools_are_shared_toolbar_commands() {
+        let mut s = session();
+        for (command, tool) in [
+            (CommandId::Lasso, LayerCanvasTool::Select),
+            (CommandId::Move, LayerCanvasTool::Move),
+            (CommandId::Brush, LayerCanvasTool::Paint),
+        ] {
+            s.dispatch(UiAction::Invoke { command }).unwrap();
+            assert_eq!(s.state.layer_tools.tool, tool);
+            for candidate in [
+                CommandId::Lasso,
+                CommandId::Move,
+                CommandId::Brush,
+                CommandId::Eraser,
+            ] {
+                assert_eq!(s.command(candidate).selected, candidate == command);
+            }
+        }
+    }
+
+    #[test]
+    fn layer_context_preserves_checks_and_bulk_duplicate_keeps_clipping_stacks() {
+        let mut s = session();
+        let send =
+            |s: &mut UiSession<Recorder>, action| s.dispatch(UiAction::Layer { action }).unwrap();
+        send(
+            &mut s,
+            LayerAction::New {
+                group: false,
+                clipped: true,
+            },
+        );
+        let shade = s.engine.document().active_layer;
+        send(&mut s, LayerAction::ToggleSelection { id: 1 });
+        send(
+            &mut s,
+            LayerAction::Context {
+                id: shade.0,
+                mask: false,
+            },
+        );
+        assert_eq!(s.layer_interaction.selected.len(), 2);
+        send(&mut s, LayerAction::DuplicateSelected);
+        let doc = s.engine.document();
+        let copies: Vec<_> = doc.ordered_layers().into_iter().take(2).collect();
+        assert!(copies[0].properties.clipped);
+        assert_eq!(doc.clipping_base(copies[0].id), Some(copies[1].id));
+        assert_eq!(doc.clipping_base(shade), Some(LayerId(1)));
+        assert_eq!(s.layer_interaction.selected.len(), 2);
+        send(&mut s, LayerAction::DeleteSelected);
+        assert_eq!(s.engine.document().layers.len(), 3);
+        s.engine.undo().unwrap();
+        assert_eq!(s.engine.document().layers.len(), 5);
+    }
+
+    #[test]
+    fn paper_can_be_selected_but_never_painted_or_moved_above_artwork() {
+        let mut s = session();
+        s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+        assert!(
+            s.state
+                .layers
+                .iter()
+                .any(|l| l.id == 2 && l.selected && l.editing)
+        );
+        assert!(s.state.layer_tools.controls.opacity);
+        assert!(!s.state.layer_tools.controls.mask);
+        assert!(!s.state.layer_tools.controls.blend);
+        assert!(!s.state.layer_tools.controls.move_layer);
+        for (seq, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
+            s.pen(event(&s, seq, phase, 1.)).unwrap();
+        }
+        s.frame(30_000_000, 38_000_000).unwrap();
+        assert_eq!(s.engine.document().strokes().count(), 0);
+        assert!(s.state.host_error.is_none());
+        s.dispatch(UiAction::SetLayerOpacity {
+            id: None,
+            opacity: 0.5,
+        })
+        .unwrap();
+        assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().opacity, 0.5);
+        assert!(
+            s.engine
+                .apply_edit(layer_core::Edit::MoveLayer {
+                    id: LayerId(2),
+                    to: 0
+                })
+                .is_err()
+        );
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        })
+        .unwrap();
+        let id = s.engine.document().active_layer.0;
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Drop {
+                id,
+                target: 2,
+                fraction: 1.,
+            },
+        })
+        .unwrap();
+        assert_eq!(s.state.layers.last().unwrap().id, 2);
+        assert_eq!(s.state.layers[s.state.layers.len() - 2].id, id);
+        s.engine
+            .apply_edit(layer_core::Edit::InsertLayer {
+                index: usize::MAX,
+                layer: layer_core::Layer::paint(LayerId(99), "Bottom"),
+            })
+            .unwrap();
+        assert_eq!(
+            s.engine.document().ordered_layers().last().unwrap().id,
+            LayerId(2)
+        );
+    }
+
+    #[test]
+    fn copied_masks_are_independent_and_keep_their_canvas_position() {
+        let mut s = session();
+        let send =
+            |s: &mut UiSession<Recorder>, action| s.dispatch(UiAction::Layer { action }).unwrap();
+        send(
+            &mut s,
+            LayerAction::AddMask {
+                id: 1,
+                replace: false,
+            },
+        );
+        for (seq, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
+            s.pen(event(&s, seq, phase, 1.)).unwrap();
+        }
+        s.frame(30_000_000, 38_000_000).unwrap();
+        let mut source = s.engine.document().layer(LayerId(1)).unwrap().clone();
+        source.mask.as_mut().unwrap().offset = Point { x: 11., y: 17. };
+        s.engine
+            .apply_edit(layer_core::Edit::ReplaceLayer(Box::new(source.clone())))
+            .unwrap();
+        send(&mut s, LayerAction::Lock { id: 1, value: true });
+        send(&mut s, LayerAction::CopyMask { id: 1 });
+        send(
+            &mut s,
+            LayerAction::New {
+                group: true,
+                clipped: false,
+            },
+        );
+        let parent = s.engine.document().active_layer;
+        let mut group = s.engine.document().layer(parent).unwrap().clone();
+        group.properties.offset = Point { x: 30., y: 50. };
+        s.engine
+            .apply_edit(layer_core::Edit::ReplaceLayer(Box::new(group)))
+            .unwrap();
+        send(
+            &mut s,
+            LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        );
+        let target = s.engine.document().active_layer;
+        send(&mut s, LayerAction::PasteMask { id: target.0 });
+        let doc = s.engine.document();
+        let original = doc.layer(LayerId(1)).unwrap().mask.as_ref().unwrap();
+        let copy = doc.layer(target).unwrap().mask.as_ref().unwrap();
+        assert_ne!(original.id, copy.id);
+        assert_eq!(doc.layer_offset(original.id), doc.layer_offset(copy.id));
+        assert_eq!(original.strokes.len(), 1);
+        assert_ne!(original.strokes[0], copy.strokes[0]);
+        assert!(std::sync::Arc::ptr_eq(
+            &doc.stroke(original.strokes[0]).unwrap().points,
+            &doc.stroke(copy.strokes[0]).unwrap().points
+        ));
+        s.engine.undo().unwrap();
+        assert!(s.engine.document().layer(target).unwrap().mask.is_none());
+        assert_eq!(
+            s.engine.document().layer(LayerId(1)).unwrap().mask,
+            source.mask
+        );
     }
 
     #[test]
@@ -3841,7 +4124,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_tabs_preserve_style_and_restore_docking_choice_through_tear_off() {
+    fn lone_panels_hide_tabs_when_floated_and_show_when_docked() {
         let viewport = [1600.0, 1200.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             for style in TabStyle::ALL {
@@ -3982,7 +4265,7 @@ mod tests {
                             config.hide_tab,
                             match destination {
                                 "float" => true,
-                                "edge" => hidden,
+                                "edge" => false,
                                 _ => false,
                             }
                         );
@@ -5380,36 +5663,36 @@ mod tests {
             .to_vec();
         app.dispatch(UiAction::ActivateTile {
             panel: Panel::Toolbar,
-            tile: tiles[6].id,
+            tile: tiles[TOOLBAR_CONTROLS.len()].id,
         })
         .unwrap();
         assert_eq!(app.state.brush.diameter, 64.0);
         assert!(
-            app.panel_view(Panel::Toolbar).unwrap().tiles[6]
+            app.panel_view(Panel::Toolbar).unwrap().tiles[TOOLBAR_CONTROLS.len()]
                 .choice
                 .selected
         );
         app.dispatch(UiAction::ActivateTile {
             panel: Panel::Toolbar,
-            tile: tiles[7].id,
+            tile: tiles[TOOLBAR_CONTROLS.len() + 1].id,
         })
         .unwrap();
         assert!(
-            app.panel_view(Panel::Toolbar).unwrap().tiles[7]
+            app.panel_view(Panel::Toolbar).unwrap().tiles[TOOLBAR_CONTROLS.len() + 1]
                 .choice
                 .selected
         );
         app.dispatch(UiAction::Customize {
             action: CustomizationAction::RemoveTool {
                 panel: Panel::Toolbar,
-                tile: tiles[6].id,
+                tile: tiles[TOOLBAR_CONTROLS.len()].id,
             },
         })
         .unwrap();
         assert!(
             app.dispatch(UiAction::ActivateTile {
                 panel: Panel::Toolbar,
-                tile: tiles[6].id
+                tile: tiles[TOOLBAR_CONTROLS.len()].id
             })
             .is_err()
         );

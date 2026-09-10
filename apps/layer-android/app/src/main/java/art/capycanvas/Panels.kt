@@ -48,7 +48,8 @@ import kotlin.math.roundToInt
                         Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
                     } else null
                 val colors = LocalPalette.current
-                Row(modifier.clip(RoundedCornerShape(6.dp)).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
+                HoverTip(tile.getString("tooltip"), modifier) {
+                Row(Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(if (tile.optBoolean("selected")) colors.active else Color.Transparent)
                     .combinedClickable(enabled = tile.getBoolean("enabled"),
                         onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
@@ -59,6 +60,7 @@ import kotlin.math.roundToInt
                     }
                     if (style == "labeled") Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp),
                         fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
                 }
             }
         }
@@ -77,6 +79,10 @@ import kotlin.math.roundToInt
 @Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, onHeight: (Float) -> Unit = {}) {
     val layers = panel.getString("id") == "layers"
     val density = LocalDensity.current.density
+    if (layers) {
+        LayerPanel(host, state, modifier)
+        return
+    }
     Box(modifier) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(if (layers) 12.dp else 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -91,7 +97,7 @@ import kotlin.math.roundToInt
                         host.dispatch(obj("type" to "set_brush_opacity", "value" to it))
                     }
                     "brush_color" -> ColorControls(host, state.getJSONObject("brush").array("color"))
-                    "layers" -> LayerList(host, state)
+                    "layers" -> LayerPanel(host, state, Modifier.heightIn(min = 240.dp, max = 480.dp))
                     "layer_actions" -> Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         host.catalog.array("layer_commands").values().forEach { id ->
                             state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
@@ -123,10 +129,12 @@ import kotlin.math.roundToInt
             val swatch = remember(id, colors.dark) {
                 context.assets.open("$id-${if (colors.dark) "dark" else "light"}.png").use { BitmapFactory.decodeStream(it).asImageBitmap() }
             }
+            ActionTip(host, choice.getString("label"), obj("type" to "select_brush", "id" to id), Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(if (brush.getInt("preset") == id) colors.active else Color.Transparent)
                 .clickable { host.dispatch(obj("type" to "select_brush", "id" to id)) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
                 Image(swatch, null, Modifier.fillMaxWidth().height(40.dp).testTag("brush-preview-$id"), contentScale = ContentScale.FillBounds)
                 Text(choice.getString("label"), Modifier.fillMaxWidth(), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
+            }
             }
         }
       }
@@ -141,7 +149,8 @@ import kotlin.math.roundToInt
           Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
            sizes.forEach { size ->
             val value = (size as Number).toFloat()
-            Column(Modifier.weight(1f).padding(3.dp).clip(RoundedCornerShape(6.dp))
+            ActionTip(host, "${value.roundToInt()} px", obj("type" to "set_brush_size", "value" to value), Modifier.weight(1f).testTag("size-preset-${value.roundToInt()}")) {
+            Column(Modifier.fillMaxWidth().padding(3.dp).clip(RoundedCornerShape(6.dp))
                 .background(if (current == value) colors.active else Color.Transparent)
                 .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }.padding(2.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -150,28 +159,10 @@ import kotlin.math.roundToInt
                 }
                 Text(value.roundToInt().toString())
             }
+            }
            }
            repeat(columns - sizes.size) { Spacer(Modifier.weight(1f)) }
           }
-        }
-      }
-    }
-}
-@Composable private fun LayerList(host: CanvasHost, state: JSONObject) {
-    val colors = LocalPalette.current
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      state.array("layers").objects().forEach { layer ->
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            EditorCheck(layer.getBoolean("visible"), "Show ${layer.getString("label")}") {
-                host.dispatch(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to it))
-            }
-            val editable = layer.getBoolean("editable")
-            Box(Modifier.weight(1f).heightIn(min = 33.dp).clip(RoundedCornerShape(6.dp)).alpha(if (editable) 1f else .36f)
-                .background(if (layer.getBoolean("selected")) colors.active else colors.button)
-                .clickable(enabled = editable) { host.dispatch(obj("type" to "select_layer", "id" to layer.getLong("id"))) }
-                .padding(horizontal = 8.dp, vertical = 4.dp), contentAlignment = Alignment.Center) {
-                Text(layer.getString("label"), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-            }
         }
       }
     }

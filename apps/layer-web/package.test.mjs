@@ -65,8 +65,9 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
-    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nconst assetPaths = {};',
+    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nconst assetPaths = {};',
     "numeric.js": "export function createNumberField() {}",
+    "layers.js": "export function createLayerPanel() {}",
     "preferences.js": "export function createPreferences() {}",
     "gpu.js": "export function showGpuNotice() {}",
     "customization.js": "export function createCustomization() {}",
@@ -92,7 +93,7 @@ test("every runtime filename hashes its final bytes and all dependency reference
     assert.equal(name, `${original.slice(0, -extension.length)}.${hash}${extension}`);
   }
   const app = readFileSync(join(dir, names["app.js"]), "utf8");
-  for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "pkg/layer_web.js"])
+  for (const path of ["preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "pkg/layer_web.js"])
     assert.ok(app.includes(`from "./${names[path]}"`));
   for (const path of ["icons/pen.svg", "brush-previews/1-dark.png"])
     assert.ok(app.includes(JSON.stringify(names[path])));

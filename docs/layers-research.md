@@ -2,6 +2,8 @@
 
 Research date: 2026-09-09. Status: research, not an implementation specification.
 The recommendation is in [Layers initial design](layers-initial-design.md).
+The subsequent [layer context-menu audit](layers-context-menu-audit.md) inventories
+command families, implemented additions and remaining engine gaps.
 
 ## Scope and evidence
 

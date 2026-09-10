@@ -258,6 +258,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.apply_edit(Edit::SetActiveLayer { id })
     }
 
+    /// Readbacks must follow the frame that applies document edits, not capture
+    /// old GPU pixels under the new document revision.
+    pub fn has_pending_document_edits(&self) -> bool {
+        self.rebuild_all || self.composite_all
+    }
+
     pub fn set_layer_opacity(&mut self, id: LayerId, opacity: f32) -> Result<(), DocumentError> {
         self.apply_edit(Edit::SetLayerOpacity { id, opacity })
     }
@@ -334,6 +340,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             Edit::ReplaceLayer(layer) => self.document().layer(layer.id).is_some_and(|old| {
                 old.strokes != layer.strokes
                     || old.operations != layer.operations
+                    || old.asset != layer.asset
                     || old
                         .mask
                         .as_ref()

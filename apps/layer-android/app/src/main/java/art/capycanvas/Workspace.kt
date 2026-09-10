@@ -269,7 +269,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val target = remember { obj("kind" to "zen_mode") }
     val anchor = dock.anchorKey(target)
     DisposableEffect(dock) { onDispose { dock.anchors.remove(anchor) } }
-    IconTile(command.getString("icon"), command.getString("label"), command.getBoolean("selected") && !hidden,
+    IconTile(command.getString("icon"), command.getString("tooltip"), command.getBoolean("selected") && !hidden,
         modifier = Modifier.offset(6.dp, 6.dp).zIndex(1000f).testTag("zen-button")
             .background(colors.surround, RoundedCornerShape(6.dp))
             .onGloballyPositioned { dock.anchors[anchor] = it.boundsInRoot().translate(-dock.origin) }
@@ -328,7 +328,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
         }
         Spacer(Modifier.weight(1f))
-        IconTile("settings", "Settings") { host.invoke("settings") }
+        IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")) { host.invoke("settings") }
       }
     }
 }

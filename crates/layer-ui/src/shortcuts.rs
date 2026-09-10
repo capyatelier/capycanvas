@@ -4,6 +4,43 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 pub(crate) const MAX_SHORTCUTS: usize = 4;
 
+/// Native text editing is not the canvas keymap. Hosts execute these through
+/// their text editor; shared copy and standard shortcut hints live here.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextEditAction {
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct TextEditMenuItem {
+    pub action: TextEditAction,
+    pub label: &'static str,
+    pub key: KeyChord,
+    pub shortcut: String,
+}
+pub fn text_edit_menu(platform: Platform) -> Vec<TextEditMenuItem> {
+    [
+        (TextEditAction::Cut, "Cut", "x"),
+        (TextEditAction::Copy, "Copy", "c"),
+        (TextEditAction::Paste, "Paste", "v"),
+        (TextEditAction::SelectAll, "Select All", "a"),
+    ]
+    .into_iter()
+    .map(|(action, label, letter)| {
+        let key = key(letter, true, false);
+        TextEditMenuItem {
+            action,
+            label,
+            shortcut: key.label(platform),
+            key,
+        }
+    })
+    .collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyChord {
     pub key: String,
@@ -260,6 +297,73 @@ pub(crate) fn definitions(
     rows
 }
 impl Settings {
+    /// Resolve action identity, not translated labels or widget names. Custom
+    /// actions work in contextual menus too, including parameterized actions.
+    pub fn action_shortcut(&self, action: &UiAction, platform: Platform) -> String {
+        fn canonical(action: &UiAction) -> UiAction {
+            use LayerAction as L;
+            match action {
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Select,
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::Lasso,
+                },
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Move,
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::Move,
+                },
+                UiAction::Layer {
+                    action:
+                        L::New {
+                            group: false,
+                            clipped: false,
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::AddLayer,
+                },
+                _ => action.clone(),
+            }
+        }
+        let action = canonical(action);
+        let builtin = match &action {
+            UiAction::Invoke { command } => Some(command.shortcut_id()),
+            UiAction::SelectBrush { id } => Some(format!("brush.{id}")),
+            UiAction::SetBrushSize { value } => Some(format!("size.{value}")),
+            _ => None,
+        };
+        let mut labels = Vec::new();
+        if let Some(id) = builtin {
+            let label = self.shortcut_label(&id, platform);
+            if !label.is_empty() {
+                labels.push(label);
+            }
+        }
+        for definition in &self.custom_actions {
+            if matches!(&definition.action, ShortcutAction::Action { action: a } if canonical(a) == action)
+            {
+                let label = self.shortcut_label(&definition.id, platform);
+                if !label.is_empty() && !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+        }
+        labels.join(" / ")
+    }
+    pub fn action_tooltip(&self, label: &str, action: &UiAction, platform: Platform) -> String {
+        let shortcut = self.action_shortcut(action, platform);
+        if shortcut.is_empty() {
+            label.into()
+        } else {
+            format!("{label} ({shortcut})")
+        }
+    }
     pub(crate) fn keys(&self, id: &str) -> Vec<KeyChord> {
         self.shortcuts
             .get(id)
@@ -341,5 +445,111 @@ impl Settings {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tooltips_follow_rebindings_and_platform_without_matching_copy() {
+        let mut settings = Settings::default();
+        let zen = UiAction::Invoke {
+            command: CommandId::ZenMode,
+        };
+        assert_eq!(
+            settings.action_tooltip("Zen mode", &zen, Platform::Gtk),
+            "Zen mode (Tab)"
+        );
+        settings.shortcuts.insert(
+            CommandId::ZenMode.shortcut_id(),
+            vec![key("j", true, false), key("k", true, true)],
+        );
+        assert_eq!(
+            settings.action_tooltip("Translated label", &zen, Platform::Web),
+            "Translated label (Ctrl+J / Ctrl+Shift+K)"
+        );
+        assert_eq!(
+            settings.action_shortcut(&zen, Platform::Mac),
+            "⌘+J / ⌘+Shift+K"
+        );
+        settings
+            .shortcuts
+            .insert(CommandId::ZenMode.shortcut_id(), Vec::new());
+        assert_eq!(
+            settings.action_tooltip("Zen mode", &zen, Platform::Gtk),
+            "Zen mode"
+        );
+        let new = UiAction::Layer {
+            action: LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        };
+        settings.shortcuts.insert(
+            CommandId::AddLayer.shortcut_id(),
+            vec![key("n", true, true)],
+        );
+        assert_eq!(
+            settings.action_shortcut(&new, Platform::Gtk),
+            "Ctrl+Shift+N"
+        );
+    }
+
+    #[test]
+    fn nested_context_menus_and_reset_preserve_hints_and_custom_action_keys() {
+        let mut settings = Settings::default();
+        let action = UiAction::Preferences {
+            action: PreferenceAction::Reset {
+                id: PreferenceId::ZenIcon,
+            },
+        };
+        settings.custom_actions.push(ShortcutDefinition {
+            id: "custom.reset-icon".into(),
+            label: "Restore icon".into(),
+            action: ShortcutAction::Action {
+                action: Box::new(action.clone()),
+            },
+            repeat: false,
+        });
+        settings
+            .shortcuts
+            .insert("custom.reset-icon".into(), vec![key("i", true, true)]);
+        let item = ContextMenuItem {
+            label: "Translated reset".into(),
+            hint: "Default icon".into(),
+            selected: Some(false),
+            enabled: true,
+            action: Some(action),
+            sections: Vec::new(),
+        };
+        let menu = ContextMenu {
+            title: "Context".into(),
+            sections: vec![vec![ContextMenuItem {
+                label: "Submenu".into(),
+                hint: String::new(),
+                selected: None,
+                enabled: true,
+                action: None,
+                sections: vec![vec![item]],
+            }]],
+        }
+        .with_shortcuts(&settings, Platform::Android);
+        assert_eq!(
+            menu.sections[0][0].sections[0][0].hint,
+            "Default icon · Ctrl+Shift+I"
+        );
+        let reset = settings
+            .pages(Platform::Gtk)
+            .into_iter()
+            .flat_map(|p| p.groups)
+            .flat_map(|g| g.rows)
+            .find(|r| r.id == PreferenceId::ZenIcon)
+            .unwrap()
+            .reset
+            .unwrap();
+        assert_eq!(reset.hint, format!("{} · Ctrl+Shift+I", reset.value));
+        assert!(!reset.enabled);
     }
 }

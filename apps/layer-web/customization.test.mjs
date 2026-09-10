@@ -416,6 +416,9 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   const tabGroup = (await group("layers")).id;
   for (const panel of ["brushes","sizes","toolbar"])
     await send({type:"move_panel",panel,target:{kind:"tab",group:tabGroup,index:null}});
+  // Layers now enforces a six-tile minimum width; use names to exercise
+  // overflow deliberately rather than relying on an illegally narrow group.
+  await customize({type:"set_tab_style",group:tabGroup,style:"name"});
   await wait();
   const wide = (await group("toolbar")).bounds;
   const edgeDivider = await evaluate(`layerApp.app.layout(innerWidth,innerHeight).dividers.find(d=>d.axis==='horizontal'&&Math.abs(d.bounds.x+d.bounds.width-${wide.x})<1)`);

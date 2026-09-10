@@ -203,6 +203,68 @@ class AndroidHostTest {
         }
         return dark
     }
+    @Test fun layersReferencesMasksAndTools() {
+        val presets = listOf(2,4,6,8).map { compose.onNodeWithTag("size-preset-$it").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot() }
+        presets.zipWithNext().forEach { (left,right) ->
+            assertEquals(left.top,right.top,1f)
+            assertTrue("Tooltip wrappers must preserve the four-column grid",left.right<=right.left+1f)
+        }
+        fun layer(action: JSONObject) = action(obj("type" to "layer","action" to action))
+        layer(obj("op" to "rename","id" to 1,"name" to "Linework"))
+        compose.onNodeWithContentDescription("Use selected layers as references").performClick()
+        waitState { it.array("layers").objects().first { l -> l.getLong("id")==1L }.getBoolean("reference") }
+        compose.onNodeWithContentDescription("New layer").performClick()
+        waitState { it.array("layers").length()==3 }
+        val paint=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+        layer(obj("op" to "rename","id" to paint,"name" to "Color wash"))
+        layer(obj("op" to "toggle_selection","id" to 1))
+        compose.onNodeWithContentDescription("Use selected layers as references").performClick()
+        waitState { it.array("layers").objects().count { l -> l.getBoolean("reference") }==2 }
+        assertEquals(1,state().array("layers").objects().count { it.getBoolean("selected") })
+        action(obj("type" to "set_color","rgba" to JSONArray(listOf(.8,.2,.12,1))))
+        layer(obj("op" to "tool","tool" to "lasso_fill"))
+        penStroke(30)
+        compose.onNodeWithContentDescription("Add layer mask").performClick()
+        waitState { it.getJSONObject("layer_tools").getJSONObject("editing_layer").getBoolean("has_mask") }
+        SystemClock.sleep(800)
+        capture("layers-paint-mask-light")
+        action(obj("type" to "set_theme","theme" to "dark"))
+        SystemClock.sleep(300)
+        capture("layers-paint-mask-dark")
+        compose.onNodeWithContentDescription("Layer actions").performClick()
+        compose.onNodeWithText("Delete mask").assertExists()
+        capture("layers-mask-menu-dark")
+        compose.onNodeWithText("Delete mask").performClick()
+        waitState { !it.getJSONObject("layer_tools").getJSONObject("editing_layer").getBoolean("has_mask") }
+        for(command in listOf("lasso","move","brush")) {
+            action(obj("type" to "invoke","command" to command))
+            assertTrue(state().array("commands").objects().first { it.getString("id")==command }.getBoolean("selected"))
+        }
+        compose.onNodeWithText("Paper").performClick()
+        waitState { it.getJSONObject("layer_tools").getJSONObject("editing_layer").getString("label")=="Paper" }
+        assertNull(host.actionError)
+        capture("layers-paper-selected")
+    }
+    @Test fun dockingLoneFloatingPanelShowsTabs() {
+        floatPanel("sizes")
+        val id = group("sizes").getInt("id")
+        assertFalse(group("sizes").getBoolean("tabs_visible"))
+        val workspace = compose.onNodeWithTag("workspace")
+        val root = workspace.fetchSemanticsNode().boundsInRoot
+        val start = compose.onNodeWithTag("group-grip-$id").fetchSemanticsNode().boundsInRoot.center - root.topLeft
+        workspace.performTouchInput { down(start); moveTo(androidx.compose.ui.geometry.Offset(root.width-2f,root.height*.5f),300); up() }
+        compose.waitUntil(10_000) { !group("sizes").getBoolean("floating") }
+        assertTrue(group("sizes").getBoolean("tabs_visible"))
+        compose.onNodeWithTag("tab-sizes").assertIsDisplayed()
+        capture("panel-tab-shown-after-docking")
+        action(obj("type" to "invoke","command" to "undo_workspace"))
+        assertTrue(group("sizes").getBoolean("floating"))
+        assertFalse(group("sizes").getBoolean("tabs_visible"))
+        action(obj("type" to "invoke","command" to "redo_workspace"))
+        assertFalse(group("sizes").getBoolean("floating"))
+        assertTrue(group("sizes").getBoolean("tabs_visible"))
+    }
+
     @Test fun workspaceMenusManageVisibilityNamesAndHistory() {
         workspaceMenu()
         capture("workspace-menu-light")

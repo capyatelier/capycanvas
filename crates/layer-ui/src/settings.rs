@@ -356,6 +356,7 @@ impl PreferenceKind {
 pub struct PreferenceReset {
     pub label: String,
     pub value: String,
+    pub hint: String,
     pub enabled: bool,
 }
 
@@ -408,6 +409,7 @@ pub struct PreferencesState {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PreferencesView {
+    pub text_edit_menu: Vec<crate::shortcuts::TextEditMenuItem>,
     pub pages: Vec<PreferencePage>,
     pub page: SettingsPage,
     /// Bring this row into view after opening or navigating preferences.
@@ -558,9 +560,21 @@ impl Settings {
             let Some(default_value) = default.kind.value() else {
                 continue;
             };
+            let value = default.kind.display_value();
+            let shortcut = self.action_shortcut(
+                &UiAction::Preferences {
+                    action: PreferenceAction::Reset { id: row.id },
+                },
+                platform,
+            );
             row.reset = Some(PreferenceReset {
                 label: "Reset to Default".into(),
-                value: default.kind.display_value(),
+                hint: if shortcut.is_empty() {
+                    value.clone()
+                } else {
+                    format!("{value} · {shortcut}")
+                },
+                value,
                 enabled: row.enabled && row.kind.value().as_ref() != Some(&default_value),
             });
             match (&mut row.kind, default_value) {
@@ -1084,6 +1098,7 @@ impl PreferencesState {
             })
         });
         PreferencesView {
+            text_edit_menu: crate::shortcuts::text_edit_menu(platform),
             empty: !query.is_empty() && search_results.is_empty(),
             pages,
             page: self.page,

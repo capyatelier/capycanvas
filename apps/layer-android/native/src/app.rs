@@ -1,6 +1,7 @@
 use crate::renderer::Renderer;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
+use layer_render::CanvasRenderer;
 use layer_ui::{ContactPhase, PointerButton, PointerKind, UiAction, UiInput, UiSession};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -258,11 +259,22 @@ impl App {
             "hide_floating_panels": self.hide_floating_panels, "keep_zen_button": self.keep_zen_button,
             "error": self.error})
     }
-    pub fn query(&self, query: Value) -> Result<Value, String> {
+    pub fn query(&mut self, query: Value) -> Result<Value, String> {
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case")]
         enum Query {
             Catalog,
+            ActionTooltip {
+                label: String,
+                action: UiAction,
+            },
+            LayerMenu {
+                id: u64,
+                mask: bool,
+            },
+            LayerThumbnails {
+                requests: Vec<(u64, u64)>,
+            },
             Context {
                 target: layer_ui::ContextTarget,
             },
@@ -288,6 +300,41 @@ impl App {
         }
         let result = match serde_json::from_value(query).map_err(|e| e.to_string())? {
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::ActionTooltip { label, action } => {
+                let state = self.session.state();
+                json!(
+                    state
+                        .settings
+                        .action_tooltip(&label, &action, state.platform)
+                )
+            }
+            Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
+            Query::LayerThumbnails { requests } => {
+                let mut accepted = Vec::new();
+                if !self.dirty && !self.session.engine().has_pending_document_edits() {
+                    for (request, target) in requests.into_iter().take(8) {
+                        if self
+                            .session
+                            .renderer_mut()
+                            .request_thumbnail(request, layer_core::LayerId(target))
+                            .is_ok()
+                        {
+                            accepted.push(request);
+                        }
+                    }
+                }
+                let mut images = Vec::new();
+                if let Some(gpu) = &self.session.renderer_mut().0 {
+                    gpu.device()
+                        .poll(wgpu::PollType::Poll)
+                        .map_err(|e| e.to_string())?;
+                }
+                while let Some(image) = self.session.renderer_mut().take_thumbnail() {
+                    let image = image.map_err(|e| e.to_string())?;
+                    images.push((image.request_id, image.width, image.height, image.bytes));
+                }
+                json!({ "accepted": accepted, "images": images })
+            }
             Query::Context { target } => json!(self.session.context_menu(target)?),
             Query::PanelHandleTarget { item } => {
                 json!(

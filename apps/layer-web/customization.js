@@ -68,7 +68,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (container === context && context.matches(":popover-open")) positionPopup(context);
   }
   function showContext(node, point) {
-    const model = app.context_menu(JSON.parse(node.dataset.context));
+    const model = node.layerMenu ? node.layerMenu() : app.context_menu(JSON.parse(node.dataset.context));
     anchor = point;
     renderMenu(context, model, () => context.hidePopover());
     context.showPopover(); positionPopup(context);
@@ -218,7 +218,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         }
         for (const tile of view.tiles) {
           const node = panel.querySelector(`[data-tile="${tile.id}"] > button`);
-          node.disabled = !tile.enabled; node.title = tile.label;
+          node.disabled = !tile.enabled; node.title = tile.tooltip;
           node.setAttribute("aria-label", tile.label); node.setAttribute("aria-pressed", tile.selected);
         }
       } else {
