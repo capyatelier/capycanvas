@@ -214,6 +214,8 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Eraser" => key("e", false, false),
         "command.Lasso" => key("m", false, false),
         "command.Move" => key("o", false, false),
+        "command.Hand" => key("h", false, false),
+        "command.Eyedropper" => key("i", false, false),
         "command.FitCanvas" => key("f", false, false),
         "command.ZoomIn" => key("=", true, false),
         "command.ZoomOut" => key("-", true, false),
@@ -322,6 +324,19 @@ impl Settings {
         fn canonical(action: &UiAction) -> UiAction {
             use LayerAction as L;
             match action {
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Hand,
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::Hand,
+                },
+                UiAction::Layer {
+                    action: L::Tool { tool },
+                } if tool.picks_color() => UiAction::Invoke {
+                    command: CommandId::Eyedropper,
+                },
                 UiAction::Layer {
                     action:
                         L::Tool {

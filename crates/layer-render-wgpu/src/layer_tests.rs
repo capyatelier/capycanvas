@@ -94,6 +94,110 @@ fn left_mask(id: u64) -> LayerMask {
 }
 
 #[test]
+fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
+    use layer_render::{ColorSampleRequest, ColorSampleSource as Source};
+    let mut r = WgpuRasterizer::new().unwrap();
+    let mut layer = Layer::paint(LayerId(1), "paint");
+    layer.opacity = 0.5;
+    layer.mask = Some(left_mask(9));
+    submit(
+        &mut r,
+        &[layer.clone()],
+        &[dab([0.25, 0.5, 1.0, 0.8])],
+        &[batch(1)],
+        true,
+    );
+    let revision = r.composite_revision;
+    let sample = |r: &mut WgpuRasterizer, source, position| {
+        let request = ColorSampleRequest {
+            request_id: 77,
+            source,
+            position,
+        };
+        assert!(r.request_color_sample(request).unwrap());
+        assert!(
+            !r.request_color_sample(request).unwrap(),
+            "bounded single-flight sample"
+        );
+        let start = std::time::Instant::now();
+        loop {
+            r.device.poll(wgpu::PollType::Poll).unwrap();
+            if let Some(result) = r.take_color_sample() {
+                let sample = result.unwrap();
+                assert_eq!(sample.request_id, 77);
+                break sample.rgba;
+            }
+            assert!(start.elapsed().as_secs() < 5);
+            std::thread::yield_now();
+        }
+    };
+    let near = |a: [f32; 4], b: [f32; 4]| {
+        for i in 0..4 {
+            assert!((a[i] - b[i]).abs() < 0.015, "{a:?} vs {b:?}");
+        }
+    };
+    near(
+        sample(&mut r, Source::Composite, [40, 64]),
+        [0.25, 0.5, 1.0, 0.4],
+    );
+    near(sample(&mut r, Source::Composite, [80, 64]), [0.0; 4]);
+    near(
+        sample(&mut r, Source::Layer(LayerId(1)), [80, 64]),
+        [0.25, 0.5, 1.0, 0.8],
+    );
+    // Bounds and empty paint tiles yield no color; never clamp to an edge pixel.
+    near(sample(&mut r, Source::Composite, [500, 64]), [0.0; 4]);
+    near(sample(&mut r, Source::Layer(LayerId(1)), [0, 0]), [0.0; 4]);
+    assert_eq!(
+        r.composite_revision, revision,
+        "sampling never invalidates composition"
+    );
+    // A subsequent edit must be sampled from the current texture, not a cached color.
+    submit(
+        &mut r,
+        &[layer],
+        &[dab([1.0, 0.0, 0.0, 1.0])],
+        &[batch(1)],
+        true,
+    );
+    near(
+        sample(&mut r, Source::Layer(LayerId(1)), [40, 64]),
+        [1.0, 0.0, 0.0, 1.0],
+    );
+    // Raw layers use independently allocated pages, not document-sized textures.
+    let mut dot = dab([0.0, 1.0, 0.0, 1.0]);
+    dot.center = Point { x: 320.0, y: 320.0 };
+    let mut stroke = batch(1);
+    stroke.damage = Rect {
+        min: Point { x: 256.0, y: 256.0 },
+        max: Point { x: 384.0, y: 384.0 },
+    };
+    r.submit(FramePacket {
+        view: view(),
+        document_extent: [384, 384],
+        layers: &[Layer::paint(LayerId(1), "paint")],
+        dabs: &[dot],
+        dab_batches: &[stroke],
+        reset_layers: true,
+        time_seconds: 0.0,
+        composite_all: true,
+    })
+    .unwrap();
+    near(
+        sample(&mut r, Source::Layer(LayerId(1)), [320, 320]),
+        [0.0, 1.0, 0.0, 1.0],
+    );
+    near(
+        sample(&mut r, Source::Composite, [320, 320]),
+        [0.0, 1.0, 0.0, 1.0],
+    );
+    near(
+        sample(&mut r, Source::Layer(LayerId(1)), [64, 64]),
+        [0.0; 4],
+    );
+}
+
+#[test]
 fn navigator_preview_reuses_composition_and_tracks_paint_mask_and_camera() {
     let mut r = WgpuRasterizer::new().unwrap();
     let mut layer = Layer::paint(LayerId(1), "paint");

@@ -200,6 +200,26 @@ pub struct CanvasPreview {
     pub image: Option<ReadbackImage>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorSampleSource {
+    Composite,
+    /// Raw paint color, before layer opacity, masks and clipping.
+    Layer(LayerId),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ColorSampleRequest {
+    pub request_id: u64,
+    pub source: ColorSampleSource,
+    /// Document coordinates for Composite, layer-local coordinates for Layer.
+    pub position: [u32; 2],
+}
+#[derive(Clone, Copy, Debug)]
+pub struct ColorSample {
+    pub request_id: u64,
+    /// Straight linear RGBA. Alpha zero means no paint at the requested point.
+    pub rgba: [f32; 4],
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -248,6 +268,13 @@ pub trait CanvasRenderer {
         Ok(false)
     }
     fn take_canvas_preview(&mut self) -> Option<Result<CanvasPreview, Self::Error>> {
+        None
+    }
+    /// One texel, asynchronous and single-flight. Does not recomposite the scene.
+    fn request_color_sample(&mut self, _request: ColorSampleRequest) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    fn take_color_sample(&mut self) -> Option<Result<ColorSample, Self::Error>> {
         None
     }
     fn request_filter_previews(

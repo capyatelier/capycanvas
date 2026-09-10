@@ -769,6 +769,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Liquify => "Push and twist existing paint",
                 CommandId::Lasso => "Draw a freehand selection",
                 CommandId::Move => "Move the editing layer or its mask",
+                CommandId::Hand => "Drag to move the canvas view",
+                CommandId::Eyedropper => "Pick a color from the canvas",
                 CommandId::Undo => "Undo the last change",
                 CommandId::Redo => "Restore the last undone change",
                 CommandId::UndoWorkspace => "Undo the last workspace change",

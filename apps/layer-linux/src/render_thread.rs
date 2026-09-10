@@ -55,6 +55,7 @@ enum Command {
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
     CanvasPreview(Option<u64>),
+    ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(layer_render::FilterPreviewRequest),
     Frame(Box<Frame>),
     Asset(AssetId, [u32; 3], PixelFormat, Vec<u8>),
@@ -67,6 +68,7 @@ enum Reply {
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
     CanvasPreview(Result<layer_render::CanvasPreview, String>),
+    ColorSample(Result<layer_render::ColorSample, String>),
     FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
     Error(String),
     Readback(ReadbackImage),
@@ -87,6 +89,8 @@ pub struct RenderWorker {
     thumbnails: VecDeque<ReadbackImage>,
     canvas_preview: Option<Result<layer_render::CanvasPreview, String>>,
     canvas_preview_pending: bool,
+    color_sample: Option<Result<layer_render::ColorSample, String>>,
+    color_sample_pending: bool,
     filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
     filter_previews_pending: bool,
     effect_validation_pending: bool,
@@ -159,6 +163,11 @@ impl RenderWorker {
                                 .send(Reply::CanvasPreview(image.map_err(error)))
                                 .map_err(error)?;
                         }
+                        if let Some(color) = worker.renderer.take_color_sample() {
+                            reply
+                                .send(Reply::ColorSample(color.map_err(error)))
+                                .map_err(error)?;
+                        }
                         while let Some(image) = worker.renderer.take_filter_previews() {
                             reply
                                 .send(Reply::FilterPreviews(image.map_err(error)))
@@ -173,6 +182,7 @@ impl RenderWorker {
                             || worker.pending_present
                             || worker.renderer.thumbnails_pending()
                             || worker.renderer.canvas_preview_pending()
+                            || worker.renderer.color_sample_pending()
                             || worker.child.feedback_pending()
                         {
                             receiver.recv_timeout(Duration::from_millis(8))
@@ -251,6 +261,17 @@ impl RenderWorker {
                                         .map_err(error)?;
                                 }
                             }
+                            Command::ColorSample(request) => {
+                                let result = worker.renderer.request_color_sample(request);
+                                if !matches!(result, Ok(true)) {
+                                    reply
+                                        .send(Reply::ColorSample(Err(result
+                                            .err()
+                                            .map(error)
+                                            .unwrap_or_else(|| "Color sampler is busy".into()))))
+                                        .map_err(error)?;
+                                }
+                            }
                             Command::Frame(frame) => {
                                 #[cfg(test)]
                                 timing.begin(frame.queued_ns);
@@ -315,6 +336,8 @@ impl RenderWorker {
             thumbnails: VecDeque::new(),
             canvas_preview: None,
             canvas_preview_pending: false,
+            color_sample: None,
+            color_sample_pending: false,
             filter_previews: VecDeque::new(),
             filter_previews_pending: false,
             effect_validation_pending: false,
@@ -342,6 +365,10 @@ impl RenderWorker {
                 Reply::CanvasPreview(image) => {
                     self.canvas_preview = Some(image);
                     self.canvas_preview_pending = false;
+                }
+                Reply::ColorSample(color) => {
+                    self.color_sample = Some(color);
+                    self.color_sample_pending = false;
                 }
                 Reply::FilterPreviews(image) => {
                     self.filter_previews_pending = false;
@@ -417,6 +444,23 @@ impl CanvasRenderer for RenderWorker {
         self.canvas_preview
             .take()
             .map(|result| result.map_err(|_| BackendError("Canvas preview unavailable")))
+    }
+    fn request_color_sample(
+        &mut self,
+        request: layer_render::ColorSampleRequest,
+    ) -> Result<bool, Self::Error> {
+        if self.color_sample_pending {
+            return Ok(false);
+        }
+        self.send(Command::ColorSample(request))?;
+        self.color_sample_pending = true;
+        Ok(true)
+    }
+    fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
+        self.ready().ok()?;
+        self.color_sample
+            .take()
+            .map(|result| result.map_err(|_| BackendError("Color sample unavailable")))
     }
     fn request_filter_previews(
         &mut self,

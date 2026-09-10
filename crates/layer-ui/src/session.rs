@@ -49,6 +49,7 @@ pub struct UiSession<R: CanvasRenderer> {
     touch: TouchGesture,
     navigator_drag: Option<[f32; 2]>,
     navigator_preview: crate::navigator::Preview,
+    eyedropper: crate::eyedropper::Eyedropper,
     system_theme: Theme,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -91,6 +92,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             touch: TouchGesture::default(),
             navigator_drag: None,
             navigator_preview: Default::default(),
+            eyedropper: Default::default(),
             system_theme: Theme::Light,
             logical_viewport: None,
             initial_fit: true,
@@ -286,6 +288,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return false;
         };
         if self.interaction.pan_key.is_some()
+            || self.layer_interaction.tool == LayerCanvasTool::Hand
             || self.interaction.pointer.is_some_and(|p| !p.paint)
             || self.interaction.facts.popup_open
             || self.state.settings_open
@@ -546,8 +549,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         reply.handled = true;
                     }
                 } else {
-                    let paint =
-                        button == PointerButton::Primary && self.interaction.pan_key.is_none();
+                    let paint = button == PointerButton::Primary
+                        && self.interaction.pan_key.is_none()
+                        && self.layer_interaction.tool != LayerCanvasTool::Hand;
                     if phase == ContactPhase::Down
                         && self.interaction.pointer.is_none()
                         && !self.state.settings_open
@@ -583,6 +587,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             UiInput::Blur => {
+                self.eyedropper.cancel();
                 self.cursor_input(None);
                 reply.cancel_paint = self.interaction.pointer.take().is_some_and(|p| p.paint)
                     || self.input_pending
@@ -617,7 +622,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         reply.hide_floating_panels = self.state.partial_zen();
         reply.keep_zen_button = !self.state.settings.total_zen;
         reply.partial_zen = self.state.partial_zen();
-        reply.pan_cursor = self.interaction.pan_key.is_some();
+        reply.pan_cursor = self.interaction.pan_key.is_some()
+            || self.layer_interaction.tool == LayerCanvasTool::Hand;
         Ok(reply)
     }
 
@@ -988,6 +994,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .is_some_and(|layer| layer.kind == LayerKind::Paint)
             }
             CommandId::FitCanvas
+            | CommandId::Hand
+            | CommandId::Eyedropper
             | CommandId::RotateLeft
             | CommandId::RotateRight
             | CommandId::FlipHorizontal
@@ -1002,6 +1010,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (id, self.layer_interaction.tool),
                 (CommandId::Lasso, LayerCanvasTool::Select)
                     | (CommandId::Move, LayerCanvasTool::Move)
+                    | (CommandId::Hand, LayerCanvasTool::Hand)
+                    | (
+                        CommandId::Eyedropper,
+                        LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer
+                    )
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
@@ -1017,6 +1030,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let was_expanded = self.state.customization.has_drawer();
         let was_zen = self.state.workspace.zen_mode;
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
+        let explicit_color = matches!(action, UiAction::Color { .. } | UiAction::SetColor { .. });
         let workspace_before = matches!(
             &action,
             UiAction::Customize { .. }
@@ -1619,6 +1633,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(before) = workspace_before {
             self.workspace_history.record(before, &self.state.workspace);
         }
+        if explicit_color
+            || revision != self.engine.document().revision
+            || tool_before != (self.state.brush.tool, self.layer_interaction.tool)
+        {
+            self.eyedropper.cancel();
+        }
         if changed & LAYOUT != 0 {
             let layout = &self.state.workspace.layout;
             self.state.customization.expanded = self
@@ -1668,6 +1688,54 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        if self.layer_interaction.tool == LayerCanvasTool::Hand {
+            // Hand input is routed through UiInput::Pointer's pan gesture.
+            return Ok(());
+        }
+        if self.layer_interaction.tool.picks_color() {
+            match event.phase {
+                PenPhase::Down => {
+                    self.eyedropper.cancel();
+                    self.eyedropper.contact = true;
+                }
+                PenPhase::Cancel => {
+                    self.eyedropper.cancel();
+                    return Ok(());
+                }
+                PenPhase::Hover => return Ok(()),
+                _ => (),
+            }
+            if self.eyedropper.contact {
+                let mut point = self
+                    .state
+                    .camera
+                    .input_transform()
+                    .map(event.surface_position);
+                let doc = self.engine.document();
+                let source = if self.eyedropper.layer {
+                    let offset = doc.layer_offset(doc.active_layer);
+                    point.x -= offset.x;
+                    point.y -= offset.y;
+                    layer_render::ColorSampleSource::Layer(doc.active_layer)
+                } else {
+                    layer_render::ColorSampleSource::Composite
+                };
+                if point.x.is_finite()
+                    && point.y.is_finite()
+                    && point.x >= 0.0
+                    && point.y >= 0.0
+                    && point.x < doc.width as f32
+                    && point.y < doc.height as f32
+                {
+                    self.eyedropper
+                        .queue(source, [point.x as u32, point.y as u32]);
+                }
+                if event.phase == PenPhase::Up {
+                    self.eyedropper.contact = false;
+                }
+            }
+            return Ok(());
+        }
         if self.layer_interaction.tool != LayerCanvasTool::Paint {
             if let Err(error) = self.layer_pen(event) {
                 self.state.host_error = Some(error);
@@ -1686,10 +1754,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.touch.clear();
             return self.changed(0, false);
         }
-        if self
-            .touch
-            .update(&mut self.state.camera, id, phase, position)
-        {
+        if self.touch.update(
+            &mut self.state.camera,
+            id,
+            phase,
+            position,
+            self.layer_interaction.tool == LayerCanvasTool::Hand,
+        ) {
             self.initial_fit = false;
             self.sync_camera();
             self.changed(regions::CAMERA, true)
@@ -1830,7 +1901,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Includes shared background work as well as the drawing engine's needs.
     pub fn wants_continuous_frames(&self) -> bool {
-        self.engine.wants_continuous_frames() || self.pending_filters.is_some()
+        self.engine.wants_continuous_frames()
+            || self.pending_filters.is_some()
+            || self.eyedropper.busy()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
         let mut changed = self.poll_filter_installation();
@@ -1839,6 +1912,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         self.input_pending = false;
+        if let Some(color) = self.eyedropper.poll(self.engine.backend_mut())? {
+            self.state.colors.set_rgba(color)?;
+            self.state.brush.color = self.state.colors.rgba();
+            self.apply_brush()?;
+            changed |= regions::BRUSH;
+        }
         if self.engine.document().revision != revision || self.layer_interaction.changed {
             self.layer_interaction.changed = false;
             self.refresh_document();
@@ -1853,6 +1932,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Hand | CommandId::Eyedropper => {
+                self.layer_action(LayerAction::Tool {
+                    tool: if command == CommandId::Hand {
+                        LayerCanvasTool::Hand
+                    } else if self.eyedropper.layer {
+                        LayerCanvasTool::PickLayer
+                    } else {
+                        LayerCanvasTool::PickVisible
+                    },
+                })?;
+                Ok((BRUSH | DOCUMENT, false))
+            }
             CommandId::Lasso | CommandId::Move => {
                 self.layer_action(LayerAction::Tool {
                     tool: if command == CommandId::Lasso {
@@ -2327,9 +2418,21 @@ mod tests {
         validation_result: Option<layer_render::EffectValidationResult>,
         preview_requests: Vec<Option<u64>>,
         preview_reply: Option<layer_render::CanvasPreview>,
+        sample_requests: Vec<layer_render::ColorSampleRequest>,
+        sample_reply: Option<layer_render::ColorSample>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn request_color_sample(
+            &mut self,
+            request: layer_render::ColorSampleRequest,
+        ) -> Result<bool, Self::Error> {
+            self.sample_requests.push(request);
+            Ok(true)
+        }
+        fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
+            self.sample_reply.take().map(Ok)
+        }
         fn request_canvas_preview(&mut self, known: Option<u64>) -> Result<bool, Self::Error> {
             self.preview_requests.push(known);
             Ok(true)
@@ -2461,6 +2564,167 @@ mod tests {
             assert!(change.canvas_wake && change.regions & regions::CAMERA != 0);
         }
         assert_eq!(s.engine.document().revision, doc_revision);
+    }
+
+    #[test]
+    fn hand_uses_shared_pointer_and_touch_navigation_without_painting() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for kind in [PointerKind::Mouse, PointerKind::Pen, PointerKind::Touch] {
+                let mut s = session();
+                s.set_platform(platform);
+                assert!(key(&mut s, "h", true, false, false).handled);
+                key(&mut s, "h", false, false, false);
+                assert!(s.command(CommandId::Hand).selected);
+                let before = s.state.camera.clone();
+                let revision = s.engine.document().revision;
+                let p = before.input_transform().map(Point { x: 200.0, y: 300.0 });
+                for (phase, position) in [
+                    (ContactPhase::Down, [200.0, 300.0]),
+                    (ContactPhase::Move, [260.0, 340.0]),
+                    (ContactPhase::Up, [260.0, 340.0]),
+                ] {
+                    let reply = s
+                        .input(UiInput::Pointer {
+                            id: 1,
+                            phase,
+                            kind,
+                            button: PointerButton::Primary,
+                            position,
+                        })
+                        .unwrap();
+                    assert!(!reply.paint && reply.pan_cursor);
+                }
+                let after = s
+                    .state
+                    .camera
+                    .input_transform()
+                    .map(Point { x: 260.0, y: 340.0 });
+                assert!((after.x - p.x).abs() < 0.001 && (after.y - p.y).abs() < 0.001);
+                assert_eq!(s.state.camera.zoom, before.zoom);
+                s.frame(1_000_000, 1_000_000).unwrap();
+                assert_eq!(s.renderer_mut().dabs, 0);
+                assert_eq!(s.engine.document().revision, revision);
+                assert!(!s.command(CommandId::Undo).enabled);
+            }
+        }
+    }
+
+    #[test]
+    fn eyedropper_coalesces_points_resolves_color_slots_and_rejects_stale_results() {
+        use layer_render::{ColorSample, ColorSampleSource};
+        let mut s = session();
+        assert!(key(&mut s, "i", true, false, false).handled);
+        key(&mut s, "i", false, false, false);
+        assert_eq!(s.state.tool_set.subtools.len(), 2);
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Select {
+                slot: ColorSlot::Background,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Select {
+                slot: ColorSlot::Transparent,
+            },
+        })
+        .unwrap();
+        let foreground = s.state.colors.foreground;
+        let revision = s.engine.document().revision;
+        let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+            let m = s.state.camera.document_to_surface();
+            let mut e = event(s, 1, phase, 1.0);
+            e.surface_position = Point {
+                x: m[0] * p[0] + m[2] * p[1] + m[4],
+                y: m[1] * p[0] + m[3] * p[1] + m[5],
+            };
+            s.pen(e).unwrap();
+        };
+        s.state.camera.flipped = [true, false];
+        s.state.camera.rotation = 0.7;
+        send(&mut s, PenPhase::Down, [64.25, 80.25]);
+        assert!(s.wants_continuous_frames());
+        s.frame(1, 1).unwrap();
+        let request = s.renderer_mut().sample_requests[0];
+        assert_eq!(request.position, [64, 80]);
+        assert_eq!(request.source, ColorSampleSource::Composite);
+        for x in 100..200 {
+            send(&mut s, PenPhase::Move, [x as f32 + 0.25, 80.25]);
+        }
+        send(&mut s, PenPhase::Up, [199.25, 80.25]);
+        s.frame(2, 2).unwrap();
+        assert_eq!(s.renderer_mut().sample_requests.len(), 1);
+        s.renderer_mut().sample_reply = Some(ColorSample {
+            request_id: request.request_id,
+            rgba: [0.25, 0.5, 1.0, 0.3],
+        });
+        let change = s.frame(3, 3).unwrap();
+        assert_ne!(change.regions & regions::BRUSH, 0);
+        assert_eq!(s.state.colors.foreground, foreground);
+        assert_eq!(s.state.colors.slot, ColorSlot::Background);
+        for (a, b) in s
+            .state
+            .colors
+            .background
+            .into_iter()
+            .zip([0.537099, 0.735357, 1.0, 1.0])
+        {
+            assert!((a - b).abs() < 0.0001);
+        }
+        assert_eq!(s.renderer_mut().sample_requests[1].position, [199, 80]);
+        let color = [0.1, 0.2, 0.3, 1.0];
+        s.dispatch(UiAction::SetColor { rgba: color }).unwrap();
+        s.renderer_mut().sample_reply = Some(ColorSample {
+            request_id: request.request_id,
+            rgba: [1.0; 4],
+        });
+        s.frame(4, 4).unwrap();
+        assert_eq!(
+            s.state.colors.background, color,
+            "late sample cannot overwrite a manual choice"
+        );
+        assert!(!s.wants_continuous_frames());
+        assert_eq!(s.engine.document().revision, revision);
+        assert_eq!(s.renderer_mut().dabs, 0);
+
+        let mut layer = s
+            .engine
+            .document()
+            .layer(s.engine.document().active_layer)
+            .unwrap()
+            .clone();
+        layer.properties.offset = Point { x: 16.0, y: 8.0 };
+        let id = layer.id;
+        s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer)))
+            .unwrap();
+        s.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::PickLayer,
+            },
+        })
+        .unwrap();
+        send(&mut s, PenPhase::Down, [64.25, 80.25]);
+        s.frame(5, 5).unwrap();
+        let request = *s.renderer_mut().sample_requests.last().unwrap();
+        assert_eq!(
+            (request.source, request.position),
+            (ColorSampleSource::Layer(id), [48, 72])
+        );
+        invoke(&mut s, CommandId::Hand);
+        s.renderer_mut().sample_reply = Some(ColorSample {
+            request_id: request.request_id,
+            rgba: [1.0; 4],
+        });
+        s.frame(6, 6).unwrap();
+        assert_eq!(
+            s.state.colors.background, color,
+            "tool changes cancel sampling"
+        );
+        invoke(&mut s, CommandId::Eyedropper);
+        assert_eq!(
+            s.state.layer_tools.tool,
+            LayerCanvasTool::PickLayer,
+            "remember source subtool"
+        );
     }
 
     #[test]

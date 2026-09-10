@@ -434,6 +434,44 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   behavior. Native handle tests verify exact before/after bounds; shared tests
   exercise nested rows/columns, individual/group moves and all three host profiles.
   Current shared UI suite: 177 passing tests; strict UI/renderer/GTK Clippy passes.
+- Hand (H) and Eyedropper (I) are implemented in shared Rust, with GTK Tool Set
+  projections and shared SVG icons. Hand uses the existing camera path for
+  mouse, pen and single-finger touch, without modifying document pixels.
+  Eyedropper remembers its Visible color / Layer color subtool. Visible samples
+  include composition opacity, masks and effects; Layer color reads the editing
+  layer's raw paint. This follows the useful distinction in
+  [CSP's Eyedropper tools](https://help.clip-studio.com/en-us/manual_en/300_color/Eyedropper_Tool.htm).
+  The initial tool samples one pixel, not an averaged area. Empty pixels do not
+  change the paint color; non-empty samples choose opaque color in the active
+  foreground/background slot, returning from transparent paint to its last slot.
+- Point sampling copies four bytes from an existing GPU texture to one reusable
+  staging buffer. It does not recompose, run a shader or wait on the UI thread.
+  One in-flight request and latest-point coalescing bound work during pointer
+  movement; generations prevent late samples overriding manual choices or tool
+  changes. The renderer handles sparse page coordinates and linear premultiplied
+  pixels; UI input resolves camera reflection/rotation and layer offsets.
+- Hand/Eyedropper validation: 179 shared UI tests, nine GPU layer correctness
+  tests, strict UI/renderer/GTK Clippy, workspace and Wasm checks. Native GTK tests
+  exercise both sample sources, shared shortcuts, actual subtool buttons, Hand
+  motion and return to an idle frame timer. Dark/light screenshots were inspected
+  at `artifacts/familiar-workspace/eyedropper-{Dark,Light}.png` (ignored). Shared
+  input tests cover GTK/web/Android profiles; browser/device interaction testing
+  of these new tools remains pending GTK review.
+- Serial six-second release panning measurements on the private 120Hz Wayland
+  display (synthetic input, actual child-surface presentation feedback):
+
+  | Input | CPU worker median/p95/p99 ms | Canvas GPU median/p95/p99 ms | GTK handler median/p95/p99 ms | Displayed Hz |
+  | --- | --- | --- | --- | --- |
+  | Existing pan | 0.277 / 0.487 / 0.574 | 0.075 / 0.198 / 0.382 | 0.014 / 0.032 / 0.040 | 120.01 |
+  | Hand tool | 0.182 / 0.380 / 0.517 | 0.071 / 0.131 / 1.426 | 0.008 / 0.020 / 0.028 | 119.80 |
+
+  Hand discarded one presentation; existing pan discarded none. GPU tails vary,
+  so this is approximately 120Hz, not a perfect-frame or physical-input guarantee.
+  Reports are `/tmp/capy-hand-{baseline-pacing,pacing}.json`, not repository assets.
+  A subsequent 384px G-Pen drawing run sustained 119.57Hz (one discarded frame),
+  CPU median/p95/p99 0.277/0.601/0.758ms, canvas GPU 0.137/0.284/0.562ms,
+  GTK handler 0.011/0.028/0.041ms. This is within the prior drawing measurements,
+  not evidence of a speedup. Report: `/tmp/capy-navigation-tools-drawing.json`.
 - Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, rulers, remaining shortcuts
   and full functional/performance validation.

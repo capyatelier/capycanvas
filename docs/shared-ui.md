@@ -487,6 +487,18 @@ While live painting/animation updates thumbnails, GTK retains its update clock
 without forcing redraws. This avoids restarting its idle clock for each 15Hz image;
 the clock is released after painting stops or Navigator becomes hidden.
 
+Hand and Eyedropper also share their input policy in Rust. Hand routes primary
+mouse/pen contact and one-finger touch through the existing camera gesture path;
+it never submits a paint stroke. Eyedropper offers visible-composition and raw
+editing-layer samples, transforming coordinates through the camera and layer
+offsets. It keeps one asynchronous request in flight and coalesces subsequent
+points. Tool/document/manual-color changes invalidate late replies. The renderer
+copies one existing texture pixel to a reusable four-byte staging buffer, with
+no shader, composition rebuild, GPU wait or full-image readback. The UI converts
+straight linear RGB to the active paint-color slot; transparent samples leave it
+unchanged. Ordinary drawing does not request samples. GTK forwards the query to
+its GPU worker; web and Android use the same renderer interface.
+
 ## Primary references
 
 - [Android UI-layer guidance](https://developer.android.com/topic/architecture/ui-layer)

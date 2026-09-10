@@ -12,6 +12,14 @@ pub enum LayerCanvasTool {
     Move,
     Select,
     LassoFill,
+    Hand,
+    PickVisible,
+    PickLayer,
+}
+impl LayerCanvasTool {
+    pub fn picks_color(self) -> bool {
+        matches!(self, Self::PickVisible | Self::PickLayer)
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct LayersView {
@@ -541,6 +549,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if tool.picks_color() {
+                    self.eyedropper.layer = tool == LayerCanvasTool::PickLayer;
+                }
                 self.layer_interaction.tool = tool;
                 self.state.layer_tools.tool = tool;
                 self.refresh_tools();

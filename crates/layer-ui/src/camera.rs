@@ -186,11 +186,13 @@ impl TouchGesture {
         id: u64,
         phase: PenPhase,
         point: [f32; 2],
+        single_pan: bool,
     ) -> bool {
         if !point.into_iter().all(f32::is_finite) {
             return false;
         }
         let before = self.pair();
+        let previous = self.points.get(&id).copied();
         match phase {
             PenPhase::Down => {
                 self.points.insert(id, point);
@@ -209,6 +211,12 @@ impl TouchGesture {
         }
         if phase != PenPhase::Move {
             return false;
+        }
+        if single_pan
+            && self.points.len() == 1
+            && let Some(previous) = previous
+        {
+            return camera.gesture(previous, point, 1.0, 0.0).is_ok();
         }
         let (Some([a, b]), Some([c, d])) = (before, self.pair()) else {
             return false;
@@ -326,12 +334,12 @@ mod tests {
         let mut camera = Camera::new([1000, 1000], [1000, 1000]);
         let mut touch = TouchGesture::default();
         let before = camera.clone();
-        assert!(!touch.update(&mut camera, 1, PenPhase::Down, [100.0, 100.0]));
-        assert!(!touch.update(&mut camera, 1, PenPhase::Move, [200.0, 100.0]));
+        assert!(!touch.update(&mut camera, 1, PenPhase::Down, [100.0, 100.0], false));
+        assert!(!touch.update(&mut camera, 1, PenPhase::Move, [200.0, 100.0], false));
         assert_eq!(camera, before);
-        touch.update(&mut camera, 2, PenPhase::Down, [300.0, 100.0]);
+        touch.update(&mut camera, 2, PenPhase::Down, [300.0, 100.0], false);
         let anchor = camera.input_transform().map(Point { x: 250.0, y: 100.0 });
-        assert!(touch.update(&mut camera, 2, PenPhase::Move, [200.0, 300.0]));
+        assert!(touch.update(&mut camera, 2, PenPhase::Move, [200.0, 300.0], false));
         assert!((camera.zoom - before.zoom * 2.0).abs() < 0.001);
         assert!((camera.rotation - std::f32::consts::FRAC_PI_2).abs() < 0.001);
         near(
@@ -339,10 +347,10 @@ mod tests {
             camera.input_transform().map(Point { x: 200.0, y: 200.0 }),
         );
         let before = camera.clone();
-        touch.update(&mut camera, 3, PenPhase::Down, [400.0, 300.0]);
-        touch.update(&mut camera, 2, PenPhase::Up, [200.0, 300.0]);
+        touch.update(&mut camera, 3, PenPhase::Down, [400.0, 300.0], false);
+        touch.update(&mut camera, 2, PenPhase::Up, [200.0, 300.0], false);
         assert_eq!(camera, before);
         touch.clear();
-        assert!(!touch.update(&mut camera, 3, PenPhase::Move, [300.0, 300.0]));
+        assert!(!touch.update(&mut camera, 3, PenPhase::Move, [300.0, 300.0], false));
     }
 }

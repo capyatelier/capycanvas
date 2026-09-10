@@ -5,6 +5,7 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod eyedropper;
 mod navigator;
 pub use navigator::NavigatorGeometry;
 mod color;
@@ -251,6 +252,8 @@ pub fn ui_catalog() -> UiCatalog {
             "check",
             "fit",
             "navigator",
+            "hand",
+            "eyedropper",
             "rotate-left",
             "rotate-right",
             "flip-horizontal",
@@ -319,6 +322,8 @@ pub enum CommandId {
     Liquify,
     Lasso,
     Move,
+    Hand,
+    Eyedropper,
     Undo,
     Redo,
     UndoWorkspace,
@@ -372,6 +377,8 @@ impl CommandId {
             Self::Liquify => "liquify",
             Self::Lasso => "lasso",
             Self::Move => "move",
+            Self::Hand => "hand",
+            Self::Eyedropper => "eyedropper",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
@@ -390,7 +397,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 36] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -401,6 +408,8 @@ impl CommandId {
         Self::Liquify,
         Self::Lasso,
         Self::Move,
+        Self::Hand,
+        Self::Eyedropper,
         Self::Undo,
         Self::Redo,
         Self::UndoWorkspace,
@@ -444,6 +453,8 @@ impl CommandId {
             Self::Liquify => "Liquify",
             Self::Lasso => "Lasso selection",
             Self::Move => "Move",
+            Self::Hand => "Hand",
+            Self::Eyedropper => "Eyedropper",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::UndoWorkspace => "Undo Workspace Change",

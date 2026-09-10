@@ -289,11 +289,41 @@ pub struct ToolSetView {
     pub subtools: Vec<ToolSetItem>,
 }
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
+    if canvas_tool.picks_color() {
+        return ToolSetView {
+            groups: vec![ToolSetItem {
+                label: "Eyedropper",
+                icon: "eyedropper",
+                action: UiAction::Layer {
+                    action: LayerAction::Tool { tool: canvas_tool },
+                },
+                selected: true,
+                preview: None,
+            }],
+            subtools: [
+                ("Visible color", LayerCanvasTool::PickVisible),
+                ("Layer color", LayerCanvasTool::PickLayer),
+            ]
+            .into_iter()
+            .map(|(label, tool)| ToolSetItem {
+                label,
+                icon: "eyedropper",
+                action: UiAction::Layer {
+                    action: LayerAction::Tool { tool },
+                },
+                selected: tool == canvas_tool,
+                preview: None,
+            })
+            .collect(),
+        };
+    }
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {
             LayerCanvasTool::Select => ("Lasso", "lasso"),
             LayerCanvasTool::LassoFill => ("Lasso fill", "lasso"),
             LayerCanvasTool::Move => ("Move layer", "move"),
+            LayerCanvasTool::Hand => ("Hand", "hand"),
+            LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
             LayerCanvasTool::Paint => unreachable!(),
         };
         let item = ToolSetItem {

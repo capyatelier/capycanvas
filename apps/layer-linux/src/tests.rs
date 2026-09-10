@@ -350,6 +350,149 @@ fn native_tool_drawers() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_navigation_tools() {
+    let app = native_test_app("art.capycanvas.NavigationTools");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .insert_tools(
+            Panel::Toolbar,
+            None,
+            &[
+                ToolbarControl::Command {
+                    command: CommandId::Hand,
+                },
+                ToolbarControl::Command {
+                    command: CommandId::Eyedropper,
+                },
+            ],
+        )
+        .unwrap();
+    let ids: Vec<_> = workspace
+        .layout
+        .panel(Panel::Toolbar)
+        .unwrap()
+        .tiles()
+        .iter()
+        .rev()
+        .take(2)
+        .map(|t| t.id)
+        .collect();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::SelectBrush {
+        id: layer_core::DefaultBrushPreset::GPen as u32,
+    });
+    w.dispatch(UiAction::SetBrushSize { value: 512.0 });
+    w.dispatch(UiAction::SetColor {
+        rgba: [1.0, 0.0, 0.0, 1.0],
+    });
+    let contact = |phase| {
+        let camera = state(&w).camera;
+        let m = camera.document_to_surface();
+        let e = PenEvent {
+            device_id: 1,
+            sequence: 0,
+            timestamp_ns: glib::monotonic_time() as u64 * 1000,
+            view_revision: camera.revision,
+            surface_position: Point {
+                x: m[0] * 1024.0 + m[2] * 768.0 + m[4],
+                y: m[1] * 1024.0 + m[3] * 768.0 + m[5],
+            },
+            pressure: 1.0,
+            tilt_radians: [0.0; 2],
+            twist_radians: 0.0,
+            distance: 0.0,
+            phase,
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
+        };
+        w.cursor_input(Some(e));
+        w.input.send(&w, e);
+    };
+    contact(PenPhase::Down);
+    contact(PenPhase::Up);
+    pump(250);
+    w.dispatch(UiAction::SetLayerOpacity {
+        id: None,
+        opacity: 0.5,
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.0, 0.0, 0.0, 1.0],
+    });
+    pump(200);
+    let tile = |id| {
+        find_named(w.surface.upcast_ref(), &format!("tile-{id}"))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap()
+    };
+    let eye = tile(ids[0]);
+    click(&eye);
+    assert!(eye.tooltip_text().unwrap().ends_with("(I)"));
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::PickVisible);
+    contact(PenPhase::Down);
+    contact(PenPhase::Up);
+    pump(250);
+    let color = state(&w).colors.foreground;
+    assert!(
+        color[0] > 0.99 && (color[1] - 0.735).abs() < 0.015 && (color[2] - 0.735).abs() < 0.015,
+        "visible color {color:?}"
+    );
+    let subtool = w.tool_set.buttons.borrow()[1].1.clone();
+    click(&subtool);
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::PickLayer);
+    contact(PenPhase::Down);
+    contact(PenPhase::Up);
+    pump(250);
+    let color = state(&w).colors.foreground;
+    for (actual, expected) in color.into_iter().zip([1.0, 0.0, 0.0, 1.0]) {
+        assert!((actual - expected).abs() < 0.001, "raw color {color:?}");
+    }
+    assert!(
+        !w.ticking.get(),
+        "sampling completes and stops the frame timer"
+    );
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(200);
+        capture_reference(&w, &format!("{dir}/eyedropper-{theme:?}.png"), 1.0);
+    }
+    click(&tile(ids[1]));
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Hand);
+    let camera = state(&w).camera;
+    for (phase, position) in [
+        (ContactPhase::Down, [600.0, 400.0]),
+        (ContactPhase::Move, [700.0, 450.0]),
+        (ContactPhase::Up, [700.0, 450.0]),
+    ] {
+        let reply = w.interact(UiInput::Pointer {
+            id: 42,
+            phase,
+            kind: PointerKind::Mouse,
+            button: PointerButton::Primary,
+            position,
+        });
+        assert!(!reply.paint && reply.pan_cursor);
+    }
+    pump(200);
+    let p = camera.input_transform().map(Point { x: 600.0, y: 400.0 });
+    let after = state(&w)
+        .camera
+        .input_transform()
+        .map(Point { x: 700.0, y: 450.0 });
+    assert!((p.x - after.x).abs() < 0.001 && (p.y - after.y).abs() < 0.001);
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_navigator() {
     let app = native_test_app("art.capycanvas.NavigatorReview");
     let w = Workspace::new(&app);
@@ -6805,6 +6948,7 @@ fn native_frame_pacing() {
         ("WetRound", Some(DefaultBrushPreset::WetRound)),
         ("WatercolorWash", Some(DefaultBrushPreset::WatercolorWash)),
         ("Pan", None),
+        ("Hand", None),
     ] {
         if std::env::var("LAYER_PACING_BRUSH").is_ok_and(|s| s != name) {
             continue;
@@ -6812,6 +6956,10 @@ fn native_frame_pacing() {
         if let Some(preset) = preset {
             w.dispatch(UiAction::SelectBrush { id: preset as u32 });
             w.dispatch(UiAction::SetBrushSize { value: 384.0 });
+        } else if name == "Hand" {
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::Hand,
+            });
         }
         pump(300);
         *worker_stats.lock().unwrap() = Default::default();
@@ -6857,7 +7005,11 @@ fn native_frame_pacing() {
                         ContactPhase::Move
                     },
                     kind: PointerKind::Mouse,
-                    button: PointerButton::Pan,
+                    button: if name == "Hand" {
+                        PointerButton::Primary
+                    } else {
+                        PointerButton::Pan
+                    },
                     position: [event.surface_position.x, event.surface_position.y],
                 });
             }
@@ -6884,7 +7036,11 @@ fn native_frame_pacing() {
                 id: 55,
                 phase: ContactPhase::Up,
                 kind: PointerKind::Mouse,
-                button: PointerButton::Pan,
+                button: if name == "Hand" {
+                    PointerButton::Primary
+                } else {
+                    PointerButton::Pan
+                },
                 position: [600.0, 450.0],
             });
         }

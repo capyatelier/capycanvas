@@ -2,7 +2,8 @@
 //!
 //! The current dry brush uses instanced quads and fixed-function blending. All
 //! paint-layer and composite pixels remain in GPU textures. Explicit export and
-//! bounded asynchronous UI thumbnails are the only readbacks. Destination-aware brush stages can be added beside this
+//! bounded asynchronous UI thumbnails and explicit color samples are the only
+//! readbacks. Destination-aware brush stages can be added beside this
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
 use layer_core::{
@@ -20,6 +21,7 @@ use layer_render::{
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
 mod canvas_preview;
+mod color_sample;
 mod effect_validation;
 mod effects;
 mod layer_masks;
@@ -564,6 +566,7 @@ pub struct WgpuRasterizer {
     scene: Option<scene::Scene>,
     thumbnails: thumbnails::Thumbnails,
     canvas_preview: canvas_preview::CanvasOverview,
+    color_sampler: color_sample::ColorSampler,
     composite_revision: u64,
     filter_previews: Option<scene::FilterPreviews>,
     effect_validation: Option<effect_validation::Pending>,
@@ -798,6 +801,7 @@ impl WgpuRasterizer {
             last_style_base: 0,
             filter_source_epoch: 0,
             canvas_preview: canvas_preview::CanvasOverview::new(),
+            color_sampler: color_sample::ColorSampler::new(),
             composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
             images: Default::default(),
@@ -3529,6 +3533,15 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
         self.canvas_preview.take()
+    }
+    fn request_color_sample(
+        &mut self,
+        request: layer_render::ColorSampleRequest,
+    ) -> Result<bool, Self::Error> {
+        self.start_color_sample(request)
+    }
+    fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
+        self.color_sampler.take()
     }
     fn request_filter_previews(
         &mut self,

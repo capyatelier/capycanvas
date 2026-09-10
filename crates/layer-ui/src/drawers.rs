@@ -222,7 +222,13 @@ impl ToolbarControl {
         match self {
             Self::Command { command }
                 if command.paint_tool().is_some()
-                    || matches!(command, CommandId::Lasso | CommandId::Move) =>
+                    || matches!(
+                        command,
+                        CommandId::Lasso
+                            | CommandId::Move
+                            | CommandId::Hand
+                            | CommandId::Eyedropper
+                    ) =>
             {
                 Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]])
             }
