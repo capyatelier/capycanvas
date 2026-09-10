@@ -515,7 +515,34 @@ pub enum BuiltinEffect {
     GradientMap,
     Posterize,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterCategory {
+    Tone,
+    Color,
+    Artistic,
+}
+impl FilterCategory {
+    pub const ALL: [Self; 3] = [Self::Tone, Self::Color, Self::Artistic];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tone => "Tone",
+            Self::Color => "Color",
+            Self::Artistic => "Artistic",
+        }
+    }
+}
 impl BuiltinEffect {
+    pub fn category(self) -> FilterCategory {
+        match self {
+            Self::Curves | Self::Levels | Self::BrightnessContrast | Self::Exposure => {
+                FilterCategory::Tone
+            }
+            Self::HueSaturation | Self::ColorBalance | Self::Vibrance => FilterCategory::Color,
+            Self::BlackWhite | Self::GradientMap | Self::Posterize => FilterCategory::Artistic,
+        }
+    }
     pub const ALL: [Self; 10] = [
         Self::Curves,
         Self::Levels,
@@ -561,6 +588,42 @@ impl BuiltinEffect {
         PROGRAMS.get_or_init(|| Self::ALL.into_iter().map(Self::build_program).collect())
             [self as usize]
             .clone()
+    }
+    /// Illustrative presets are separate from the defaults used on insertion.
+    pub fn preview(self) -> EffectInstance {
+        let mut effect = EffectInstance::new(self.program());
+        let values: Vec<(&str, EffectValue)> = match self {
+            Self::Curves => vec![(
+                "curve_0",
+                EffectValue::Curve(vec![[0., 0.], [0.25, 0.15], [0.75, 0.85], [1., 1.]]),
+            )],
+            Self::Levels => vec![
+                ("black", EffectValue::Number(0.1)),
+                ("white", EffectValue::Number(0.9)),
+            ],
+            Self::BrightnessContrast => vec![("contrast", EffectValue::Number(25.))],
+            Self::HueSaturation => vec![
+                ("hue", EffectValue::Number(35.)),
+                ("saturation", EffectValue::Number(18.)),
+            ],
+            Self::ColorBalance => vec![
+                ("shadows_blue", EffectValue::Number(20.)),
+                ("highlights_red", EffectValue::Number(20.)),
+            ],
+            Self::Exposure => vec![("exposure", EffectValue::Number(0.8))],
+            Self::Vibrance => vec![("vibrance", EffectValue::Number(45.))],
+            _ => Vec::new(),
+        };
+        for (key, value) in values {
+            effect
+                .set(key, value)
+                .expect("valid built-in preview preset");
+        }
+        if effect.program.time {
+            effect.set("animate", EffectValue::Toggle(false)).unwrap();
+            effect.set("time", EffectValue::Number(1.25)).unwrap();
+        }
+        effect
     }
     fn build_program(self) -> Arc<EffectProgram> {
         use EffectParameterKind as K;
@@ -734,6 +797,16 @@ impl BuiltinEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_presets_are_valid_and_do_not_change_insertion_defaults() {
+        for id in BuiltinEffect::ALL {
+            let original = EffectInstance::new(id.program());
+            let preview = id.preview();
+            preview.validate().unwrap();
+            assert_eq!(original, EffectInstance::new(id.program()));
+            assert!(!preview.animated());
+        }
+    }
     #[test]
     fn gaussian_lookup_is_finite_normalized_and_fixed_size() {
         for sigma in [0., 0.000001, 0.1, 0.5, 1., 3., 12., 21.] {

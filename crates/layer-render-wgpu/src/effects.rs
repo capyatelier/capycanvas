@@ -8,6 +8,13 @@ use std::{collections::HashMap, sync::Arc};
 // the rest let ordinary aligned masks participate in the same fused shader.
 pub(super) const MASK_SLOTS: usize = 14;
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum Execution {
+    Fused,
+    Image(usize),
+    Preview,
+}
+
 #[derive(Clone)]
 pub(super) struct PreparedEffect {
     pub pipeline: wgpu::RenderPipeline,
@@ -24,8 +31,8 @@ pub(super) struct Effects {
     layout: wgpu::BindGroupLayout,
     pub masks: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
-    pipelines: Vec<(Vec<Arc<EffectProgram>>, Option<usize>, wgpu::RenderPipeline)>,
-    instances: HashMap<(Vec<LayerId>, Option<usize>), Instance>,
+    pipelines: Vec<(Vec<Arc<EffectProgram>>, Execution, wgpu::RenderPipeline)>,
+    instances: HashMap<(Vec<LayerId>, Execution), Instance>,
     pub compilations: u64,
 }
 impl Effects {
@@ -93,7 +100,7 @@ impl Effects {
         &mut self,
         r: &WgpuRasterizer,
         layers: &[&Layer],
-        stage: Option<usize>,
+        stage: Execution,
         time: f32,
     ) -> Result<PreparedEffect, GpuRasterError> {
         let ids = (layers.iter().map(|l| l.id).collect::<Vec<_>>(), stage);
@@ -239,7 +246,7 @@ impl Effects {
 fn shader_source(
     programs: &[Arc<EffectProgram>],
     offsets: &[u32],
-    stage: Option<usize>,
+    stage: Execution,
 ) -> Result<String, GpuRasterError> {
     let mut source = include_str!("scene.wgsl").to_string();
     for i in 0..MASK_SLOTS {
@@ -258,7 +265,9 @@ fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
 fn fx_time(base:u32)->f32 { return effect_data[base-1u].w; }
 fn fx_extent()->vec2<f32> { return settings.color.zw; }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
-    return textureSampleLevel(front,sampling,clamp(p,vec2<f32>(.5),fx_extent()-.5)/fx_extent(),0.);
+    let point=clamp(p,vec2<f32>(.5),fx_extent()-.5);
+    if settings.source_over.z>0. {return textureSampleLevel(front,sampling,(point-settings.source_over.xy)/settings.source_over.zw,0.);}
+    return textureSampleLevel(front,sampling,point/fx_extent(),0.);
 }
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     return textureSampleLevel(back,sampling,clamp(p,vec2<f32>(.5),fx_extent()-.5)/fx_extent(),0.);
@@ -278,11 +287,31 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
             included.push(&program.wgsl);
         }
     }
-    if let Some(stage) = stage {
+    if stage == Execution::Preview {
+        source.push_str("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);switch u32(settings.extent.z) {\n");
+        for (i, (p, offset)) in programs.iter().zip(offsets).enumerate() {
+            source.push_str(&format!("case {i}u: {{\n"));
+            for (j, pass) in p.passes.iter().enumerate() {
+                source.push_str(&format!(
+                    "if u32(settings.extent.w)=={j}u {{return {}(c,position,{}u);}}\n",
+                    pass.entry,
+                    offset + 1
+                ));
+            }
+            source.push_str(&format!(
+                "return {}(c,position,{}u);}}\n",
+                p.entry,
+                offset + 1
+            ));
+        }
+        source.push_str("default: {return c;} }}");
+        return Ok(source);
+    }
+    if let Execution::Image(stage) = stage {
         let p = &programs[0];
         let entry = p.passes.get(stage).map_or(&p.entry, |p| &p.entry);
         let last = stage + 1 >= p.passes.len();
-        source.push_str(&format!("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {{ let position=v.position.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
+        source.push_str(&format!("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
         if last && p.kind == EffectKind::Adjustment {
             source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=clamp(blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)),vec3<f32>(0.),vec3<f32>(1.));");
             if p.alpha == layer_core::EffectAlpha::Filter {
@@ -350,7 +379,7 @@ mod tests {
         validate(&programs);
     }
     fn validate(p: &[Arc<EffectProgram>]) {
-        let source = shader_source(p, &vec![0; p.len()], None).unwrap();
+        let source = shader_source(p, &vec![0; p.len()], Execution::Fused).unwrap();
         let module = naga::front::wgsl::parse_str(&source)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(

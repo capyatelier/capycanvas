@@ -18,7 +18,8 @@ mod workspace;
 pub use session::{LayerAction, LayerCanvasTool, LayersView};
 mod stats;
 pub use session::{
-    AdjustmentChoice, EffectAction, LayerPropertiesView, PropertyControl, PropertyKind,
+    AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
+    LayerPropertiesView, PropertyControl, PropertyKind,
 };
 pub use stats::{StatRow, StatsView};
 
@@ -524,6 +525,8 @@ pub struct UiState {
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,
     pub adjustments: Vec<AdjustmentChoice>,
+    pub filter_picker: FilterPickerState,
+    pub filter_categories: Vec<FilterCategoryChoice>,
     pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
     pub commands: Vec<CommandState>,
@@ -545,6 +548,9 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    FilterPicker {
+        action: FilterPickerAction,
+    },
     Effect {
         action: EffectAction,
     },

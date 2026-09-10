@@ -160,6 +160,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.document()
     }
 
+    pub fn view(&self) -> ViewState {
+        self.view
+    }
+
     pub fn backend(&self) -> &B {
         &self.backend
     }

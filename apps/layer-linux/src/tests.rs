@@ -103,13 +103,28 @@ fn native_adjustment_panels_review() {
         group: 8,
         panel: Panel::Adjustments,
     });
-    pump(300);
+    pump(900);
     crate::capture(&w, &format!("{dir}/01-adjustments.png"));
-    let first = w.effects.adjustments.child_at_index(0).unwrap();
-    let second = w.effects.adjustments.child_at_index(1).unwrap();
-    assert_eq!(first.width(), 108);
-    assert_eq!(first.height(), 72);
-    assert!(second.compute_bounds(&w.effects.adjustments).unwrap().x() > 100.);
+    let first = find_named(w.effects.adjustments.upcast_ref(), "adjustment-curves").unwrap();
+    let picture = first
+        .downcast_ref::<gtk::Button>()
+        .unwrap()
+        .child()
+        .unwrap()
+        .first_child()
+        .unwrap()
+        .downcast::<gtk::Picture>()
+        .unwrap();
+    assert!(
+        picture.paintable().is_some(),
+        "visible filter rows receive asynchronous GPU previews"
+    );
+    let second = find_named(w.effects.adjustments.upcast_ref(), "adjustment-levels").unwrap();
+    assert!(first.width() > 160);
+    assert!(
+        second.compute_bounds(&w.effects.adjustments).unwrap().y()
+            > first.compute_bounds(&w.effects.adjustments).unwrap().y()
+    );
     for (i, kind) in BuiltinEffect::ALL.into_iter().enumerate() {
         w.dispatch(UiAction::SelectPanelTab {
             group: 8,

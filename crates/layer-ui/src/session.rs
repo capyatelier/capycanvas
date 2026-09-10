@@ -10,7 +10,8 @@ pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView};
 #[path = "effects.rs"]
 mod effects;
 pub use effects::{
-    AdjustmentChoice, EffectAction, LayerPropertiesView, PropertyControl, PropertyKind,
+    AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
+    LayerPropertiesView, PropertyControl, PropertyKind,
 };
 
 const ZEN_CORNER_GUARD: f32 = 300.0;
@@ -101,7 +102,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
-                adjustments: effects::catalog(),
+                adjustments: effects::catalog(&Default::default()),
+                filter_picker: Default::default(),
+                filter_categories: effects::FilterPickerState::default().categories(),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
                 commands: Vec::new(),
@@ -958,6 +961,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::FilterPicker { action } => {
+                self.state.filter_picker.apply(action);
+                self.state.adjustments = effects::catalog(&self.state.filter_picker);
+                (DOCUMENT, false)
+            }
             UiAction::Effect { action } => {
                 self.require_idle()?;
                 self.effect_action(action)?;
@@ -2076,6 +2084,55 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn filter_picker_search_and_categories_are_ui_only() {
+        let mut s = session();
+        let revision = s.engine.document().revision;
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            s.set_platform(platform);
+            let update = s
+                .dispatch(UiAction::FilterPicker {
+                    action: FilterPickerAction::Search {
+                        query: "  COLOR   balance ".into(),
+                    },
+                })
+                .unwrap();
+            assert!(!update.canvas_wake);
+            assert_eq!(s.state.adjustments.len(), 1);
+            assert_eq!(
+                s.state.adjustments[0].id,
+                layer_core::BuiltinEffect::ColorBalance
+            );
+            s.dispatch(UiAction::FilterPicker {
+                action: FilterPickerAction::Category {
+                    category: Some(layer_core::FilterCategory::Tone),
+                },
+            })
+            .unwrap();
+            assert!(s.state.adjustments.is_empty());
+            s.dispatch(UiAction::FilterPicker {
+                action: FilterPickerAction::ToggleSearch,
+            })
+            .unwrap();
+            assert!(s.state.filter_picker.search.is_none());
+            assert!(
+                s.state
+                    .adjustments
+                    .iter()
+                    .all(|f| f.category == layer_core::FilterCategory::Tone)
+            );
+            s.dispatch(UiAction::FilterPicker {
+                action: FilterPickerAction::Category { category: None },
+            })
+            .unwrap();
+            assert_eq!(
+                s.state.adjustments.len(),
+                layer_core::BuiltinEffect::ALL.len()
+            );
+            assert_eq!(s.engine.document().revision, revision);
+        }
     }
 
     #[test]

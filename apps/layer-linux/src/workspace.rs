@@ -759,7 +759,7 @@ impl Workspace {
                 (Panel::Brushes, scroll(&brushes)),
                 (Panel::Sizes, scroll(&sizes)),
                 (Panel::Layers, layer_panel.root.clone().upcast()),
-                (Panel::Adjustments, scroll(&effects.adjustments)),
+                (Panel::Adjustments, effects.adjustments.clone().upcast()),
                 (Panel::Properties, scroll(&effects.properties)),
                 (Panel::Stats, scroll(&effects.stats)),
             ],

@@ -4,6 +4,108 @@ use layer_core::{BuiltinEffect, Edit, EffectInstance, EffectParameterKind, Effec
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+impl<B: CanvasRenderer> UiSession<B> {
+    pub fn filter_preview_revision(&self) -> (u64, u64) {
+        let doc = self.engine.document();
+        (doc.revision, doc.active_layer.0)
+    }
+
+    /// Hosts request only rows on screen, after painting and pending edits end.
+    pub fn request_filter_previews(
+        &mut self,
+        request_id: u64,
+        filters: Vec<BuiltinEffect>,
+        size: [u32; 2],
+    ) -> Result<bool, String> {
+        if self.input_pending
+            || self.engine.has_active_stroke()
+            || self.engine.has_pending_document_edits()
+        {
+            return Ok(false);
+        }
+        let doc = self.engine.document();
+        let request = layer_render::FilterPreviewRequest {
+            request_id,
+            target: doc.active_layer,
+            size,
+            extent: [doc.width, doc.height],
+            view: self.engine.view(),
+            layers: doc.layers.iter().map(Layer::composite_snapshot).collect(),
+            filters: filters.into_iter().take(8).collect(),
+        };
+        self.engine
+            .backend_mut()
+            .request_filter_previews(request)
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FilterPickerState {
+    pub category: Option<layer_core::FilterCategory>,
+    pub search: Option<String>,
+    pub search_label: &'static str,
+    pub empty_label: &'static str,
+}
+impl Default for FilterPickerState {
+    fn default() -> Self {
+        Self {
+            category: None,
+            search: None,
+            search_label: "Search filters",
+            empty_label: "No matching filters",
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum FilterPickerAction {
+    Category {
+        category: Option<layer_core::FilterCategory>,
+    },
+    Search {
+        query: String,
+    },
+    ToggleSearch,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct FilterCategoryChoice {
+    pub id: Option<layer_core::FilterCategory>,
+    pub label: &'static str,
+}
+impl FilterPickerState {
+    pub fn categories(&self) -> Vec<FilterCategoryChoice> {
+        std::iter::once(FilterCategoryChoice {
+            id: None,
+            label: "All filters",
+        })
+        .chain(
+            layer_core::FilterCategory::ALL
+                .into_iter()
+                .map(|id| FilterCategoryChoice {
+                    id: Some(id),
+                    label: id.label(),
+                }),
+        )
+        .collect()
+    }
+    pub fn apply(&mut self, action: FilterPickerAction) {
+        match action {
+            FilterPickerAction::Category { category } => self.category = category,
+            FilterPickerAction::Search { query } => {
+                self.search = Some(query.chars().take(120).collect())
+            }
+            FilterPickerAction::ToggleSearch => {
+                self.search = if self.search.is_some() {
+                    None
+                } else {
+                    Some(String::new())
+                }
+            }
+        }
+    }
+}
+
 fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
     let gap = ((upper - lower) * 0.25).min(0.001);
     value.clamp(lower + gap, upper - gap)
@@ -52,10 +154,24 @@ pub struct AdjustmentChoice {
     pub icon: &'static str,
     pub action: UiAction,
     pub tile_cells: [u32; 2],
+    pub category: layer_core::FilterCategory,
+    pub category_label: &'static str,
 }
-pub(super) fn catalog() -> Vec<AdjustmentChoice> {
-    BuiltinEffect::ALL
+pub(super) fn catalog(picker: &FilterPickerState) -> Vec<AdjustmentChoice> {
+    let query = picker.search.as_deref().unwrap_or("").trim().to_lowercase();
+    layer_core::FilterCategory::ALL
         .into_iter()
+        .flat_map(|category| {
+            BuiltinEffect::ALL
+                .into_iter()
+                .filter(move |id| id.category() == category)
+        })
+        .filter(|id| picker.category.is_none_or(|c| id.category() == c))
+        .filter(|id| {
+            query
+                .split_whitespace()
+                .all(|word| id.label().to_lowercase().contains(word))
+        })
         .map(|id| AdjustmentChoice {
             id,
             label: id.label(),
@@ -64,6 +180,8 @@ pub(super) fn catalog() -> Vec<AdjustmentChoice> {
                 action: EffectAction::Insert { effect: id },
             },
             tile_cells: [3, 2],
+            category: id.category(),
+            category_label: id.category().label(),
         })
         .collect()
 }

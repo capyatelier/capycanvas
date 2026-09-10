@@ -906,6 +906,7 @@ dependencies = [
  "layer-core",
  "layer-render",
  "naga",
+ "png",
  "pollster",
  "web-time",
  "wgpu",

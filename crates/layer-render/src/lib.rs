@@ -161,6 +161,25 @@ pub struct ReadbackImage {
     pub bytes: Vec<u8>,
 }
 
+/// Small idle-time picker request; paint stays in renderer-owned GPU storage.
+#[derive(Clone, Debug)]
+pub struct FilterPreviewRequest {
+    pub request_id: u64,
+    pub target: LayerId,
+    pub size: [u32; 2],
+    pub extent: [u32; 2],
+    pub view: ViewState,
+    pub layers: Vec<Layer>,
+    pub filters: Vec<layer_core::BuiltinEffect>,
+}
+
+/// Rows of equal-sized previews packed vertically in a single small image.
+#[derive(Clone, Debug)]
+pub struct FilterPreviewImage {
+    pub image: ReadbackImage,
+    pub filters: Vec<layer_core::BuiltinEffect>,
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -188,6 +207,15 @@ pub trait CanvasRenderer {
         Ok(())
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
+        None
+    }
+    fn request_filter_previews(
+        &mut self,
+        _request: FilterPreviewRequest,
+    ) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    fn take_filter_previews(&mut self) -> Option<Result<FilterPreviewImage, Self::Error>> {
         None
     }
     fn request_readback(&mut self, request_id: u64) -> Result<(), Self::Error>;

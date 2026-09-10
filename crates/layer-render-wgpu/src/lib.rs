@@ -561,6 +561,9 @@ pub struct WgpuRasterizer {
     layer_masks: layer_masks::MaskRenderer,
     scene: Option<scene::Scene>,
     thumbnails: thumbnails::Thumbnails,
+    filter_previews: Option<scene::FilterPreviews>,
+    last_style_base: usize,
+    filter_source_epoch: u64,
     images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
@@ -783,6 +786,9 @@ impl WgpuRasterizer {
             document_extent: [0, 0],
             layer_masks,
             scene: None,
+            filter_previews: None,
+            last_style_base: 0,
+            filter_source_epoch: 0,
             thumbnails: thumbnails::Thumbnails::new(),
             images: Default::default(),
             paint_layers: Vec::with_capacity(8),
@@ -3496,6 +3502,9 @@ impl CanvasRenderer for WgpuRasterizer {
             t.compiled_effects = scene.effects.compilations;
             t.resident_bytes += scene.scratch_bytes();
         }
+        if let Some(previews) = &self.filter_previews {
+            t.resident_bytes += previews.storage_bytes();
+        }
         t
     }
     fn request_thumbnail(&mut self, request_id: u64, target: LayerId) -> Result<(), Self::Error> {
@@ -3503,6 +3512,17 @@ impl CanvasRenderer for WgpuRasterizer {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.take()
+    }
+    fn request_filter_previews(
+        &mut self,
+        request: layer_render::FilterPreviewRequest,
+    ) -> Result<bool, Self::Error> {
+        self.start_filter_previews(request)
+    }
+    fn take_filter_previews(
+        &mut self,
+    ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
+        self.poll_filter_previews()
     }
     fn tip_outline(&self, asset: &AssetId) -> Option<&layer_render::TipOutline> {
         let mask = self.mask(asset).ok()?;
@@ -3579,6 +3599,16 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        self.last_style_base = packet.dab_batches.len();
+        if packet.reset_layers
+            || !packet.dabs.is_empty()
+            || packet
+                .dab_batches
+                .iter()
+                .any(|b| b.kind != DabBatchKind::Preview)
+        {
+            self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
+        }
         let started = self.telemetry.enabled.then(web_time::Instant::now);
         if !needs_scene(packet.layers) {
             self.scene = None;

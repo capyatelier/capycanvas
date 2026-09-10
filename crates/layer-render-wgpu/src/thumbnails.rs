@@ -46,11 +46,39 @@ impl WgpuRasterizer {
             .unwrap_or_else(|| PreviewPipeline::new(self));
         let source = gpu.render(self, target, &mut encoder);
         self.thumbnails.gpu = Some(gpu);
-        let (texture, view) =
-            create_target(&self.device, [32, 32], EXPORT_FORMAT, "thumbnail sRGB");
+        let tx = self.thumbnails.tx.clone();
+        self.thumbnails.pending += 1;
+        self.submit_ui_readback(
+            encoder,
+            &source.texture_bind_group,
+            [32, 32],
+            id,
+            move |image| {
+                let _ = tx.send(image);
+            },
+        );
+        Ok(())
+    }
+
+    /// Shared color conversion and nonblocking readback for small UI images.
+    /// Neither thumbnails nor filter previews synchronously wait for the GPU.
+    pub(super) fn submit_ui_readback(
+        &mut self,
+        mut encoder: wgpu::CommandEncoder,
+        source: &wgpu::BindGroup,
+        [width, height]: [u32; 2],
+        request_id: u64,
+        reply: impl FnOnce(Result<ReadbackImage, GpuRasterError>) + Send + 'static,
+    ) {
+        let (texture, view) = create_target(
+            &self.device,
+            [width, height],
+            EXPORT_FORMAT,
+            "UI image sRGB",
+        );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("thumbnail color conversion"),
+                label: Some("UI image color conversion"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -66,12 +94,13 @@ impl WgpuRasterizer {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipelines.export);
-            pass.set_bind_group(0, &source.texture_bind_group, &[]);
+            pass.set_bind_group(0, source, &[]);
             pass.draw(0..3, 0..1);
         }
+        let stride = (width * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("32px thumbnail readback"),
-            size: 256 * 32,
+            label: Some("small UI image readback"),
+            size: stride as u64 * height as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -81,21 +110,15 @@ impl WgpuRasterizer {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(256),
-                    rows_per_image: Some(32),
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
                 },
             },
-            wgpu::Extent3d {
-                width: 32,
-                height: 32,
-                depth_or_array_layers: 1,
-            },
+            texture.size(),
         );
         self.uploads.finish(&encoder);
         self.queue.submit([encoder.finish()]);
         let ready = buffer.clone();
-        let tx = self.thumbnails.tx.clone();
-        self.thumbnails.pending += 1;
         buffer
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
@@ -106,23 +129,22 @@ impl WgpuRasterizer {
                             .slice(..)
                             .get_mapped_range()
                             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?;
-                        let mut bytes = Vec::with_capacity(32 * 32 * 4);
-                        for row in data.chunks(256) {
-                            bytes.extend_from_slice(&row[..128]);
+                        let mut bytes = Vec::with_capacity((width * height * 4) as usize);
+                        for row in data.chunks(stride as usize) {
+                            bytes.extend_from_slice(&row[..width as usize * 4]);
                         }
                         drop(data);
                         ready.unmap();
                         Ok(ReadbackImage {
-                            request_id: id,
-                            width: 32,
-                            height: 32,
-                            stride: 128,
+                            request_id,
+                            width,
+                            height,
+                            stride: width * 4,
                             bytes,
                         })
                     });
-                let _ = tx.send(image);
+                reply(image);
             });
-        Ok(())
     }
 }
 

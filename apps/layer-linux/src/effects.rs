@@ -2,14 +2,36 @@
 use crate::{number_control::NumberControl, workspace::Workspace};
 use gtk::{glib, prelude::*};
 use layer_core::EffectValue;
-use layer_ui::{EffectAction, LayerPropertiesView, PropertyKind, UiAction, UiState};
+use layer_render::CanvasRenderer;
+use layer_ui::{
+    EffectAction, FilterPickerAction, LayerPropertiesView, PropertyKind, UiAction, UiState,
+};
 use std::{
     cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PreviewKey {
+    revision: (u64, u64),
+    size: [u32; 2],
+}
+
 pub struct EffectPanels {
-    pub adjustments: gtk::FlowBox,
+    pub adjustments: gtk::Box,
+    picker_body: gtk::Box,
+    picker_scroller: gtk::ScrolledWindow,
+    category: gtk::DropDown,
+    search_button: gtk::Button,
+    search_entry: gtk::SearchEntry,
+    picker_bound: Cell<bool>,
+    picker_visible: RefCell<Vec<layer_core::BuiltinEffect>>,
+    picker_rows: RefCell<HashMap<layer_core::BuiltinEffect, (gtk::Button, gtk::Picture)>>,
+    preview_key: Cell<Option<PreviewKey>>,
+    preview_loaded: RefCell<HashSet<layer_core::BuiltinEffect>>,
+    preview_request: Cell<u64>,
+    preview_pending: Cell<Option<(u64, PreviewKey)>>,
     pub properties: gtk::Box,
     pub stats: gtk::Box,
     title: gtk::Label,
@@ -30,16 +52,28 @@ enum Field {
 }
 impl EffectPanels {
     pub fn new() -> Self {
-        let adjustments = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .min_children_per_line(1)
-            .max_children_per_line(8)
-            .column_spacing(2)
-            .row_spacing(2)
-            .homogeneous(true)
-            .valign(gtk::Align::Start)
+        let adjustments = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        adjustments.add_css_class("filter-picker");
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let category = gtk::DropDown::from_strings(&[]);
+        category.set_hexpand(true);
+        let search_entry = gtk::SearchEntry::builder()
+            .hexpand(true)
+            .visible(false)
             .build();
-        adjustments.add_css_class("adjustment-grid");
+        let search_button = gtk::Button::from_icon_name("system-search-symbolic");
+        search_button.add_css_class("flat");
+        header.append(&category);
+        header.append(&search_entry);
+        header.append(&search_button);
+        let picker_body = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&picker_body)
+            .build();
+        adjustments.append(&header);
+        adjustments.append(&scroller);
         let properties = gtk::Box::new(gtk::Orientation::Vertical, 6);
         properties.add_css_class("effect-properties");
         let title = gtk::Label::new(None);
@@ -87,6 +121,18 @@ impl EffectPanels {
         ));
         Self {
             adjustments,
+            picker_body,
+            picker_scroller: scroller,
+            category,
+            search_button,
+            search_entry,
+            picker_bound: Cell::new(false),
+            picker_visible: RefCell::new(Vec::new()),
+            picker_rows: RefCell::new(HashMap::new()),
+            preview_key: Cell::new(None),
+            preview_loaded: RefCell::new(HashSet::new()),
+            preview_request: Cell::new(0),
+            preview_pending: Cell::new(None),
             properties,
             stats,
             title,
@@ -99,7 +145,7 @@ impl EffectPanels {
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>, state: &UiState) {
-        if self.adjustments.first_child().is_some() {
+        if self.picker_bound.replace(true) {
             return;
         }
         let weak = Rc::downgrade(w);
@@ -110,38 +156,224 @@ impl EffectPanels {
             if w.effects.stats.is_mapped() {
                 w.effects.refresh_stats(&w);
             }
+            w.effects.refresh_previews(&w);
             glib::ControlFlow::Continue
         });
+        self.category.set_model(Some(&gtk::StringList::new(
+            &state
+                .filter_categories
+                .iter()
+                .map(|c| c.label)
+                .collect::<Vec<_>>(),
+        )));
+        let categories = state.filter_categories.clone();
+        self.category.connect_selected_notify(glib::clone!(
+            #[weak]
+            w,
+            move |drop| {
+                if let Some(choice) = categories.get(drop.selected() as usize) {
+                    w.dispatch(UiAction::FilterPicker {
+                        action: FilterPickerAction::Category {
+                            category: choice.id,
+                        },
+                    });
+                }
+            }
+        ));
+        self.search_entry
+            .set_placeholder_text(Some(state.filter_picker.search_label));
+        self.search_button
+            .set_tooltip_text(Some(state.filter_picker.search_label));
+        self.search_button.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                w.dispatch(UiAction::FilterPicker {
+                    action: FilterPickerAction::ToggleSearch,
+                });
+                if w.effects.search_entry.is_visible() {
+                    w.effects.search_entry.grab_focus();
+                }
+            }
+        ));
+        self.search_entry.connect_search_changed(glib::clone!(
+            #[weak]
+            w,
+            move |entry| {
+                if entry.is_visible() {
+                    w.dispatch(UiAction::FilterPicker {
+                        action: FilterPickerAction::Search {
+                            query: entry.text().to_string(),
+                        },
+                    });
+                }
+            }
+        ));
+        self.search_entry.connect_stop_search(glib::clone!(
+            #[weak]
+            w,
+            move |_| w.dispatch(UiAction::FilterPicker {
+                action: FilterPickerAction::ToggleSearch
+            })
+        ));
+    }
+    fn refresh_picker(&self, w: &Rc<Workspace>, state: &UiState) {
+        let picker = &state.filter_picker;
+        self.category.set_visible(picker.search.is_none());
+        self.category.set_selected(
+            state
+                .filter_categories
+                .iter()
+                .position(|c| c.id == picker.category)
+                .unwrap_or(0) as u32,
+        );
+        self.search_entry.set_visible(picker.search.is_some());
+        let query = picker.search.as_deref().unwrap_or("");
+        if self.search_entry.text() != query {
+            self.search_entry.set_text(query);
+        }
+        let ids: Vec<_> = state.adjustments.iter().map(|c| c.id).collect();
+        if *self.picker_visible.borrow() == ids {
+            return;
+        }
+        while let Some(child) = self.picker_body.first_child() {
+            self.picker_body.remove(&child);
+        }
+        let mut category = None;
+        let mut rows = self.picker_rows.borrow_mut();
         for choice in &state.adjustments {
-            let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            body.set_valign(gtk::Align::Center);
-            let icon = gtk::Image::from_icon_name(&format!("layer-{}-symbolic", choice.icon));
-            icon.set_pixel_size(24);
-            let label = gtk::Label::new(Some(choice.label));
-            label.set_wrap(true);
-            label.set_justify(gtk::Justification::Center);
-            label.set_max_width_chars(10);
-            body.append(&icon);
-            body.append(&label);
-            let button = gtk::Button::builder()
-                .child(&body)
-                .width_request((choice.tile_cells[0] * 36) as i32)
-                .height_request((choice.tile_cells[1] * 36) as i32)
-                .tooltip_text(choice.label)
-                .build();
-            button.add_css_class("flat");
-            button.set_widget_name(&format!("adjustment-{}", choice.icon));
-            let action = choice.action.clone();
-            button.connect_clicked(glib::clone!(
-                #[weak]
-                w,
-                move |_| w.dispatch(action.clone())
-            ));
-            self.adjustments.insert(&button, -1);
+            if category != Some(choice.category) {
+                let heading = gtk::Label::new(Some(choice.category_label));
+                heading.set_xalign(0.);
+                heading.add_css_class("filter-category");
+                self.picker_body.append(&heading);
+                category = Some(choice.category);
+            }
+            let row = rows.entry(choice.id).or_insert_with(|| {
+                let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let picture = gtk::Picture::builder()
+                    .can_shrink(true)
+                    .height_request(40)
+                    .content_fit(gtk::ContentFit::Fill)
+                    .build();
+                let label = gtk::Label::new(Some(choice.label));
+                label.set_xalign(1.);
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                body.append(&picture);
+                body.append(&label);
+                let button = gtk::Button::builder()
+                    .child(&body)
+                    .tooltip_text(choice.label)
+                    .build();
+                button.add_css_class("flat");
+                button.add_css_class("filter-row");
+                button.set_widget_name(&format!("adjustment-{}", choice.id.id()));
+                let action = choice.action.clone();
+                button.connect_clicked(glib::clone!(
+                    #[weak]
+                    w,
+                    move |_| w.dispatch(action.clone())
+                ));
+                (button, picture)
+            });
+            self.picker_body.append(&row.0);
+        }
+        if ids.is_empty() {
+            let empty = gtk::Label::new(Some(picker.empty_label));
+            empty.add_css_class("dim-label");
+            self.picker_body.append(&empty);
+        }
+        *self.picker_visible.borrow_mut() = ids;
+    }
+    fn refresh_previews(&self, w: &Workspace) {
+        let mut gpu = w.gpu.borrow_mut();
+        let Some(gpu) = gpu.as_mut() else {
+            return;
+        };
+        let revision = gpu.session.filter_preview_revision();
+        while let Some(result) = gpu.session.renderer_mut().take_filter_previews() {
+            let pending = self.preview_pending.take();
+            let Ok(result) = result else {
+                continue;
+            };
+            if pending.is_none_or(|(id, key)| {
+                id != result.image.request_id
+                    || key.revision != revision
+                    || Some(key) != self.preview_key.get()
+            }) {
+                continue;
+            }
+            let count = result.filters.len();
+            let height = result.image.height / count as u32;
+            let stride = result.image.stride as usize;
+            let bytes = glib::Bytes::from_owned(result.image.bytes);
+            let rows = self.picker_rows.borrow();
+            for (i, id) in result.filters.into_iter().enumerate() {
+                if let Some((_, picture)) = rows.get(&id) {
+                    let start = i * height as usize * stride;
+                    let row =
+                        glib::Bytes::from_bytes(&bytes, start..start + height as usize * stride);
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        result.image.width as i32,
+                        height as i32,
+                        gtk::gdk::MemoryFormat::R8g8b8a8,
+                        &row,
+                        stride,
+                    );
+                    picture.set_paintable(Some(&texture));
+                    self.preview_loaded.borrow_mut().insert(id);
+                }
+            }
+        }
+        if !self.adjustments.is_mapped() || self.preview_pending.get().is_some() {
+            return;
+        }
+        let rows = self.picker_rows.borrow();
+        let on_screen: Vec<_> = self
+            .picker_visible
+            .borrow()
+            .iter()
+            .filter_map(|id| {
+                let (_, picture) = rows.get(id)?;
+                let rect = picture.compute_bounds(&self.picker_scroller)?;
+                (rect.y() + rect.height() > 0. && rect.y() < self.picker_scroller.height() as f32)
+                    .then_some((*id, picture))
+            })
+            .collect();
+        let Some((_, first)) = on_screen.first() else {
+            return;
+        };
+        let scale = first.scale_factor() as u32;
+        let size = [
+            (first.width().max(1) as u32 * scale).clamp(80, 512),
+            (40 * scale).min(128),
+        ];
+        let key = PreviewKey { revision, size };
+        if self.preview_key.get() != Some(key) {
+            self.preview_loaded.borrow_mut().clear();
+            self.preview_key.set(Some(key));
+        }
+        let filters = on_screen
+            .into_iter()
+            .filter_map(|(id, _)| (!self.preview_loaded.borrow().contains(&id)).then_some(id))
+            .take(8)
+            .collect::<Vec<_>>();
+        if filters.is_empty() {
+            return;
+        }
+        let id = self.preview_request.get().wrapping_add(1);
+        if gpu
+            .session
+            .request_filter_previews(id, filters, size)
+            .unwrap_or(false)
+        {
+            self.preview_request.set(id);
+            self.preview_pending.set(Some((id, key)));
         }
     }
     pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
         self.bind(w, state);
+        self.refresh_picker(w, state);
         let view = &state.layer_properties;
         self.title.set_text(&view.title);
         self.title.set_tooltip_text(Some(&view.description));

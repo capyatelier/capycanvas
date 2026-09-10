@@ -64,20 +64,7 @@ impl ImageStages {
 // Stroke history does not participate in composition; batches invalidate paint.
 // Mask stroke IDs are already shared. Do not clone stroke/operation vectors.
 fn metadata(l: &Layer) -> Layer {
-    Layer {
-        id: l.id,
-        name: "".into(),
-        kind: l.kind,
-        visible: l.visible,
-        opacity: l.opacity,
-        strokes: Vec::new(),
-        asset: l.asset.clone(),
-        source_revision: None,
-        properties: l.properties.clone(),
-        mask: l.mask.clone(),
-        operations: Vec::new(),
-        effect: l.effect.clone(),
-    }
+    l.composite_snapshot()
 }
 fn visible(layers: &[Layer], layer: &Layer) -> bool {
     if !layer.visible {
@@ -121,7 +108,7 @@ impl Scene {
         );
         out
     }
-    fn copy_tile(
+    pub(super) fn copy_tile(
         &mut self,
         output: usize,
         destination: &wgpu::Texture,
@@ -283,7 +270,7 @@ impl Scene {
             if cached.input_owned && !input_dirty.is_empty() {
                 self.jobs.clear();
                 self.used.fill(false);
-                self.stop_before = Some(index);
+                self.stop_before = Some((index, layer.properties.clipped));
                 if effect.program.kind == layer_core::EffectKind::Generator {
                     self.jobs.push(Job::Clear(
                         cached.input.view.clone(),
@@ -382,7 +369,7 @@ impl Scene {
                         prepared: self.effects.prepare(
                             r,
                             &[layer],
-                            Some(pass),
+                            effects::Execution::Image(pass),
                             packet.time_seconds,
                         )?,
                         masks,

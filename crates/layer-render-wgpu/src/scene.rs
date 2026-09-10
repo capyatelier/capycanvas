@@ -3,6 +3,9 @@
 use super::*;
 #[path = "scene_images.rs"]
 mod images;
+#[path = "filter_previews.rs"]
+mod previews;
+pub(super) use previews::FilterPreviews;
 
 #[derive(Clone)]
 enum Job {
@@ -52,7 +55,7 @@ pub(super) struct Scene {
     pub(super) effects: effects::Effects,
     pub effect_passes: u64,
     images: images::ImageStages,
-    stop_before: Option<usize>,
+    stop_before: Option<(usize, bool)>,
 }
 impl Scene {
     #[cfg(test)]
@@ -225,9 +228,9 @@ impl Scene {
             self.free(input);
             return Ok(out);
         }
-        let prepared = self
-            .effects
-            .prepare(r, &layers, None, packet.time_seconds)?;
+        let prepared =
+            self.effects
+                .prepare(r, &layers, effects::Execution::Fused, packet.time_seconds)?;
         let mask =
             if indices.len() == 1 && !direct_effect_mask(packet.layers, layer) {
                 layer.mask.as_ref().filter(|m| m.enabled).map(|m| {
@@ -582,7 +585,7 @@ impl Scene {
                 && l.effect
                     .as_ref()
                     .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
-                && self.stop_before.is_none_or(|stop| *i > stop)
+                && self.stop_before.is_none_or(|(stop, _)| *i > stop)
                 && self.images.output(l.id).is_some()
         });
         if let Some((_, l)) = checkpoint {
@@ -603,8 +606,10 @@ impl Scene {
             .filter(|(i, _)| checkpoint.is_none_or(|(cut, _)| *i < cut))
             .peekable();
         while let Some((i, layer)) = siblings.next() {
-            if self.stop_before == Some(i) {
-                if layer.properties.clipped {
+            if let Some((stop, clipped)) = self.stop_before
+                && stop == i
+            {
+                if clipped {
                     self.free(output);
                     return Ok(stack.map_or_else(
                         || self.alloc(r, wgpu::Color::TRANSPARENT),
@@ -636,7 +641,8 @@ impl Scene {
                     && !layer.effect.as_ref().unwrap().program.image_boundary()
                 {
                     while let Some((j, next)) = siblings.peek() {
-                        if !next.visible
+                        if self.stop_before.is_some_and(|(stop, _)| *j <= stop)
+                            || !next.visible
                             || next.properties.clipped != layer.properties.clipped
                             || !direct_effect_mask(packet.layers, next)
                             || (chain.len() >= effects::MASK_SLOTS

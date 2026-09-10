@@ -12,6 +12,7 @@ pollster = "0.4.0"
 wgpu = "30.0.1"
 naga = { version = "30.0.0", features = ["wgsl-in"] }
 web-time = "1.1.0"
+png = "0.17.16"
 
 [lib]
 path = "src/lib.rs"

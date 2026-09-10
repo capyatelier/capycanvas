@@ -126,6 +126,23 @@ pub struct Layer {
 }
 
 impl Layer {
+    /// Composition metadata without copying immutable paint history.
+    pub fn composite_snapshot(&self) -> Self {
+        Self {
+            id: self.id,
+            name: "".into(),
+            kind: self.kind,
+            visible: self.visible,
+            opacity: self.opacity,
+            strokes: Vec::new(),
+            asset: self.asset.clone(),
+            source_revision: None,
+            properties: self.properties.clone(),
+            mask: self.mask.clone(),
+            operations: Vec::new(),
+            effect: self.effect.clone(),
+        }
+    }
     pub fn paint(id: LayerId, name: impl Into<Arc<str>>) -> Self {
         Self {
             id,

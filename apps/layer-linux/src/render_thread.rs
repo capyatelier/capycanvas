@@ -53,6 +53,7 @@ impl Frame {
 enum Command {
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
+    FilterPreviews(layer_render::FilterPreviewRequest),
     Frame(Box<Frame>),
     Asset(AssetId, [u32; 3], PixelFormat, Vec<u8>),
     Release(AssetId),
@@ -62,6 +63,7 @@ enum Command {
 }
 enum Reply {
     Thumbnail(ReadbackImage),
+    FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
     Error(String),
     Readback(ReadbackImage),
 }
@@ -78,6 +80,8 @@ pub struct RenderWorker {
     outlines: HashMap<AssetId, TipOutline>,
     readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
+    filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
+    filter_previews_pending: bool,
     pub(super) geometry: Option<Geometry>,
     pub(super) surround: [f32; 4],
     pub(super) cursor: Vec<CursorSegment>,
@@ -141,7 +145,13 @@ impl RenderWorker {
                                 .send(Reply::Thumbnail(image.map_err(error)?))
                                 .map_err(error)?;
                         }
+                        while let Some(image) = worker.renderer.take_filter_previews() {
+                            reply
+                                .send(Reply::FilterPreviews(image.map_err(error)))
+                                .map_err(error)?;
+                        }
                         let next = if cfg!(test)
+                            || worker.renderer.filter_previews_pending()
                             || worker.pending_present
                             || worker.renderer.thumbnails_pending()
                         {
@@ -171,6 +181,19 @@ impl RenderWorker {
                             Command::Telemetry(enabled) => {
                                 telemetry_enabled = enabled;
                                 worker.renderer.set_telemetry_enabled(enabled);
+                            }
+                            Command::FilterPreviews(request) => {
+                                let result = worker
+                                    .renderer
+                                    .request_filter_previews(request)
+                                    .map_err(error);
+                                if !matches!(result, Ok(true)) {
+                                    reply
+                                        .send(Reply::FilterPreviews(Err(result
+                                            .err()
+                                            .unwrap_or_else(|| "Preview renderer busy".into()))))
+                                        .map_err(error)?;
+                                }
                             }
                             Command::Thumbnail(id, target) => worker
                                 .renderer
@@ -237,6 +260,8 @@ impl RenderWorker {
             outlines,
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
+            filter_previews: VecDeque::new(),
+            filter_previews_pending: false,
             geometry: None,
             surround: [0.033; 4],
             cursor: Vec::new(),
@@ -253,6 +278,10 @@ impl RenderWorker {
         while let Ok(reply) = self.replies.try_recv() {
             match reply {
                 Reply::Thumbnail(image) => self.thumbnails.push_back(image),
+                Reply::FilterPreviews(image) => {
+                    self.filter_previews_pending = false;
+                    self.filter_previews.push_back(image);
+                }
                 Reply::Error(error) => return Err(error),
                 Reply::Readback(image) => self.readbacks.push_back(image),
             }
@@ -294,6 +323,28 @@ impl CanvasRenderer for RenderWorker {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.pop_front().map(Ok)
+    }
+    fn request_filter_previews(
+        &mut self,
+        request: layer_render::FilterPreviewRequest,
+    ) -> Result<bool, Self::Error> {
+        if self.filter_previews_pending {
+            return Ok(false);
+        }
+        self.send(Command::FilterPreviews(request))?;
+        self.filter_previews_pending = true;
+        Ok(true)
+    }
+    fn take_filter_previews(
+        &mut self,
+    ) -> Option<Result<layer_render::FilterPreviewImage, Self::Error>> {
+        self.ready().ok()?;
+        self.filter_previews.pop_front().map(|r| {
+            r.map_err(|message| {
+                eprintln!("Filter preview: {message}");
+                BackendError("Filter preview failed")
+            })
+        })
     }
     type Error = BackendError;
     fn tip_outline(&self, asset: &AssetId) -> Option<&TipOutline> {

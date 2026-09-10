@@ -17,6 +17,11 @@ catalog and property schema; they do not implement filter algorithms or policy.
 - Sampling dependencies explicitly distinguish bounded neighborhoods from
   whole-image remapping. Dirty regions must expand through every dependent pass;
   remapping conservatively invalidates the affected output image.
+  Use effective sampling bounds from the current parameters where possible.
+  Validate localized output against full recomposition and benchmark sparse,
+  broad and full-frame edits, including CPU scheduling/encoding costs. Prefer a
+  contiguous expanded region when splitting it into tiles would add more work;
+  incremental scheduling must be a measured benefit, not an assumption.
 - Cache composition at image/time-dependent boundaries. Animation changes a time
   value, not the document or paint strokes. Static upstream results remain cached.
   No canvas readback, paint replay, pipeline compilation or image allocation belongs
@@ -68,11 +73,59 @@ masking, frozen-time cache hits, upstream reuse, cache memory accounting and
 equivalence to fused filters in masked/clipped/isolated groups. This comparison
 also fixed a pre-existing double-fusion bug that overwrote nested opacity.
 
-The expanded picker and thirty-filter catalog below remain implementation work,
-not completed features. The repeat ten-filter 4096×4096 Vulkan baseline on the
+The thirty-filter catalog and web/Android picker ports remain implementation
+work, not completed features. The repeat ten-filter 4096×4096 Vulkan baseline on the
 workstation measured completion median/p99: 2.05/2.56 ms fused, 3.46/5.83 ms
 masked, 2.89/3.94 ms clipped. This establishes no large baseline regression;
 it does not yet establish neighborhood-filter, preview or device performance.
+
+## GTK picker milestone (2026-09-10)
+
+The shared category/search model and GTK categorized list now display actual
+GPU-rendered previews. They use the same shader bodies as the canvas through
+one catalog preview pipeline. Non-neutral preview presets do not change layer
+insertion defaults. Hosts request only visible rows, at most eight at a time;
+the core defers requests while input, a stroke or document edits are pending.
+
+The source is the composition at the insertion point in its layer-group scope,
+without filters above that point or the mask-inspection overlay. A topmost source
+copies the existing GPU composite in one operation. The GPU locates an actual
+painted pixel, preferring a crop whose corners also contain artwork; an empty
+document uses an original procedural color sample. Only the winning coordinate
+pair (eight bytes) returns before rendering. This is asynchronous and never
+waits on the drawing thread. A bounded multi-pass effect renders its crop plus
+sampling halo; whole-document dependencies remain correct. The original G-Pen
+sample alpha masks the final result, after filtering. PNG decoding happens once.
+
+Source/pixel caches ignore camera movement and category/search changes. Cache
+hits submit no GPU work. Source invalidation uses renderer paint epochs and
+composition metadata, not the UI revision alone. Small atlas readbacks share the
+existing layer-thumbnail color conversion and asynchronous mapping code. GTK
+shares the received atlas memory between its image widgets.
+
+Release Vulkan measurements on the workstation, eight 400×80 previews from a
+4096×4096 source, five warm-ups and sixty samples:
+
+| Operation | Median | p95 | p99 |
+| --- | ---: | ---: | ---: |
+| Refresh source + eight previews | 0.605 ms | 0.998 ms | 3.032 ms |
+| Eight previews from cached source | 0.362 ms | 0.432 ms | 0.663 ms |
+| Cached image delivery; no GPU work | 0.0150 ms | 0.0153 ms | 0.0154 ms |
+
+These include completion and small-image transfer, not presentation. Initial
+pipeline setup was 16–68 ms in two runs and is not included in warmed numbers.
+Preview storage measured 67,419,024 GPU bytes (64.30 MiB), dominated by one 4K
+RGBA8 source snapshot; CPU cache storage is 128,000 bytes per 400×80 row. Stats
+includes preview GPU storage. Raw measurements are generated/ignored at
+`artifacts/benchmarks/filter-previews.csv`.
+
+Validation covers nonempty selection, insertion below a clipped adjustment,
+100% pixel scale, blank-document fallback, camera-independent cache hits, and
+cropped two-pass output matching full-document output across a tile boundary.
+The GPU suite passes 43 tests; three opt-in benchmarks are excluded. Shared
+core/engine/UI tests and GTK integration pass. The wasm target compiles; this is
+not yet a web/Android UI-port or device-performance claim. The PNG dependency
+passes the existing MIT/Apache-compatible distribution notice audit.
 
 ## Validation gates
 

@@ -45,6 +45,19 @@ fn blend(s: vec3<f32>, d: vec3<f32>, mode: u32) -> vec3<f32> {
     if any(v.uv<vec2<f32>(0.)) || any(v.uv>vec2<f32>(1.)) { discard; }
     let op = u32(settings.options.x);
     if op == 0u { return settings.color; }
+    if op == 9u {
+        let p=v.uv;
+        let bands=.5+.5*cos(vec3<f32>(0.,2.,4.)+p.x*8.);
+        let light=.25+.65*p.y;
+        let detail=select(.8,1.,(u32(p.x*48.)+u32(p.y*12.))%2u==0u);
+        return vec4<f32>(bands*light*detail,1.);
+    }
+    if op == 10u {
+        let p=settings.color.xy+v.uv*settings.color.zw;
+        let ink=textureSampleLevel(front,sampling,p/vec2<f32>(textureDimensions(front)),0.);
+        let mask=textureSampleLevel(back,sampling,v.uv,0.).a;
+        return ink*mask;
+    }
     let raw = textureSample(front,sampling,v.uv);
     if op == 8u { return vec4<f32>(raw.rgb * raw.a, raw.a); }
     if op == 6u { let a = raw.r*settings.color.a; return vec4<f32>(settings.color.rgb*a,a); }
