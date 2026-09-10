@@ -4,7 +4,9 @@
 //! executor, or platform types. Strokes are immutable after commit and use
 //! shared point storage so undo/redo moves handles instead of copying samples.
 
+mod effect_catalog;
 mod effects;
+pub use effect_catalog::*;
 mod layers;
 pub use effects::*;
 mod presets;

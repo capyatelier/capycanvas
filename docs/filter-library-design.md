@@ -130,13 +130,15 @@ passes the existing MIT/Apache-compatible distribution notice audit.
 
 ## Forty-filter GTK milestone (2026-09-10)
 
-All thirty additions in the catalog above are now implemented as declarative
-Rust programs and original WGSL. The same registry defines IDs, categories,
+All thirty additions in the catalog above are implemented as declarative
+manifest entries and original WGSL. The same registry defines IDs, categories,
 labels, controls and preview presets. The renderer does not branch on filter IDs.
 Time-aware filters include Film Grain, Ripple, Rainy Glass, VHS, CRT, Heat Haze,
 Iridescence and Domain Warp. Other effects do not request animation frames.
 
-The blur family shares normalized separable Gaussian tap tables and two passes.
+The blur family shares WGSL-prepared normalized Gaussian tap tables and two passes.
+See [the runtime migration](runtime-filters.md) for resource loading, the current
+milestones and the remaining host hot-reload work.
 Denoise uses a bounded, alpha-aware bilateral neighborhood. Painterly chooses
 the lowest-variance of four regions using fixed nine-sample quadrature per region;
 it is an efficient approximation, not a full anisotropic Kuwahara implementation.

@@ -6306,6 +6306,12 @@ fn lattice_noise(x: u32, y: u32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub(super) fn fixtures() -> &'static [layer_core::EffectDefinition] {
+        layer_core::bundled_effect_catalog().filters()
+    }
+    pub(super) fn fixture(id: &str) -> &'static layer_core::EffectDefinition {
+        layer_core::bundled_effect_catalog().get(id).unwrap()
+    }
     mod adjustments;
     mod filter_library;
     use layer_core::{

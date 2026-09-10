@@ -1,6 +1,6 @@
 //! Effect catalog, properties and navigation policy shared by every native view.
 use super::*;
-use layer_core::{BuiltinEffect, Edit, EffectInstance, EffectParameterKind, EffectValue, Layer};
+use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, Layer};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ impl<B: CanvasRenderer> UiSession<B> {
     pub fn request_filter_previews(
         &mut self,
         request_id: u64,
-        filters: Vec<BuiltinEffect>,
+        filters: Vec<Arc<str>>,
         size: [u32; 2],
     ) -> Result<bool, String> {
         if self.input_pending
@@ -33,7 +33,17 @@ impl<B: CanvasRenderer> UiSession<B> {
             extent: [doc.width, doc.height],
             view: self.engine.view(),
             layers: doc.layers.iter().map(Layer::composite_snapshot).collect(),
-            filters: filters.into_iter().take(8).collect(),
+            filters: filters
+                .into_iter()
+                .take(8)
+                .map(|id| {
+                    self.effect_catalog
+                        .get(&id)
+                        .ok_or_else(|| format!("Unknown filter: {id}"))?
+                        .preview()
+                        .map(Arc::new)
+                })
+                .collect::<Result<_, _>>()?,
         };
         self.engine
             .backend_mut()
@@ -44,7 +54,7 @@ impl<B: CanvasRenderer> UiSession<B> {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FilterPickerState {
-    pub category: Option<layer_core::FilterCategory>,
+    pub category: Option<Arc<str>>,
     pub search: Option<String>,
     pub search_label: &'static str,
     pub empty_label: &'static str,
@@ -62,35 +72,27 @@ impl Default for FilterPickerState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum FilterPickerAction {
-    Category {
-        category: Option<layer_core::FilterCategory>,
-    },
-    Search {
-        query: String,
-    },
+    Category { category: Option<Arc<str>> },
+    Search { query: String },
     ToggleSearch,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct FilterCategoryChoice {
-    pub id: Option<layer_core::FilterCategory>,
-    pub label: &'static str,
+    pub id: Option<Arc<str>>,
+    pub label: Arc<str>,
+}
+pub(super) fn categories(catalog: &layer_core::EffectCatalog) -> Vec<FilterCategoryChoice> {
+    std::iter::once(FilterCategoryChoice {
+        id: None,
+        label: "All filters".into(),
+    })
+    .chain(catalog.categories().iter().map(|c| FilterCategoryChoice {
+        id: Some(c.id.clone()),
+        label: c.label.clone(),
+    }))
+    .collect()
 }
 impl FilterPickerState {
-    pub fn categories(&self) -> Vec<FilterCategoryChoice> {
-        std::iter::once(FilterCategoryChoice {
-            id: None,
-            label: "All filters",
-        })
-        .chain(
-            layer_core::FilterCategory::ALL
-                .into_iter()
-                .map(|id| FilterCategoryChoice {
-                    id: Some(id),
-                    label: id.label(),
-                }),
-        )
-        .collect()
-    }
     pub fn apply(&mut self, action: FilterPickerAction) {
         match action {
             FilterPickerAction::Category { category } => self.category = category,
@@ -117,7 +119,7 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
     Insert {
-        effect: BuiltinEffect,
+        effect: Arc<str>,
     },
     Set {
         layer: u64,
@@ -151,40 +153,58 @@ pub enum EffectAction {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct AdjustmentChoice {
-    pub id: BuiltinEffect,
-    pub label: &'static str,
-    pub icon: &'static str,
+    pub id: Arc<str>,
+    pub label: Arc<str>,
+    pub icon: Arc<str>,
     pub action: UiAction,
-    pub category: layer_core::FilterCategory,
-    pub category_label: &'static str,
+    pub category: Arc<str>,
+    pub category_label: Arc<str>,
     /// Capability, independent of whether a particular layer has frozen time.
     pub animated: bool,
     pub tooltip: String,
 }
-pub(super) fn catalog(picker: &FilterPickerState) -> Vec<AdjustmentChoice> {
+pub(super) fn catalog(
+    catalog: &layer_core::EffectCatalog,
+    picker: &FilterPickerState,
+) -> Vec<AdjustmentChoice> {
     let query = picker.search.as_deref().unwrap_or("").trim().to_lowercase();
-    layer_core::FilterCategory::ALL
-        .into_iter()
+    catalog
+        .categories()
+        .iter()
         .flat_map(|category| {
-            BuiltinEffect::ALL
-                .into_iter()
-                .filter(move |id| id.category() == category)
+            catalog
+                .filters()
+                .iter()
+                .filter(move |definition| definition.category == category.id)
         })
-        .filter(|id| picker.category.is_none_or(|c| id.category() == c))
+        .filter(|definition| {
+            picker
+                .category
+                .as_ref()
+                .is_none_or(|c| definition.category == *c)
+        })
         .filter(|id| {
             query
                 .split_whitespace()
                 .all(|word| id.label().to_lowercase().contains(word))
         })
         .map(|id| AdjustmentChoice {
-            id,
-            label: id.label(),
-            icon: id.icon(),
+            id: id.program.id.clone(),
+            label: id.program.label.clone(),
+            icon: id.icon.clone(),
             action: UiAction::Effect {
-                action: EffectAction::Insert { effect: id },
+                action: EffectAction::Insert {
+                    effect: id.program.id.clone(),
+                },
             },
-            category: id.category(),
-            category_label: id.category().label(),
+            category: id.category.clone(),
+            category_label: catalog
+                .categories()
+                .iter()
+                .find(|c| c.id == id.category)
+                .unwrap()
+                .label
+                .clone(),
             animated: id.program().time,
             tooltip: if id.program().time {
                 format!("{} · Animated", id.label())
@@ -445,6 +465,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 });
             }
             EffectAction::Insert { effect } => {
+                let effect = self.effect_catalog.get(&effect).ok_or("Unknown filter")?;
                 let doc = self.engine.document();
                 let current = doc.layer(doc.active_layer).ok_or("Select a layer first")?;
                 let top = doc.clipping_stack_top(current.id).unwrap();

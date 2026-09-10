@@ -406,10 +406,16 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     );
     let mut included = Vec::<&str>::new();
     for program in programs {
-        if !included.contains(&program.wgsl.as_ref()) {
-            source.push_str(&program.wgsl);
-            source.push('\n');
-            included.push(&program.wgsl);
+        for part in program
+            .wgsl
+            .sources()
+            .map_err(|e| GpuRasterError::Effect(e.into()))?
+        {
+            if !included.contains(&part.as_ref()) {
+                source.push_str(part);
+                source.push('\n');
+                included.push(part);
+            }
         }
     }
     if stage == Execution::Preview {
@@ -485,12 +491,10 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::fixtures;
     #[test]
     fn builtin_shaders_and_fused_chain_validate() {
-        let programs: Vec<_> = layer_core::BuiltinEffect::ALL
-            .into_iter()
-            .map(|b| b.program())
-            .collect();
+        let programs: Vec<_> = fixtures().iter().map(|b| b.program()).collect();
         for p in &programs {
             validate(std::slice::from_ref(p), Execution::Preview);
             if p.image_boundary() {

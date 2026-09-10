@@ -1,9 +1,9 @@
 //! Independent catalog-wide pixel, incremental, animation and performance gates.
 use super::*;
-use layer_core::{BuiltinEffect, EffectAlpha, EffectValue};
+use layer_core::{EffectAlpha, EffectValue};
 const EXTENT: [u32; 2] = [384, 256];
 
-fn fixture([width, height]: [u32; 2]) -> Vec<u8> {
+fn artwork([width, height]: [u32; 2]) -> Vec<u8> {
     // Original test artwork: gradients, curved silhouettes, bright highlights,
     // fine texture and transparent edges. No external image/licensing inputs.
     (0..width * height)
@@ -53,7 +53,7 @@ fn fixture([width, height]: [u32; 2]) -> Vec<u8> {
 }
 fn setup(r: &mut WgpuRasterizer, extent: [u32; 2]) -> Layer {
     let asset = AssetId("test:filter-library-art".into());
-    let bytes = fixture(extent);
+    let bytes = artwork(extent);
     r.prepare_asset(
         &asset,
         HostImage {
@@ -69,10 +69,10 @@ fn setup(r: &mut WgpuRasterizer, extent: [u32; 2]) -> Layer {
     layer.asset = Some(asset);
     layer
 }
-fn filter(id: BuiltinEffect) -> Layer {
+fn filter(id: &layer_core::EffectDefinition) -> Layer {
     let mut layer = Layer::paint(LayerId(2), id.label());
     layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(id.preview()));
+    layer.effect = Some(Arc::new(id.preview().unwrap()));
     layer
 }
 fn submit(
@@ -153,10 +153,10 @@ fn runtime_filter_pixel_reference() {
     let base = setup(&mut r, EXTENT);
     let sample = [64usize, 48usize];
     let columns = 8;
-    let rows = (BuiltinEffect::ALL.len() * 4).div_ceil(columns);
+    let rows = (fixtures().len() * 4).div_ceil(columns);
     let extent = [(columns * sample[0]) as u32, (rows * sample[1]) as u32];
     let mut pixels = vec![0; extent[0] as usize * extent[1] as usize * 4];
-    for (i, id) in BuiltinEffect::ALL.into_iter().enumerate() {
+    for (i, id) in fixtures().iter().enumerate() {
         for scope in 0..4 {
             let mut effect = filter(id);
             effect.properties.clipped = scope == 1 || scope == 3;
@@ -219,7 +219,7 @@ fn runtime_filter_pixel_reference() {
 fn gpu_preparation_is_shared_and_dependency_driven() {
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
-    let mut effect = filter(BuiltinEffect::UnsharpMask);
+    let mut effect = filter(fixture("unsharp_mask"));
     let old = effect.effect.take().unwrap();
     let program = Arc::new((*old.program).clone().with_time_controls());
     effect.effect = Some(Arc::new(layer_core::EffectInstance::new(program)));
@@ -272,12 +272,20 @@ fn gpu_preparation_is_shared_and_dependency_driven() {
     assert_eq!(count(&r), 2, "relevant edit prepares exactly once");
     let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
     let program = Arc::make_mut(&mut effect.program);
-    program.wgsl = format!("{}\n// render-only revision\n", program.wgsl).into();
+    program.wgsl = format!(
+        "{}\n// render-only revision\n",
+        program.wgsl.sources().unwrap().join("\n")
+    )
+    .into();
     submit(&mut r, EXTENT, &layers, 12., false, true, None);
     assert_eq!(count(&r), 2, "render-only code retains preparation");
     let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
     let lookup = &mut Arc::make_mut(&mut Arc::make_mut(&mut effect.program).lookups)[0];
-    lookup.wgsl = format!("{}\n// preparation revision\n", lookup.wgsl).into();
+    lookup.wgsl = format!(
+        "{}\n// preparation revision\n",
+        lookup.wgsl.sources().unwrap().join("\n")
+    )
+    .into();
     submit(&mut r, EXTENT, &layers, 13., false, true, None);
     assert_eq!(count(&r), 3, "preparation code edit prepares once");
     assert_eq!(
@@ -291,7 +299,7 @@ fn gpu_preparation_is_shared_and_dependency_driven() {
 fn custom_preparation_replaces_kernel_at_runtime() {
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
-    let mut layers = vec![filter(BuiltinEffect::GaussianBlur), base];
+    let mut layers = vec![filter(fixture("gaussian_blur")), base];
     submit(&mut r, EXTENT, &layers, 0., true, true, None);
     let gaussian = image(&mut r);
     let effect = Arc::make_mut(layers[0].effect.as_mut().unwrap());
@@ -316,10 +324,56 @@ fn custom_preparation_replaces_kernel_at_runtime() {
 }
 
 #[test]
+fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
+    let directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/filters/tent-blur");
+    let manifest = std::fs::read_to_string(directory.join("manifest.json")).unwrap();
+    let catalog = layer_core::EffectPackage::parse(&manifest)
+        .unwrap()
+        .resolve(|name| {
+            std::fs::read_to_string(directory.join(name))
+                .map(Arc::from)
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+    let definition = catalog.get("example:tent_blur").unwrap();
+    let mut r = WgpuRasterizer::new().unwrap();
+    let base = setup(&mut r, EXTENT);
+    submit(
+        &mut r,
+        EXTENT,
+        std::slice::from_ref(&base),
+        0.,
+        true,
+        true,
+        None,
+    );
+    let original = image(&mut r);
+    let mut layer = Layer::paint(LayerId(2), definition.label());
+    layer.kind = LayerKind::Effect;
+    layer.effect = Some(Arc::new(definition.preview().unwrap()));
+    let mut layers = vec![layer, base];
+    submit(&mut r, EXTENT, &layers, 0., false, true, None);
+    assert_ne!(image(&mut r), original);
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 1);
+    Arc::make_mut(layers[0].effect.as_mut().unwrap())
+        .set("radius", EffectValue::Number(0.))
+        .unwrap();
+    submit(&mut r, EXTENT, &layers, 0., false, true, None);
+    assert!(
+        image(&mut r)
+            .iter()
+            .zip(original)
+            .all(|(a, b)| a.abs_diff(b) <= 1)
+    );
+    assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(), 2);
+}
+
+#[test]
 fn prepared_pointwise_filters_still_fuse() {
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
-    let mut program = (*BuiltinEffect::BrightnessContrast.program()).clone();
+    let mut program = (*fixture("brightness_contrast").program()).clone();
     program.id = "runtime_factor".into();
     program.entry = "runtime_factor".into();
     program.wgsl="fn runtime_factor(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(c.rgb*fx_lookup(b,0u,0u).x,c.a);}".into();
@@ -327,7 +381,7 @@ fn prepared_pointwise_filters_still_fuse() {
         wgsl:"fn prepare_factor(local:vec3<u32>,global:vec3<u32>){prep_store(0u,prep_parameter(0u,0u)/100.);}".into(),
         entry:"prepare_factor".into(),dependencies:Arc::from([Arc::from("brightness")]),values:1,workgroup_size:[1,1,1],workgroups:[1,1,1],
     }]);
-    let mut first = filter(BuiltinEffect::BrightnessContrast);
+    let mut first = filter(fixture("brightness_contrast"));
     first.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
     Arc::make_mut(first.effect.as_mut().unwrap())
         .set("brightness", EffectValue::Number(50.))
@@ -369,7 +423,7 @@ fn prepared_pointwise_filters_still_fuse() {
 fn invalid_preparation_keeps_the_working_gpu_state() {
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
-    let effect = filter(BuiltinEffect::GaussianBlur);
+    let effect = filter(fixture("gaussian_blur"));
     let layers = vec![effect.clone(), base];
     submit(&mut r, EXTENT, &layers, 0., true, true, None);
     let expected = image(&mut r);
@@ -418,7 +472,7 @@ fn gpu_gaussian_is_normalized_at_parameter_extremes() {
     .unwrap();
     let mut base = Layer::paint(LayerId(1), "Uniform");
     base.asset = Some(asset);
-    let mut layers = vec![filter(BuiltinEffect::GaussianBlur), base];
+    let mut layers = vec![filter(fixture("gaussian_blur")), base];
     for (i, sigma) in [0., 0.000001, 0.1, 0.5, 1., 3., 12., 21.]
         .into_iter()
         .enumerate()
@@ -453,7 +507,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
     let directory = "../../artifacts/filter-library";
     png(&format!("{directory}/source.png"), EXTENT, &original);
     let mut rendered = Vec::new();
-    for id in BuiltinEffect::ALL {
+    for id in fixtures() {
         let mut layers = vec![filter(id), base.clone()];
         submit(&mut r, EXTENT, &layers, 0., false, true, None);
         let output = image(&mut r);
@@ -555,8 +609,8 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
     );
     std::fs::write(
         format!("{directory}/order.txt"),
-        BuiltinEffect::ALL
-            .into_iter()
+        fixtures()
+            .iter()
             .map(|id| id.label())
             .collect::<Vec<_>>()
             .join("\n"),
@@ -577,7 +631,7 @@ fn cached_clipping_matches_tiled_composition() {
             Point::default(),
         ));
         base.mask.as_mut().unwrap().default_coverage = 0.7;
-        let mut effect = filter(BuiltinEffect::HeatHaze);
+        let mut effect = filter(fixture("heat_haze"));
         effect.properties.clipped = true;
         effect.opacity = 0.54;
         effect.mask = Some(layer_core::LayerMask::reveal_all(
@@ -590,7 +644,7 @@ fn cached_clipping_matches_tiled_composition() {
             .unwrap();
         let mut layers = vec![effect, base];
         if case >= 3 {
-            let mut clip = filter(BuiltinEffect::GaussianBlur);
+            let mut clip = filter(fixture("gaussian_blur"));
             clip.id = LayerId(4);
             clip.properties.clipped = true;
             layers.insert(1, clip);
@@ -611,9 +665,9 @@ fn cached_clipping_matches_tiled_composition() {
         }
         if case >= 12 {
             let mut upper = filter(if case < 15 {
-                BuiltinEffect::Curves
+                fixture("curves")
             } else {
-                BuiltinEffect::GaussianBlur
+                fixture("gaussian_blur")
             });
             upper.id = LayerId(8);
             upper.properties.clipped = case < 15;
@@ -683,7 +737,7 @@ fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() 
     let mut base = backdrop.clone();
     base.id = LayerId(3);
     base.opacity = 0.6;
-    let mut heat = filter(BuiltinEffect::HeatHaze);
+    let mut heat = filter(fixture("heat_haze"));
     heat.properties.clipped = true;
     let mut layers = vec![heat, base, backdrop];
     submit(&mut r, EXTENT, &layers, 0., true, true, None);
@@ -755,7 +809,7 @@ fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() 
 fn every_filter_incremental_update_matches_a_forced_full_rebuild() {
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
-    for id in BuiltinEffect::ALL {
+    for id in fixtures() {
         let layers = vec![filter(id), base.clone()];
         submit(&mut r, EXTENT, &layers, 0., true, true, None);
         image(&mut r);
@@ -831,7 +885,7 @@ fn clipped_animation_latency() {
                 }
                 let animate = matches!(mode, "animation" | "backdrop-paint-animated");
                 let painting_backdrop = mode.starts_with("backdrop-paint");
-                let mut effect = filter(BuiltinEffect::HeatHaze);
+                let mut effect = filter(fixture("heat_haze"));
                 effect.properties.clipped = clipped;
                 Arc::make_mut(effect.effect.as_mut().unwrap())
                     .set("animate", EffectValue::Toggle(animate))
@@ -928,15 +982,15 @@ fn filter_parameter_latency() {
         "filter,mode,cpu_median,cpu_p95,cpu_p99,gpu_median,gpu_p95,gpu_p99,complete_median,complete_p95,complete_p99\n",
     );
     for (label, filters) in [
-        ("Unsharp", vec![BuiltinEffect::UnsharpMask]),
+        ("Unsharp", vec![fixture("unsharp_mask")]),
         (
             "Five prepared",
             vec![
-                BuiltinEffect::Pencil,
-                BuiltinEffect::SoftFocus,
-                BuiltinEffect::Bloom,
-                BuiltinEffect::GaussianBlur,
-                BuiltinEffect::UnsharpMask,
+                fixture("pencil"),
+                fixture("soft_focus"),
+                fixture("bloom"),
+                fixture("gaussian_blur"),
+                fixture("unsharp_mask"),
             ],
         ),
     ] {
@@ -945,7 +999,7 @@ fn filter_parameter_latency() {
                 .iter()
                 .enumerate()
                 .map(|(i, id)| {
-                    let mut l = filter(*id);
+                    let mut l = filter(id);
                     l.id = LayerId(i as u64 + 2);
                     l
                 })
@@ -1025,19 +1079,19 @@ fn filter_library_latency() {
         "filter,mode,cold_ms,cpu_median,cpu_p95,cpu_p99,complete_median,complete_p95,complete_p99,gpu_median,gpu_p95,gpu_p99,image_pixels,cache_bytes\n",
     );
     eprintln!("{:?}", r.adapter.get_info());
-    let mut cases: Vec<_> = BuiltinEffect::ALL
-        .into_iter()
+    let mut cases: Vec<_> = fixtures()
+        .iter()
         .map(|id| (id.label(), vec![filter(id)]))
         .collect();
     cases.insert(0, ("Baseline", vec![]));
     cases.push((
         "Five expensive",
         [
-            BuiltinEffect::Denoise,
-            BuiltinEffect::Painterly,
-            BuiltinEffect::DomainWarp,
-            BuiltinEffect::GaussianBlur,
-            BuiltinEffect::MotionBlur,
+            fixture("denoise"),
+            fixture("painterly"),
+            fixture("domain_warp"),
+            fixture("gaussian_blur"),
+            fixture("motion_blur"),
         ]
         .into_iter()
         .enumerate()
@@ -1127,9 +1181,9 @@ fn unrelated_layers_do_not_invalidate_filter_inputs() {
     let base = setup(&mut r, EXTENT);
     let mut source = base.clone();
     source.id = LayerId(3);
-    let mut clipped = filter(BuiltinEffect::GaussianBlur);
+    let mut clipped = filter(fixture("gaussian_blur"));
     clipped.properties.clipped = true;
-    let mut grouped = filter(BuiltinEffect::Painterly);
+    let mut grouped = filter(fixture("painterly"));
     grouped.properties.parent = Some(LayerId(7));
     let mut child = source.clone();
     child.properties.parent = Some(LayerId(7));
@@ -1140,7 +1194,7 @@ fn unrelated_layers_do_not_invalidate_filter_inputs() {
             "above",
             vec![
                 base.clone(),
-                filter(BuiltinEffect::GaussianBlur),
+                filter(fixture("gaussian_blur")),
                 source.clone(),
             ],
         ),
@@ -1180,12 +1234,12 @@ fn filter_parameter_limits_are_valid_and_do_not_recompile_shaders() {
     let mut r = WgpuRasterizer::new().unwrap();
     let extent = [64, 64];
     let base = setup(&mut r, extent);
-    for id in BuiltinEffect::ALL.into_iter().skip(10) {
+    for id in fixtures().iter().skip(10) {
         let mut layers = vec![filter(id), base.clone()];
         submit(&mut r, extent, &layers, 0., true, true, None);
         image(&mut r);
         let compiled = r.scene.as_ref().unwrap().effects.compilations;
-        let defaults = id.preview();
+        let defaults = id.preview().unwrap();
         for p in defaults.program.parameters.iter() {
             if let layer_core::EffectParameterKind::Number { min, max, .. } = p.kind {
                 for value in [min, max] {
@@ -1213,11 +1267,11 @@ fn expensive_filter_chain_incremental_matches_full_at_document_and_tile_edges() 
     let mut r = WgpuRasterizer::new().unwrap();
     let base = setup(&mut r, EXTENT);
     let mut layers: Vec<_> = [
-        BuiltinEffect::Denoise,
-        BuiltinEffect::Painterly,
-        BuiltinEffect::DomainWarp,
-        BuiltinEffect::GaussianBlur,
-        BuiltinEffect::MotionBlur,
+        fixture("denoise"),
+        fixture("painterly"),
+        fixture("domain_warp"),
+        fixture("gaussian_blur"),
+        fixture("motion_blur"),
     ]
     .into_iter()
     .enumerate()

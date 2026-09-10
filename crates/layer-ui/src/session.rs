@@ -55,6 +55,7 @@ pub struct UiSession<R: CanvasRenderer> {
     cursor: cursor::Cursor,
     next_request: u32,
     layer_interaction: art_layers::LayerInteraction,
+    effect_catalog: layer_core::EffectCatalog,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -74,6 +75,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         )
         .map_err(|e| e.to_string())?;
         let brush = default_brush(DefaultBrushPreset::GPen);
+        let effect_catalog = layer_core::bundled_effect_catalog().clone();
         let mut session = Self {
             engine,
             pen,
@@ -102,9 +104,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
-                adjustments: effects::catalog(&Default::default()),
+                adjustments: effects::catalog(&effect_catalog, &Default::default()),
                 filter_picker: Default::default(),
-                filter_categories: effects::FilterPickerState::default().categories(),
+                filter_categories: effects::categories(&effect_catalog),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
                 commands: Vec::new(),
@@ -119,6 +121,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 host_error: None,
                 camera,
             },
+            effect_catalog,
         };
         session.apply_brush()?;
         session.refresh_document();
@@ -963,7 +966,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (mut changed, wake) = match action {
             UiAction::FilterPicker { action } => {
                 self.state.filter_picker.apply(action);
-                self.state.adjustments = effects::catalog(&self.state.filter_picker);
+                self.state.adjustments =
+                    effects::catalog(&self.effect_catalog, &self.state.filter_picker);
                 (DOCUMENT, false)
             }
             UiAction::Effect { action } => {
@@ -1915,10 +1919,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             content_icon: l.effect.as_ref().map(|fx| {
                 format!(
                     "layer-{}-symbolic",
-                    layer_core::BuiltinEffect::ALL
-                        .into_iter()
-                        .find(|e| e.id() == fx.program.id.as_ref())
-                        .map_or("adjustments", |e| e.icon())
+                    self.effect_catalog
+                        .get(&fx.program.id)
+                        .map_or("adjustments", |e| e.icon.as_ref())
                 )
             }),
             label: l.name.to_string(),
@@ -2103,13 +2106,10 @@ mod tests {
                 .unwrap();
             assert!(!update.canvas_wake);
             assert_eq!(s.state.adjustments.len(), 1);
-            assert_eq!(
-                s.state.adjustments[0].id,
-                layer_core::BuiltinEffect::ColorBalance
-            );
+            assert_eq!(s.state.adjustments[0].id, "color_balance".into());
             s.dispatch(UiAction::FilterPicker {
                 action: FilterPickerAction::Category {
-                    category: Some(layer_core::FilterCategory::Tone),
+                    category: Some("tone".into()),
                 },
             })
             .unwrap();
@@ -2123,7 +2123,7 @@ mod tests {
                 s.state
                     .adjustments
                     .iter()
-                    .all(|f| f.category == layer_core::FilterCategory::Tone)
+                    .all(|f| f.category == "tone".into())
             );
             s.dispatch(UiAction::FilterPicker {
                 action: FilterPickerAction::Category { category: None },
@@ -2131,11 +2131,14 @@ mod tests {
             .unwrap();
             assert_eq!(
                 s.state.adjustments.len(),
-                layer_core::BuiltinEffect::ALL.len()
+                layer_core::bundled_effect_catalog().filters().len()
             );
             assert_eq!(s.engine.document().revision, revision);
             for choice in &s.state.adjustments {
-                assert_eq!(choice.animated, choice.id.program().time);
+                assert_eq!(
+                    choice.animated,
+                    s.effect_catalog.get(&choice.id).unwrap().program.time
+                );
                 assert_eq!(choice.tooltip.contains("Animated"), choice.animated);
             }
         }
@@ -2179,7 +2182,7 @@ mod tests {
                 );
                 s.dispatch(UiAction::Effect {
                     action: EffectAction::Insert {
-                        effect: layer_core::BuiltinEffect::HeatHaze,
+                        effect: "heat_haze".into(),
                     },
                 })
                 .unwrap();
@@ -5132,7 +5135,7 @@ mod tests {
 
     #[test]
     fn effect_creation_properties_and_navigation_are_shared() {
-        use layer_core::{BuiltinEffect, EffectValue};
+        use layer_core::EffectValue;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut app = session();
             app.set_platform(platform);
@@ -5143,7 +5146,7 @@ mod tests {
             send(
                 &mut app,
                 EffectAction::Insert {
-                    effect: BuiltinEffect::Curves,
+                    effect: "curves".into(),
                 },
             );
             let id = app.engine.document().active_layer;
@@ -5199,7 +5202,7 @@ mod tests {
             send(
                 &mut app,
                 EffectAction::Insert {
-                    effect: BuiltinEffect::Levels,
+                    effect: "levels".into(),
                 },
             );
             assert_eq!(
@@ -5215,7 +5218,7 @@ mod tests {
             send(
                 &mut app,
                 EffectAction::Insert {
-                    effect: BuiltinEffect::BrightnessContrast,
+                    effect: "brightness_contrast".into(),
                 },
             );
             let panels = app.state.workspace.layout.group_panels(8).unwrap();
@@ -5227,7 +5230,7 @@ mod tests {
             send(
                 &mut app,
                 EffectAction::Insert {
-                    effect: BuiltinEffect::ColorBalance,
+                    effect: "color_balance".into(),
                 },
             );
             let controls = &app.state.layer_properties.controls;
@@ -5239,7 +5242,7 @@ mod tests {
             send(
                 &mut app,
                 EffectAction::Insert {
-                    effect: BuiltinEffect::GradientMap,
+                    effect: "gradient_map".into(),
                 },
             );
             let layer = app.state.layer_properties.layer.unwrap();

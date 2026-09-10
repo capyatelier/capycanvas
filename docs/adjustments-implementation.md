@@ -4,6 +4,10 @@ Implemented design, 2026-09-09. Builds on
 [the supplied shader research](non_destructive_filters_wgsl_shader_subsystem.md)
 and the existing tiled compositor, not a second rendering engine.
 
+Filter definitions now come from JSON/WGSL resources rather than Rust
+constructors; see [runtime filters](runtime-filters.md) for the loading contract
+and the remaining transactional host-publication work.
+
 ## Contract
 
 - An adjustment transforms the composite below it within its isolated group.

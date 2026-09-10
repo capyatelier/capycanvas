@@ -1,5 +1,5 @@
 // Original WGSL filter library. Parameters, footprints and pass order are in
-// filter_library.rs. No platform code or filter-specific renderer branches.
+// manifest.json. No platform code or filter-specific renderer branches.
 const FX_PI:f32=3.141592653589793;
 fn fx_axis(degrees:f32)->vec2<f32> {let a=degrees*FX_PI/180.;return vec2<f32>(cos(a),sin(a));}
 fn fx_rotate(p:vec2<f32>,axis:vec2<f32>)->vec2<f32> {return vec2<f32>(p.x*axis.x-p.y*axis.y,p.x*axis.y+p.y*axis.x);}

@@ -170,14 +170,14 @@ pub struct FilterPreviewRequest {
     pub extent: [u32; 2],
     pub view: ViewState,
     pub layers: Vec<Layer>,
-    pub filters: Vec<layer_core::BuiltinEffect>,
+    pub filters: Vec<std::sync::Arc<layer_core::EffectInstance>>,
 }
 
 /// Rows of equal-sized previews packed vertically in a single small image.
 #[derive(Clone, Debug)]
 pub struct FilterPreviewImage {
     pub image: ReadbackImage,
-    pub filters: Vec<layer_core::BuiltinEffect>,
+    pub filters: Vec<std::sync::Arc<str>>,
 }
 
 /// GPU command boundary implemented by the renderer owned by each platform.

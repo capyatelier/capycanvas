@@ -57,7 +57,7 @@ fn native_test_app(id: &str) -> NativeTestApp {
 #[test]
 #[ignore = "private Wayland display and GPU"]
 fn native_adjustment_panels_review() {
-    use layer_core::{BuiltinEffect, EffectValue};
+    use layer_core::EffectValue;
     use layer_ui::EffectAction;
     let app = native_test_app("art.capycanvas.AdjustmentReview");
     let w = Workspace::new(&app);
@@ -125,7 +125,11 @@ fn native_adjustment_panels_review() {
         second.compute_bounds(&w.effects.adjustments).unwrap().y()
             > first.compute_bounds(&w.effects.adjustments).unwrap().y()
     );
-    for (i, kind) in BuiltinEffect::ALL.into_iter().enumerate() {
+    for (i, kind) in layer_core::bundled_effect_catalog()
+        .filters()
+        .iter()
+        .enumerate()
+    {
         w.dispatch(UiAction::SelectPanelTab {
             group: 8,
             panel: Panel::Adjustments,
@@ -145,7 +149,7 @@ fn native_adjustment_panels_review() {
         let s = state(&w);
         let id = s.layer_properties.layer.unwrap();
         assert_eq!(s.layer_properties.description, kind.label());
-        if kind == BuiltinEffect::ColorBalance {
+        if kind.id() == "color_balance" {
             let mut headings = Vec::new();
             let mut child = w.effects.properties.last_child().unwrap().first_child();
             while let Some(widget) = child {
@@ -163,19 +167,19 @@ fn native_adjustment_panels_review() {
             assert_eq!(headings, ["Shadows", "Midtones", "Highlights"]);
         }
         let program = kind.program();
-        let (key, value) = match kind {
-            BuiltinEffect::Curves => (
+        let (key, value) = match kind.id() {
+            "curves" => (
                 "curve_0",
                 EffectValue::Curve(vec![[0., 0.], [0.4, 0.65], [1., 1.]]),
             ),
-            BuiltinEffect::Levels => ("gamma", EffectValue::Number(1.5)),
-            BuiltinEffect::BrightnessContrast => ("contrast", EffectValue::Number(30.)),
-            BuiltinEffect::HueSaturation => ("hue", EffectValue::Number(40.)),
-            BuiltinEffect::ColorBalance => ("midtones_red", EffectValue::Number(25.)),
-            BuiltinEffect::Exposure => ("exposure", EffectValue::Number(1.)),
-            BuiltinEffect::Vibrance => ("vibrance", EffectValue::Number(75.)),
-            BuiltinEffect::BlackWhite => ("reds", EffectValue::Number(80.)),
-            BuiltinEffect::GradientMap => (
+            "levels" => ("gamma", EffectValue::Number(1.5)),
+            "brightness_contrast" => ("contrast", EffectValue::Number(30.)),
+            "hue_saturation" => ("hue", EffectValue::Number(40.)),
+            "color_balance" => ("midtones_red", EffectValue::Number(25.)),
+            "exposure" => ("exposure", EffectValue::Number(1.)),
+            "vibrance" => ("vibrance", EffectValue::Number(75.)),
+            "black_white" => ("reds", EffectValue::Number(80.)),
+            "gradient_map" => (
                 "gradient",
                 EffectValue::Gradient(vec![
                     layer_core::GradientStop {
@@ -192,7 +196,7 @@ fn native_adjustment_panels_review() {
                     },
                 ]),
             ),
-            BuiltinEffect::Posterize => ("levels", EffectValue::Number(4.)),
+            "posterize" => ("levels", EffectValue::Number(4.)),
             _ => {
                 let parameter = program
                     .parameters
@@ -218,7 +222,7 @@ fn native_adjustment_panels_review() {
         });
         pump(200);
         assert!(!w.status.is_visible(), "{}", w.status.text());
-        if kind == BuiltinEffect::GradientMap {
+        if kind.id() == "gradient_map" {
             let bar = find_named(w.effects.properties.upcast_ref(), "effect-gradient").unwrap();
             let controllers = bar.observe_controllers();
             for i in 0..controllers.n_items() {
@@ -253,7 +257,7 @@ fn native_adjustment_panels_review() {
     });
     w.dispatch(UiAction::FilterPicker {
         action: layer_ui::FilterPickerAction::Category {
-            category: Some(layer_core::FilterCategory::Distort),
+            category: Some("distort".into()),
         },
     });
     pump(700);
@@ -285,7 +289,7 @@ fn native_adjustment_panels_review() {
     // Keep the stable stats exercise on a simple pointwise filter.
     w.dispatch(UiAction::Effect {
         action: EffectAction::Insert {
-            effect: BuiltinEffect::Posterize,
+            effect: "posterize".into(),
         },
     });
     let layer = state(&w).layer_properties.layer.unwrap();

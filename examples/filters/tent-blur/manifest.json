@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "categories": [{"id": "examples", "label": "Examples"}],
+  "filters": [{
+    "category": "examples",
+    "icon": "adjustments",
+    "preview": {"radius": {"kind": "number", "value": 5}},
+    "program": {
+      "abi": 2,
+      "id": "example:tent_blur",
+      "label": "Tent Blur",
+      "kind": "adjustment",
+      "alpha": "filter",
+      "wgsl": ["tent.wgsl"],
+      "entry": "tent_vertical",
+      "passes": [
+        {"entry": "tent_horizontal", "sampling": {"kind": "parameter", "key": "radius", "scale": 1, "padding": 0}},
+        {"entry": "tent_vertical", "sampling": {"kind": "parameter", "key": "radius", "scale": 1, "padding": 0}}
+      ],
+      "lookups": [{
+        "wgsl": ["prepare.wgsl"],
+        "entry": "prepare_tent",
+        "dependencies": ["radius"],
+        "values": 17,
+        "workgroup_size": [32, 1, 1],
+        "workgroups": [1, 1, 1]
+      }],
+      "parameters": [{
+        "key": "radius",
+        "label": "Radius",
+        "kind": {"kind": "number", "min": 0, "max": 16, "step": 1, "decimals": 0, "unit": "px"},
+        "default": {"kind": "number", "value": 3}
+      }]
+    }
+  }]
+}

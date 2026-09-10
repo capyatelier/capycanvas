@@ -64,7 +64,14 @@ impl Preparation {
         source.push_str("default:{return vec4<f32>(0.);}}}\n");
         let lookup = &key.definition;
         source.push_str(&format!("fn prep_store(index:u32,value:vec4<f32>){{if index<{}u{{prep_data[{}u+index]=value;}}}}\n",lookup.values,key.output));
-        source.push_str(&lookup.wgsl);
+        for part in lookup
+            .wgsl
+            .sources()
+            .map_err(|e| GpuRasterError::Effect(e.into()))?
+        {
+            source.push_str(part);
+            source.push('\n');
+        }
         let [x, y, z] = lookup.workgroup_size;
         source.push_str(&format!("\n@compute @workgroup_size({x},{y},{z}) fn prep_main(@builtin(local_invocation_id) local:vec3<u32>,@builtin(global_invocation_id) global:vec3<u32>){{{}(local,global);}}",lookup.entry));
         let module = naga::front::wgsl::parse_str(&source)

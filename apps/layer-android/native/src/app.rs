@@ -268,7 +268,7 @@ impl App {
             FilterPreviews {
                 request: u64,
                 revision: Option<(u64, u64)>,
-                filters: Vec<layer_core::BuiltinEffect>,
+                filters: Vec<std::sync::Arc<str>>,
                 size: [u32; 2],
             },
             ActionTooltip {

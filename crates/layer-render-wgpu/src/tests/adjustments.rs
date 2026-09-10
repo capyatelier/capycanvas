@@ -1,21 +1,23 @@
 use super::*;
-use layer_core::{BuiltinEffect, EffectInstance, EffectValue, LayerMask, Selection};
+use layer_core::{EffectInstance, EffectValue, LayerMask, Selection};
 
 // Keep the established ten-filter baseline stable as the catalog grows.
-const POINTWISE_BASELINE: [BuiltinEffect; 10] = [
-    BuiltinEffect::Curves,
-    BuiltinEffect::Levels,
-    BuiltinEffect::BrightnessContrast,
-    BuiltinEffect::HueSaturation,
-    BuiltinEffect::ColorBalance,
-    BuiltinEffect::Exposure,
-    BuiltinEffect::Vibrance,
-    BuiltinEffect::BlackWhite,
-    BuiltinEffect::GradientMap,
-    BuiltinEffect::Posterize,
-];
+fn pointwise_baseline() -> [&'static layer_core::EffectDefinition; 10] {
+    [
+        fixture("curves"),
+        fixture("levels"),
+        fixture("brightness_contrast"),
+        fixture("hue_saturation"),
+        fixture("color_balance"),
+        fixture("exposure"),
+        fixture("vibrance"),
+        fixture("black_white"),
+        fixture("gradient_map"),
+        fixture("posterize"),
+    ]
+}
 
-fn effect(id: u64, kind: BuiltinEffect) -> Layer {
+fn effect(id: u64, kind: &layer_core::EffectDefinition) -> Layer {
     let mut l = Layer::paint(LayerId(id), kind.label());
     l.kind = LayerKind::Effect;
     l.effect = Some(Arc::new(EffectInstance::new(kind.program())));
@@ -31,13 +33,13 @@ fn set(layer: &mut Layer, key: &str, value: EffectValue) {
 fn image_passes_cross_tiles_cache_inputs_and_freeze_animation() {
     use layer_core::{EffectKind, EffectPass, EffectSampling};
     let mut r = WgpuRasterizer::new().expect("physical GPU required");
-    let mut source = effect(1, BuiltinEffect::BrightnessContrast);
+    let mut source = effect(1, fixture("brightness_contrast"));
     let mut generator = (*source.effect.as_ref().unwrap().program).clone();
     generator.kind = EffectKind::Generator;
     generator.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(select(0.,1.,p.x<256.),select(1.,0.,p.x<256.),p.y/291.,1.);}".into();
     generator.entry = "pattern".into();
     source.effect = Some(Arc::new(EffectInstance::new(Arc::new(generator))));
-    let mut filter = effect(2, BuiltinEffect::BrightnessContrast);
+    let mut filter = effect(2, fixture("brightness_contrast"));
     let mut program = (*filter.effect.as_ref().unwrap().program)
         .clone()
         .with_time_controls();
@@ -173,7 +175,7 @@ fn image_boundary_matches_fused_mask_clip_and_group_semantics() {
         [0.7, 0.25, 0.1, 0.6],
         45.,
     );
-    let mut effect = effect(2, BuiltinEffect::HueSaturation);
+    let mut effect = effect(2, fixture("hue_saturation"));
     set(&mut effect, "hue", EffectValue::Number(100.));
     effect.opacity = 0.7;
     for grouped in [false, true] {
@@ -288,11 +290,8 @@ fn adjustment_defaults_masks_clipping_and_parameter_updates() {
         32.,
     );
     let original = pixel(&mut r, 64, 64);
-    for kind in POINTWISE_BASELINE {
-        if matches!(
-            kind,
-            BuiltinEffect::BlackWhite | BuiltinEffect::GradientMap | BuiltinEffect::Posterize
-        ) {
+    for kind in pointwise_baseline() {
+        if matches!(kind.id(), "black_white" | "gradient_map" | "posterize") {
             continue;
         }
         let fx = effect(2, kind);
@@ -304,7 +303,7 @@ fn adjustment_defaults_masks_clipping_and_parameter_updates() {
             kind.label()
         );
     }
-    let mut fx = effect(2, BuiltinEffect::BrightnessContrast);
+    let mut fx = effect(2, fixture("brightness_contrast"));
     set(&mut fx, "brightness", EffectValue::Number(-50.));
     frame(&mut r, &[fx.clone(), base.clone()]);
     assert!(pixel(&mut r, 4, 64)[0] < 150, "unclipped adjusts backdrop");
@@ -373,7 +372,7 @@ fn adjustment_chain_is_fused_and_preserves_clip_base() {
         [0.2, 0.4, 0.7, 1.],
         32.,
     );
-    let mut layers: Vec<_> = POINTWISE_BASELINE
+    let mut layers: Vec<_> = pointwise_baseline()
         .into_iter()
         .enumerate()
         .map(|(i, kind)| {
@@ -401,7 +400,7 @@ fn masked_chain_crosses_portable_texture_limit_without_losing_coverage() {
     paint(&mut r, std::slice::from_ref(&base), 1, [1.; 4], 128.);
     let mut layers = Vec::new();
     for i in 0..17 {
-        let mut fx = effect(i + 2, BuiltinEffect::BrightnessContrast);
+        let mut fx = effect(i + 2, fixture("brightness_contrast"));
         set(&mut fx, "brightness", EffectValue::Number(-1.));
         let mut mask = LayerMask::reveal_all(LayerId(30 + i), Point::default());
         mask.default_coverage = 0.;
@@ -443,17 +442,16 @@ fn adjustment_latency() {
     eprintln!("adapter {:?}", r.adapter.get_info());
     for size in [128, 2048, 4096] {
         for incremental in [false, true] {
-            for case in 0..=POINTWISE_BASELINE.len() + 4 {
+            for case in 0..=pointwise_baseline().len() + 4 {
                 let kind = case
                     .checked_sub(1)
-                    .and_then(|i| POINTWISE_BASELINE.get(i))
-                    .copied();
-                let chain = case > POINTWISE_BASELINE.len();
-                let masked = case == POINTWISE_BASELINE.len() + 2;
-                let clipped = case == POINTWISE_BASELINE.len() + 3;
-                let telemetry = case != POINTWISE_BASELINE.len() + 4;
+                    .and_then(|i| pointwise_baseline().get(i).copied());
+                let chain = case > pointwise_baseline().len();
+                let masked = case == pointwise_baseline().len() + 2;
+                let clipped = case == pointwise_baseline().len() + 3;
+                let telemetry = case != pointwise_baseline().len() + 4;
                 let label = if !chain {
-                    kind.map_or("Baseline", BuiltinEffect::label)
+                    kind.map_or("Baseline", layer_core::EffectDefinition::label)
                 } else if masked {
                     "Ten masked"
                 } else if clipped {
@@ -468,7 +466,7 @@ fn adjustment_latency() {
                     layers.insert(0, effect(2, kind));
                 }
                 if chain {
-                    for (i, kind) in POINTWISE_BASELINE.into_iter().enumerate() {
+                    for (i, kind) in pointwise_baseline().into_iter().enumerate() {
                         let mut fx = effect(2 + i as u64, kind);
                         fx.properties.clipped = clipped;
                         if masked {
@@ -609,7 +607,7 @@ fn programmable_generator_and_adjustment_share_runtime_without_tile_seams() {
         entry:"test_gradient".into(),parameters:Arc::from([]),constraints:Arc::from([]),passes:Arc::from([]),time:false,lookups:Arc::from([]),
         wgsl:"fn test_gradient(c:vec4<f32>,position:vec2<f32>,base:u32)->vec4<f32>{return vec4<f32>(position.x/333.,position.y/291.,.25,.5)*vec4<f32>(.5,.5,.5,1.);}".into(),
     }))));
-    let mut fx = effect(2, BuiltinEffect::HueSaturation);
+    let mut fx = effect(2, fixture("hue_saturation"));
     set(&mut fx, "hue", EffectValue::Number(120.));
     let mut view = test_view();
     view.width_px = 333;
@@ -680,55 +678,55 @@ fn builtin_adjustments_have_known_color_results() {
     );
     let cases = [
         (
-            BuiltinEffect::HueSaturation,
+            fixture("hue_saturation"),
             "hue",
             EffectValue::Number(120.),
             [0, 255, 0],
         ),
         (
-            BuiltinEffect::HueSaturation,
+            fixture("hue_saturation"),
             "saturation",
             EffectValue::Number(-100.),
             [128, 128, 128],
         ),
         (
-            BuiltinEffect::Curves,
+            fixture("curves"),
             "curve_0",
             EffectValue::Curve(vec![[0., 1.], [1., 0.]]),
             [0, 255, 255],
         ),
         (
-            BuiltinEffect::Levels,
+            fixture("levels"),
             "output_white",
             EffectValue::Number(0.5),
             [128, 0, 0],
         ),
         (
-            BuiltinEffect::BrightnessContrast,
+            fixture("brightness_contrast"),
             "brightness",
             EffectValue::Number(-50.),
             [128, 0, 0],
         ),
         (
-            BuiltinEffect::Exposure,
+            fixture("exposure"),
             "exposure",
             EffectValue::Number(-1.),
             [188, 0, 0],
         ),
         (
-            BuiltinEffect::Vibrance,
+            fixture("vibrance"),
             "saturation",
             EffectValue::Number(-100.),
             [128, 128, 128],
         ),
         (
-            BuiltinEffect::BlackWhite,
+            fixture("black_white"),
             "reds",
             EffectValue::Number(80.),
             [204, 204, 204],
         ),
         (
-            BuiltinEffect::GradientMap,
+            fixture("gradient_map"),
             "gradient",
             EffectValue::Gradient(vec![
                 layer_core::GradientStop {
@@ -743,7 +741,7 @@ fn builtin_adjustments_have_known_color_results() {
             [0, 0, 255],
         ),
         (
-            BuiltinEffect::Posterize,
+            fixture("posterize"),
             "levels",
             EffectValue::Number(2.),
             [255, 0, 0],
@@ -773,7 +771,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
     group.kind = LayerKind::Group;
     base.properties.parent = Some(group.id);
     let mut layers = vec![group];
-    for (i, kind) in POINTWISE_BASELINE.into_iter().enumerate() {
+    for (i, kind) in pointwise_baseline().into_iter().enumerate() {
         let mut fx = effect(i as u64 + 2, kind);
         fx.properties.parent = Some(LayerId(20));
         fx.properties.clipped = true;

@@ -26,10 +26,10 @@ pub struct EffectPanels {
     search_button: gtk::Button,
     search_entry: gtk::SearchEntry,
     picker_bound: Cell<bool>,
-    picker_visible: RefCell<Vec<layer_core::BuiltinEffect>>,
-    picker_rows: RefCell<HashMap<layer_core::BuiltinEffect, (gtk::Button, gtk::Picture)>>,
+    picker_visible: RefCell<Vec<std::sync::Arc<str>>>,
+    picker_rows: RefCell<HashMap<std::sync::Arc<str>, (gtk::Button, gtk::Picture)>>,
     preview_key: Cell<Option<PreviewKey>>,
-    preview_loaded: RefCell<HashSet<layer_core::BuiltinEffect>>,
+    preview_loaded: RefCell<HashSet<std::sync::Arc<str>>>,
     preview_request: Cell<u64>,
     preview_pending: Cell<Option<(u64, PreviewKey)>>,
     pub properties: gtk::Box,
@@ -163,7 +163,7 @@ impl EffectPanels {
             &state
                 .filter_categories
                 .iter()
-                .map(|c| c.label)
+                .map(|c| c.label.as_ref())
                 .collect::<Vec<_>>(),
         )));
         let categories = state.filter_categories.clone();
@@ -174,7 +174,7 @@ impl EffectPanels {
                 if let Some(choice) = categories.get(drop.selected() as usize) {
                     w.dispatch(UiAction::FilterPicker {
                         action: FilterPickerAction::Category {
-                            category: choice.id,
+                            category: choice.id.clone(),
                         },
                     });
                 }
@@ -232,7 +232,7 @@ impl EffectPanels {
         if self.search_entry.text() != query {
             self.search_entry.set_text(query);
         }
-        let ids: Vec<_> = state.adjustments.iter().map(|c| c.id).collect();
+        let ids: Vec<_> = state.adjustments.iter().map(|c| c.id.clone()).collect();
         if *self.picker_visible.borrow() == ids {
             return;
         }
@@ -242,21 +242,21 @@ impl EffectPanels {
         let mut category = None;
         let mut rows = self.picker_rows.borrow_mut();
         for choice in &state.adjustments {
-            if category != Some(choice.category) {
-                let heading = gtk::Label::new(Some(choice.category_label));
+            if category.as_ref() != Some(&choice.category) {
+                let heading = gtk::Label::new(Some(&choice.category_label));
                 heading.set_xalign(0.);
                 heading.add_css_class("filter-category");
                 self.picker_body.append(&heading);
-                category = Some(choice.category);
+                category = Some(choice.category.clone());
             }
-            let row = rows.entry(choice.id).or_insert_with(|| {
+            let row = rows.entry(choice.id.clone()).or_insert_with(|| {
                 let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 let picture = gtk::Picture::builder()
                     .can_shrink(true)
                     .height_request(40)
                     .content_fit(gtk::ContentFit::Fill)
                     .build();
-                let label = gtk::Label::new(Some(choice.label));
+                let label = gtk::Label::new(Some(&choice.label));
                 label.set_xalign(1.);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 let caption = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -276,7 +276,7 @@ impl EffectPanels {
                     .build();
                 button.add_css_class("flat");
                 button.add_css_class("filter-row");
-                button.set_widget_name(&format!("adjustment-{}", choice.id.id()));
+                button.set_widget_name(&format!("adjustment-{}", choice.id));
                 let action = choice.action.clone();
                 button.connect_clicked(glib::clone!(
                     #[weak]
@@ -346,7 +346,7 @@ impl EffectPanels {
                 let (_, picture) = rows.get(id)?;
                 let rect = picture.compute_bounds(&self.picker_scroller)?;
                 (rect.y() + rect.height() > 0. && rect.y() < self.picker_scroller.height() as f32)
-                    .then_some((*id, picture))
+                    .then_some((id.clone(), picture))
             })
             .collect();
         let Some((_, first)) = on_screen.first() else {

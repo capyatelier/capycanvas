@@ -299,7 +299,12 @@ pub fn ui_catalog() -> UiCatalog {
             "cursor-none",
         ]
         .into_iter()
-        .chain(layer_core::BuiltinEffect::ALL.into_iter().map(|e| e.icon()))
+        .chain(
+            layer_core::bundled_effect_catalog()
+                .filters()
+                .iter()
+                .map(|e| e.icon.as_ref()),
+        )
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect(),

@@ -1,11 +1,46 @@
 //! Pure effect descriptions and parameters. No graphics API or UI widget types.
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-#[path = "filter_library.rs"]
-mod library;
 
 pub const EFFECT_ABI: u32 = 2;
 pub const EFFECT_LUT_SAMPLES: usize = 256;
+
+/// Inline WGSL or manifest-local module names. Catalog loading resolves module
+/// lists into shared code; the renderer never performs I/O or source resolution.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EffectShader {
+    Code(Arc<str>),
+    Modules(Arc<[Arc<str>]>),
+    /// Resolved modules remain separate so fused programs can share helpers.
+    Linked {
+        sources: Arc<[Arc<str>]>,
+    },
+}
+impl EffectShader {
+    pub fn sources(&self) -> Result<&[Arc<str>], &'static str> {
+        match self {
+            Self::Code(code) => Ok(std::slice::from_ref(code)),
+            Self::Linked { sources } => Ok(sources),
+            Self::Modules(_) => Err("Unresolved effect shader modules"),
+        }
+    }
+}
+impl From<&str> for EffectShader {
+    fn from(value: &str) -> Self {
+        Self::Code(value.into())
+    }
+}
+impl From<String> for EffectShader {
+    fn from(value: String) -> Self {
+        Self::Code(value.into())
+    }
+}
+impl From<Arc<str>> for EffectShader {
+    fn from(value: Arc<str>) -> Self {
+        Self::Code(value)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,7 +70,7 @@ pub struct EffectProgram {
     #[serde(default)]
     pub alpha: EffectAlpha,
     /// Ordinary WGSL library with a uniquely named function matching the ABI.
-    pub wgsl: Arc<str>,
+    pub wgsl: EffectShader,
     pub entry: Arc<str>,
     /// Ordered image passes. Each reads the previous pass and original input
     /// through fx_sample/fx_original; only the last applies layer properties.
@@ -97,7 +132,7 @@ impl EffectSampling {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectLookup {
     /// Preparation library. The wrapper owns bindings and the compute entry.
-    pub wgsl: Arc<str>,
+    pub wgsl: EffectShader,
     pub entry: Arc<str>,
     /// Parameters exposed through prep_parameter, in this order.
     pub dependencies: Arc<[Arc<str>]>,
@@ -241,11 +276,17 @@ impl EffectInstance {
         }
     }
     pub fn validate(&self) -> Result<(), &'static str> {
+        let source_len: usize = self.program.wgsl.sources()?.iter().map(|s| s.len()).sum();
+        if source_len == 0 || source_len > 1024 * 1024 {
+            return Err("Empty or oversized effect shader");
+        }
         if self.program.abi != EFFECT_ABI
             || self.program.passes.len() > 8
             || self.program.parameters.len() > 64
+            || self.program.constraints.len() > 128
             || self.values.len() != self.program.parameters.len()
             || self.program.entry.is_empty()
+            || self.program.entry.len() > 128
             || !self
                 .program
                 .entry
@@ -257,6 +298,7 @@ impl EffectInstance {
         }
         for pass in self.program.passes.iter() {
             if pass.entry.is_empty()
+                || pass.entry.len() > 128
                 || !pass.entry.bytes().enumerate().all(|(i, c)| {
                     c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
                 })
@@ -275,8 +317,15 @@ impl EffectInstance {
         for lookup in self.program.lookups.iter() {
             let product = |v: [u32; 3]| v.into_iter().try_fold(1u32, u32::checked_mul);
             if !(1..=4096).contains(&lookup.values)
-                || lookup.wgsl.len() > 256 * 1024
+                || lookup
+                    .wgsl
+                    .sources()?
+                    .iter()
+                    .map(|s| s.len())
+                    .sum::<usize>()
+                    > 256 * 1024
                 || lookup.entry.is_empty()
+                || lookup.entry.len() > 128
                 || !lookup.entry.bytes().enumerate().all(|(i, c)| {
                     c == b'_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
                 })
@@ -415,11 +464,15 @@ impl EffectInstance {
 }
 
 impl EffectParameter {
-    fn in_section(mut self, section: &str) -> Self {
-        self.section = Some(section.into());
-        self
-    }
     pub fn validate(&self, value: &EffectValue) -> Result<(), &'static str> {
+        if self.key.is_empty()
+            || self.key.len() > 128
+            || self.label.is_empty()
+            || self.label.len() > 256
+            || self.section.as_ref().is_some_and(|s| s.len() > 256)
+        {
+            return Err("Invalid effect parameter metadata");
+        }
         let valid = match (&self.kind, value) {
             (
                 EffectParameterKind::Number {
@@ -443,6 +496,8 @@ impl EffectParameter {
             (EffectParameterKind::Toggle, EffectValue::Toggle(_)) => true,
             (EffectParameterKind::Choice { options }, EffectValue::Choice(v)) => {
                 (*v as usize) < options.len()
+                    && options.len() <= 256
+                    && options.iter().all(|o| !o.is_empty() && o.len() <= 256)
             }
             (EffectParameterKind::Color, EffectValue::Color(c)) => valid_color(c),
             (EffectParameterKind::Curve, EffectValue::Curve(p)) => {
@@ -526,324 +581,20 @@ pub fn gradient_value(stops: &[GradientStop], x: f32) -> [f32; 4] {
     std::array::from_fn(|c| stops[i].color[c] * (1. - t) + stops[i + 1].color[c] * t)
 }
 
-macro_rules! builtin_filters {
-    ($($variant:ident, $id:literal, $label:literal, $category:ident;)+) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        pub enum BuiltinEffect { $($variant,)+ }
-        impl BuiltinEffect {
-            pub const ALL:[Self;[$(stringify!($variant),)+].len()]=[$(Self::$variant,)+];
-            pub fn id(self)->&'static str {match self {$(Self::$variant=>$id,)+}}
-            pub fn label(self)->&'static str {match self {$(Self::$variant=>$label,)+}}
-            pub fn category(self)->FilterCategory {match self {$(Self::$variant=>FilterCategory::$category,)+}}
-        }
-    };
-}
-builtin_filters! {
-    Curves, "curves", "Curves", Tone;
-    Levels, "levels", "Levels", Tone;
-    BrightnessContrast, "brightness_contrast", "Brightness / Contrast", Tone;
-    HueSaturation, "hue_saturation", "Hue / Saturation", Color;
-    ColorBalance, "color_balance", "Color Balance", Color;
-    Exposure, "exposure", "Exposure", Tone;
-    Vibrance, "vibrance", "Vibrance", Color;
-    BlackWhite, "black_white", "Black & White", Color;
-    GradientMap, "gradient_map", "Gradient Map", Color;
-    Posterize, "posterize", "Posterize", Artistic;
-    GaussianBlur, "gaussian_blur", "Gaussian Blur", Blur;
-    UnsharpMask, "unsharp_mask", "Unsharp Mask", Detail;
-    HighPass, "high_pass", "High Pass", Detail;
-    MotionBlur, "motion_blur", "Motion Blur", Blur;
-    Denoise, "denoise", "Denoise", Detail;
-    EdgeDetect, "edge_detect", "Edge Detect", Detail;
-    WhiteBalance, "white_balance", "White Balance", Color;
-    SplitTone, "split_tone", "Split Tone", Color;
-    Vignette, "vignette", "Vignette", Tone;
-    FilmGrain, "film_grain", "Film Grain", Texture;
-    Bloom, "bloom", "Bloom", Blur;
-    SoftFocus, "soft_focus", "Soft Focus", Blur;
-    Halftone, "halftone", "Halftone", Artistic;
-    Crosshatch, "crosshatch", "Crosshatch", Artistic;
-    Emboss, "emboss", "Emboss", Detail;
-    PixelMosaic, "pixel_mosaic", "Pixel Mosaic", Artistic;
-    ChromaticAberration, "chromatic_aberration", "Chromatic Aberration", Distort;
-    Painterly, "painterly", "Painterly", Artistic;
-    Solarize, "solarize", "Solarize", Color;
-    Pencil, "pencil", "Pencil", Artistic;
-    Kaleidoscope, "kaleidoscope", "Kaleidoscope", Distort;
-    Swirl, "swirl", "Swirl", Distort;
-    Ripple, "ripple", "Ripple", Distort;
-    Glass, "glass", "Glass", Distort;
-    RainyGlass, "rainy_glass", "Rainy Glass", Distort;
-    Vhs, "vhs", "VHS", Texture;
-    Crt, "crt", "CRT", Texture;
-    HeatHaze, "heat_haze", "Heat Haze", Distort;
-    Iridescence, "iridescence", "Iridescence", Color;
-    DomainWarp, "domain_warp", "Domain Warp", Distort;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FilterCategory {
-    Tone,
-    Color,
-    Detail,
-    Blur,
-    Artistic,
-    Distort,
-    Texture,
-}
-impl FilterCategory {
-    pub const ALL: [Self; 7] = [
-        Self::Tone,
-        Self::Color,
-        Self::Detail,
-        Self::Blur,
-        Self::Artistic,
-        Self::Distort,
-        Self::Texture,
-    ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Tone => "Tone",
-            Self::Color => "Color",
-            Self::Detail => "Detail",
-            Self::Blur => "Blur",
-            Self::Artistic => "Artistic",
-            Self::Distort => "Distort",
-            Self::Texture => "Texture",
-        }
-    }
-}
-impl BuiltinEffect {
-    pub fn icon(self) -> &'static str {
-        if (self as usize) < 10 {
-            self.id()
-        } else {
-            "adjustments"
-        }
-    }
-    pub fn program(self) -> Arc<EffectProgram> {
-        static PROGRAMS: std::sync::OnceLock<Vec<Arc<EffectProgram>>> = std::sync::OnceLock::new();
-        PROGRAMS.get_or_init(|| Self::ALL.into_iter().map(Self::build_program).collect())
-            [self as usize]
-            .clone()
-    }
-    /// Illustrative presets are separate from the defaults used on insertion.
-    pub fn preview(self) -> EffectInstance {
-        let mut effect = EffectInstance::new(self.program());
-        let values: Vec<(&str, EffectValue)> = match self {
-            Self::Curves => vec![(
-                "curve_0",
-                EffectValue::Curve(vec![[0., 0.], [0.25, 0.15], [0.75, 0.85], [1., 1.]]),
-            )],
-            Self::Levels => vec![
-                ("black", EffectValue::Number(0.1)),
-                ("white", EffectValue::Number(0.9)),
-            ],
-            Self::BrightnessContrast => vec![("contrast", EffectValue::Number(25.))],
-            Self::HueSaturation => vec![
-                ("hue", EffectValue::Number(35.)),
-                ("saturation", EffectValue::Number(18.)),
-            ],
-            Self::ColorBalance => vec![
-                ("shadows_blue", EffectValue::Number(20.)),
-                ("highlights_red", EffectValue::Number(20.)),
-            ],
-            Self::Exposure => vec![("exposure", EffectValue::Number(0.8))],
-            Self::Vibrance => vec![("vibrance", EffectValue::Number(45.))],
-            Self::WhiteBalance => vec![("temperature", EffectValue::Number(35.))],
-            _ => Vec::new(),
-        };
-        for (key, value) in values {
-            effect
-                .set(key, value)
-                .expect("valid built-in preview preset");
-        }
-        if effect.program.time {
-            effect.set("animate", EffectValue::Toggle(false)).unwrap();
-            effect.set("time", EffectValue::Number(1.25)).unwrap();
-        }
-        effect
-    }
-    fn build_program(self) -> Arc<EffectProgram> {
-        use EffectParameterKind as K;
-        let number = |key: &str, label: &str, min, max, default, step, decimals, unit: &str| {
-            EffectParameter {
-                key: key.into(),
-                label: label.into(),
-                section: None,
-                kind: K::Number {
-                    min,
-                    max,
-                    step,
-                    decimals,
-                    unit: unit.into(),
-                },
-                default: EffectValue::Number(default),
-            }
-        };
-        let parameters = match self {
-            Self::Exposure => vec![
-                number("exposure", "Exposure", -10., 10., 0., 0.1, 2, "EV"),
-                number("offset", "Offset", -0.5, 0.5, 0., 0.01, 3, ""),
-                number("gamma", "Gamma", 0.1, 10., 1., 0.05, 2, ""),
-            ],
-            Self::Vibrance => vec![
-                number("vibrance", "Vibrance", -100., 100., 0., 1., 0, "%"),
-                number("saturation", "Saturation", -100., 100., 0., 1., 0, "%"),
-                EffectParameter {
-                    key: "protect_skin".into(),
-                    label: "Protect skin tones".into(),
-                    section: None,
-                    kind: K::Toggle,
-                    default: EffectValue::Toggle(true),
-                },
-            ],
-            Self::BlackWhite => {
-                let mut p: Vec<_> = [
-                    ("reds", "Reds", 40.),
-                    ("yellows", "Yellows", 60.),
-                    ("greens", "Greens", 40.),
-                    ("cyans", "Cyans", 60.),
-                    ("blues", "Blues", 20.),
-                    ("magentas", "Magentas", 80.),
-                ]
-                .into_iter()
-                .map(|(key, label, v)| number(key, label, -100., 200., v, 1., 0, "%"))
-                .collect();
-                p.push(EffectParameter {
-                    key: "tint".into(),
-                    label: "Tint".into(),
-                    section: None,
-                    kind: K::Toggle,
-                    default: EffectValue::Toggle(false),
-                });
-                p.push(EffectParameter {
-                    key: "tint_color".into(),
-                    label: "Tint color".into(),
-                    section: None,
-                    kind: K::Color,
-                    default: EffectValue::Color([0.75, 0.53, 0.3, 1.]),
-                });
-                p
-            }
-            Self::GradientMap => vec![
-                EffectParameter {
-                    key: "gradient".into(),
-                    label: "Gradient".into(),
-                    section: None,
-                    kind: K::Gradient,
-                    default: EffectValue::Gradient(vec![
-                        GradientStop {
-                            position: 0.,
-                            color: [0., 0., 0., 1.],
-                        },
-                        GradientStop {
-                            position: 1.,
-                            color: [1.; 4],
-                        },
-                    ]),
-                },
-                EffectParameter {
-                    key: "reverse".into(),
-                    label: "Reverse".into(),
-                    section: None,
-                    kind: K::Toggle,
-                    default: EffectValue::Toggle(false),
-                },
-                number("amount", "Amount", 0., 100., 100., 1., 0, "%"),
-            ],
-            Self::Posterize => vec![number("levels", "Levels", 2., 256., 6., 1., 0, "")],
-            Self::Curves => ["RGB", "Red", "Green", "Blue"]
-                .into_iter()
-                .enumerate()
-                .map(|(i, label)| EffectParameter {
-                    key: format!("curve_{i}").into(),
-                    label: label.into(),
-                    section: None,
-                    kind: K::Curve,
-                    default: EffectValue::Curve(vec![[0., 0.], [1., 1.]]),
-                })
-                .collect(),
-            Self::Levels => vec![
-                number("black", "Black", 0., 0.999, 0., 0.01, 3, "").in_section("Input"),
-                number("white", "White", 0.001, 1., 1., 0.01, 3, "").in_section("Input"),
-                number("gamma", "Midtones", 0.1, 10., 1., 0.05, 2, "").in_section("Input"),
-                number("output_black", "Black", 0., 1., 0., 0.01, 3, "").in_section("Output"),
-                number("output_white", "White", 0., 1., 1., 0.01, 3, "").in_section("Output"),
-            ],
-            Self::BrightnessContrast => vec![
-                number("brightness", "Brightness", -100., 100., 0., 1., 0, ""),
-                number("contrast", "Contrast", -100., 100., 0., 1., 0, ""),
-            ],
-            Self::HueSaturation => vec![
-                number("hue", "Hue", -180., 180., 0., 1., 0, "°"),
-                number("saturation", "Saturation", -100., 100., 0., 1., 0, "%"),
-                number("lightness", "Lightness", -100., 100., 0., 1., 0, "%"),
-            ],
-            Self::ColorBalance => {
-                let mut p = Vec::new();
-                for (range, label) in [
-                    ("shadows", "Shadows"),
-                    ("midtones", "Midtones"),
-                    ("highlights", "Highlights"),
-                ] {
-                    for (axis, name) in [
-                        ("red", "Cyan — Red"),
-                        ("green", "Magenta — Green"),
-                        ("blue", "Yellow — Blue"),
-                    ] {
-                        p.push(
-                            number(&format!("{range}_{axis}"), name, -100., 100., 0., 1., 0, "")
-                                .in_section(label),
-                        );
-                    }
-                }
-                p.push(EffectParameter {
-                    key: "preserve_luminance".into(),
-                    label: "Preserve luminosity".into(),
-                    section: None,
-                    kind: K::Toggle,
-                    default: EffectValue::Toggle(true),
-                });
-                p
-            }
-            _ => return Arc::new(library::program(self)),
-        };
-        Arc::new(EffectProgram {
-            abi: EFFECT_ABI,
-            id: self.id().into(),
-            label: self.label().into(),
-            kind: EffectKind::Adjustment,
-            alpha: EffectAlpha::Preserve,
-            wgsl: library::source(),
-            entry: format!("capy_{}", self.id()).into(),
-            passes: Arc::from([]),
-            time: false,
-            lookups: Arc::from([]),
-            parameters: parameters.into(),
-            constraints: if self == Self::Levels {
-                Arc::from([EffectConstraint::OrderedNumbers {
-                    lower: "black".into(),
-                    upper: "white".into(),
-                    gap: 0.001,
-                }])
-            } else {
-                Arc::from([])
-            },
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixtures() -> &'static [crate::EffectDefinition] {
+        crate::bundled_effect_catalog().filters()
+    }
+    fn fixture(id: &str) -> &'static crate::EffectDefinition {
+        crate::bundled_effect_catalog().get(id).unwrap()
+    }
     #[test]
     fn preview_presets_are_valid_and_do_not_change_insertion_defaults() {
-        for id in BuiltinEffect::ALL {
+        for id in fixtures() {
             let original = EffectInstance::new(id.program());
-            let preview = id.preview();
+            let preview = id.preview().unwrap();
             preview.validate().unwrap();
             assert_eq!(original, EffectInstance::new(id.program()));
             assert!(!preview.animated());
@@ -851,7 +602,7 @@ mod tests {
     }
     #[test]
     fn image_footprints_follow_parameters_and_validate_their_bounds() {
-        let mut blur = EffectInstance::new(BuiltinEffect::GaussianBlur.program());
+        let mut blur = EffectInstance::new(fixture("gaussian_blur").program());
         assert_eq!(blur.damage_radius(), Some(18));
         blur.set("sigma", EffectValue::Number(1.)).unwrap();
         assert_eq!(blur.damage_radius(), Some(6));
@@ -865,13 +616,13 @@ mod tests {
         };
         assert!(EffectInstance::new(Arc::new(invalid)).validate().is_err());
         assert_eq!(
-            EffectInstance::new(BuiltinEffect::Kaleidoscope.program()).damage_radius(),
+            EffectInstance::new(fixture("kaleidoscope").program()).damage_radius(),
             None
         );
     }
     #[test]
     fn preparation_has_bounded_storage_and_known_dependencies() {
-        let mut program = (*BuiltinEffect::GaussianBlur.program()).clone();
+        let mut program = (*fixture("gaussian_blur").program()).clone();
         EffectInstance::new(Arc::new(program.clone()))
             .validate()
             .unwrap();
@@ -887,12 +638,12 @@ mod tests {
     }
     #[test]
     fn defaults_and_parameter_validation() {
-        for kind in BuiltinEffect::ALL {
+        for kind in fixtures() {
             let fx = EffectInstance::new(kind.program());
             fx.validate().unwrap();
             assert!(!fx.gpu_parameters().is_empty());
         }
-        let mut fx = EffectInstance::new(BuiltinEffect::Levels.program());
+        let mut fx = EffectInstance::new(fixture("levels").program());
         assert!(fx.set("gamma", EffectValue::Number(f32::NAN)).is_err());
         assert!(fx.set("black", EffectValue::Toggle(true)).is_err());
         fx.set("black", EffectValue::Number(0.8)).unwrap();
@@ -902,7 +653,7 @@ mod tests {
     }
     #[test]
     fn sections_shorten_labels_without_changing_shader_parameters() {
-        let program = BuiltinEffect::ColorBalance.program();
+        let program = fixture("color_balance").program();
         for (i, section) in ["Shadows", "Midtones", "Highlights"]
             .into_iter()
             .enumerate()

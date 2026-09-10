@@ -1,7 +1,6 @@
 //! Idle-time GPU previews: one source capture/probe per revision, one shared
 //! preview pipeline, bounded scratch and small asynchronous image readbacks.
 use super::*;
-use layer_core::BuiltinEffect;
 use layer_render::{FilterPreviewImage, FilterPreviewRequest};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -13,7 +12,7 @@ enum Ready {
 }
 pub(crate) struct FilterPreviews {
     scene: Scene,
-    programs: Vec<Layer>,
+    programs: HashMap<Arc<str>, Layer>,
     probe: wgpu::ComputePipeline,
     mask: Image,
     source: Option<Image>,
@@ -23,9 +22,9 @@ pub(crate) struct FilterPreviews {
     scratch: Vec<Image>,
     scratch_size: [u32; 2],
     size: [u32; 2],
-    rows: HashMap<BuiltinEffect, Vec<u8>>,
+    rows: HashMap<Arc<str>, Vec<u8>>,
     request: Option<FilterPreviewRequest>,
-    rendering: Vec<BuiltinEffect>,
+    rendering: Vec<Arc<str>>,
     tx: mpsc::Sender<Ready>,
     rx: mpsc::Receiver<Ready>,
     pub source_updates: u64,
@@ -34,15 +33,6 @@ pub(crate) struct FilterPreviews {
 impl FilterPreviews {
     fn new(r: &mut WgpuRasterizer) -> Result<Self, GpuRasterError> {
         let scene = Scene::new(r);
-        let programs: Vec<_> = BuiltinEffect::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(i, effect)| {
-                let mut layer = Layer::paint(LayerId(u64::MAX - i as u64), "");
-                layer.effect = Some(Arc::new(effect.preview()));
-                layer
-            })
-            .collect();
         let shader = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filter preview content probe"),
             source: wgpu::ShaderSource::Wgsl(include_str!("filter_probe.wgsl").into()),
@@ -87,7 +77,7 @@ impl FilterPreviews {
         let (tx, rx) = mpsc::channel();
         Ok(Self {
             scene,
-            programs,
+            programs: HashMap::new(),
             probe,
             mask,
             source: None,
@@ -122,6 +112,21 @@ impl FilterPreviews {
             || request.extent != r.document_extent
         {
             return Ok(false);
+        }
+        for effect in &request.filters {
+            effect
+                .validate()
+                .map_err(|e| GpuRasterError::Effect(e.into()))?;
+            let id = effect.program.id.clone();
+            let count = self.programs.len();
+            let layer = self
+                .programs
+                .entry(id.clone())
+                .or_insert_with(|| Layer::paint(LayerId(u64::MAX - count as u64), ""));
+            if layer.effect.as_ref() != Some(effect) {
+                self.rows.remove(&id);
+                layer.effect = Some(effect.clone());
+            }
         }
         if let Some(paper) = request
             .layers
@@ -278,7 +283,7 @@ impl FilterPreviews {
             .unwrap()
             .filters
             .iter()
-            .any(|f| !self.rows.contains_key(f))
+            .any(|f| !self.rows.contains_key(&f.program.id))
         {
             self.render(r)?;
         }
@@ -289,7 +294,7 @@ impl FilterPreviews {
         self.rendering = request
             .filters
             .iter()
-            .copied()
+            .map(|f| f.program.id.clone())
             .filter(|f| !self.rows.contains_key(f))
             .collect();
         if self.rendering.is_empty() {
@@ -348,16 +353,11 @@ impl FilterPreviews {
             // compile every expensive kernel before showing even the first row.
             let prepared = self.scene.effects.prepare(
                 r,
-                &[&self.programs[*id as usize]],
+                &[&self.programs[id]],
                 effects::Execution::Preview,
                 0.,
             )?;
-            let program = self.programs[*id as usize]
-                .effect
-                .as_ref()
-                .unwrap()
-                .program
-                .clone();
+            let program = self.programs[id].effect.as_ref().unwrap().program.clone();
             // A document-remapping pass after another pass genuinely needs its
             // complete input. Bounded programs otherwise render only crop+halo.
             let whole = program
@@ -365,7 +365,7 @@ impl FilterPreviews {
                 .iter()
                 .skip(1)
                 .any(|p| p.sampling == layer_core::EffectSampling::Document);
-            let pad = self.programs[*id as usize]
+            let pad = self.programs[id]
                 .effect
                 .as_ref()
                 .unwrap()
@@ -520,15 +520,19 @@ impl FilterPreviews {
             }
         }
         let request = self.request.as_ref()?;
-        if request.filters.iter().any(|f| !self.rows.contains_key(f)) {
+        if request
+            .filters
+            .iter()
+            .any(|f| !self.rows.contains_key(&f.program.id))
+        {
             return None;
         }
         let request = self.request.take().unwrap();
         let mut bytes = Vec::with_capacity(
             self.size[0] as usize * self.size[1] as usize * 4 * request.filters.len(),
         );
-        for id in &request.filters {
-            bytes.extend_from_slice(&self.rows[id]);
+        for effect in &request.filters {
+            bytes.extend_from_slice(&self.rows[&effect.program.id]);
         }
         Some(Ok(FilterPreviewImage {
             image: ReadbackImage {
@@ -538,7 +542,11 @@ impl FilterPreviews {
                 stride: self.size[0] * 4,
                 bytes,
             },
-            filters: request.filters,
+            filters: request
+                .filters
+                .iter()
+                .map(|f| f.program.id.clone())
+                .collect(),
         }))
     }
 }
@@ -630,7 +638,7 @@ impl WgpuRasterizer {
             request
                 .filters
                 .iter()
-                .any(|id| !previews.rows.contains_key(id))
+                .any(|effect| !previews.rows.contains_key(&effect.program.id))
         }) {
             let _ = self.device.poll(wgpu::PollType::Poll);
         }
@@ -653,6 +661,7 @@ impl FilterPreviews {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::{fixture, fixtures};
 
     fn finish(r: &mut WgpuRasterizer) -> FilterPreviewImage {
         for _ in 0..100 {
@@ -693,7 +702,7 @@ mod tests {
         let mut base = Layer::paint(LayerId(1), "Source");
         base.asset = Some(asset);
         let mut upper = Layer::paint(LayerId(2), "Not part of preview");
-        upper.effect = Some(Arc::new(BuiltinEffect::BlackWhite.preview()));
+        upper.effect = Some(Arc::new(fixture("black_white").preview().unwrap()));
         upper.properties.clipped = true;
         let layers = vec![upper, base];
         let view = layer_render::ViewState {
@@ -727,7 +736,10 @@ mod tests {
             extent: [512, 256],
             view,
             layers: layers.iter().map(Layer::composite_snapshot).collect(),
-            filters: vec![BuiltinEffect::Curves, BuiltinEffect::BlackWhite],
+            filters: vec![
+                Arc::new(fixture("curves").preview().unwrap()),
+                Arc::new(fixture("black_white").preview().unwrap()),
+            ],
         };
         assert!(r.request_filter_previews(request.clone()).unwrap());
         let first = finish(&mut r);
@@ -760,7 +772,7 @@ mod tests {
         assert_eq!(second.image.bytes, first.image.bytes);
         assert_eq!(second.image.request_id, 2);
         assert_eq!(r.filter_previews.as_ref().unwrap().rendered_rows, 2);
-        request.filters = vec![BuiltinEffect::Exposure];
+        request.filters = vec![Arc::new(fixture("exposure").preview().unwrap())];
         request.request_id = 3;
         assert!(r.request_filter_previews(request).unwrap());
         finish(&mut r);
@@ -804,7 +816,10 @@ mod tests {
             extent: [512, 256],
             view,
             layers,
-            filters: vec![BuiltinEffect::Curves, BuiltinEffect::BlackWhite],
+            filters: vec![
+                Arc::new(fixture("curves").preview().unwrap()),
+                Arc::new(fixture("black_white").preview().unwrap()),
+            ],
         })
         .unwrap();
         let image = finish(&mut r).image;
@@ -829,7 +844,7 @@ mod tests {
     #[ignore = "GPU completion benchmark; run alone in release mode"]
     fn filter_preview_latency() {
         let mut r = WgpuRasterizer::new().unwrap();
-        let mut program = (*BuiltinEffect::BrightnessContrast.program()).clone();
+        let mut program = (*fixture("brightness_contrast").program()).clone();
         program.kind = layer_core::EffectKind::Generator;
         program.entry = "sample_art".into();
         program.wgsl="fn sample_art(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(.2+.6*fract(p.x/211.),.1+.5*fract(p.y/127.),.5+.4*sin(p.x*.01),1.);}".into();
@@ -867,7 +882,10 @@ mod tests {
             extent: [4096, 4096],
             view,
             layers,
-            filters: BuiltinEffect::ALL[..8].to_vec(),
+            filters: fixtures()[..8]
+                .iter()
+                .map(|f| Arc::new(f.preview().unwrap()))
+                .collect(),
         };
         let started = web_time::Instant::now();
         r.request_filter_previews(request.clone()).unwrap();
@@ -940,7 +958,7 @@ mod tests {
         .unwrap();
         let mut base = Layer::paint(LayerId(1), "Paint");
         base.asset = Some(asset);
-        let mut program = (*BuiltinEffect::BrightnessContrast.program()).clone();
+        let mut program = (*fixture("brightness_contrast").program()).clone();
         program.entry = "preview_h".into();
         program.wgsl="fn preview_h(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (c+fx_sample(p+vec2<f32>(-2.,0.))+fx_sample(p+vec2<f32>(2.,0.)))/3.;} fn preview_v(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (c+fx_sample(p+vec2<f32>(0.,-2.))+fx_sample(p+vec2<f32>(0.,2.)))/3.;}".into();
         program.passes = ["preview_h", "preview_v"]
@@ -972,9 +990,6 @@ mod tests {
         })
         .unwrap();
         let full = r.readback_srgb_rgba8().unwrap();
-        let mut previews = FilterPreviews::new(&mut r).unwrap();
-        previews.programs[BuiltinEffect::BrightnessContrast as usize].effect = Some(effect);
-        r.filter_previews = Some(previews);
         r.request_filter_previews(FilterPreviewRequest {
             request_id: 1,
             target: LayerId(1),
@@ -982,7 +997,7 @@ mod tests {
             extent: [512, 256],
             view,
             layers: layers.iter().map(Layer::composite_snapshot).collect(),
-            filters: vec![BuiltinEffect::BrightnessContrast],
+            filters: vec![effect],
         })
         .unwrap();
         let preview = finish(&mut r).image;
@@ -1011,8 +1026,8 @@ mod tests {
         // Every built-in preview executes the exact canvas algorithm, including
         // document-coordinate warps and original-input reads in later passes.
         r.filter_previews = None;
-        for id in BuiltinEffect::ALL {
-            layers[0].effect = Some(Arc::new(id.preview()));
+        for id in fixtures() {
+            layers[0].effect = Some(Arc::new(id.preview().unwrap()));
             r.submit(FramePacket {
                 time_seconds: 0.,
                 view,
@@ -1032,7 +1047,7 @@ mod tests {
                 extent: [512, 256],
                 view,
                 layers: layers.iter().map(Layer::composite_snapshot).collect(),
-                filters: vec![id],
+                filters: vec![Arc::new(id.preview().unwrap())],
             })
             .unwrap();
             let preview = finish(&mut r).image;
