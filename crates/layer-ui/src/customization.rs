@@ -7,23 +7,35 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum TabStyle {
     #[default]
+    Automatic,
     ActiveName,
+    IconName,
     Name,
     Icon,
 }
 impl TabStyle {
-    pub const ALL: [Self; 3] = [Self::ActiveName, Self::Name, Self::Icon];
+    pub const ALL: [Self; 5] = [
+        Self::Automatic,
+        Self::ActiveName,
+        Self::IconName,
+        Self::Name,
+        Self::Icon,
+    ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::Automatic => "Automatic",
             Self::ActiveName => "Icons and active tab name",
+            Self::IconName => "Icons and names",
             Self::Name => "Names only",
             Self::Icon => "Icons only",
         }
     }
-    fn presentation(self, active: bool) -> TabPresentation {
+    fn presentation(self, active: bool, tab_count: usize) -> TabPresentation {
         TabPresentation {
             show_icon: self != Self::Name,
-            show_name: self == Self::Name || (self == Self::ActiveName && active),
+            show_name: matches!(self, Self::Name | Self::IconName)
+                || (self == Self::Automatic && (tab_count <= 2 || active))
+                || (self == Self::ActiveName && active),
         }
     }
 }
@@ -455,6 +467,13 @@ impl ContextMenu {
 }
 impl DockLayout {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
+        self.context_menu_on(target, Platform::Generic)
+    }
+    pub(crate) fn context_menu_on(
+        &self,
+        target: ContextTarget,
+        platform: Platform,
+    ) -> Result<ContextMenu, String> {
         let entry = ContextMenuItem::edit;
         let (title, sections) = match target {
             ContextTarget::ZenMode => return Err("Not a panel context".into()),
@@ -482,11 +501,11 @@ impl DockLayout {
                     vec![
                         ContextMenuItem::submenu(
                             "Add built-in panel",
-                            vec![self.panel_items(PanelKind::Content, Some(group))],
+                            vec![self.panel_items(PanelKind::Content, Some(group), platform)],
                         ),
                         ContextMenuItem::submenu(
                             "Add Toolbar",
-                            vec![self.panel_items(PanelKind::Tiles, Some(group))],
+                            vec![self.panel_items(PanelKind::Tiles, Some(group), platform)],
                         ),
                     ],
                     vec![entry(
@@ -550,10 +569,15 @@ impl DockLayout {
             },
         )
     }
-    pub fn panel_items(&self, kind: PanelKind, group: Option<u32>) -> Vec<ContextMenuItem> {
+    pub fn panel_items(
+        &self,
+        kind: PanelKind,
+        group: Option<u32>,
+        platform: Platform,
+    ) -> Vec<ContextMenuItem> {
         self.panels
             .iter()
-            .filter(|p| p.id.kind() == kind)
+            .filter(|p| p.id.kind() == kind && p.id.available_on(platform))
             .map(|p| {
                 let selected = if let Some(group) = group {
                     self.panel_group(p.id) == Some(group)
@@ -638,15 +662,18 @@ impl DockLayout {
     }
     pub fn tab_presentation(&self, panel: Panel) -> TabPresentation {
         let Some(group) = self.panel_group(panel) else {
-            return TabStyle::default().presentation(true);
+            return TabStyle::default().presentation(true, 1);
         };
         let DockNode::Tabs {
-            active, tab_style, ..
+            active,
+            tab_style,
+            panels,
+            ..
         } = self.node(group).unwrap()
         else {
             unreachable!()
         };
-        tab_style.presentation(*active == panel)
+        tab_style.presentation(*active == panel, panels.len())
     }
     fn hide_tab_items(&self, target: ContextTarget) -> Result<Vec<ContextMenuItem>, String> {
         let group = match target {
@@ -862,6 +889,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
     let expanded = state.customization.expanded == Some(panel);
     let controls = PanelControl::available(panel)
         .iter()
+        .filter(|_| panel.available_on(state.platform))
         .map(|&control| PanelControlView {
             control,
             label: control.label(),
@@ -1156,6 +1184,16 @@ impl CustomizationState {
         viewport: [f32; 2],
     ) -> Result<u32, String> {
         use CustomizationAction::*;
+        if let SetPanelVisible {
+            panel,
+            visible: true,
+        }
+        | AddPanel { panel, .. }
+        | ShowAllControls { panel } = &action
+            && !panel.available_on(platform)
+        {
+            return Err("This panel is not available on this platform yet".into());
+        }
         let mut changed = regions::CUSTOMIZATION;
         match action {
             ManageToolbars => {
@@ -1694,6 +1732,105 @@ mod tests {
         );
         edit(&mut state, &mut layout, CustomizationAction::CancelTools);
         assert_eq!(layout, before);
+    }
+
+    #[test]
+    fn automatic_tabs_follow_group_membership_without_changing_the_saved_style() {
+        let mut layout = DockLayout::default();
+        let check = |layout: &mut DockLayout| {
+            assert_eq!(layout.group_tab_style(8).unwrap(), TabStyle::Automatic);
+            let panels = layout.group_panels(8).unwrap().to_vec();
+            for &active in &panels {
+                layout.select_tab(8, active).unwrap();
+                for &panel in &panels {
+                    assert_eq!(
+                        layout.tab_presentation(panel),
+                        TabPresentation {
+                            show_icon: true,
+                            show_name: panels.len() <= 2 || panel == active,
+                        }
+                    );
+                }
+            }
+        };
+        check(&mut layout);
+        for panel in [Panel::Brushes, Panel::Sizes] {
+            layout
+                .move_panel(
+                    [1200.0, 900.0],
+                    panel,
+                    DockTarget::Tab {
+                        group: 8,
+                        index: None,
+                    },
+                )
+                .unwrap();
+            check(&mut layout);
+        }
+        for panel in [
+            Panel::Sizes,
+            Panel::Brushes,
+            Panel::Properties,
+            Panel::Adjustments,
+        ] {
+            layout.set_panel_visible(panel, false).unwrap();
+            check(&mut layout);
+            layout = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+            check(&mut layout);
+        }
+    }
+
+    #[test]
+    fn all_tab_styles_apply_to_the_whole_group_and_persist() {
+        let styles = [
+            (TabStyle::Automatic, [true, true], [true, false]),
+            (TabStyle::ActiveName, [true, true], [true, false]),
+            (TabStyle::IconName, [true, true], [true, true]),
+            (TabStyle::Name, [false, true], [false, true]),
+            (TabStyle::Icon, [true, false], [true, false]),
+        ];
+        assert_eq!(TabStyle::default(), TabStyle::Automatic);
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut layout = DockLayout::default();
+            let mut state = CustomizationState::default();
+            for (style, active, inactive) in styles {
+                let menu = layout
+                    .context_menu(ContextTarget::Group { group: 8 })
+                    .unwrap();
+                assert_eq!(menu.sections[0].len(), TabStyle::ALL.len());
+                let item = menu.sections[0]
+                    .iter()
+                    .find(|item| item.label == style.label())
+                    .unwrap();
+                let Some(UiAction::Customize { action }) = item.action.clone() else {
+                    panic!("Missing group style action")
+                };
+                state
+                    .edit(&mut layout, action, platform, [1200.0, 900.0])
+                    .unwrap();
+                let encoded = serde_json::to_string(&layout).unwrap();
+                layout = serde_json::from_str(&encoded).unwrap();
+                layout.validate().unwrap();
+                assert_eq!(layout.group_tab_style(8).unwrap(), style);
+                for selected in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
+                    layout.select_tab(8, selected).unwrap();
+                    for panel in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
+                        let expected = if selected == panel { active } else { inactive };
+                        let tab = layout.tab_presentation(panel);
+                        assert_eq!([tab.show_icon, tab.show_name], expected);
+                    }
+                }
+                let menu = layout
+                    .context_menu(ContextTarget::Group { group: 8 })
+                    .unwrap();
+                let checked: Vec<_> = menu.sections[0]
+                    .iter()
+                    .filter(|i| i.selected == Some(true))
+                    .collect();
+                assert_eq!(checked.len(), 1);
+                assert_eq!(checked[0].label, style.label());
+            }
+        }
     }
 
     #[test]

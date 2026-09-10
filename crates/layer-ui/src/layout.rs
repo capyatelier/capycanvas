@@ -274,6 +274,12 @@ pub enum PanelKind {
 }
 
 impl Panel {
+    /// New native panel bodies remain GTK-only until their review is complete.
+    /// Keep their saved identities, but do not offer unimplemented host views.
+    pub fn available_on(self, platform: crate::Platform) -> bool {
+        !matches!(self, Self::ToolSettings | Self::Color)
+            || matches!(platform, crate::Platform::Gtk | crate::Platform::Generic)
+    }
     pub fn kind(self) -> PanelKind {
         if matches!(self, Self::Toolbar | Self::CustomToolbar(_)) {
             PanelKind::Tiles

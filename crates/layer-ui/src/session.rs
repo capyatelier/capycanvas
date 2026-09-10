@@ -158,7 +158,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn context_menu(&self, target: ContextTarget) -> Result<ContextMenu, String> {
         Ok(match target {
             ContextTarget::ZenMode => self.state.settings.zen_menu(self.state.platform),
-            _ => self.state.workspace.layout.context_menu(target),
+            _ => self
+                .state
+                .workspace
+                .layout
+                .context_menu_on(target, self.state.platform),
         }?
         .with_shortcuts(&self.state.settings, self.state.platform))
     }
@@ -177,14 +181,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     command(CommandId::UndoWorkspace),
                     command(CommandId::RedoWorkspace),
                 ],
-                self.state
-                    .workspace
-                    .layout
-                    .panel_items(PanelKind::Content, None),
-                self.state
-                    .workspace
-                    .layout
-                    .panel_items(PanelKind::Tiles, None),
+                self.state.workspace.layout.panel_items(
+                    PanelKind::Content,
+                    None,
+                    self.state.platform,
+                ),
+                self.state.workspace.layout.panel_items(
+                    PanelKind::Tiles,
+                    None,
+                    self.state.platform,
+                ),
                 vec![
                     command(CommandId::NewToolbar),
                     command(CommandId::ManageToolbars),
@@ -2969,7 +2975,13 @@ mod tests {
                 s.dispatch(UiAction::Customize { action }).unwrap()
             };
             let menu = s.workspace_menu();
-            assert_eq!(menu.sections[1].len(), Panel::ALL.len() - 1);
+            assert_eq!(
+                menu.sections[1].len(),
+                Panel::ALL
+                    .iter()
+                    .filter(|p| p.available_on(platform) && p.kind() == PanelKind::Content)
+                    .count()
+            );
             assert_eq!(menu.sections[2].len(), 1);
             assert_eq!(
                 menu.sections[1]
@@ -4460,6 +4472,31 @@ mod tests {
     }
 
     #[test]
+    fn native_only_panel_controls_are_not_offered_to_other_hosts() {
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut app = session();
+            app.set_platform(platform);
+            for panel in [Panel::ToolSettings, Panel::Color] {
+                let available = platform == Platform::Gtk;
+                assert_eq!(
+                    !app.panel_view(panel).unwrap().controls.is_empty(),
+                    available
+                );
+                assert_eq!(app.workspace_menu().sections[1].iter().any(|i| matches!(
+                    i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
+                )), available);
+                let result = app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::SetPanelVisible {
+                        panel,
+                        visible: true,
+                    },
+                });
+                assert_eq!(result.is_ok(), available);
+            }
+        }
+    }
+
+    #[test]
     fn group_tab_presentation_selection_moves_and_history_are_shared() {
         let viewport = [1600.0, 1000.0];
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
@@ -4501,8 +4538,10 @@ mod tests {
                         assert_eq!(tab.show_icon, style != TabStyle::Name);
                         assert_eq!(
                             tab.show_name,
-                            style == TabStyle::Name
-                                || (style == TabStyle::ActiveName && active == panel)
+                            matches!(
+                                style,
+                                TabStyle::Name | TabStyle::IconName | TabStyle::Automatic
+                            ) || (style == TabStyle::ActiveName && active == panel)
                         );
                     }
                 }
@@ -4576,7 +4615,7 @@ mod tests {
                     .layout
                     .group_tab_style(detached)
                     .unwrap(),
-                TabStyle::ActiveName
+                TabStyle::Automatic
             );
             assert_eq!(
                 app.state

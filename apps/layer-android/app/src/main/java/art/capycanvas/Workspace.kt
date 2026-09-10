@@ -359,7 +359,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     }
     Surface(modifier, color = colors.panel) {
         Column {
-            if (tabsVisible) Row(Modifier.fillMaxWidth().height(36.dp).background(colors.tabs).dragSource(dock, groupItem)
+            if (tabsVisible) Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
                 .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
                     onDoubleClick = { dock.doubleClickHandle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {

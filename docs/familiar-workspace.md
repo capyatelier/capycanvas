@@ -156,6 +156,11 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 ## Progress
 
 - Repository inventory and primary-source tool/color/ruler research completed.
+- Tab groups now default to Automatic: icons and names at one/two tabs, icons
+  and only the active name at three or more. Fixed Icons and names is also
+  available; explicit saved styles are retained. All five styles and the live
+  two/three-tab transition pass GTK, Wayland Chrome and Android emulator tests
+  in both themes; captures are in `artifacts/ui/group-tab-styles/` (ignored).
 - Shared three-tile minimum implemented for Tool Set and Tool Settings: 112px
   content + 8px each side = 128 logical pixels. Layers retains its own minimum.
   Fixed ribbon height measurement to use the same constrained split widths as
@@ -164,9 +169,12 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   on GTK, available through Workspace. Color state, hit testing, conversions,
   numeric constraints and brush edits are shared Rust. Stroke snapshots remain
   immutable while next-stroke settings are edited.
+  Rust marks these new panel bodies GTK-only pending review, excluding their
+  controls and add-panel actions on web/Android so hidden registrations cannot
+  break hosts whose view implementations have not yet been built.
 - GTK color ring uses a continuous [conic gradient](https://docs.gtk.org/gtk4/method.Snapshot.append_conic_gradient.html)
   clipped to a stroked circle, avoiding antialiased seams between color wedges.
-- Validation so far: 153 shared UI tests, 23 engine tests, workspace compile,
+- Validation so far: 156 shared UI tests, 23 engine tests, workspace compile,
   strict UI/GTK Clippy, and isolated Wayland/GPU checks of all 24 brush control
   schemas at 128px. Native expression editors and color buttons exercised;
   dark/light HSV/HLS and narrow-panel captures in the ignored

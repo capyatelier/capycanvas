@@ -24,19 +24,23 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   The empty list shows **No toolbars**. Workspace Undo restores deleted toolbars.
   Rust owns this list, copy, selection, eligibility and actions; GTK, web and
   Android only render them. Manager selection is transient, not saved workspace data.
-- A built-in-panel tab or body opens **Configure Brushes panel…** and
-  **Hide Brushes panel** (using its actual
+- A built-in-panel tab or body opens **Configure Tool Set panel…** and
+  **Hide Tool Set panel** (using its actual
   name). A toolbar tab/body has **Configure Tools toolbar…** and
   **Hide Tools toolbar**, likewise using its actual name; display and management
   options are in its configuration column. A single tap on the selected tab toggles
   configuration; an inactive tab selects it. Inputs retain native behavior.
 - Empty tab-header space and the group grip target the whole tab group:
-  **Icons and active tab name** (default), **Names only**, **Icons only**,
+  **Automatic** (default), **Icons and active tab name**, **Icons and names**, **Names only**, **Icons only**,
   **Add built-in panel** / **Add Toolbar** submenus,
   and **New Toolbar…**. Submenu checks show current group membership; choosing
   another panel moves it here, never duplicates it. Style is stored once on the
-  group's `DockNode::Tabs`, never on individual panels. The default shows every
-  icon and only the active tab's name. Names-only and icons-only apply to all tabs.
+  group's `DockNode::Tabs`, never on individual panels. Automatic shows icons and
+  names with one or two tabs, and icons with only the active tab's name at three
+  or more. It adapts as tabs are added or removed. Explicit styles do not adapt:
+  icons-and-active-name shows every icon and only the active name regardless of
+  count; icons-and-names shows both on every tab;
+  names-only and icons-only likewise apply to all tabs.
   Rust resolves `PanelView.tab` into `show_icon` / `show_name`; GTK, web and Android
   render and measure those contents with a 6px icon/name gap. Whole-group moves
   retain style; merges adopt the destination style, and splitting out a tab creates
@@ -255,7 +259,7 @@ policies and native/Wasm type checks pass.
 GTK now renders dynamic toolbars, native contextual menus, the searchable picker
 and in-place two-column configuration. The original group and preview controls
 stay in their parents; closing restores its allocation without changing saved geometry. Native
-checks exercise group/panel/tile/empty-ribbon targets, all three tab-group styles,
+checks exercise group/panel/tile/empty-ribbon targets, all five tab-group styles,
 creation/insertion, control visibility and editing, a GTK drop signal, restore
 and reset. Dark/light GTK widget captures are inspected in
 `artifacts/ui/customization/` (ignored). Gesture signals test native bindings,
@@ -326,8 +330,9 @@ resize/reset directions, hidden tabs, group collapse, narrow-ribbon merging,
 top snap coordinates and Zen hidden-edge/floating-only targets. The complete
 suite also retains drawing, settings, numeric-input and lifecycle checks.
 
-The group-tab-style tests on GTK, web and Android check all three modes with
-every tab active in turn, in both themes. Shared tests also cover serialization,
+The group-tab-style tests on GTK, web and Android check all five modes with
+every tab active in turn, in both themes, and Automatic switching between two
+and three tabs without changing the saved style. Shared tests also cover serialization,
 undo/redo, whole-group moves, merging into a differently styled group and
 splitting out a new default-style group. GTK keeps the existing tab widgets and
 changes child visibility; all hosts render the Rust-resolved icon/name flags.

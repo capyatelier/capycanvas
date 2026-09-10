@@ -269,7 +269,11 @@ class AndroidHostTest {
         assertEquals("Workspace menu opens below its header button", anchor.bottom, menu.top, 2f)
     }
     private fun assertContextBeside(tag: String) {
-        val anchor = screenBounds(compose.onNodeWithTag(tag))
+        // The group menu is anchored to the draggable header, not its grip.
+        // Compose can align to either end of that header as its width changes.
+        val header = tag.replace("group-grip-", "group-header-")
+        val anchorTag = if (header != tag && compose.onAllNodesWithTag(header).fetchSemanticsNodes().isNotEmpty()) header else tag
+        val anchor = screenBounds(compose.onNodeWithTag(anchorTag))
         val menu = screenBounds(compose.onNodeWithTag("workspace-menu"))
         assertTrue("Menu $menu must remain beside its trigger $anchor",
             maxOf(anchor.left - menu.right, menu.left - anchor.right, 0f) <= 2f &&
@@ -565,7 +569,7 @@ class AndroidHostTest {
             "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
         for (theme in listOf("dark", "light")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for ((style, label) in listOf("active_name" to "Icons and active tab name", "name" to "Names only", "icon" to "Icons only")) {
+            for ((style, label) in listOf("automatic" to "Automatic", "active_name" to "Icons and active tab name", "icon_name" to "Icons and names", "name" to "Names only", "icon" to "Icons only")) {
                 contextGrip("group-grip-$id")
                 compose.onNodeWithText(label).performClick()
                 for (active in listOf("brushes", "sizes", "layers")) {
@@ -575,11 +579,21 @@ class AndroidHostTest {
                         val icon = compose.onNodeWithTag("tab-icon-$panel", useUnmergedTree = true)
                         val name = compose.onNodeWithTag("tab-name-$panel", useUnmergedTree = true)
                         if (style != "name") icon.assertExists() else icon.assertDoesNotExist()
-                        if (style == "name" || (style == "active_name" && panel == active)) name.assertExists() else name.assertDoesNotExist()
+                        if (style == "icon_name" || style == "name" || (style in listOf("automatic", "active_name") && panel == active)) name.assertExists() else name.assertDoesNotExist()
                     }
                 }
                 capture("group-tabs-$style-$theme")
             }
+            customize(obj("type" to "set_tab_style", "group" to id, "style" to "automatic"))
+            floatPanel("layers", 850f, 200f)
+            for (panel in listOf("brushes", "sizes")) {
+                compose.onNodeWithTag("tab-icon-$panel", useUnmergedTree = true).assertExists()
+                compose.onNodeWithTag("tab-name-$panel", useUnmergedTree = true).assertExists()
+            }
+            capture("group-tabs-automatic-two-tabs-$theme")
+            action(obj("type" to "move_panel", "panel" to "layers", "target" to obj("kind" to "tab", "group" to id), "viewport" to viewport()))
+            for (panel in listOf("brushes", "sizes")) compose.onNodeWithTag("tab-name-$panel", useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag("tab-name-layers", useUnmergedTree = true).assertExists()
         }
         compose.onNodeWithTag("tab-layers").performTouchInput { longClick() }
         compose.onNodeWithText("Icons only").assertDoesNotExist()
@@ -591,7 +605,7 @@ class AndroidHostTest {
         val id = group("sizes").getInt("id")
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
-            for (style in listOf("active_name", "name", "icon")) {
+            for (style in listOf("automatic", "active_name", "icon_name", "name", "icon")) {
                 customize(obj("type" to "set_tab_style", "group" to id, "style" to style))
                 val bands = state().getJSONObject("workspace").getJSONObject("layout").getJSONArray("bands").toString()
                 for (hidden in listOf(true, false)) {

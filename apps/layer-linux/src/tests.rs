@@ -1882,6 +1882,44 @@ fn native_group_tab_styles() {
             }
             capture_reference(&w, &format!("{dir}/gtk-{theme:?}-{style:?}.png"), 1.0);
         }
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetTabStyle {
+                group,
+                style: TabStyle::Automatic,
+            },
+        });
+        w.dispatch(UiAction::MovePanel {
+            panel: Panel::Layers,
+            viewport,
+            target: DockTarget::Float {
+                position: [850.0, 200.0],
+            },
+        });
+        pump(150);
+        let visible_names = || {
+            w.groups
+                .borrow()
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .tabs
+                .iter()
+                .filter(|(_, button)| button.child().unwrap().last_child().unwrap().is_visible())
+                .count()
+        };
+        assert_eq!(visible_names(), 2);
+        capture_reference(
+            &w,
+            &format!("{dir}/gtk-{theme:?}-Automatic-two-tabs.png"),
+            1.0,
+        );
+        w.dispatch(UiAction::MovePanel {
+            panel: Panel::Layers,
+            viewport,
+            target: DockTarget::Tab { group, index: None },
+        });
+        pump(150);
+        assert_eq!(visible_names(), 1);
     }
     w.window.destroy();
     pump(100);
