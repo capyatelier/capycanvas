@@ -302,3 +302,30 @@ Settings persistence, complete workspace/panel functionality, physical input and
 shortcut capture, OS theme changes, mixed-DPI/lifecycle recovery, exact visual
 parity and packaging remain unfinished. This checkpoint does not establish
 120 Hz presentation, sustained painting performance or input-to-present latency.
+
+### Current Windows validation findings
+
+A manual pen test in the open prototype produced a visible stroke. This confirms
+basic pen drawing for that run; the exact tested binary, pressure/tilt/history,
+eraser, capture cancellation and latency have not been established.
+
+The first identity-matched, 20-second steady-canvas trace on the nominal 120 Hz
+display recorded about 60.00 presents/s and 50.35 displayed frames/s. Of 1,195
+records, 1,003 reported reaching display; 192 did not report a display time.
+Display interval p99 was 33.47 ms. Present-to-display p99 was 31.40 ms, which
+excludes input and earlier drawing work and is not an input-latency result.
+This run overlapped renderer GPU tests. It does not pass the presentation gate;
+a clean repeat has been requested with GPU tests and builds paused.
+
+The upstream integration passes 273 core/engine/UI/host/Windows tests. The
+serial hardware D3D12 renderer suite passes 101 tests, skips 16 explicitly ignored
+benchmarks, and fails three tests: viewport pipeline creation, the imported sRGB
+ramp, and the runtime-filter pixel reference. These failures remain under
+investigation. Native Preferences opening also needs an isolated recheck after
+one fixture timeout during concurrent GPU validation. The integration has not
+been accepted or published.
+
+The presentation analyzer reports actual display intervals separately from
+submission intervals and present-to-display latency. Synthetic checks cover
+swap-chain/process filtering, missing display records, percentiles and rejected
+invalid data. Raw captures, pixel differences and device metadata stay local.

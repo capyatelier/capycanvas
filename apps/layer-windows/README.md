@@ -152,8 +152,8 @@ capture; reconfiguration invalidates the run.
 
 Raw CSV, logs, display metadata and binary hashes stay under ignored
 artifacts/windows/presentation. Analyze actual display intervals and dropped
-frames separately from submission rate. No display-cadence result is available
-until capture succeeds, and no mouse/pen latency is measured by this probe.
+frames separately from submission rate. No display-cadence conclusion is available
+without a valid capture and workload review; this probe measures no mouse/pen latency.
 
 ## Native header and Preferences checks
 
@@ -178,3 +178,16 @@ The opt-in ui-state.json contains app state and may include private settings.
 It stays ignored alongside captures and traces, and must be off for performance
 runs. Settings persistence, OS theme changes, remaining workspace features and
 the full acceptance gates are still open.
+
+Analyze a captured directory locally with:
+
+~~~powershell
+./apps/layer-windows/scripts/analyze-presentation.ps1 -Directory <local-capture-directory>
+./apps/layer-windows/scripts/test-presentation-analysis.ps1
+~~~
+
+The analyzer keeps submission rate, displayed-frame rate, missing display
+records and present-to-display latency distinct. It does not declare a 120 Hz
+or input-latency acceptance pass. Its tests use synthetic data. See the latest
+validation findings in ../../docs/windows-implementation.md for measured results
+and unresolved integration checks.
