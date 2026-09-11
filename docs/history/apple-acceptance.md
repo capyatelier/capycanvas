@@ -1156,3 +1156,79 @@ Web now uses the full editor preset and grouped paint tools. Matching
 those defaults on Apple and refreshing the Chrome comparison fixtures remain
 part of the next UI parity work; the older comparison results are not a pass
 against this new web baseline.
+
+## Shared full editor workspace and grouped tools on Apple
+
+Fresh iPad and Mac owners now initialize the shared full editor preset used by
+the web host. The default workspace includes the Tools and Commands bars,
+Tool Set, Tool Settings, Brush size, Color, Navigator/Diagnostics,
+Properties/Filters and Layers. Saved workspaces still restore their exact layout
+and toolbar contents. The new preset does not overwrite an older customization.
+
+Both native targets project the Rust tool groups and subtools, replacing the
+Apple-only flat painting catalog. Group buttons wrap with flexible equal widths
+and brush previews retain their aspect ratio. A direct ABI check visits every
+catalog brush through the live toolbar, group and subtool actions on both Apple
+policies, checks the selected preset, unchanged paint color and layer state,
+then verifies exact restoration of an older customized workspace. The native
+numeric workflow also verifies that changing groups remembers the selected
+brush and its edited size.
+
+Testing the full preset exposed an iPad numeric-entry stall: accepting an
+expression synchronously resigned the text field during a SwiftUI update.
+A process sample located the repeated responder-graph/AttributeGraph cycle in
+that update path. UIKit focus release now runs after the update with a guard
+against newer focus changes. AppKit uses the same guarded deferred pattern;
+the stall was reproduced on iPad Simulator, not on Mac. The final expression,
+invalid-input, stepping and brush-group workflow passes on both Mac and iPad
+Simulator. Earlier iPad Return stalls are executed failures that led to this
+fix. No system menu coordinates were used.
+
+The regression run passes 32 Apple bridge, 15 host and 220 UI checks, with one
+host hardware check ignored. The later assertion for legacy workspace restoration
+passes separately. Direct Swift persistence checks pass, including actual native
+owner restoration on both policies. The signed Mac and physical iPad builds,
+iPad Simulator test build and WebAssembly build pass. The updated physical iPad
+app installs and launches. Concurrent documentation reorganization was integrated;
+its only executable-file changes update documentation links. These checks do not
+establish physical input, lifecycle or performance acceptance.
+
+The refreshed light-theme `initial` comparisons use a fresh local Chrome profile,
+a hardware WebGPU adapter and matching logical dimensions at 2× scale. The full
+images retain native window controls, the Mac system-menu adaptation, all control
+differences and system corner pixels. EXIF orientation is honored; neither image
+is resized, cropped or masked. Results with zero channel tolerance are:
+
+| Native target | Logical viewport | Different pixels / total | Different fraction | Maximum channel error | Exact result |
+| --- | --- | --- | --- | --- | --- |
+| iPad Simulator | 1376 × 1032 | 462,046 / 5,680,128 | 8.1344% | 219 | Fail |
+| macOS | 1200 × 870 | 523,196 / 4,176,000 | 12.5286% | 255 | Fail |
+
+The blank central paper rectangle matches all four Chrome edges exactly on both
+platforms after orientation normalization. This checks that rectangle only;
+it does not establish one-point geometry agreement for every editor control.
+Visible remaining differences include tool/text spacing, color controls and tab
+icon, Properties dropdown layout and Navigator sizing. The web overview's fixed
+height clips its controls in the short default panel, while the Apple overview
+fits the available height and exposes navigation actions. Full-window canvas
+compositing during camera changes and the other visual scenarios remain open.
+
+The final focused Mac capture passes with both history commands disabled and
+panel configuration closed. Preliminary Mac captures with a lingering tooltip,
+a canvas contact or an open configuration panel are excluded from the table.
+The fixture dismisses help by opening and closing the existing panel configuration
+controls, then moves the pointer within the app before capturing. No system menu
+is addressed. Test teardown leaves only the user's original editor process.
+The numeric interaction results precede these capture-only fixture refinements;
+the final shared test source also compiles for iPad Simulator. Other UI fixtures
+were adjusted for the shared preset's groups and Commands bar but their full
+workflows were not rerun in this milestone.
+
+Screenshots, process samples, result bundles, build logs and signing/device data
+remain in ignored local artifacts. The physical iPad automation runner's earlier
+setup timeout remains unresolved; installation/launch is not a physical UI-test
+pass. The previous strict filter-reference differences (3,274 pixels above one
+byte across 70 of 160 cases, maximum error 47), complete feature inventory,
+physical lifecycle/input matrix and sustained hardware performance gates remain
+open on both targets. A concurrent Android-only native time/battery header change
+was also pulled before publication; it does not change these tested Apple paths.

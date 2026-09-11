@@ -24,9 +24,8 @@ Capture after the expansion settles, at the same viewport and scale. Native
 control heights can differ; keep those differences in the full-image report.
 `partial-zen` toggles Zen on the default workspace. The Apple debug actions are
 `[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]`.
-Apple projects shared edge toolbar sections; the current web host does not.
-Retain this visible host difference in the report; the fixture cannot establish
-parity for those missing web sections.
+Both hosts now project shared edge toolbar sections. Older comparisons from
+before the web implementation do not establish parity against the current preset.
 `CAPY_CHROME` overrides the default macOS Chrome executable path. WebGPU must use
 a hardware adapter. Captures wait for staged GPU startup, fonts/images, visible
 layer thumbnail pixels and layout. GPU attachment alone can precede the actual
@@ -42,7 +41,9 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcrun swift tools/visual/mac-capture.swift artifacts/ui/parity/mac
 ```
 
-Screen capture permission is required. Keep the editor frontmost and unobscured.
+Screen capture permission is required. Keep the editor frontmost and unobscured,
+with native tooltips dismissed. The script identifies the frontmost editor by
+bundle identifier and process, independent of its displayed application name.
 The command captures the screen inside its exact window bounds, preserving system
 corner pixels rather than producing transparent corners, and writes the PNG and
 its measured logical/pixel dimensions. Use those dimensions and the app's theme for the Chrome
@@ -54,7 +55,10 @@ Inspect each pair before comparison: a macOS permission dialog or another window
 covering the editor makes the fixture invalid and must not be counted as parity
 evidence. Captures can include system corner backgrounds; keep artifacts local.
 
-Compare a native screenshot exported from the Apple launch test:
+The focused Apple `EditorLaunchTests/testCompleteEditorCapture` test attaches
+`complete-editor-initial` and `complete-editor-geometry` on either target. It uses
+a fresh light-theme workspace and waits for the canvas and live Navigator.
+Compare its exported native screenshot with a matching Chrome `initial` capture:
 
 ```sh
 python3 -m venv artifacts/ui/parity/python-env
@@ -115,7 +119,8 @@ The default limit is two levels per 8-bit channel, including opacity. Both the
 ring and field must have at least 20 samples. The report retains every count and
 the worst failures. This checks sampled color correctness only; it does not
 replace full-image Chrome comparisons or establish editor visual parity. The
-web renderer currently has no matching custom color-wheel fixture.
+Chrome `initial` fixture includes the default HSV wheel; a matching dedicated
+HLS interaction scenario is not currently provided.
 
 A fixture may include `hue` alongside `rgba` to preserve the remembered hue of
 black, white or gray paint. The oracle applies that hue through shared color

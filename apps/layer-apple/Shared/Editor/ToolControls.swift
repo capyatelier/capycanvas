@@ -6,26 +6,11 @@ struct ToolSetControls: View {
     @ObservedObject var store: EditorStore
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
-        if store.state["tool_set"]["groups"].array.contains(where: { $0["action"]["type"].string == "select_tool_group" }) {
-            // Keep every brush reachable in the current Apple paint list.
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(store.catalog["brush_categories"].array.indices, id: \.self) { index in
-                    let category = store.catalog["brush_categories"][index]
-                    Text(category["label"].string).fontWeight(.bold).opacity(0.55).padding(8)
-                    items(JSON(category["brushes"].array.map { brush in
-                        ["label": brush["label"].raw, "preview": brush["id"].raw,
-                         "selected": brush["id"].uint == store.state["brush"]["preset"].uint,
-                         "action": ["type": "select_brush", "id": brush["id"].raw]]
-                    }), group: false)
-                }
+        VStack(spacing: 8) {
+            ToolGroupsLayout {
+                items(store.state["tool_set"]["groups"], group: true)
             }
-        } else {
-            VStack(spacing: 6) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 2)], spacing: 2) {
-                    items(store.state["tool_set"]["groups"], group: true)
-                }
-                VStack(spacing: 2) { items(store.state["tool_set"]["subtools"], group: false) }
-            }
+            VStack(spacing: 4) { items(store.state["tool_set"]["subtools"], group: false) }
         }
     }
 
@@ -36,18 +21,21 @@ struct ToolSetControls: View {
                 ? store.command(item["action"]["command"].string) : JSON()
             Button { store.dispatch(item["action"]) } label: {
                 Group {
-                    if !item["preview"].isNull {
-                        VStack(alignment: .trailing, spacing: 0) {
-                            Image("preview-\(item["preview"].uint)-\(store.state["theme"].string)").resizable().frame(height: 40)
-                            Text(item["label"].string).fontWeight(.bold)
-                        }.padding(.horizontal, 6).padding(.vertical, 3)
-                    } else {
-                        HStack(spacing: 6) {
+                    if group {
+                        VStack(spacing: 8) {
                             SharedIcon(name: item["icon"].string)
-                            Text(item["label"].string).fontWeight(.bold)
-                        }.frame(minHeight: 36)
+                            Text(item["label"].string).fontWeight(.bold).frame(minHeight: 24)
+                        }.font(.system(size: store.catalog["text_size_pt"].number * 4 / 3 * 0.85))
+                    } else {
+                        HStack(spacing: 8) {
+                            if !item["preview"].isNull {
+                                Image("preview-\(item["preview"].uint)-\(store.state["theme"].string)")
+                                    .resizable().scaledToFit().frame(width: 82, height: 32)
+                            } else { SharedIcon(name: item["icon"].string) }
+                            Text(item["label"].string).fontWeight(.bold).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                        }
                     }
-                }.frame(maxWidth: .infinity)
+                }.padding(.horizontal, 17).padding(.vertical, 5).frame(maxWidth: .infinity)
                     .background(item["selected"].bool ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!command.isNull && !command["enabled"].bool)
@@ -56,6 +44,36 @@ struct ToolSetControls: View {
                 .accessibilityLabel(item["label"].string)
                 .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
                 .accessibilityIdentifier(item["preview"].isNull ? "tool-\(group ? "group" : "subtool")-\(index)" : "brush-\(item["preview"].uint)")
+        }
+    }
+}
+
+/// Equal flexible buttons with wrapping, matching the web tool-group rows.
+/// An adaptive grid reserves unused columns when a family has fewer groups.
+private struct ToolGroupsLayout: Layout {
+    private func rows(_ width: CGFloat, _ subviews: Subviews) -> [(Range<Int>, CGFloat, CGFloat)] {
+        let columns = max(1, Int((width + 4) / 74))
+        return stride(from: 0, to: subviews.count, by: columns).map { start in
+            let range = start..<min(start + columns, subviews.count)
+            let cell = max(0, (width - CGFloat(range.count - 1) * 4) / CGFloat(range.count))
+            let height = range.map { subviews[$0].sizeThatFits(ProposedViewSize(width: cell, height: nil)).height }.max() ?? 0
+            return (range, cell, height)
+        }
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let requested = proposal.width ?? 226
+        let width = requested.isFinite ? max(0, requested) : 226
+        let rows = rows(width, subviews)
+        return CGSize(width: width, height: rows.reduce(0) { $0 + $1.2 } + CGFloat(max(0, rows.count - 1)) * 4)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for (range, width, height) in rows(bounds.width, subviews) {
+            for index in range {
+                subviews[index].place(at: CGPoint(x: bounds.minX + CGFloat(index - range.lowerBound) * (width + 4), y: y),
+                    anchor: .topLeading, proposal: ProposedViewSize(width: width, height: height))
+            }
+            y += height + 4
         }
     }
 }

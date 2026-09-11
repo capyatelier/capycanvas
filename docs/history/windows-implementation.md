@@ -760,3 +760,9 @@ The full editor workspace, physical input (including Navigator gestures),
 mixed-DPI/device recovery, additional native windows, packaging and release
 acceptance remain open. The strict v4 filter-sheet difference and deferred
 120 Hz/input-to-present gates are unchanged; no presentation benchmark ran here.
+
+Before publication, the Apple editor-preset milestone 9a752ea was also merged.
+Its shared layout change enables the full preset for Apple platforms and leaves
+the Windows preset unchanged. The affected 245 UI/Windows unit checks, rebuilt
+native app and complete Navigator fixture pass after that merge; the additional
+owned review exits with code zero.

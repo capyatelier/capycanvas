@@ -43,7 +43,11 @@ struct NumericTextField: NSViewRepresentable {
                 field.currentEditor()?.selectAll(nil)
             }
         } else if !focused && field.currentEditor() != nil {
-            field.window?.makeFirstResponder(nil)
+            let coordinator = context.coordinator
+            DispatchQueue.main.async { [weak field] in
+                guard !coordinator.parent.focused, let field, field.currentEditor() != nil else { return }
+                field.window?.makeFirstResponder(nil)
+            }
         }
     }
     final class Coordinator: NSObject, NSTextFieldDelegate {

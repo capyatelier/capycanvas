@@ -5,19 +5,20 @@ import AppKit
 enum CaptureFailure: Error { case missingWindow, captureFailed, invalidImage, notFrontmost }
 let directory = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "artifacts/ui/parity/mac")
 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+guard let app = NSWorkspace.shared.frontmostApplication,
+    app.bundleIdentifier == "art.capycanvas.apple.mac" else {
+    fputs("Bring the native Mac editor to the front before capturing.\n", stderr)
+    throw CaptureFailure.notFrontmost
+}
 let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
 guard let window = windows.first(where: {
-    ($0[kCGWindowOwnerName as String] as? String) == "CapyCanvas-Mac" &&
+    ($0[kCGWindowOwnerPID as String] as? Int32) == app.processIdentifier &&
     ($0[kCGWindowLayer as String] as? Int) == 0 &&
     (($0[kCGWindowBounds as String] as? [String: Double])?["Width"] ?? 0) > 100
 }),
     let bounds = window[kCGWindowBounds as String] as? [String: Double] else {
     fputs("Open the native Mac app before capturing its editor window.\n", stderr)
     throw CaptureFailure.missingWindow
-}
-guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "art.capycanvas.apple.mac" else {
-    fputs("Bring the native Mac editor to the front before capturing.\n", stderr)
-    throw CaptureFailure.notFrontmost
 }
 let output = directory.appendingPathComponent("native-mac.png")
 let capture = Process()

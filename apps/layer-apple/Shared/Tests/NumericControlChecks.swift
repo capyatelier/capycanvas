@@ -1,6 +1,53 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor func captureDefaultEditor(in app: XCUIApplication) {
+        let canvas = app.descendants(matching: .any)["canvas"].firstMatch
+        XCTAssertTrue(canvas.waitForExistence(timeout: 20))
+        expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
+        waitForExpectations(timeout: 30)
+        for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "navigator", "properties", "layers"] {
+            let control = panel == "toolbar" || panel == "commands"
+                ? app.descendants(matching: .any)["toolbar-options-" + panel].firstMatch
+                : app.buttons["panel-tab-" + panel]
+            XCTAssertTrue(control.waitForExistence(timeout: 10),
+                "The complete default workspace must expose \(panel)")
+        }
+        let overview = app.descendants(matching: .any)["navigator-overview"].firstMatch
+        expectation(for: NSPredicate(format: "value == %@", "Live preview"), evaluatedWith: overview)
+        waitForExpectations(timeout: 10)
+        #if os(macOS)
+        let window = app.windows.firstMatch
+        // Open and close panel configuration to dismiss native help without
+        // touching ink. Empty header space can forward contacts to the canvas.
+        app.buttons["panel-tab-brushes"].click()
+        let closeConfiguration = app.buttons["close-panel-configuration"]
+        XCTAssertTrue(closeConfiguration.waitForExistence(timeout: 5))
+        closeConfiguration.click()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: closeConfiguration)
+        waitForExpectations(timeout: 5)
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.02)).hover()
+        let viewport = window.frame
+        #else
+        let viewport = app.frame
+        #endif
+        for command in ["Undo", "Redo"] {
+            let button = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", command)).firstMatch
+            XCTAssertTrue(button.exists)
+            XCTAssertFalse(button.isEnabled, "The initial capture must have no drawing history")
+        }
+        #if os(macOS)
+        let screenshot = window.screenshot()
+        #else
+        let screenshot = XCUIScreen.main.screenshot()
+        #endif
+        let initial = XCTAttachment(screenshot: screenshot)
+        initial.name = "complete-editor-initial"; initial.lifetime = .keepAlways; add(initial)
+        let metadata = XCTAttachment(data: try! JSONSerialization.data(withJSONObject:
+            ["scenario": "initial", "theme": "light", "viewport": [viewport.width, viewport.height]]), uniformTypeIdentifier: "public.json")
+        metadata.name = "complete-editor-geometry"; metadata.lifetime = .keepAlways; add(metadata)
+    }
+
     @MainActor func checkNumericToolControls(in app: XCUIApplication) {
         func activate(_ element: XCUIElement) {
             XCTAssertTrue(element.waitForExistence(timeout: 5))
@@ -10,6 +57,7 @@ extension XCTestCase {
             element.tap()
             #endif
         }
+        captureDefaultEditor(in: app)
         let value = app.buttons["number-value-tool-size"]
         let entry = app.textFields["number-entry-tool-size"]
         activate(value)
@@ -44,8 +92,13 @@ extension XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertFalse(error.exists, "A corrected expression must clear local feedback")
         #endif
+        let remembered = value.value as? String
+        activate(app.buttons["tool-group-1"])
         activate(app.buttons["brush-7"])
         XCTAssertTrue(app.buttons["brush-7"].isSelected, "The Marker brush must become selected")
+        activate(app.buttons["tool-group-0"])
+        XCTAssertTrue(app.buttons["brush-1"].isSelected, "Returning to Pen must restore its selected subtool")
+        XCTAssertEqual(value.value as? String, remembered, "Changing groups must preserve each brush's edited size")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 }
