@@ -969,3 +969,57 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   preview cancel/commit, shared handles and numeric settings, GTK rendering/input,
   and end-to-end latency/visual tests. Existing painting is unchanged; this is a
   tested rendering foundation, **not completion of the Operation milestone**.
+
+### GTK staged startup milestone
+
+- GTK now uses the same four-stage shader dependency scheduler as Android and
+  web. GPU worker construction no longer blocks the GTK initialization call.
+  Paper is submitted before document and active-brush compilation, followed by
+  unused shaders. Procedural brush textures use that same priority queue on all
+  platforms, and readiness waits for their upload. Pixel queries wait for the
+  real document frame; a contact begun before brush readiness stays suppressed
+  until release. Existing two-frame queuing and direct Wayland presentation are
+  preserved.
+- Native pipeline data uses a bounded, build/adapter/driver-keyed private cache.
+  The old eager constructors are deprecated; tests and diagnostic bindings use
+  explicitly named headless constructors. The in-development Apple bridge still
+  needs to adopt the staged lifecycle; its old call now emits a deprecation
+  warning on an Apple build. No Apple runtime validation is claimed here.
+- Representative startup measurements (milliseconds from workspace creation):
+
+  | Measurement | Previous eager GTK | Staged, empty app cache | Staged, warm app cache |
+  | --- | ---: | ---: | ---: |
+  | `window.present()` returns | 2752 | 863 | 779 |
+  | First canvas presentation feedback observed | 2825 | 1836 | 1017 |
+  | Document / active brush ready observed | Not separately available | 1864 / 1872 | 1017 / 1017 |
+  | Entire startup catalog ready observed | Not separately available | 5381 | 1799 |
+
+  These are individual local runs, not statistical startup percentiles or a
+  cold-driver guarantee. The readiness timestamps include event-loop polling.
+  GTK's initial widget/layout work still pauses the main loop (maximum measured
+  post-present pump slice: 928ms cold, 197ms warm); moving shader compilation
+  does not remove that separate UI startup cost. Constructor-only diagnostic
+  timers were removed after confirming session/host setup itself takes under
+  1ms. The retained ignored `native_startup_latency` test checks startup order,
+  contact gating, native control changes and painting before optional completion.
+- Six-second native pacing runs, 384px brushes, actual Wayland presentation
+  feedback, no simultaneous GPU benchmark:
+
+  | Workload | Worker render/present CPU median/p95/p99 ms | GPU median/p95/p99 ms | Presented Hz |
+  | --- | --- | --- | ---: |
+  | G pen | 0.273 / 0.517 / 0.661 | 0.135 / 0.283 / 0.488 | 119.95 |
+  | Natural blender | 0.617 / 1.213 / 1.492 | 0.621 / 1.593 / 3.292 | 120.01 |
+  | Wet round | 0.527 / 0.991 / 1.145 | 0.325 / 1.082 / 2.276 | 119.95 |
+  | Watercolor | 1.176 / 1.978 / 2.403 | 1.507 / 3.711 / 4.660 | 119.91 |
+  | Pan | 0.189 / 0.413 / 0.503 | 0.071 / 0.151 / 0.330 | 119.96 |
+  | Hand tool | 0.183 / 0.405 / 0.499 | 0.067 / 0.134 / 0.181 | 120.00 |
+
+  GTK frame-handler CPU p99 stays below 0.052ms in these runs. These are
+  steady-state results, not a claim of 120Hz throughout initial UI construction
+  or physical tablet input validation. Raw reports/cache files remain local.
+- Validation: renderer regression suite including cache reload and reference
+  pixels; GTK cold/warm startup and pacing; workspace/Wasm checks and strict
+  renderer/GTK/FFI Clippy. Real Chrome + rebuilt Wasm verifies visible paper,
+  delayed GPU-validation readiness, native web settings and drawing/panning
+  during optional compilation, and startup with a loaded domain-warp filter.
+  No new physical Android or Apple run is claimed by this GTK milestone.

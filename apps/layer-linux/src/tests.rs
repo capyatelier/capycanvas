@@ -21,6 +21,120 @@ fn state(w: &Workspace) -> UiState {
     w.gpu.borrow().as_ref().unwrap().session.state().clone()
 }
 
+#[test]
+#[ignore = "private Wayland desktop: startup timing and event-loop responsiveness"]
+fn native_startup_latency() {
+    let app = native_test_app("art.capycanvas.StartupTest");
+    let started = Instant::now();
+    let w = Workspace::new(&app);
+    let built = started.elapsed().as_secs_f64() * 1000.;
+    w.window.present();
+    let presented = started.elapsed().as_secs_f64() * 1000.;
+    let send = |phase, x| {
+        let camera = state(&w).camera;
+        let m = camera.document_to_surface();
+        let now = glib::monotonic_time() as u64 * 1000;
+        w.input.send(
+            &w,
+            PenEvent {
+                device_id: 92,
+                sequence: now,
+                timestamp_ns: now,
+                view_revision: camera.revision,
+                surface_position: Point {
+                    x: m[0] * x + m[2] * 400. + m[4],
+                    y: m[1] * x + m[3] * 400. + m[5],
+                },
+                pressure: 1.,
+                tilt_radians: [0.; 2],
+                twist_radians: 0.,
+                distance: 0.,
+                phase,
+                tool: ToolKind::Pen,
+                flags: SampleFlags::PRIMARY,
+            },
+        );
+    };
+    let strokes = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .strokes()
+            .count()
+    };
+    send(PenPhase::Down, 400.);
+    w.dispatch(UiAction::SetBrushSize { value: 24. });
+    let mut stages = [None; 3];
+    let mut first_canvas = None;
+    let mut painted = false;
+    let mut max_pump_ms = 0f64;
+    while stages[2].is_none() || first_canvas.is_none() {
+        let tick = Instant::now();
+        pump(1);
+        max_pump_ms = max_pump_ms.max(tick.elapsed().as_secs_f64() * 1000.);
+        if first_canvas.is_none()
+            && w.gpu.borrow().as_ref().is_some_and(|g| {
+                !g.session
+                    .engine()
+                    .backend()
+                    .stats
+                    .lock()
+                    .unwrap()
+                    .presented
+                    .is_empty()
+            })
+        {
+            first_canvas = Some(started.elapsed().as_secs_f64() * 1000.);
+        }
+        let progress = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .backend()
+            .startup;
+        for (slot, ready) in stages.iter_mut().zip([
+            progress.canvas_ready,
+            progress.brush_ready,
+            progress.complete,
+        ]) {
+            if ready && slot.is_none() {
+                *slot = Some(started.elapsed().as_secs_f64() * 1000.);
+            }
+        }
+        if progress.brush_ready && !painted {
+            // A contact started before readiness cannot turn into half a stroke.
+            send(PenPhase::Move, 450.);
+            send(PenPhase::Up, 500.);
+            assert_eq!(strokes(), 0);
+            // A new contact works without waiting for the unused catalog.
+            send(PenPhase::Down, 400.);
+            send(PenPhase::Move, 450.);
+            send(PenPhase::Up, 500.);
+            painted = true;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "startup never completed"
+        );
+    }
+    eprintln!(
+        "GTK startup: UI built {built:.3}ms, present returned {presented:.3}ms, first canvas feedback {first_canvas:.3?}ms, max event-loop slice {max_pump_ms:.3}ms"
+    );
+    eprintln!("GTK startup document/brush/all ready: {stages:.3?}ms");
+    pump(100);
+    assert_eq!(strokes(), 1);
+    assert!(white_pixels(&w) > 100_000);
+    w.window.destroy();
+    pump(20);
+}
+
 struct NativeTestApp(adw::Application);
 impl std::ops::Deref for NativeTestApp {
     type Target = adw::Application;

@@ -692,11 +692,23 @@ impl WgpuRasterizer {
         &self.queue
     }
 
+    #[deprecated(note = "Interactive hosts must use staged startup; headless tests should use new_headless")]
     pub fn new() -> Result<Self, GpuRasterError> {
-        pollster::block_on(Self::new_async())
+        Self::new_headless()
     }
 
+    #[deprecated(note = "Interactive hosts must use staged startup; headless tests should use new_headless_async")]
     pub async fn new_async() -> Result<Self, GpuRasterError> {
+        Self::new_headless_async().await
+    }
+
+    /// Fully warmed hardware renderer for headless tests, export and benchmarks.
+    /// Interactive applications use from_wgpu_staged[_cached] instead.
+    pub fn new_headless() -> Result<Self, GpuRasterError> {
+        pollster::block_on(Self::new_headless_async())
+    }
+
+    pub async fn new_headless_async() -> Result<Self, GpuRasterError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::PRIMARY;
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -738,12 +750,13 @@ impl WgpuRasterizer {
             .await
             .map_err(|error| GpuRasterError::DeviceRequest(error.to_string()))?;
 
-        Self::from_wgpu(adapter, device, queue)
+        // Headless tests/benchmarks explicitly need a fully warmed renderer.
+        Self::from_wgpu_inner(adapter, device.into(), queue, false)
     }
 
-    /// Builds the canvas engine on a platform-selected adapter/device. Native
-    /// presenters use this after selecting an adapter compatible with their
-    /// surface, so the canvas and presentation share one queue and resource set.
+    /// Legacy blocking constructor. Interactive presenters use the staged
+    /// constructor with their surface-compatible device and queue instead.
+    #[deprecated(note = "Interactive hosts must use from_wgpu_staged[_cached] and drive the four-stage startup lifecycle")]
     pub fn from_wgpu(
         adapter: wgpu::Adapter,
         device: wgpu::Device,
@@ -962,7 +975,7 @@ impl WgpuRasterizer {
             inspection: None,
             metrics: GpuRasterMetrics::default(),
         };
-        if !cfg!(target_arch = "wasm32") || !staged {
+        if !staged {
             renderer.install_builtin_masks()?;
             for pipeline in &renderer.scene_pipelines.pipeline { pipeline.compile(); }
         }
@@ -972,11 +985,10 @@ impl WgpuRasterizer {
             renderer.selection_clip.compile_all();
         }
         if staged {
-            // Web can present paper with the flat compositor; tiled document
+            renderer.upload_mask(&AssetId::from(WHITE_MASK_ASSET), 1, 1, 1, &[255])?;
+            // Hosts can present paper with the flat compositor; tiled document
             // composition is prepared next, before loaded content is replayed.
             renderer.validated_effects = Some(renderer.scene_pipelines.effects(&renderer));
-            #[cfg(not(target_arch = "wasm32"))]
-            { renderer.scene = Some(scene::Scene::new(&renderer)); }
             renderer.startup = Some(startup::Startup::new(&renderer.device)?);
         }
         Ok(renderer)
@@ -6748,7 +6760,7 @@ mod tests {
 
     #[test]
     fn thumbnails_frame_nontransparent_pixels_and_show_paper_and_checkerboard() {
-        let mut r = WgpuRasterizer::new().expect("physical GPU required");
+        let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
         let mut paper = Layer::paint(LayerId(2), "Paper");
         paper.kind = LayerKind::Background;
         let paint = Layer::paint(LayerId(1), "Small mark");
@@ -6843,7 +6855,7 @@ mod tests {
 
     #[test]
     fn layer_system_selection_mask_and_incremental_erase() {
-        let mut r = WgpuRasterizer::new().expect("physical GPU required");
+        let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
         let mut layer = Layer::paint(LayerId(1), "Masked red");
         let mut mask = layer_core::LayerMask::reveal_all(LayerId(3), Point::default());
         mask.default_coverage = 0.;
@@ -6994,7 +7006,7 @@ mod tests {
     }
 
     fn transport_samples(existing_wet: bool, wet_flow: f32, dry_flow: f32) -> [[u8; 4]; 2] {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Watercolor");
         if existing_wet {
@@ -7150,7 +7162,7 @@ mod tests {
 
     #[test]
     fn uniform_coverage_persists_across_frames_and_resets_per_stroke() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let dab = test_dab([64.0, 64.0], [0.0, 0.0, 0.0, 1.0], 0.45);
@@ -7228,7 +7240,7 @@ mod tests {
 
     #[test]
     fn watercolor_uses_coverage_and_wetness_without_pen_up_change() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Watercolor");
         let dab = test_dab([64.0, 64.0], [0.55, 0.02, 0.01, 1.0], 0.68);
@@ -7328,7 +7340,7 @@ mod tests {
     #[test]
     fn watercolor_preview_microbatches_share_private_coverage() {
         fn preview_pixel(batch_count: usize) -> [u8; 4] {
-            let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+            let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
             renderer.resize_surface(128, 128).unwrap();
             let layer = Layer::paint(LayerId(1), "Watercolor");
             let dab = test_dab([64.0, 64.0], [0.05, 0.12, 0.7, 1.0], 0.62);
@@ -7388,7 +7400,7 @@ mod tests {
     #[test]
     fn watercolor_density_is_independent_of_fringe_contact_count() {
         fn render(include_fringe: bool) -> [u8; 4] {
-            let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+            let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
             renderer.resize_surface(128, 128).unwrap();
             let layer = Layer::paint(LayerId(1), "Watercolor");
             let mut style = test_style(BrushExecution::Watercolor);
@@ -7472,7 +7484,7 @@ mod tests {
     #[test]
     fn watercolor_wetness_removes_internal_overlap_edges() {
         fn render(edge_strength: f32) -> ([u8; 4], [u8; 4]) {
-            let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+            let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
             renderer.resize_surface(128, 128).unwrap();
             let layer = Layer::paint(LayerId(1), "Watercolor");
             let mut style = test_style(BrushExecution::Watercolor);
@@ -7551,7 +7563,7 @@ mod tests {
 
     #[test]
     fn dry_paint_on_a_mixed_layer_is_not_watercolor_wetness() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Mixed media");
         let dry_dab = test_dab([32.0, 64.0], [0.08, 0.02, 0.01, 1.0], 1.0);
@@ -7632,7 +7644,7 @@ mod tests {
 
     #[test]
     fn pure_smudge_does_not_invent_paint_on_an_empty_layer() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let dab = test_dab([64.0, 64.0], [0.8, 0.0, 0.4, 1.0], 1.0);
@@ -7672,7 +7684,7 @@ mod tests {
 
     #[test]
     fn gpu_smudge_composes_batch_motion_without_selected_color() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let red = test_dab([32.0, 64.0], [1.0, 0.0, 0.0, 1.0], 1.0);
@@ -7748,7 +7760,7 @@ mod tests {
 
     #[test]
     fn wet_brush_mixes_loaded_and_destination_color() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let red = test_dab([64.0, 64.0], [1.0, 0.0, 0.0, 1.0], 1.0);
@@ -7811,7 +7823,7 @@ mod tests {
 
     #[test]
     fn canvas_material_and_post_stroke_edge_are_lazy_gpu_state() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let dab = test_dab([64.0, 64.0], [0.2, 0.05, 0.01, 1.0], 0.55);
@@ -7953,7 +7965,7 @@ mod tests {
 
     #[test]
     fn textured_dual_brush_executes_on_the_gpu() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Ink");
         let grain = BrushGrain {
@@ -8043,7 +8055,7 @@ mod tests {
 
     #[test]
     fn smudge_and_liquify_read_prior_gpu_pixels() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(128, 128).unwrap();
         let layer = Layer::paint(LayerId(1), "Paint");
         let view = ViewState {
@@ -8226,7 +8238,7 @@ mod tests {
 
     #[test]
     fn empty_4k_layers_allocate_no_layer_pixels() {
-        let mut renderer = WgpuRasterizer::new().expect("physical GPU is required");
+        let mut renderer = WgpuRasterizer::new_headless().expect("physical GPU is required");
         renderer.resize_surface(4096, 4096).unwrap();
         let layers = (1..=128)
             .map(|id| Layer::paint(LayerId(id), format!("Layer {id}")))

@@ -121,7 +121,7 @@ fn draw(
 
 #[test]
 fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
-    let r = WgpuRasterizer::new().unwrap();
+    let r = WgpuRasterizer::new_headless().unwrap();
     let mut pass = PixelTransform::new(r.device());
     let size = [17, 13];
     let origin = [257, 259];
@@ -282,7 +282,7 @@ fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
 
 #[test]
 fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() {
-    let r = WgpuRasterizer::new().unwrap();
+    let r = WgpuRasterizer::new_headless().unwrap();
     let mut p = PixelTransform::new(r.device());
     let size = [520, 280];
     let pixels: Vec<_> = (0..size[0] * size[1])
@@ -456,7 +456,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
 #[ignore = "hardware GPU transform benchmark; release, serial"]
 fn transform_latency() {
     use std::time::Instant;
-    let r = WgpuRasterizer::new().unwrap();
+    let r = WgpuRasterizer::new_headless().unwrap();
     let start = Instant::now();
     let mut p = PixelTransform::new(r.device());
     eprintln!(
@@ -586,7 +586,7 @@ fn transform_latency() {
 
 #[test]
 fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
-    let r = WgpuRasterizer::new().unwrap();
+    let r = WgpuRasterizer::new_headless().unwrap();
     let mut pass = PixelTransform::scalar(r.device());
     let texture = |usage| {
         r.device().create_texture(&wgpu::TextureDescriptor {

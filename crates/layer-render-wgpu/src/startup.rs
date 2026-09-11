@@ -101,8 +101,7 @@ impl Requirements {
 }
 pub(super) struct Startup {
     pub compiler: Compiler,
-    #[cfg(target_arch = "wasm32")]
-    masks: platform::Masks,
+    masks: builtin_masks::Masks,
     revision: Option<layer_core::Revision>,
     brush: Option<BrushSnapshot>,
     document: Requirements,
@@ -124,8 +123,7 @@ impl Startup {
         let compiler = Compiler::new(device)?;
         Ok(Self {
             compiler,
-            #[cfg(target_arch = "wasm32")]
-            masks: platform::Masks::new(),
+            masks: builtin_masks::Masks::new(),
             revision: None,
             brush: None,
             document: Requirements::default(),
@@ -212,7 +210,6 @@ impl WgpuRasterizer {
             for stroke in document.strokes() {
                 let mut style = style(&stroke.brush, stroke.tool, stroke.alpha_locked);
                 style.selection = stroke.selection.clone();
-                #[cfg(target_arch = "wasm32")]
                 startup.masks.style(&startup.compiler, &style, DOCUMENT);
                 required.style(
                     self,
@@ -281,7 +278,6 @@ impl WgpuRasterizer {
         for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
             let mut style = style(brush, tool, locked);
             style.selection = document.selection.clone().map(Arc::new);
-            #[cfg(target_arch = "wasm32")]
             startup.masks.style(&startup.compiler, &style, BRUSH);
             current.style(self, &style, document.active_mask, true);
         }
@@ -289,7 +285,6 @@ impl WgpuRasterizer {
         startup.current = current;
         startup.brush = Some(brush.clone());
         if !startup.others_queued {
-            #[cfg(target_arch = "wasm32")]
             startup.masks.remaining(&startup.compiler);
             for p in self
                 .pipelines
@@ -318,7 +313,6 @@ impl WgpuRasterizer {
         Ok(())
     }
     pub fn poll_startup(&mut self) -> Result<StartupProgress, GpuRasterError> {
-        #[cfg(target_arch = "wasm32")]
         if let Some(startup) = &mut self.startup {
             let masks = startup.masks.take_ready()?;
             for (id, (width, height, pixels)) in masks {
@@ -364,19 +358,25 @@ impl WgpuRasterizer {
             }
         }
         let canvas_ready =
-            startup.revision.is_some() && startup.effects_ready && startup.document.ready();
+            startup.revision.is_some() && startup.effects_ready && startup.document.ready()
+                && startup.masks.ready_through(DOCUMENT);
         #[cfg(target_arch = "wasm32")]
         let canvas_ready = canvas_ready && startup.compiler.ready_through(DOCUMENT);
-        let brush_ready = canvas_ready && startup.current.ready();
+        let brush_ready = canvas_ready && startup.current.ready() && startup.masks.ready_through(BRUSH);
         #[cfg(target_arch = "wasm32")]
         let brush_ready = brush_ready && startup.compiler.ready_through(BRUSH);
         startup.finished =
-            brush_ready && !startup.host_catalog_pending && startup.compiler.pending() == 0;
-        Ok(StartupProgress {
+            brush_ready && !startup.host_catalog_pending && startup.compiler.pending() == 0
+                && startup.masks.ready_through(OTHER);
+        let progress = StartupProgress {
             canvas_ready,
             brush_ready,
             complete: startup.finished,
-        })
+        };
+        if canvas_ready && self.scene.is_none() {
+            self.scene = Some(scene::Scene::new(self));
+        }
+        Ok(progress)
     }
 }
 fn style(brush: &BrushSnapshot, tool: StrokeTool, alpha_locked: bool) -> layer_render::DabStyle {
@@ -436,7 +436,7 @@ mod gpu_tests {
     use super::*;
     #[test]
     fn loaded_filters_and_current_brush_render_before_unused_pipelines() {
-        let mut reference = WgpuRasterizer::new().unwrap();
+        let mut reference = WgpuRasterizer::new_headless().unwrap();
         let mut renderer = WgpuRasterizer::from_wgpu_staged(
             reference.adapter.clone(),
             reference.device().clone(),

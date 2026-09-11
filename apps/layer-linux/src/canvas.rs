@@ -57,6 +57,7 @@ impl GpuCanvas {
                 eprintln!("{error}; using bundled filters");
             }
         }
+        session.renderer_mut().finish_startup_cache()?;
         // Read once while creating this window, before it can accept input.
         match crate::preferences::load() {
             Ok(Some(settings)) => {
@@ -82,6 +83,16 @@ impl GpuCanvas {
     pub fn render(&mut self, area: &gtk::Picture, now_ns: u64) -> Result<UiChange, String> {
         #[cfg(test)]
         let start = std::time::Instant::now();
+        let engine = self.session.engine();
+        if engine
+            .backend()
+            .startup_needs_update(engine.document(), engine.brush())
+        {
+            let (document, brush) = (engine.document().clone(), engine.brush().clone());
+            self.session
+                .renderer_mut()
+                .prepare_startup(document, brush)?;
+        }
         let renderer = self.session.renderer_mut();
         if !renderer.ready()? {
             // Preserve queued pen samples; never stall GTK or drop paint.
@@ -101,7 +112,7 @@ impl GpuCanvas {
         let presentation_ns = self.session.engine().backend().clock.presentation(now_ns);
         let mut changed = self.session.frame(now_ns, presentation_ns)?;
         changed.regions |= resized.regions;
-        self.needs_present = false;
+        self.needs_present = !self.session.engine().backend().startup.complete;
         #[cfg(test)]
         {
             self.session

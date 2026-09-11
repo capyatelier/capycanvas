@@ -4,53 +4,6 @@ use super::*;
 use std::{cell::RefCell, collections::VecDeque, future::Future, pin::Pin, rc::Rc};
 
 type Work = Box<dyn FnOnce() -> Result<(), String>>;
-type MaskPixels = Rc<RefCell<Option<Result<builtin_masks::Pixels, GpuRasterError>>>>;
-pub(super) struct Masks(Vec<(AssetId, Deferred<MaskPixels>)>);
-impl Masks {
-    pub fn new() -> Self {
-        Self(
-            builtin_masks()
-                .into_iter()
-                .map(|(id, generate)| {
-                    (
-                        AssetId::from(id),
-                        Deferred::new(move || Rc::new(RefCell::new(Some(generate())))),
-                    )
-                })
-                .collect(),
-        )
-    }
-    pub fn style(&self, compiler: &Compiler, style: &layer_render::DabStyle, priority: u8) {
-        let key = WgpuRasterizer::texture_set_key(style);
-        for id in [
-            key.primary,
-            key.grain,
-            key.dual,
-            key.dual_grain,
-            key.transport,
-        ] {
-            if let Some((_, pixels)) = self.0.iter().find(|(asset, _)| *asset == id) {
-                compiler.pipeline(pixels, priority);
-            }
-        }
-    }
-    pub fn remaining(&self, compiler: &Compiler) {
-        for (_, pixels) in &self.0 {
-            compiler.pipeline(pixels, OTHER);
-        }
-    }
-    pub fn take_ready(&mut self) -> Result<Vec<(AssetId, builtin_masks::Pixels)>, GpuRasterError> {
-        let mut ready = Vec::new();
-        for (id, pixels) in &self.0 {
-            if pixels.ready() {
-                if let Some(result) = pixels.compile().borrow_mut().take() {
-                    ready.push((id.clone(), result?));
-                }
-            }
-        }
-        Ok(ready)
-    }
-}
 struct Job {
     priority: u8,
     work: Work,

@@ -1315,7 +1315,7 @@ impl Pipelines {
 #[cfg(test)]
 #[test]
 fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
-    let r = WgpuRasterizer::new().unwrap();
+    let r = WgpuRasterizer::new_headless().unwrap();
     let a = Scene::new(&r);
     let b = Scene::new(&r);
     assert_eq!(a.pipeline, r.scene_pipelines.pipeline.clone().map(|p| p.compile().clone()));

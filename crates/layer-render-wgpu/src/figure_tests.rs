@@ -121,7 +121,7 @@ fn oracle(f: &Figure) -> impl Fn(u32, u32) -> [u8; 4] + '_ {
 
 #[test]
 fn figure_gpu_pixels_match_independent_geometry() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for shape in [
         FigureShape::Line,
         FigureShape::Rectangle,
@@ -190,7 +190,7 @@ fn figure_gpu_pixels_match_independent_geometry() {
 
 #[test]
 fn figure_uses_existing_mask_clipping_and_alpha_lock_and_can_erase() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for erase in [false, true] {
         for lock in [false, true] {
             let mut f = figure(FigureShape::Rectangle, FigurePaint::Both, 8.);
@@ -252,7 +252,7 @@ fn figure_uses_existing_mask_clipping_and_alpha_lock_and_can_erase() {
 
 #[test]
 fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [512, 384];
     let v = ViewState {
         width_px: 512,
@@ -353,7 +353,7 @@ fn figures_are_incremental_sparse_and_match_replay_at_tile_boundaries() {
 #[test]
 #[ignore = "hardware GPU figure latency; release, serial"]
 fn figure_latency() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     r.set_telemetry_enabled(true);
     let extent = [2048, 1536];
     let v = ViewState {

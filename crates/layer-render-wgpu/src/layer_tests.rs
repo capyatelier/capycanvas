@@ -100,7 +100,7 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
             std::thread::yield_now();
         }
     };
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let asset = AssetId::from("test:closed-line");
     let pixels: Vec<_> = (0..128 * 128)
         .flat_map(|i| {
@@ -231,7 +231,7 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
     use layer_core::{Document, EffectInstance};
     use layer_render::{RegionRequest, RegionSource};
     use std::sync::Arc;
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let receive = |r: &mut WgpuRasterizer| {
         let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
         loop {
@@ -315,7 +315,7 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
 #[ignore = "hardware GPU complete region request benchmark; release, serial"]
 fn region_request_latency() {
     use layer_render::{RegionRequest, RegionSource, TimingSamples};
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [2048, 1536];
     let asset = AssetId::from("test:region-benchmark");
     let pixels: Vec<_> = (0..extent[0] * extent[1])
@@ -517,7 +517,7 @@ fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
 
 #[test]
 fn packed_brush_selection_matches_mask_coverage_and_reuses_geometry() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let polygon = Selection::polygon(vec![
         Point { x: 5., y: 5. },
         Point { x: 121., y: 27. },
@@ -585,7 +585,7 @@ fn packed_brush_selection_matches_mask_coverage_and_reuses_geometry() {
 #[test]
 fn all_brush_families_preserve_unselected_pigment_and_wetness() {
     use layer_core::DefaultBrushPreset::*;
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for preset in [
         GPen,
         Pencil,
@@ -682,7 +682,7 @@ fn all_brush_families_preserve_unselected_pigment_and_wetness() {
 
 #[test]
 fn selected_wet_brush_does_not_dry_or_advect_unselected_wet_paint() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for preset in [
         layer_core::DefaultBrushPreset::WetWatercolor,
         layer_core::DefaultBrushPreset::WetRound,
@@ -744,7 +744,7 @@ fn selected_wet_brush_does_not_dry_or_advect_unselected_wet_paint() {
 #[test]
 fn selection_clips_mask_paint_and_disposable_brush_previews() {
     use layer_core::DefaultBrushPreset::*;
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let selection = std::sync::Arc::new(left_mask(5).initial.unwrap());
     let mut masked = Layer::paint(LayerId(1), "masked");
     masked.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
@@ -802,7 +802,7 @@ fn selection_clips_mask_paint_and_disposable_brush_previews() {
 
 #[test]
 fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [2048, 128];
     let mut outside = Selection::polygon(vec![
         Point { x: -40., y: -10. },
@@ -878,7 +878,7 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
 #[test]
 fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
     use layer_render::{ColorSampleRequest, ColorSampleSource as Source};
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut layer = Layer::paint(LayerId(1), "paint");
     layer.opacity = 0.5;
     layer.mask = Some(left_mask(9));
@@ -981,7 +981,7 @@ fn point_sampling_reads_visible_or_raw_layer_color_without_recompositing() {
 
 #[test]
 fn gradients_share_fill_compositing_and_respect_coverage_and_alpha_lock() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for radial in [false, true] {
         for transparent in [false, true] {
             for alpha_locked in [false, true] {
@@ -1063,7 +1063,7 @@ fn gradients_share_fill_compositing_and_respect_coverage_and_alpha_lock() {
 
 #[test]
 fn gradient_respects_layer_mask_and_clipping_base_alpha() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut gradient = Layer::paint(LayerId(1), "gradient");
     gradient.properties.clipped = true;
     gradient.mask = Some(left_mask(8));
@@ -1105,7 +1105,7 @@ fn gradient_respects_layer_mask_and_clipping_base_alpha() {
 
 #[test]
 fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [512, 384];
     let v = ViewState {
         width_px: extent[0],
@@ -1217,7 +1217,7 @@ fn queued_gradients_match_replay_across_tiles_and_inverted_offset_masks() {
 
 #[test]
 fn navigator_preview_reuses_composition_and_tracks_paint_mask_and_camera() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut layer = Layer::paint(LayerId(1), "paint");
     layer.mask = Some(left_mask(9));
     submit(
@@ -1306,7 +1306,7 @@ fn navigator_preview_reuses_composition_and_tracks_paint_mask_and_camera() {
 
 #[test]
 fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut base = Layer::paint(LayerId(1), "base");
     let mut a = Layer::paint(LayerId(2), "clip a");
     a.properties.clipped = true;
@@ -1341,7 +1341,7 @@ fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
 
 #[test]
 fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
     l.mask = Some(left_mask(9));
     submit(
@@ -1375,7 +1375,7 @@ fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
 #[test]
 fn baked_operations_keep_the_ordinary_brush_path() {
     use layer_core::{DefaultBrushPreset::*, Figure, FigurePaint, FigureShape};
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let asset = AssetId::from("test:baked-operation");
     // Nonuniform artwork makes a pure blender observable even after a
     // transform moves the original selection boundary outside its footprint.
@@ -1503,7 +1503,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
 
 #[test]
 fn inspection_is_not_exported_and_translated_mask_keeps_source() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
     l.mask = Some(left_mask(9));
     submit(
@@ -1525,7 +1525,7 @@ fn inspection_is_not_exported_and_translated_mask_keeps_source() {
 
 #[test]
 fn imported_texture_is_linearized_premultiplied_and_masked_on_gpu() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let id = AssetId::from("test:image");
     let bytes = [128, 0, 255, 128].repeat(128 * 128);
     r.prepare_asset(
@@ -1556,7 +1556,7 @@ fn imported_texture_is_linearized_premultiplied_and_masked_on_gpu() {
 
 #[test]
 fn alpha_lock_preserves_partial_alpha_and_eraser_is_noop() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let l = Layer::paint(LayerId(1), "paint");
     submit(
         &mut r,
@@ -1587,7 +1587,7 @@ fn alpha_lock_preserves_partial_alpha_and_eraser_is_noop() {
 
 #[test]
 fn mask_scene_preview_keeps_pixels_outside_preview_damage() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
     l.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
     submit(
@@ -1615,7 +1615,7 @@ fn mask_scene_preview_keeps_pixels_outside_preview_damage() {
 
 #[test]
 fn mask_scene_destination_preview_preserves_untouched_color() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
     l.mask = Some(left_mask(9));
     submit(
@@ -1644,7 +1644,7 @@ fn mask_scene_destination_preview_preserves_untouched_color() {
 #[ignore = "hardware GPU latency benchmark; run serially in release mode"]
 fn selected_brush_latency() {
     use layer_core::DefaultBrushPreset::*;
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     r.set_telemetry_enabled(true);
     let extent = [2048, 1536];
     let v = ViewState {
@@ -1737,7 +1737,7 @@ fn selected_brush_latency() {
 #[test]
 #[ignore = "hardware GPU latency benchmark; run serially in release mode"]
 fn selection_raster_latency() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     r.ensure_document([2048, 1536], &[]).unwrap();
     for vertices in [4, 256, 4096] {
         let mut times = Vec::new();
@@ -1778,7 +1778,7 @@ fn selection_raster_latency() {
 #[test]
 #[ignore = "hardware GPU latency benchmark; run serially in release mode"]
 fn paint_operation_latency() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     r.set_telemetry_enabled(true);
     let extent = [2048, 1536];
     let v = ViewState {
@@ -1891,7 +1891,7 @@ fn paint_operation_latency() {
 #[test]
 #[ignore = "hardware GPU latency benchmark; run serially in release mode"]
 fn layer_composition_latency() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for (name, count, masked) in [
         ("plain", 1, false),
         ("masked", 1, true),

@@ -259,7 +259,7 @@ impl Effects {
                     source: wgpu::ShaderSource::Wgsl(source.into()),
                 });
             let pipeline = fullscreen_pipeline(
-                &r.device(),
+                r.device(),
                 &self.pipeline_layout,
                 &module,
                 "effect_fragment",
@@ -318,7 +318,7 @@ impl Effects {
                     .and_then(|old| old.lookups.get(lookups.len()));
                 if !reusable || old.is_none_or(|old| old.key != key || old.values != values) {
                     dispatches.push((
-                        self.preparation.pipeline(&r.device(), &key)?,
+                        self.preparation.pipeline(r.device(), &key)?,
                         definition.workgroups,
                     ));
                 }

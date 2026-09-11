@@ -94,6 +94,37 @@ provide the pixel parallelism. Native hosts may keep UI and engine on one event
 loop or place the engine on a canvas thread; the shared APIs do not require one
 topology. Wasm may run everything on the browser event loop.
 
+### Interactive renderer startup
+
+Interactive hosts use `WgpuRasterizer::from_wgpu_staged`, or
+`from_wgpu_staged_cached` with a dedicated app-private cache directory on native
+platforms. The four stages are:
+
+1. Present paper using only the background/presentation pipelines.
+2. Prepare the current document's shaders and brush textures.
+3. Prepare the active brush, enabling new paint contacts when it is ready.
+4. Compile the remaining catalog without blocking input or presentation.
+
+After submitting the first paper frame, call `prepare_startup(document, brush)`
+and poll `poll_startup()` without waiting. Refresh dependencies while startup is
+in progress if the document or active brush changes. Readiness includes texture
+uploads, not merely shader completion. Discard paint contacts that began before
+readiness through their release; never begin half a stroke. Navigation and UI
+controls remain usable. Notify the renderer when the initial catalog has been
+submitted so startup can complete and native pipeline data can be saved.
+
+Native compilation runs on an owned background worker; browser hosts drive
+`compile_startup_step()` between presentation opportunities. GTK's GPU worker
+initialization is asynchronous too: the GTK event loop never waits on its
+initialization channel. Its initial document frame is retained until ready, and
+pixel-inspection requests wait behind that frame. The existing bounded frame
+queue and direct Wayland presentation remain unchanged during steady drawing.
+
+The old eager `new`, `new_async`, and `from_wgpu` constructors are deprecated.
+Explicit `new_headless[_async]` is for tests and the diagnostic C ABI only; it
+uses the same pipelines, fully prepared before measurement. New platform hosts
+must not use these blocking constructors for interactive startup.
+
 ## CPU and GPU work
 
 | Operation | Owner |

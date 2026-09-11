@@ -32,7 +32,7 @@ fn set(layer: &mut Layer, key: &str, value: EffectValue) {
 #[test]
 fn image_passes_cross_tiles_cache_inputs_and_freeze_animation() {
     use layer_core::{EffectKind, EffectPass, EffectSampling};
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let mut source = effect(1, fixture("brightness_contrast"));
     let mut generator = (*source.effect.as_ref().unwrap().program).clone();
     generator.kind = EffectKind::Generator;
@@ -166,7 +166,7 @@ fn image_passes_cross_tiles_cache_inputs_and_freeze_animation() {
 #[test]
 fn image_boundary_matches_fused_mask_clip_and_group_semantics() {
     use layer_core::{EffectPass, EffectSampling};
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let base = Layer::paint(LayerId(1), "Paint");
     paint(
         &mut r,
@@ -280,7 +280,7 @@ fn paint(r: &mut WgpuRasterizer, layers: &[Layer], id: u64, color: [f32; 4], rad
 }
 #[test]
 fn adjustment_defaults_masks_clipping_and_parameter_updates() {
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let base = Layer::paint(LayerId(1), "Paint");
     paint(
         &mut r,
@@ -363,7 +363,7 @@ fn adjustment_defaults_masks_clipping_and_parameter_updates() {
 
 #[test]
 fn adjustment_chain_is_fused_and_preserves_clip_base() {
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let base = Layer::paint(LayerId(1), "Paint");
     paint(
         &mut r,
@@ -395,7 +395,7 @@ fn adjustment_chain_is_fused_and_preserves_clip_base() {
 
 #[test]
 fn masked_chain_crosses_portable_texture_limit_without_losing_coverage() {
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let base = Layer::paint(LayerId(1), "White");
     paint(&mut r, std::slice::from_ref(&base), 1, [1.; 4], 128.);
     let mut layers = Vec::new();
@@ -435,7 +435,7 @@ fn adjustment_latency() {
         v.sort_by(f64::total_cmp);
         [v[v.len() / 2], v[v.len() * 95 / 100], v[v.len() * 99 / 100]]
     }
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let mut report = String::from(
         "size,incremental,case,cpu_median,cpu_p95,cpu_p99,complete_median,complete_p95,complete_p99,gpu_median,gpu_p95,gpu_p99,passes\n",
     );
@@ -599,7 +599,7 @@ fn adjustment_latency() {
 #[test]
 fn programmable_generator_and_adjustment_share_runtime_without_tile_seams() {
     use layer_core::{EFFECT_ABI, EffectKind, EffectProgram};
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let mut generator = Layer::paint(LayerId(1), "Procedural gradient");
     generator.kind = LayerKind::Effect;
     generator.effect=Some(Arc::new(EffectInstance::new(Arc::new(EffectProgram{
@@ -667,7 +667,7 @@ fn programmable_generator_and_adjustment_share_runtime_without_tile_seams() {
 
 #[test]
 fn builtin_adjustments_have_known_color_results() {
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let base = Layer::paint(LayerId(1), "Red");
     paint(
         &mut r,
@@ -765,7 +765,7 @@ fn builtin_adjustments_have_known_color_results() {
 
 #[test]
 fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() {
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let mut base = Layer::paint(LayerId(1), "Translucent paint");
     let mut group = Layer::paint(LayerId(20), "Isolated group");
     group.kind = LayerKind::Group;

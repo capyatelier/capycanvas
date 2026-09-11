@@ -679,7 +679,7 @@ mod tests {
     }
     #[test]
     fn filter_previews_capture_insertion_pixels_and_cache_independently_of_view() {
-        let mut r = WgpuRasterizer::new().unwrap();
+        let mut r = WgpuRasterizer::new_headless().unwrap();
         let asset = AssetId("test:preview-source".into());
         let mut bytes = vec![0u8; 512 * 256 * 4];
         for y in 105..145 {
@@ -790,7 +790,7 @@ mod tests {
     }
     #[test]
     fn empty_document_filter_previews_have_a_masked_color_sample() {
-        let mut r = WgpuRasterizer::new().unwrap();
+        let mut r = WgpuRasterizer::new_headless().unwrap();
         let layers = vec![Layer::paint(LayerId(1), "Empty")];
         let view = layer_render::ViewState {
             width_px: 512,
@@ -843,7 +843,7 @@ mod tests {
     #[test]
     #[ignore = "GPU completion benchmark; run alone in release mode"]
     fn filter_preview_latency() {
-        let mut r = WgpuRasterizer::new().unwrap();
+        let mut r = WgpuRasterizer::new_headless().unwrap();
         let mut program = (*fixture("brightness_contrast").program()).clone();
         program.kind = layer_core::EffectKind::Generator;
         program.entry = "sample_art".into();
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn cropped_multipass_preview_matches_full_resolution_canvas() {
         use layer_core::{EffectInstance, EffectPass, EffectSampling};
-        let mut r = WgpuRasterizer::new().unwrap();
+        let mut r = WgpuRasterizer::new_headless().unwrap();
         let asset = AssetId("test:preview-seam".into());
         let bytes: Vec<u8> = (0..512 * 256)
             .flat_map(|i| {

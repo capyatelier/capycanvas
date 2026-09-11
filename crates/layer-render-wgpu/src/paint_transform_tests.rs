@@ -26,7 +26,7 @@ fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
 #[test]
 fn ordered_transforms_preserve_wetness_and_match_combined_replay() {
     use layer_core::DefaultBrushPreset::*;
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     for preset in [GPen, WetRound, WatercolorWash] {
         let mut layer = Layer::paint(LayerId(1), "transform");
         let mut brush = batch(1);
@@ -134,7 +134,7 @@ fn ordered_transforms_preserve_wetness_and_match_combined_replay() {
 
 #[test]
 fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [768, 512];
     let view = ViewState {
         width_px: extent[0],
@@ -218,7 +218,7 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
 
 #[test]
 fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [768, 512];
     let mut group = Layer::paint(LayerId(3), "group");
     group.kind = LayerKind::Group;
@@ -319,7 +319,7 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
 fn ordered_transform_latency() {
     use layer_core::DefaultBrushPreset::*;
     use std::time::Instant;
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [2048, 1536];
     let view = ViewState {
         width_px: extent[0],
