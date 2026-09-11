@@ -74,9 +74,9 @@ impl SystemStatus {
                 };
                 let dark = adw::StyleManager::for_display(&area.display()).is_dark();
                 let (fill, track, ink) = match (battery.charging, battery.low, dark) {
-                    (true, _, _) => (0x5acb7d, 0xc4c9cf, 0x13251a),
-                    (_, true, true) => (0xf28b82, 0xa3a8b0, 0x202226),
-                    (_, true, false) => (0xb3261e, 0x707479, 0xffffff),
+                    (true, _, _) => (0x91b89d, 0xc4c9cf, 0x13251a),
+                    (_, true, true) => (0xbc9996, 0xa3a8b0, 0x202226),
+                    (_, true, false) => (0xa15d59, 0x707479, 0xffffff),
                     (_, _, true) => (0xe5e7eb, 0xa3a8b0, 0x202226),
                     _ => (0x3f4246, 0x707479, 0xffffff),
                 };
@@ -129,11 +129,11 @@ impl SystemStatus {
                     cr.line_to(18.5, 7.7);
                     cr.line_to(21.2, 7.7);
                     cr.line_to(20., 12.5);
-                    cr.line_to(25.5, 6.2);
+                    cr.line_to(25., 6.2);
                     cr.line_to(22.7, 6.2);
                     cr.line_to(24.1, 1.5);
                     cr.close_path();
-                    cr.set_line_width(1.25);
+                    cr.set_line_width(1.75);
                     cr.set_line_join(gtk::cairo::LineJoin::Round);
                     let _ = cr.stroke_preserve();
                     color(ink);

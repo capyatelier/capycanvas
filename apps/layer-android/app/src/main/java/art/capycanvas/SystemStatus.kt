@@ -95,9 +95,9 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
     val dark = LocalPalette.current.dark
     // Both halves must contrast with the inset number, even when nearly empty.
     val (fill, track, ink) = when {
-        battery.charging -> Triple(Color(0xFF5ACB7D), Color(0xFFC4C9CF), Color(0xFF13251A))
-        battery.low && dark -> Triple(Color(0xFFF28B82), Color(0xFFA3A8B0), Color(0xFF202226))
-        battery.low -> Triple(Color(0xFFB3261E), Color(0xFF707479), Color.White)
+        battery.charging -> Triple(Color(0xFF91B89D), Color(0xFFC4C9CF), Color(0xFF13251A))
+        battery.low && dark -> Triple(Color(0xFFBC9996), Color(0xFFA3A8B0), Color(0xFF202226))
+        battery.low -> Triple(Color(0xFFA15D59), Color(0xFF707479), Color.White)
         dark -> Triple(Color(0xFFE5E7EB), Color(0xFFA3A8B0), Color(0xFF202226))
         else -> Triple(Color(0xFF3F4246), Color(0xFF707479), Color.White)
     }
@@ -120,11 +120,11 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
                 val bolt = Path().apply {
                     moveTo(23f * u, 1.5f * u); lineTo(18.5f * u, 7.7f * u)
                     lineTo(21.2f * u, 7.7f * u); lineTo(20f * u, 12.5f * u)
-                    lineTo(25.5f * u, 6.2f * u); lineTo(22.7f * u, 6.2f * u)
+                    lineTo(25f * u, 6.2f * u); lineTo(22.7f * u, 6.2f * u)
                     lineTo(24.1f * u, 1.5f * u); close()
                 }
                 // A fine pale edge keeps the dark terminal mark legible on dark chrome.
-                drawPath(bolt, track, style = Stroke(1.25f * u))
+                drawPath(bolt, track, style = Stroke(1.75f * u))
                 drawPath(bolt, ink)
             }
         }

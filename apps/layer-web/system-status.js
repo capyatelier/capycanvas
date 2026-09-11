@@ -6,7 +6,7 @@ export function createSystemStatus({element, changed}) {
   const battery = element("span", "system-battery"); battery.id = "system-battery";
   battery.setAttribute("role", "img"); battery.hidden = true;
   const charging = element("span", "battery-charging");
-  charging.innerHTML = '<svg viewBox="0 0 8 12" aria-hidden="true"><path d="M5 .5 .5 6.7h2.7L2 11.5l5.5-6.3H4.7L6.1.5Z"/></svg>';
+  charging.innerHTML = '<svg viewBox="0 0 8 12" aria-hidden="true"><path d="M5 .5 .5 6.7h2.7L2 11.5l5-6.3H4.7L6.1.5Z"/></svg>';
   const shell = element("span", "battery-shell");
   const fill = element("span", "battery-fill"), percent = element("span", "battery-percent");
   shell.append(fill, percent); battery.append(charging, shell); root.append(clock, battery);
