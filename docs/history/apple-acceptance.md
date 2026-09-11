@@ -66,6 +66,42 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Presentation measurement checkpoint — 2026-09-11
+
+The CAMetalDisplayLink trial was not adopted. Across short physical 4K
+watercolor runs it reduced iPad CPU time but produced 49–57 skipped drawable
+presentations per measured twenty-second interval. Both requested rendering
+windows and a run without GPU instrumentation retained the problem. An explicit
+Core Animation transaction trial also caused UIKit layout on the render thread
+and was removed before those completed comparisons. The published app retains
+its existing CADisplayLink scheduling on both platforms.
+
+The shared recorder now supports `CAPY_TRACE_GPU=0`, retaining CPU/input/memory
+and presentation observations while disabling GPU timestamp submissions and
+polls. Metadata and report warnings distinguish this mode; absent GPU durations
+remain null. The analyzer separately measures frame admission to actual display
+and can interpret the local experiment's CPU deadline and presentation target.
+These are software timings, not physical Pencil latency.
+
+Other ports' changes through `a7c048c` are integrated. Both Apple Release builds,
+32 Apple bridge checks, 15 shared host checks, 236 shared UI checks, the direct
+trace recorder check and ten analyzer checks pass. The existing host hardware
+benchmark remains explicitly ignored. The restored scheduler was then exercised
+with and without GPU timing on both physical hosts, using the same binaries.
+All four measured twenty-second intervals completed with zero rejected input,
+missing presentation callbacks or zero-time presentations. The iPad CPU p99
+remains above budget at 9.077/9.120 ms with GPU timing on/off. See the complete
+[scheduling comparison](../../apps/layer-apple/PERFORMANCE.md#display-scheduling-comparison--2026-09-11)
+for counts, display delays, whole-trace caveats and source-comparison limits.
+
+The completed Mac painting was directly captured and inspected. Test apps were
+closed after collection, preserving the original editor. Raw traces, images,
+device/signing logs and the rejected scheduling experiment stay local. No
+system menu-bar automation was used. Full visual/feature parity, the remaining
+lifecycle matrix, physical input latency, calibrated recorder overhead and the
+sustained workload matrix remain open. The current Mac display configuration
+still reports 90 Hz and cannot establish the 120 Hz presentation gate.
+
 ## Shared replay milestone — 2026-09-11
 
 A direct renderer regression reproduced the intermittent Metal startup failure

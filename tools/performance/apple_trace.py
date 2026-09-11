@@ -40,13 +40,14 @@ def analyze(header, events):
     presented = {(r[0], r[3]): r for r in grouped[4]}
     visible = {key: r for key, r in presented.items() if r[1] > 0}
     gpu = {r[0]: r for r in grouped[7]}
+    schedules = {r[0]: r for r in grouped[12]}
     submitted = [r for r in frames.values() if r[6] > 0]
     ready_states = [r[0] for r in grouped[9] if r[2] & 11 == 11 and not r[3]]
     ready_at = min(ready_states, default=None)
     state_errors = sum(bool(r[3]) for r in grouped[9])
     stats = sorted(grouped[8], key=lambda r: r[0])
     last_stats = stats[-1] if stats else [0] * 10
-    displays = sorted({(r[1], r[2], r[3] / 1000, r[4]) for r in grouped[6]})
+    displays = sorted({(r[1], r[2], r[3] / 1000, r[4], r[5]) for r in grouped[6]})
     memory = sorted((r for r in grouped[5] if r[4] == 0), key=lambda r: r[0])
     times = sorted(r[1] for r in visible.values())
     ticks = grouped[0]
@@ -80,6 +81,19 @@ def analyze(header, events):
                               for index, name in enumerate(["prepare", "acquire", "viewport", "present_call", "poll"], start=4)},
             "owner_service_over_8_33ms": sum(r[3] - r[2] > BUDGET_NS for r in records),
         }
+    def schedule_metrics(records):
+        recorded = [schedules[r[0]] for r in records if r[0] in schedules]
+        deadlines = [(r, schedules[r[0]][1]) for r in records if r[0] in schedules and schedules[r[0]][1]]
+        return {
+            "legacy_frames": sum(r[3] == 0 for r in recorded),
+            "supplied_drawables_accepted": sum(r[3] == 1 for r in recorded),
+            "stale_drawables_rejected": sum(r[3] == 2 for r in recorded),
+            # The owner returns after polling and snapshot publication. This is
+            # an upper bound, not the timestamp of the actual Metal present call.
+            "owner_completion_after_commit_deadline_ms": distribution(max(0, r[3] - deadline) for r, deadline in deadlines),
+            "owners_completing_after_commit_deadline": sum(r[3] > deadline for r, deadline in deadlines),
+            "presentation_target_after_commit_deadline_ms": distribution(r[2] - r[1] for r in recorded if r[1] and r[2] >= r[1]),
+        }
     visible_frames = [(r, frames[r[0]]) for r in visible.values() if r[0] in frames]
     warnings = []
     if header.get("configuration") != "release":
@@ -92,7 +106,12 @@ def analyze(header, events):
         warnings.append("No display-link activity records; idle-separated cadence cannot be measured.")
     if drawables - presented.keys():
         warnings.append("Acquired drawables lack completion callbacks.")
-    if last_stats[1] != 1:
+    gpu_timing_requested = header.get("gpu_timing_requested", True)
+    if not gpu_timing_requested:
+        warnings.append("GPU timing intentionally disabled; this trace measures CPU and presentation only.")
+        if gpu or last_stats[2]:
+            warnings.append("GPU observations contradict the disabled instrumentation setting.")
+    elif last_stats[1] != 1:
         warnings.append("GPU timestamps are unavailable or not initialized.")
     zero_gpu = sum(r[2] == 1 and r[1] == 0 for r in gpu.values())
     if last_stats[3] or last_stats[4] or last_stats[5] or any(r[6] for r in stats) or zero_gpu:
@@ -107,6 +126,7 @@ def analyze(header, events):
     result = {
         "schema": 1, "platform": "iPadOS" if header["platform"] == 0 else "macOS",
         "input_source": header.get("input_source", "platform"),
+        "gpu_timing_requested": gpu_timing_requested,
         "configuration": header.get("configuration"), "duration_seconds": header["duration_seconds"],
         "counts": {"events": len(events), "dropped_records": header.get("dropped_records", 0),
                    "real_input_batches": sum(r[6] == 0 for r in inputs.values()),
@@ -121,13 +141,16 @@ def analyze(header, events):
                    "gpu_false_zero_samples": zero_gpu,
                    "gpu_pending_at_last_poll": last_stats[5], "gpu_poll_errors": sum(bool(r[6]) for r in stats),
                    "frames_without_gpu_sample": sum(r[0] not in gpu for r in submitted), "frame_errors": state_errors},
-        "display_configurations": [{"pixels": list(d[:2]), "scale": d[2], "maximum_hz": d[3]} for d in displays],
+        "display_configurations": [{"pixels": list(d[:2]), "scale": d[2], "maximum_hz": d[3],
+                                    "metal_preferred_frame_latency": d[4] or None} for d in displays],
         "recorder_reserved_bytes": header["capacity"] * header["record_stride_bytes"],
         "ready_seconds_from_start": None if ready_at is None else (ready_at - header["started_ns"]) / 1e9,
         "all_submitted_frames": frame_metrics(submitted),
+        "display_scheduling": schedule_metrics(list(frames.values())),
         "frames_after_readiness": frame_metrics([r for r in submitted if ready_at is not None and r[0] > ready_at]),
         "gpu_queue_span_ms": distribution(r[1] for r in gpu.values() if r[2] == 1 and r[1] > 0),
         "presentation": {
+            "frame_admission_to_present_ms": distribution(r[1] - f[0] for r, f in visible_frames if r[1] >= f[0]),
             "all_intervals_including_idle_ms": distribution(b - a for a, b in zip(times, times[1:])),
             "continuous_active_intervals_ms": distribution(continuous_intervals),
             "continuous_intervals_over_120hz_budget": sum(v > BUDGET_NS * 1.05 for v in continuous_intervals),
@@ -178,9 +201,11 @@ def analyze(header, events):
                 "last_presentation_before_end_ms": (end[0] - observed_times[-1]) / NS_PER_MS if observed_times else None,
                 "producer_interval_maximum_lateness_ms": distribution(scheduler),
                 "frames": frame_metrics(rows),
+                "display_scheduling": schedule_metrics(admitted),
                 "gpu_queue_span_ms": distribution(r[1] for key, r in gpu.items() if key in identities and r[2] == 1 and r[1] > 0),
                 "gpu_samples_missing": sum(key not in gpu for key in identities),
                 "actual_presentations": len(shown_rows),
+                "frame_admission_to_present_ms": distribution(r[1] - r[0] for r in shown_rows if r[1] >= r[0]),
                 # The fixed workload includes explicit pen-up gaps. Preserve
                 # all intervals as well as the display-link-cycle metric above.
                 "presentation_intervals_including_pen_up_ms": distribution(b[1] - a[1] for a, b in zip(shown_rows, shown_rows[1:])),

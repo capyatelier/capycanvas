@@ -17,6 +17,31 @@ def header(**changes):
 
 
 class ReportChecks(unittest.TestCase):
+    def test_disabled_gpu_instrumentation_does_not_claim_gpu_measurements(self):
+        result = analyze(header(gpu_timing_requested=False), [frame(100)])
+        self.assertFalse(result["gpu_timing_requested"])
+        self.assertEqual(result["gpu_queue_span_ms"]["count"], 0)
+        self.assertIsNone(result["gpu_queue_span_ms"]["p50"])
+        self.assertTrue(any("intentionally disabled" in warning for warning in result["warnings"]))
+        conflicting = analyze(header(gpu_timing_requested=False), [record(7, 100, 1000, 1)])
+        self.assertTrue(any("contradict" in warning for warning in conflicting["warnings"]))
+
+    def test_commit_deadline_is_distinct_from_presentation_target(self):
+        events = [record(6, 1, 2400, 1800, 2000, 120, 2),
+                  frame(100_000_000), record(12, 100_000_000, 101_000_000, 108_000_000, 1),
+                  record(4, 100_000_000, 108_000_000),
+                  frame(200_000_000), record(12, 200_000_000, 203_000_000, 208_000_000, 2)]
+        result = analyze(header(), events)
+        self.assertEqual(result["display_configurations"][0]["metal_preferred_frame_latency"], 2)
+        schedule = result["display_scheduling"]
+        self.assertEqual(schedule["supplied_drawables_accepted"], 1)
+        self.assertEqual(schedule["stale_drawables_rejected"], 1)
+        self.assertEqual(schedule["owners_completing_after_commit_deadline"], 1)
+        self.assertEqual(schedule["owner_completion_after_commit_deadline_ms"]["max"], 1)
+        self.assertEqual(schedule["presentation_target_after_commit_deadline_ms"]["max"], 7)
+        self.assertEqual(result["presentation"]["positive_target_lateness_ms"]["max"], 0)
+        self.assertEqual(result["presentation"]["frame_admission_to_present_ms"]["max"], 8)
+
     def test_workload_interval_excludes_setup_and_reports_synthetic_source(self):
         events = [record(9, 1, 1, 11), frame(10),
                   record(11, 100_000_000, 2, 1, 200, 100),
@@ -37,6 +62,7 @@ class ReportChecks(unittest.TestCase):
         self.assertEqual(workload["presentation_intervals_including_pen_up_ms"]["max"], 50)
         self.assertEqual(workload["first_presentation_after_start_ms"], 20)
         self.assertEqual(workload["last_presentation_before_end_ms"], 30)
+        self.assertEqual(workload["frame_admission_to_present_ms"]["max"], 10)
 
     def test_completed_producer_does_not_conceal_missing_render_observations(self):
         no_viewport = frame(300_000_000)

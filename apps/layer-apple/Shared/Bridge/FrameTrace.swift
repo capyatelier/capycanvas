@@ -20,6 +20,7 @@ final class FrameTrace: @unchecked Sendable {
     let started: UInt64
     let duration: TimeInterval
     let capacity: Int
+    let recordsGpuTiming: Bool
     private let lock = NSLock()
     private var events: [FrameTraceEvent] = []
     private var dropped: UInt64 = 0
@@ -30,8 +31,9 @@ final class FrameTrace: @unchecked Sendable {
     private let platform: UInt32
     private let workload: [String: Any]?
 
-    init(duration: TimeInterval, capacity: Int, platform: UInt32, output: URL? = nil, started: UInt64 = FrameTrace.now(), workload: [String: Any]? = nil) {
+    init(duration: TimeInterval, capacity: Int, platform: UInt32, output: URL? = nil, started: UInt64 = FrameTrace.now(), workload: [String: Any]? = nil, recordsGpuTiming: Bool = true) {
         self.duration = duration; self.capacity = max(1, capacity)
+        self.recordsGpuTiming = recordsGpuTiming
         self.platform = platform; self.output = output; self.started = started; self.workload = workload
         events.reserveCapacity(self.capacity)
     }
@@ -42,7 +44,8 @@ final class FrameTrace: @unchecked Sendable {
         let directory = environment["CAPY_TRACE_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Performance", isDirectory: true)
         let trace = FrameTrace(duration: seconds, capacity: min(1_000_000, max(2048, Int(ceil(seconds * 1200)))),
-            platform: platform, output: directory.appendingPathComponent("frames-\(UUID().uuidString).jsonl"), workload: workload)
+            platform: platform, output: directory.appendingPathComponent("frames-\(UUID().uuidString).jsonl"), workload: workload,
+            recordsGpuTiming: environment["CAPY_TRACE_GPU"] != "0")
         trace.startTimer()
         return trace
     }
@@ -114,6 +117,7 @@ final class FrameTrace: @unchecked Sendable {
             #endif
             let header: [String: Any] = ["schema": 1, "clock": "CACurrentMediaTime nanoseconds", "platform": platform,
                 "configuration": configuration, "duration_seconds": duration, "started_ns": started,
+                "gpu_timing_requested": recordsGpuTiming,
                 "capacity": capacity, "dropped_records": snapshot.dropped, "record_stride_bytes": MemoryLayout<FrameTraceEvent>.stride,
                 "input_source": workload == nil ? "platform" : "synthetic", "workload": workload as Any? ?? NSNull(),
                 "input_association": "received by owner before frame; pixel inclusion is not established"]

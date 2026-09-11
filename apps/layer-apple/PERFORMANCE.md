@@ -180,11 +180,85 @@ See the [renderer regression command](../../crates/layer-render-wgpu/README.md).
 This fixes submission capacity; it does not close the sustained frame-time or
 presentation requirements above. The published Apple scheduler is unchanged.
 
+## Display scheduling comparison — 2026-09-11
+
+The shared CAMetalDisplayLink experiment was **not adopted**. It supplied each
+callback's drawable to the serial render owner and separated the CPU commit
+deadline from the presentation target. The shorter CPU frame times did not
+establish better presentation: the physical iPad repeatedly reported skipped
+drawables with both requested rendering windows, including with GPU timing
+disabled. The published hosts retain CADisplayLink and ordinary wgpu acquisition.
+
+Each row below is a separate twenty-second measured `wet-watercolor-4k` run,
+with ten-second warm-up and postlude. CPU times include the whole owner service;
+admission-to-display times use actual nonzero Metal presentation callbacks.
+
+| Host / requested Metal latency | GPU timer | Actual presentations | Zero-time presentations | CPU p99, ms | Admission-to-display p99, ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| iPad / 1 | On | 2,156 | 49 | 4.832 | 24.957 |
+| iPad / 2 | On | 2,137 | 54 | 4.640 | 24.970 |
+| iPad / 1 | Off | 2,154 | 57 | 4.387 | 24.916 |
+| Mac / 1 | On | 1,642 | 0 | 6.371 | 33.380 |
+| Mac / 2 | On | 1,655 | 1 | 5.875 | 33.376 |
+| Mac / 1 | Off | 1,655 | 1 | 6.046 | 33.377 |
+
+All six intervals completed with no renderer errors or missing presentation
+callbacks. The Mac reports 90 Hz and the iPad 120 Hz. Changing the requested
+latency did not change the observed target-to-deadline separation: approximately
+22.222 ms on Mac and 8.333 ms on iPad. These observations do not demonstrate that
+the requested latency is the actual end-to-end latency. Timer-disabled rows have
+no GPU-duration samples; these short pairs do not calibrate all recorder overhead.
+
+The experiment also exposed an unsafe explicit CATransaction commit on the
+render queue: on iPad it invoked UIKit layout off the main thread and crashed
+during attachment. That trial was removed before the six completed runs above.
+A failed run produced no new trace; an older container file was rejected as
+evidence. Collection must check file freshness and configuration against the
+specific launch, not assume that the latest existing file belongs to it.
+
+Local raw evidence remains under `artifacts/performance/{mac,ipad}-metal-link-`
+`{safe1,safe2,no-gpu}`. The experiment is saved locally, not shipped in either
+Apple target. Further scheduling work needs a new explanation and presentation
+evidence; lower CPU measurements alone are insufficient.
+
+After restoring CADisplayLink and integrating shared changes through `a7c048c`,
+the same Release binaries were run once with GPU timing enabled and once with
+it disabled. All four twenty-second intervals completed with zero rejected
+input batches, missing callbacks or zero-time presentations:
+
+| Stable host | GPU timer | Actual presentations | CPU p99, ms | Admission-to-display p99, ms |
+| --- | --- | ---: | ---: | ---: |
+| iPad | On | 2,190 | 9.077 | 25.965 |
+| iPad | Off | 2,188 | 9.120 | 25.966 |
+| Mac | On | 1,639 | 6.232 | 32.897 |
+| Mac | Off | 1,655 | 5.873 | 32.928 |
+
+The whole traces have no renderer errors or recorder overflow; startup/postlude
+zero-time callbacks and omitted GPU samples remain in the reports. The iPad CPU
+tail exceeds 8.33 ms with either instrumentation setting. Enabled GPU queue spans
+have p99 9.389 ms on iPad and 10.363 ms on Mac and retain the overhead caveat.
+This short pair does not establish a precise overhead correction or sustained
+performance acceptance. The stable controls include subsequent shared layout
+changes, so their comparison against the earlier Metal-link runs is not a
+strictly identical-source scheduler-only experiment.
+Reports are in ignored `artifacts/performance/{mac,ipad}-scheduler-control`
+and corresponding `-no-gpu` directories. The Mac's completed synthetic painting
+was captured and inspected; test apps were closed after collection.
+
 ## Capture locally
 
 Build with `CAPY_CONFIGURATION=Release` for performance investigations. See
 [README.md](README.md) for signing and build options. Debug captures are useful
 for validating instrumentation but do not close performance gates.
+
+Set `CAPY_TRACE_GPU=0` to retain CPU, input, memory and actual presentation
+observations while disabling the GPU timestamp marker submissions and readback
+polls. The default is enabled when tracing is requested; ordinary unrecorded
+launches still create no frame timer. The trace header and report expose
+`gpu_timing_requested`. Disabled GPU measurements remain null, with an explicit
+warning; they must not be treated as zero GPU cost. This comparison isolates
+the optional GPU timer, not the remaining recorder overhead. Use the same build,
+workload, duration and display state for each pair.
 
 ```sh
 CAPY_CONFIGURATION=Release bash apps/layer-apple/scripts/build.sh macos
@@ -249,6 +323,10 @@ commands and review staged source before pushing.
   intervals across recorded idle pauses. All intervals are also reported.
   The 8.33 ms exceedance count uses a 5% cadence tolerance; target lateness over
   1 ms is a separate descriptive count. Neither is an acceptance waiver.
+  `frame_admission_to_present_ms` measures actual display time minus frame
+  admission, independently of the scheduler's advertised target. It is software
+  scheduling delay, not physical input-to-pixel latency. Comparing target
+  lateness alone across different schedulers can conceal a changed target.
 - Input enqueue/owner times measure transport queueing. The first presentation
   associated with each successfully received, nonpredicted batch is a **receipt
   proxy**. The renderer may defer that input or consume only part of its queue.
@@ -293,6 +371,15 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
 | 11 workload | observation time, phase, profile ID, phase-dependent counters |
+
+The analyzer also retains local scheduling experiment records: kind 12 contains
+frame ID, CPU commit deadline, presentation target and drawable admission status
+(0 ordinary acquisition, 1 supplied drawable accepted, 2 stale drawable rejected).
+The optional sixth field of kind 6 records the requested Metal frame latency;
+zero means unavailable. The published CADisplayLink hosts do not emit these
+experimental fields. Owner completion includes polling and snapshot publication,
+so lateness relative to the commit deadline is an upper bound, not a measured
+Metal commit timestamp.
 
 Workload phases: 0 configuration, 1 warm-up begins, 2 measurement begins,
 3 measurement ends, 4 postlude ends, 5 failure, 6 producer sample. Phase 0's

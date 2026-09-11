@@ -440,7 +440,7 @@ final class NativeOwner: @unchecked Sendable {
     /// Runs on the serial owner. At most one trailing poll can be scheduled,
     /// allowing the last GPU readback to complete after the display link sleeps.
     private func collectGpuTiming(_ observation: FrameTrace) {
-        guard observation.acceptsCompletions else { return }
+        guard observation.recordsGpuTiming, observation.acceptsCompletions else { return }
         var status = CapyGpuFrameTimingStats()
         let capacity = gpuSamples.count
         let count = capy_apple_take_gpu_timing(handle, &gpuSamples, capacity, &status)
@@ -472,9 +472,10 @@ final class NativeOwner: @unchecked Sendable {
                 if let trace { collectGpuTiming(trace) }
             }
             do {
-                if gpuTimingEnabled != (observation != nil) {
-                    try check(capy_apple_gpu_timing(handle, observation == nil ? 0 : 1))
-                    gpuTimingEnabled = observation != nil
+                let wantsGpuTiming = observation?.recordsGpuTiming == true
+                if gpuTimingEnabled != wantsGpuTiming {
+                    try check(capy_apple_gpu_timing(handle, wantsGpuTiming ? 1 : 0))
+                    gpuTimingEnabled = wantsGpuTiming
                 }
                 let result = capy_apple_frame(handle, now, max(now, target), &costs)
                 try check(result)
