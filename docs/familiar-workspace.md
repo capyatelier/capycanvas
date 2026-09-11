@@ -1400,3 +1400,50 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   restores its current geometry; the persistent column drawer remains open.
   Native tests verify both directions. No test artifacts or local paths are
   included in the repository.
+
+### Editable-project foundation and faithful watercolor replay
+
+- The shared [project codec](project-format.md) now preserves editable document
+  history, source assets, masks, selections, transforms, rulers and exact runtime
+  filter definitions. It prunes removed artwork and unused assets, rejects
+  malformed/oversized input, and checks the compressed stream's checksum and
+  completion. This is a codec milestone, not a claim that Save/Open dialogs exist.
+- Live-versus-reopened GPU tests found that watercolor replay combined a whole
+  stroke into one bleed update. Stored material-update boundaries now preserve
+  the live transport sequence during undo/recovery/opening without adding GPU
+  work while drawing. Contiguous update lookup avoids scanning unrelated
+  strokes. No pixel channel or canvas readback was added for project saving.
+- Validation passes 39 core, 31 engine and 207 shared UI tests, plus the new
+  fresh-GPU save/reopen test. The latter compares exact output for imported
+  transparency, wet brushes, live/applied masks, groups, gradients, figures,
+  transforms, clipped multipass filters and animation, then checks continued
+  wet painting. Generated PNGs were inspected under ignored
+  `artifacts/familiar-workspace/project/`.
+- The Vulkan renderer suite passes 103 tests, with 16 hardware benchmarks ignored
+  and the previously documented historical filter-reference test explicitly
+  excluded. That failure remains unresolved; this is not a fully green renderer
+  suite claim. Strict core/engine/render/UI/GTK Clippy, workspace and Wasm checks
+  pass, apart from the existing non-Metal Apple workspace warnings.
+- The native pacing test now waits for actual brush readiness and verifies a
+  committed stroke with real samples/material updates. A fixed warm-up delay
+  could otherwise benchmark a contact suppressed during shader initialization.
+  Six-second release runs, 384px brushes, on the private Wayland display:
+
+  | Brush | Worker CPU median/p95/p99 ms | GPU median/p95/p99 ms | GTK handler median/p95/p99 ms | Displayed Hz |
+  | --- | --- | --- | --- | --- |
+  | G-Pen | 0.243 / 0.590 / 0.818 | 0.121 / 0.293 / 1.575 | 0.007 / 0.050 / 0.060 | 119.40 |
+  | Watercolor Wash | 1.155 / 1.836 / 2.359 | 1.359 / 2.379 / 2.887 | 0.017 / 0.043 / 0.060 | 119.73 |
+
+  Input is synthetic and child-surface presentation feedback is real. These
+  validate approximately 120Hz steady-state drawing, not physical tablet latency,
+  cold-start latency, or an isolated before/after overhead measurement. Earlier
+  unguarded warm-up runs from this milestone are not used as drawing evidence.
+- No new third-party package versions were introduced. The direct compression
+  dependency reuses the existing locked MIT/Apache-2.0 `flate2` with its Rust
+  backend. `cargo-deny` is not installed in this environment, so its automated
+  licensing gate was not rerun; dependency metadata and lockfile changes were
+  reviewed directly. Captures, raw timings and local paths remain untracked.
+- Next: document asset ownership, atomic asynchronous native file workflows,
+  unsaved-work/cancellation handling, the eight menus and command ribbon, final
+  default layout, region refinements, historical filter-reference reconciliation,
+  and the integrated GTK approval gate. The full goal remains active.

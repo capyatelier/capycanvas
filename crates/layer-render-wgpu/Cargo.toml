@@ -15,6 +15,9 @@ web-time = "1.1.0"
 png = "0.17.16"
 crc32fast = "1.5"
 
+[dev-dependencies]
+layer-engine = { path = "../layer-engine" }
+
 [target.'cfg(target_os = "android")'.dependencies]
 libc = "0.2"
 

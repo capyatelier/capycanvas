@@ -37,6 +37,7 @@ pub use startup::StartupProgress;
 mod effect_validation;
 mod effects;
 mod flood;
+mod frame_timing;
 mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
@@ -45,7 +46,6 @@ mod region_requests;
 mod scene;
 mod selection_clip;
 mod telemetry;
-mod frame_timing;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
 pub use present::ViewportPresenter;
@@ -5362,22 +5362,26 @@ fn batch_pixel_rect(batch: &DabBatch, extent: [u32; 2]) -> PixelRect {
 
 fn is_first_watercolor_update_batch(batches: &[DabBatch], index: usize) -> bool {
     let current = &batches[index];
-    batches[..index].iter().all(|earlier| {
-        earlier.dab_count == 0
-            || earlier.kind != current.kind
-            || earlier.stroke_id != current.stroke_id
-            || earlier.layer_id != current.layer_id
-    })
+    batches[..index]
+        .iter()
+        .rev()
+        .take_while(|b| same_material_update(b, current))
+        .all(|b| b.dab_count == 0)
 }
 
 fn is_last_watercolor_update_batch(batches: &[DabBatch], index: usize) -> bool {
     let current = &batches[index];
-    batches[index + 1..].iter().all(|later| {
-        later.dab_count == 0
-            || later.kind != current.kind
-            || later.stroke_id != current.stroke_id
-            || later.layer_id != current.layer_id
-    })
+    batches[index + 1..]
+        .iter()
+        .take_while(|b| same_material_update(b, current))
+        .all(|b| b.dab_count == 0)
+}
+
+fn same_material_update(a: &DabBatch, b: &DabBatch) -> bool {
+    a.kind == b.kind
+        && a.stroke_id == b.stroke_id
+        && a.layer_id == b.layer_id
+        && a.material_update == b.material_update
 }
 
 fn watercolor_update_damages(
@@ -5386,14 +5390,16 @@ fn watercolor_update_damages(
     extent: [u32; 2],
 ) -> Vec<PixelRect> {
     let current = &batches[index];
-    batches
+    let start = index
+        - batches[..index]
+            .iter()
+            .rev()
+            .take_while(|b| same_material_update(b, current))
+            .count();
+    batches[start..]
         .iter()
-        .filter(|batch| {
-            batch.dab_count != 0
-                && batch.kind == current.kind
-                && batch.stroke_id == current.stroke_id
-                && batch.layer_id == current.layer_id
-        })
+        .take_while(|b| same_material_update(b, current))
+        .filter(|batch| batch.dab_count != 0)
         .map(|batch| batch_pixel_rect(batch, extent))
         .collect()
 }
@@ -6876,6 +6882,7 @@ mod tests {
         let mut dab = test_dab([40., 100.], [1., 0., 0., 1.], 1.);
         dab.radii = [3., 6.];
         let mut batch = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(1),
             layer_id: LayerId(1),
             kind: DabBatchKind::Persistent,
@@ -6980,6 +6987,7 @@ mod tests {
         let mut dab = test_dab([64., 64.], [1., 0., 0., 1.], 1.);
         dab.radii = [58., 58.];
         let mut batch = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(1),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7126,6 +7134,7 @@ mod tests {
             base_style.wet_mix.density = 0.9;
             base_style.wet_mix.attack = 0.88;
             let base = DabBatch {
+                material_update: 0,
                 stroke_id: StrokeId(30),
                 layer_id: layer.id,
                 kind: DabBatchKind::Persistent,
@@ -7174,6 +7183,7 @@ mod tests {
         // reclassification of first-batch deposition as pre-existing water.
         let active_batches = [
             DabBatch {
+                material_update: 0,
                 stroke_id: StrokeId(31),
                 layer_id: layer.id,
                 kind: DabBatchKind::Persistent,
@@ -7185,6 +7195,7 @@ mod tests {
                 damage,
             },
             DabBatch {
+                material_update: 0,
                 stroke_id: StrokeId(31),
                 layer_id: layer.id,
                 kind: DabBatchKind::Persistent,
@@ -7225,6 +7236,7 @@ mod tests {
     #[test]
     fn zero_dab_boundary_preserves_watercolor_update_bounds() {
         let painted = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(4),
             layer_id: LayerId(1),
             kind: DabBatchKind::Persistent,
@@ -7277,6 +7289,7 @@ mod tests {
         let mut style = test_style(BrushExecution::Dry);
         style.rendering.accumulation = BrushAccumulation::Uniform;
         let mut batch = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(7),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7364,6 +7377,7 @@ mod tests {
         style.wet_mix.dilution = 0.3;
         style.wet_mix.mix_space = ColorMixSpace::Oklab;
         let mut batch = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(17),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7463,6 +7477,7 @@ mod tests {
             style.wet_mix.dilution = 0.3;
             let batches = (0..batch_count)
                 .map(|index| DabBatch {
+                    material_update: 0,
                     stroke_id: StrokeId(23),
                     layer_id: layer.id,
                     kind: DabBatchKind::Preview,
@@ -7522,6 +7537,7 @@ mod tests {
 
             if include_fringe {
                 let first = DabBatch {
+                    material_update: 0,
                     stroke_id: StrokeId(31),
                     layer_id: layer.id,
                     kind: DabBatchKind::Persistent,
@@ -7550,6 +7566,7 @@ mod tests {
             }
 
             let second = DabBatch {
+                material_update: 0,
                 stroke_id: StrokeId(31),
                 layer_id: layer.id,
                 kind: DabBatchKind::Persistent,
@@ -7610,6 +7627,7 @@ mod tests {
             second.radii = [38.0, 38.0];
             for (index, dab) in [first, second].iter().enumerate() {
                 let batch = DabBatch {
+                    material_update: 0,
                     stroke_id: StrokeId(41 + index as u64),
                     layer_id: layer.id,
                     kind: DabBatchKind::Persistent,
@@ -7676,6 +7694,7 @@ mod tests {
         let layer = Layer::paint(LayerId(1), "Mixed media");
         let dry_dab = test_dab([32.0, 64.0], [0.08, 0.02, 0.01, 1.0], 1.0);
         let dry = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(51),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7713,6 +7732,7 @@ mod tests {
         watercolor_style.wet_mix.density = 0.9;
         watercolor_style.wet_mix.attack = 0.8;
         let watercolor = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(52),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7761,6 +7781,7 @@ mod tests {
         style.wet_mix.attack = 1.0;
         style.wet_mix.pull = 1.0;
         let batch = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(12),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7797,6 +7818,7 @@ mod tests {
         let layer = Layer::paint(LayerId(1), "Paint");
         let red = test_dab([32.0, 64.0], [1.0, 0.0, 0.0, 1.0], 1.0);
         let dry = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(1),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7834,6 +7856,7 @@ mod tests {
         second.material[1] = 1.0;
         smudge_style.wet_mix.pull = 1.0;
         let smudge = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(2),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7873,6 +7896,7 @@ mod tests {
         let layer = Layer::paint(LayerId(1), "Paint");
         let red = test_dab([64.0, 64.0], [1.0, 0.0, 0.0, 1.0], 1.0);
         let dry = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(1),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -7943,6 +7967,7 @@ mod tests {
         style.rendering.burnt_edge = 0.4;
         style.rendering.edge_width = 4.0;
         let mut batch = DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(9),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -8118,6 +8143,7 @@ mod tests {
             material: [0.8, 0.0, 1.0, 0.0],
         };
         let batch = DabBatch {
+            material_update: 0,
             stroke_id: layer_core::StrokeId(1),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -8185,6 +8211,7 @@ mod tests {
             material: [0.0, 0.0, 1.0, 0.0],
         };
         let dry_batch = DabBatch {
+            material_update: 0,
             stroke_id: layer_core::StrokeId(1),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -8240,6 +8267,7 @@ mod tests {
             material: [0.0, 1.0, 1.0, 0.0],
         };
         let smudge_batch = DabBatch {
+            material_update: 0,
             stroke_id: layer_core::StrokeId(2),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,
@@ -8291,6 +8319,7 @@ mod tests {
             material: [0.0, 0.0, 0.0, 1.0],
         };
         let liquify_batch = DabBatch {
+            material_update: 0,
             stroke_id: layer_core::StrokeId(3),
             layer_id: layer.id,
             kind: DabBatchKind::Persistent,

@@ -51,11 +51,7 @@ pub struct Dab {
     pub material: [f32; 4],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PixelFormat {
-    R8Unorm,
-    Rgba8Srgb,
-}
+pub use layer_core::ProjectAssetFormat as PixelFormat;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
@@ -103,6 +99,9 @@ pub enum DabBatchKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DabBatch {
+    /// Material-update identity within a stroke. Replay can contain several
+    /// updates in one packet; live rendering need not submit extra GPU work.
+    pub material_update: u32,
     /// Stable stroke identity. Stateful GPU resources use this to distinguish
     /// adjacent strokes that happen to share the same brush style.
     pub stroke_id: StrokeId,

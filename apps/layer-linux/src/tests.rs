@@ -9007,6 +9007,37 @@ fn native_frame_pacing() {
             assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
         }
         pump(300);
+        // A cold material shader/texture may not be ready after a fixed sleep.
+        // Starting then suppresses the whole contact and benchmarks an empty
+        // canvas. Wait for the actual input gate, and verify committed ink.
+        if preset.is_some() {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                let ready = w.gpu.borrow().as_ref().is_some_and(|g| {
+                    let engine = g.session.engine();
+                    engine.backend().paint_ready(
+                        engine.document(),
+                        engine.configured_brush(),
+                        false,
+                    )
+                });
+                if ready {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "brush did not become ready");
+                pump(5);
+            }
+        }
+        let strokes_before = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .strokes()
+            .count();
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
         let start = Instant::now();
@@ -9098,6 +9129,30 @@ fn native_frame_pacing() {
             });
         }
         pump(150);
+        if let Some(preset) = preset {
+            let gpu = w.gpu.borrow();
+            let document = gpu.as_ref().unwrap().session.engine().document();
+            assert_eq!(
+                document.strokes().count(),
+                strokes_before + 1,
+                "pacing must draw a complete stroke"
+            );
+            let stroke = document.strokes().last().unwrap();
+            assert_eq!(
+                stroke.brush.execution,
+                layer_core::default_brush(preset).execution
+            );
+            assert!(
+                stroke.points.len() > 100,
+                "pacing must deliver real samples"
+            );
+            if stroke.brush.execution == layer_core::BrushExecution::Watercolor {
+                assert!(
+                    stroke.material_updates.len() > 100,
+                    "pacing must advance material updates"
+                );
+            }
+        }
         assert!(
             !w.navigator_images.updating(),
             "idle preview releases GTK timing"

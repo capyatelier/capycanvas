@@ -269,7 +269,7 @@ mod organization_tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum LayerBlend {
     #[default]
@@ -304,7 +304,7 @@ impl LayerBlend {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerProperties {
     pub parent: Option<LayerId>,
     pub offset: Point,
@@ -317,7 +317,7 @@ pub struct LayerProperties {
 /// Immutable coverage survives subsequent edits, undo and renderer recreation.
 /// Each row contains ceil(width / 8) words, with eight 0..4 coverage nibbles.
 /// Pixels are produced by the GPU; this type validates and retains their data.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SelectionPixels {
     extent: [u32; 2],
     bounds: [u32; 4],
@@ -329,9 +329,18 @@ impl SelectionPixels {
         bounds: [u32; 4],
         words: impl Into<Arc<[u32]>>,
     ) -> Result<Self, DocumentError> {
-        let words = words.into();
-        let [w, h] = extent;
-        let [x0, y0, x1, y1] = bounds;
+        let value = Self {
+            extent,
+            bounds,
+            words: words.into(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+    pub(crate) fn validate(&self) -> Result<(), DocumentError> {
+        let [w, h] = self.extent;
+        let [x0, y0, x1, y1] = self.bounds;
+        let words = &self.words;
         if w == 0 || h == 0 || x0 > x1 || y0 > y1 || x1 > w || y1 > h
             || u64::from(w.div_ceil(8)) * u64::from(h) != words.len() as u64
             // Reject values >4 with eight parallel nibble comparisons.
@@ -341,11 +350,7 @@ impl SelectionPixels {
                 "Invalid selection coverage",
             ));
         }
-        Ok(Self {
-            extent,
-            bounds,
-            words,
-        })
+        Ok(())
     }
     pub fn extent(&self) -> [u32; 2] {
         self.extent
@@ -358,7 +363,7 @@ impl SelectionPixels {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionShape {
     /// Even/odd interiors support holes and disjoint islands.
     Contours(Arc<[Arc<[Point]>]>),
@@ -367,7 +372,7 @@ pub enum SelectionShape {
 
 /// Geometry or immutable GPU-produced coverage. Affine placement and inversion are
 /// metadata, so layer-local stroke snapshots never duplicate a selection image.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Selection {
     pub shape: SelectionShape,
     pub affine: crate::Affine,
@@ -548,7 +553,7 @@ mod selection_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerMask {
     /// Unique image identity, allocated from the document layer-ID allocator.
     pub id: LayerId,
@@ -568,13 +573,13 @@ pub struct LayerMask {
 
 /// Ordered raster mutations retain their source coverage for deterministic undo
 /// and device-loss replay. They are not live composition masks after baking.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LayerOperation {
     pub after_stroke: usize,
     pub coverage: LayerMask,
     pub kind: LayerOperationKind,
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LayerOperationKind {
     ApplyMask,
     Transform(crate::ImageTransform),

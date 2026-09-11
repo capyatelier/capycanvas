@@ -729,6 +729,7 @@ mod gpu_tests {
             material: [0.; 4],
         }];
         let mut batches = vec![DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(1),
             layer_id: doc.active_layer,
             kind: DabBatchKind::Persistent,

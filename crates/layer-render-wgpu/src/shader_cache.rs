@@ -343,6 +343,7 @@ mod tests {
             material: [0.; 4],
         }];
         let batches = [layer_render::DabBatch {
+            material_update: 0,
             stroke_id: layer_core::StrokeId(1),
             layer_id: doc.active_layer,
             kind: layer_render::DabBatchKind::Persistent,
