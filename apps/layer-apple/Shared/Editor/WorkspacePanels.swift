@@ -181,7 +181,8 @@ private struct WorkspaceTile: View {
     let panel: JSON
     let tile: JSON
     private var kind: String { tile["control"]["kind"].string }
-    private var style: String { panel["tile_style"].string }
+    private var iconSize: CGFloat { CGFloat(panel["tile_icon_size"].number) }
+    private var labelLines: Int { Int(panel["tile_label_lines"].uint) }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         Group {
@@ -190,19 +191,26 @@ private struct WorkspaceTile: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
                 Button { store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw]) } label: {
-                    VStack(spacing: 4) {
-                        if kind == "color" {
-                            // Dynamic fill within the canonical color icon's
-                            // 16-unit viewbox (5.5 radius, 1.5 outline).
-                            let scale: CGFloat = style == "large" ? 2 : 1
-                            ColorSwatch(rgba: store.state["brush"]["color"])
-                                .frame(width: 11 * scale, height: 11 * scale).clipShape(Circle())
-                                .overlay(Circle().stroke(palette["text"], lineWidth: 1.5 * scale))
-                                .frame(width: 16 * scale, height: 16 * scale)
+                    HStack(spacing: 0) {
+                        Group {
+                            if kind == "color" {
+                                // Dynamic fill within the canonical color icon's
+                                // 16-unit viewbox (5.5 radius, 1.5 outline).
+                                let scale = iconSize / 16
+                                ColorSwatch(rgba: store.state["brush"]["color"])
+                                    .frame(width: 11 * scale, height: 11 * scale).clipShape(Circle())
+                                    .overlay(Circle().stroke(palette["text"], lineWidth: 1.5 * scale))
+                                    .frame(width: 16 * scale, height: 16 * scale)
+                            }
+                            else if kind == "size" { Text(String(tile["control"]["pixels"].uint)) }
+                            else { SharedIcon(name: tile["icon"].string, size: iconSize) }
+                        }.frame(width: labelLines > 0 ? 36 : nil)
+                        if labelLines > 0 {
+                            Text(tile["label"].string)
+                                .fontWeight(panel["tile_label_bold"].bool ? .bold : .regular)
+                                .lineLimit(labelLines).truncationMode(.tail).multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 4)
                         }
-                        else if kind == "size" { Text(String(tile["control"]["pixels"].uint)) }
-                        else { SharedIcon(name: tile["icon"].string, size: style == "large" ? 32 : 16) }
-                        if style == "labeled" { Text(tile["label"].string).font(.system(size: 11)).lineLimit(2).multilineTextAlignment(.center) }
                     }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                 }.buttonStyle(.plain).disabled(!tile["enabled"].bool).opacity(tile["enabled"].bool ? 1 : 0.4)
                     .background(tile["selected"].bool ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 6))

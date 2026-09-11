@@ -35,7 +35,8 @@ pub(super) fn tile_button(
         }
     ));
     icon.set_pixel_size(config.tile_style.icon_size() as i32);
-    if config.tile_style == TileStyle::Labeled {
+    let label_lines = config.tile_style.label_lines();
+    if label_lines > 0 {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         icon.set_size_request(TILE_SIZE as i32, -1);
         let label = gtk::Label::new(Some(&choice.label));
@@ -43,8 +44,18 @@ pub(super) fn tile_button(
         label.set_wrap(true);
         label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_lines(3);
+        label.set_lines(label_lines as i32);
         label.set_max_width_chars(1);
+        label.set_margin_end(4);
+        let attributes = gtk::pango::AttrList::new();
+        attributes.insert(gtk::pango::AttrInt::new_weight(
+            if config.tile_style == TileStyle::Labeled {
+                gtk::pango::Weight::Bold
+            } else {
+                gtk::pango::Weight::Normal
+            },
+        ));
+        label.set_attributes(Some(&attributes));
         label.set_xalign(0.0);
         label.set_valign(gtk::Align::Center);
         row.append(&icon);

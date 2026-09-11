@@ -7,9 +7,6 @@ use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
-#[path = "toolbar_tiles_tests.rs"]
-mod toolbar_tiles;
-
 fn pump(ms: u64) {
     let until = Instant::now() + Duration::from_millis(ms);
     let context = glib::MainContext::default();

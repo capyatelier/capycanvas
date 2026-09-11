@@ -95,7 +95,12 @@ impl TileStyle {
         !matches!(self, Self::Medium | Self::MediumLabeled)
             || matches!(
                 platform,
-                Platform::Generic | Platform::Android | Platform::Web
+                Platform::Generic
+                    | Platform::Android
+                    | Platform::Web
+                    | Platform::Gtk
+                    | Platform::Mac
+                    | Platform::Ios
             )
     }
     pub(crate) fn floating_width(self) -> f32 {
@@ -1882,7 +1887,12 @@ mod tests {
         ] {
             let supported = matches!(
                 platform,
-                Platform::Generic | Platform::Android | Platform::Web
+                Platform::Generic
+                    | Platform::Android
+                    | Platform::Web
+                    | Platform::Gtk
+                    | Platform::Mac
+                    | Platform::Ios
             );
             let context = layout
                 .context_menu_on(
