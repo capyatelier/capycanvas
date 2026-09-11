@@ -230,6 +230,10 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.ZenMode" => key("tab", false, false),
         "command.Undo" => key("z", true, false),
         "command.Redo" => return vec![key("z", true, true), key("y", true, false)],
+        "command.FillSelection" => key("backspace", false, true),
+        "command.SelectAll" => key("a", true, false),
+        "command.Deselect" => key("d", true, false),
+        "command.InvertSelection" => key("i", true, true),
         "command.UndoWorkspace" | "command.RedoWorkspace" => {
             return vec![KeyChord {
                 key: "z".into(),
@@ -240,7 +244,13 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         }
         "command.Settings" => key(",", true, false),
         "command.KeyboardShortcuts" => key("?", true, true),
-        "command.NewWindow" => key("n", true, false),
+        "command.NewDocument" => key("n", true, false),
+        "command.NewWindow" => key("n", true, true),
+        "command.OpenDocument" => key("o", true, false),
+        "command.SaveDocument" => key("s", true, false),
+        "command.SaveDocumentAs" => key("s", true, true),
+        "command.ExportDocument" => key("e", true, true),
+        "command.CloseDocument" => key("w", true, false),
         "canvas.pan" => key(" ", false, false),
         _ => return Vec::new(),
     };
@@ -332,6 +342,21 @@ impl Settings {
         fn canonical(action: &UiAction) -> UiAction {
             use LayerAction as L;
             match action {
+                UiAction::Layer {
+                    action: L::FillSelection,
+                } => UiAction::Invoke {
+                    command: CommandId::FillSelection,
+                },
+                UiAction::Layer {
+                    action: L::Deselect,
+                } => UiAction::Invoke {
+                    command: CommandId::Deselect,
+                },
+                UiAction::Layer {
+                    action: L::InvertSelection,
+                } => UiAction::Invoke {
+                    command: CommandId::InvertSelection,
+                },
                 UiAction::Layer {
                     action:
                         L::Tool {

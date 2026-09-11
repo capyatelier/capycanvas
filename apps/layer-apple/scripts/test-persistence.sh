@@ -15,7 +15,7 @@ cargo build --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple --target
 xcrun swiftc -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
   "$CAPY_BRIDGE/JSON.swift" "$CAPY_BRIDGE/AtomicJSONFile.swift" "$CAPY_BRIDGE/EditorPersistence.swift" \
   "$CAPY_BRIDGE/FrameTrace.swift" "$CAPY_BRIDGE/ObservedMetalLayer.swift" \
-  "$CAPY_BRIDGE/LayerImageImport.swift" "$CAPY_BRIDGE/NativeOwner.swift" \
+  "$CAPY_BRIDGE/LayerImageImport.swift" "$CAPY_BRIDGE/ProjectFileIO.swift" "$CAPY_BRIDGE/NativeOwner.swift" \
   "$CAPY_APP/tests/persistence-owner.swift" \
   -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lc++ \
   -framework Metal -framework QuartzCore -framework Security -o "$CAPY_CHECK_DIR/owner"

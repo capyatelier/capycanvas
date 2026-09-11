@@ -73,7 +73,7 @@ function Capture([string]$Name){
     & $Python (Join-Path $repo 'tools/visual/check_color_wheel.py') $png $json --oracle (Join-Path $repo 'target/debug/examples/color_wheel_reference.exe') --output (Join-Path $run ($Name+'-report.json'))
     if($LASTEXITCODE -ne 0){throw "Color pixel comparison failed: $Name"}
 }
-Invoke-Control 'Workspace'
+Invoke-Control ((Model).workspace_menu.title)
 (Control 'Color panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
 $null=Control 'Color wheel' ([System.Windows.Automation.ControlType]::Image)
 $original=(Control 'Hue' ([System.Windows.Automation.ControlType]::Edit)).GetRuntimeId() -join ':'

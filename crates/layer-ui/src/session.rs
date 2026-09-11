@@ -15,10 +15,18 @@ mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
+#[path = "application_menu.rs"]
+mod application_menu;
+#[path = "document_files.rs"]
+mod document_files;
+pub use application_menu::{ApplicationLink, ApplicationMenu};
 #[path = "effects.rs"]
 mod effects;
 #[path = "filter_loading.rs"]
 mod filter_loading;
+#[path = "project_files.rs"]
+mod project_files;
+pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
     LayerPropertiesView, PropertyControl, PropertyKind,
@@ -75,11 +83,13 @@ pub struct UiSession<R: CanvasRenderer> {
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
     tools: tools::ToolMemory,
+    files: document_files::DocumentFiles,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn blank(renderer: R, viewport: [u32; 2]) -> Result<Self, String> {
-        Self::new(renderer, Document::new("untitled", 2048, 1536), viewport)
+        let [width, height] = DEFAULT_DOCUMENT_EXTENT;
+        Self::new(renderer, Document::new("untitled", width, height), viewport)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2]) -> Result<Self, String> {
@@ -119,6 +129,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             next_request: 1,
             layer_interaction: Default::default(),
             tools: tools::ToolMemory::default(),
+            files: document_files::DocumentFiles::default(),
             state: UiState {
                 revision: 0,
                 workspace: WorkspaceState::default(),
@@ -142,6 +153,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 filter_load: FilterLoadState::default(),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
+                document_file: DocumentFileState::default(),
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
@@ -1056,7 +1068,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
-        if !id.available_on(self.state.platform) {
+        if !id.available_on(self.state.platform) || self.state.document_file.close_ready {
             return (false, false);
         }
         let document = self.engine.document();
@@ -1076,6 +1088,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::NewDocument
+            | CommandId::OpenDocument
+            | CommandId::SaveDocument
+            | CommandId::SaveDocumentAs
+            | CommandId::ExportDocument => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy
+            }
+            CommandId::CloseDocument => self.require_document_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
                 idle && self.operation.active()
@@ -1090,6 +1110,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::Undo => idle && self.engine.can_undo(),
             CommandId::Redo => idle && self.engine.can_redo(),
+            CommandId::SelectAll => self.require_document_idle().is_ok(),
+            CommandId::Deselect | CommandId::InvertSelection => {
+                self.require_document_idle().is_ok() && document.selection.is_some()
+            }
+            CommandId::ClearLayer | CommandId::FillSelection => {
+                self.require_document_idle().is_ok()
+                    && editable
+                    && !document.active_mask
+                    && !document.is_locked(document.active_layer)
+                    && (id == CommandId::ClearLayer || document.selection.is_some())
+            }
             CommandId::UndoWorkspace => self.workspace_history.can_undo(),
             CommandId::RedoWorkspace => self.workspace_history.can_redo(),
             CommandId::AddLayer => idle,
@@ -1368,7 +1399,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
                 let layout = &mut self.state.workspace.layout;
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
                     && layout.column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
@@ -1426,7 +1457,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .find(|t| t.id == tile)
                     .is_some_and(|t| t.choice.selected && t.enabled);
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
                     && control.drawer_columns().is_some()
                     && (!control.selectable()
                         || selected
@@ -1727,7 +1758,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if !drag.collapsed {
                             let point = drag.position(position);
                             let root =
-                                matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                                matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
                                     .then(|| {
                                         self.state
                                             .workspace
@@ -1863,6 +1894,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .position(|r| r.id == id)
                     .ok_or("Unknown host request")?;
+                if matches!(
+                    self.state.requests[index].kind,
+                    HostRequestKind::Document { .. }
+                ) {
+                    return Err("Complete document requests through the document service".into());
+                }
                 self.state.requests.remove(index);
                 self.state.host_error = error;
                 (HOST, false)
@@ -2204,6 +2241,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         self.input_pending = false;
+        changed |= self.poll_document_close();
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
@@ -2231,6 +2269,24 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::NewDocument | CommandId::OpenDocument => {
+                self.request_document_open(command == CommandId::OpenDocument)?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::SaveDocument | CommandId::SaveDocumentAs => {
+                self.request_save(command == CommandId::SaveDocumentAs)?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::ExportDocument => {
+                self.request_document(DocumentRequest::Export {
+                    name: self.document_filename("png"),
+                })?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::CloseDocument => {
+                self.request_document_close()?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::ScaleRotate => {
                 self.begin_transform()?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -2324,6 +2380,32 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.engine.redo().map_err(error)?;
                 Ok((0, true))
             }
+            CommandId::SelectAll => {
+                let doc = self.engine.document();
+                let [w, h] = [doc.width as f32, doc.height as f32];
+                let selection = layer_core::Selection::polygon(
+                    [[0., 0.], [w, 0.], [w, h], [0., h]]
+                        .map(|[x, y]| layer_core::Point { x, y })
+                        .to_vec(),
+                )
+                .map_err(error)?;
+                self.layer_edit(layer_core::Edit::SetSelection(Some(selection)))?;
+                Ok((DOCUMENT, true))
+            }
+            CommandId::ClearLayer
+            | CommandId::FillSelection
+            | CommandId::Deselect
+            | CommandId::InvertSelection => {
+                self.layer_action(match command {
+                    CommandId::ClearLayer => LayerAction::Clear {
+                        id: self.engine.document().active_layer.0,
+                    },
+                    CommandId::FillSelection => LayerAction::FillSelection,
+                    CommandId::Deselect => LayerAction::Deselect,
+                    _ => LayerAction::InvertSelection,
+                })?;
+                Ok((DOCUMENT, true))
+            }
             CommandId::AddLayer => {
                 self.layer_action(LayerAction::New {
                     group: false,
@@ -2406,6 +2488,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
+                Ok((HOST, false))
+            }
+            CommandId::Website | CommandId::SourceCode => {
+                self.request(HostRequestKind::OpenLink {
+                    link: if command == CommandId::Website {
+                        ApplicationLink::Website
+                    } else {
+                        ApplicationLink::SourceCode
+                    },
+                })?;
                 Ok((HOST, false))
             }
             CommandId::ToggleTheme => {
@@ -2718,6 +2810,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        self.refresh_file_state();
         self.reconcile_transform();
         if self
             .rulers
@@ -2825,7 +2918,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
-            title: "Untitled".into(),
+            title: self.state.document_file.title().into(),
             active: true,
             width: doc.width,
             height: doc.height,
@@ -2958,6 +3051,229 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn document_save_keeps_source_assets_and_tracks_the_saved_undo_state() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let pixels = std::sync::Arc::<[u8]>::from([200, 20, 90, 128]);
+        s.import_layer_asset(
+            "Image",
+            layer_core::ProjectAsset {
+                extent: [1, 1],
+                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+                bytes: pixels.clone(),
+            },
+        )
+        .unwrap();
+        assert!(s.state.document_file.modified);
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        assert!(s.complete_document_request(id, Ok(true)).is_err());
+        let location = DocumentLocation {
+            uri: "file:///drawing.capy".into(),
+            name: "drawing.capy".into(),
+        };
+        let project = s
+            .capture_project_save(id, location.clone())
+            .unwrap()
+            .pruned()
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            &project.assets.values().next().unwrap().bytes,
+            &pixels
+        ));
+        assert!(s.capture_project_save(id, location.clone()).is_err());
+        // The writer holds its snapshot while drawing/editing continues.
+        invoke(&mut s, CommandId::AddLayer);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert_eq!(s.state.document_file.location, Some(location));
+        assert_eq!(s.state.tabs[0].title, "drawing.capy");
+        assert!(s.state.document_file.modified);
+        invoke(&mut s, CommandId::Undo);
+        assert!(!s.state.document_file.modified);
+        invoke(&mut s, CommandId::Redo);
+        assert!(s.state.document_file.modified);
+        let mut stream = Vec::new();
+        project.write(&mut stream).unwrap();
+        let decoded = layer_core::Project::read(stream.as_slice(), Default::default()).unwrap();
+        let reopened = UiSession::from_project(
+            Recorder::default(),
+            decoded,
+            s.state.document_file.location.clone(),
+            [800, 600],
+        )
+        .unwrap();
+        assert!(!reopened.state.document_file.modified);
+        assert_eq!(reopened.files.assets, project.assets);
+        assert_eq!(reopened.engine.document(), &project.document);
+    }
+
+    #[test]
+    fn in_place_new_and_open_share_unsaved_and_save_completion_policy() {
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.set_document_replacement(true);
+            invoke(&mut s, CommandId::AddLayer);
+            invoke(&mut s, CommandId::NewDocument);
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+            assert!(s.files.pending.is_none());
+            assert!(s.state.document_file.modified);
+            invoke(&mut s, CommandId::OpenDocument);
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Save).unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.capture_project_save(
+                id,
+                DocumentLocation {
+                    uri: "file:///fixture.capy".into(),
+                    name: "fixture.capy".into(),
+                },
+            )
+            .unwrap();
+            s.complete_document_request(id, Ok(true)).unwrap();
+            assert!(!s.state.document_file.modified);
+            assert!(!s.state.document_file.close_ready);
+            assert!(matches!(
+                s.state.requests.last().unwrap().kind,
+                HostRequestKind::Document {
+                    request: DocumentRequest::Open
+                }
+            ));
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.complete_document_request(id, Ok(false)).unwrap();
+            invoke(&mut s, CommandId::AddLayer);
+            invoke(&mut s, CommandId::NewDocument);
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Discard)
+                .unwrap();
+            assert!(
+                s.state.document_file.modified,
+                "The host has not replaced the document yet"
+            );
+            assert!(matches!(
+                s.state.requests.last().unwrap().kind,
+                HostRequestKind::Document {
+                    request: DocumentRequest::New
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn close_save_cancel_failure_and_concurrent_edits_never_discard_work() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        let location = DocumentLocation {
+            uri: "file:///drawing.capy".into(),
+            name: "drawing.capy".into(),
+        };
+        for outcome in [Ok(false), Err("Disk full".into())] {
+            s.request_document_close().unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Save).unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.capture_project_save(id, location.clone()).unwrap();
+            s.complete_document_request(id, outcome).unwrap();
+            assert!(s.state.document_file.modified);
+            assert!(!s.state.document_file.close_ready);
+            assert!(!s.state.document_file.busy);
+        }
+        s.request_document_close().unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+        assert!(!s.state.document_file.close_ready);
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.capture_project_save(id, location.clone()).unwrap();
+        s.request_document_close().unwrap(); // do not interrupt the write
+        invoke(&mut s, CommandId::AddLayer);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(!s.state.document_file.close_ready);
+        let id = s.files.pending.as_ref().unwrap().0;
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::Document {
+                request: DocumentRequest::ConfirmClose { .. }
+            }
+        ));
+        s.respond_document_close(id, CloseDecision::Save).unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.capture_project_save(id, location).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.state.document_file.close_ready);
+        assert!(!s.state.document_file.modified);
+    }
+
+    #[test]
+    fn file_requests_are_single_flight_and_new_open_do_not_replace_artwork() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        let document = s.engine.document().clone();
+        for command in [
+            CommandId::NewDocument,
+            CommandId::OpenDocument,
+            CommandId::ExportDocument,
+        ] {
+            invoke(&mut s, command);
+            let id = s.files.pending.as_ref().unwrap().0;
+            assert!(s.request_save(false).is_err());
+            assert!(
+                s.dispatch(UiAction::CompleteRequest { id, error: None })
+                    .is_err()
+            );
+            s.complete_document_request(id, Ok(true)).unwrap();
+            assert_eq!(s.engine.document(), &document);
+            assert!(s.state.document_file.modified);
+            assert!(s.complete_document_request(id, Ok(true)).is_err());
+        }
+        s.request_document_close().unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Discard)
+            .unwrap();
+        assert!(s.state.document_file.close_ready);
+        assert_eq!(s.engine.document(), &document);
+        assert!(new_drawing(0, 10).is_err());
+        assert!(new_drawing(10, 8193).is_err());
+        assert_eq!(new_drawing(512, 128).unwrap().document.width, 512);
+    }
+
+    #[test]
+    fn save_completion_during_a_live_stroke_defers_close_until_pen_up() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.state.requests.last().unwrap().id;
+        s.capture_project_save(
+            id,
+            DocumentLocation {
+                uri: "file:///live.capy".into(),
+                name: "live.capy".into(),
+            },
+        )
+        .unwrap();
+        s.request_document_close().unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(!s.state.document_file.close_ready);
+        assert!(s.state.requests.is_empty());
+        s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::Document {
+                request: DocumentRequest::ConfirmClose { .. }
+            }
+        ));
     }
 
     #[test]
@@ -4490,12 +4806,16 @@ mod tests {
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"
             );
-            s.dispatch(UiAction::Effect {
-                action: EffectAction::Insert {
-                    effect: "test:runtime".into(),
-                },
-            })
-            .unwrap();
+            let menu = s.application_menu(ApplicationMenu::Filter);
+            let category = menu
+                .sections
+                .iter()
+                .flatten()
+                .find(|i| i.label == "Examples")
+                .unwrap();
+            let filter = &category.sections[0][0];
+            assert_eq!(filter.label, "Runtime test");
+            s.dispatch(filter.action.clone().unwrap()).unwrap();
             assert_eq!(s.state.layer_properties.controls.len(), 2);
         }
     }
@@ -4530,6 +4850,62 @@ mod tests {
         assert!(s.renderer_mut().validation.is_none());
         assert_eq!(s.engine.document().layer(id).unwrap().effect, original);
         assert!(s.effect_catalog.get("document:custom").is_none());
+    }
+
+    #[test]
+    fn startup_filter_library_does_not_rewrite_saved_programs() {
+        use layer_core::{EffectInstallMode, EffectPackage};
+        use std::sync::Arc;
+        let mut s = session();
+        s.dispatch(UiAction::Effect {
+            action: EffectAction::Insert {
+                effect: "unsharp_mask".into(),
+            },
+        })
+        .unwrap();
+        s.frame(0, 0).unwrap();
+        let document = s.engine.document().clone();
+        let original = document
+            .layer(document.active_layer)
+            .unwrap()
+            .effect
+            .as_ref()
+            .unwrap()
+            .program
+            .clone();
+        let checkpoint = s.engine.checkpoint();
+        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        Arc::make_mut(&mut definition.program).label = "New library version".into();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: vec![definition],
+        };
+        s.load_effect_library(
+            &serde_json::to_string(&package).unwrap(),
+            |_| panic!(),
+            EffectInstallMode::Replace,
+        )
+        .unwrap();
+        assert!(
+            s.renderer_mut()
+                .validation
+                .as_ref()
+                .unwrap()
+                .namespace
+                .contains(&original)
+        );
+        s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
+            request_id: s.state.filter_load.request_id,
+            result: Ok(()),
+        });
+        s.frame(1, 1).unwrap();
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(
+            s.effect_catalog.get("unsharp_mask").unwrap().label(),
+            "New library version"
+        );
     }
 
     #[test]
@@ -6638,7 +7014,139 @@ mod tests {
     }
 
     #[test]
-    fn native_only_panel_controls_are_not_offered_to_other_hosts() {
+    fn application_menus_reuse_live_models_and_selection_commands_are_undoable() {
+        let mut app = session();
+        app.set_platform(Platform::Gtk);
+        assert_eq!(
+            ApplicationMenu::ALL.map(|m| m.label()),
+            [
+                "File", "Edit", "Layer", "Select", "Filter", "View", "Window", "Help"
+            ]
+        );
+        for menu in ApplicationMenu::ALL {
+            assert!(!app.application_menu(menu).sections.is_empty());
+        }
+        for (command, link) in [
+            (CommandId::Website, ApplicationLink::Website),
+            (CommandId::SourceCode, ApplicationLink::SourceCode),
+        ] {
+            invoke(&mut app, command);
+            let request = app.state.requests.last().unwrap();
+            assert!(
+                matches!(request.kind, HostRequestKind::OpenLink { link: actual } if actual == link)
+            );
+            app.dispatch(UiAction::CompleteRequest {
+                id: request.id,
+                error: None,
+            })
+            .unwrap();
+        }
+        let serialize = |menu: ContextMenu| serde_json::to_value(menu.sections).unwrap();
+        let doc = app.engine.document();
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Layer)),
+            serialize(app.layer_menu(doc.active_layer.0, doc.active_mask).unwrap())
+        );
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Window)),
+            serialize(app.workspace_menu())
+        );
+        let all_filters = serialize(app.application_menu(ApplicationMenu::Filter));
+        app.dispatch(UiAction::FilterPicker {
+            action: FilterPickerAction::Search {
+                query: "no such filter".into(),
+            },
+        })
+        .unwrap();
+        assert!(app.state.adjustments.is_empty());
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Filter)),
+            all_filters
+        );
+        assert!(!app.command(CommandId::FillSelection).enabled);
+        assert!(!app.command(CommandId::Deselect).enabled);
+        let saved = app.engine.checkpoint();
+        invoke(&mut app, CommandId::SelectAll);
+        assert_eq!(
+            app.engine.checkpoint(),
+            saved,
+            "selection is not saved artwork"
+        );
+        assert!(app.command(CommandId::FillSelection).enabled);
+        let all = app.engine.document().selection.clone().unwrap();
+        assert_eq!(all.contours()[0].len(), 4);
+        invoke(&mut app, CommandId::InvertSelection);
+        assert!(app.engine.document().selection.as_ref().unwrap().inverted);
+        invoke(&mut app, CommandId::Undo);
+        assert_eq!(app.engine.document().selection.as_ref(), Some(&all));
+        invoke(&mut app, CommandId::FillSelection);
+        let painted = app.engine.document().layers.clone();
+        assert!(app.engine.checkpoint() != saved);
+        invoke(&mut app, CommandId::ClearLayer);
+        assert!(
+            app.engine
+                .document()
+                .layer(app.engine.document().active_layer)
+                .unwrap()
+                .operations
+                .is_empty()
+        );
+        invoke(&mut app, CommandId::Undo);
+        assert_eq!(app.engine.document().layers, painted);
+        invoke(&mut app, CommandId::Deselect);
+        assert!(app.engine.document().selection.is_none());
+        let mask_layer = app.engine.document().active_layer.0;
+        invoke(&mut app, CommandId::SelectAll);
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: mask_layer,
+                value: true,
+            },
+        })
+        .unwrap();
+        assert!(!app.command(CommandId::ClearLayer).enabled);
+        assert!(!app.command(CommandId::FillSelection).enabled);
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: mask_layer,
+                value: false,
+            },
+        })
+        .unwrap();
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::AddMask {
+                id: mask_layer,
+                replace: false,
+            },
+        })
+        .unwrap();
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::Select {
+                id: mask_layer,
+                mask: true,
+            },
+        })
+        .unwrap();
+        assert!(!app.command(CommandId::ClearLayer).enabled);
+        let doc = app.engine.document();
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Layer)),
+            serialize(app.layer_menu(doc.active_layer.0, true).unwrap())
+        );
+        app.input_pending = true;
+        assert!(!app.command(CommandId::SelectAll).enabled);
+        assert!(
+            app.application_menu(ApplicationMenu::Filter)
+                .sections
+                .iter()
+                .flatten()
+                .flat_map(|c| c.sections.iter().flatten())
+                .all(|item| !item.enabled)
+        );
+    }
+
+    #[test]
+    fn panel_availability_is_consistent_across_controls_and_menus() {
         for platform in [
             Platform::Windows,
             Platform::Gtk,
@@ -6650,11 +7158,14 @@ mod tests {
             let mut app = session();
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
-                let available = platform == Platform::Gtk
-                    || (matches!(panel, Panel::ToolSettings | Panel::Color)
-                        && platform == Platform::Windows)
-                    || (matches!(panel, Panel::ToolSettings | Panel::Color)
-                        && matches!(platform, Platform::Ios | Platform::Mac));
+                let available = matches!(
+                    platform,
+                    Platform::Gtk
+                        | Platform::Windows
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
+                );
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
@@ -7118,7 +7629,7 @@ mod tests {
     #[test]
     fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Web, Platform::Android] {
+        for platform in [Platform::Web, Platform::Windows] {
             let mut app = session();
             app.set_platform(platform);
             let panel = Panel::Sizes;
@@ -9280,11 +9791,48 @@ mod tests {
         );
     }
     #[test]
+    fn android_drawers_and_columns_replace_legacy_popup_behavior() {
+        let mut app = session();
+        app.set_platform(Platform::Android);
+        let viewport = [1200.0, 900.0];
+        app.dispatch(UiAction::DoubleClickPanelHandle {
+            group: 5,
+            viewport,
+        })
+        .unwrap();
+        assert_eq!(app.state.workspace.layout.collapsed.len(), 1);
+        invoke(&mut app, CommandId::UndoWorkspace);
+        assert!(app.state.workspace.layout.collapsed.is_empty());
+
+        let tile = app
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .iter()
+            .find(|tile| tile.control == ToolbarControl::Color)
+            .unwrap()
+            .id;
+        for open in [true, false] {
+            app.dispatch(UiAction::ActivateTile {
+                panel: Panel::Toolbar,
+                tile,
+            })
+            .unwrap();
+            assert_eq!(app.state.customization.drawer.is_some(), open);
+            assert!(app.state.customization.control.is_none());
+        }
+        assert!(Panel::Navigator.available_on(Platform::Android));
+        assert!(!Panel::Navigator.available_on(Platform::Windows));
+    }
+
+    #[test]
     fn popup_tiles_toggle_while_explicit_open_remains_idempotent() {
         for platform in [
             Platform::Windows,
             Platform::Web,
-            Platform::Android,
             Platform::Ios,
             Platform::Mac,
         ] {

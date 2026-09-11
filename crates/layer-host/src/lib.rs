@@ -46,6 +46,7 @@ pub struct NativeHost {
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
     last_camera_revision: Option<u64>,
+    document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
 }
 
@@ -72,8 +73,18 @@ impl NativeHost {
             last_pen: None,
             last_snapshot: None,
             last_camera_revision: None,
+            document_view_revision: 0,
             last_durable_workspace: None,
         })
+    }
+    /// Invalidate host input and snapshot caches after shared document adoption.
+    pub fn document_adopted(&mut self) {
+        self.deferred_contacts.clear();
+        self.last_pen = None;
+        self.last_snapshot = None;
+        self.last_camera_revision = None;
+        self.document_view_revision = self.session.state().camera.revision;
+        self.dirty = true;
     }
     pub fn resize(&mut self, width: u32, height: u32, density: f32) -> Result<(), String> {
         if width == 0 || height == 0 || !density.is_finite() || density <= 0.0 {
@@ -291,6 +302,11 @@ impl NativeHost {
         {
             return Err("Invalid native pointer batch".into());
         }
+        if view_revision < self.document_view_revision
+            || self.session.state().document_file.close_ready
+        {
+            return Ok(());
+        }
         for sample in records.chunks_exact(9) {
             let phase = match sample[8] as u8 {
                 0 => PenPhase::Hover,
@@ -458,13 +474,52 @@ impl NativeHost {
     }
     fn snapshot(&self) -> Value {
         let layout = self.session.layout(self.logical);
-        let panels: Vec<_> = layout
+        let state = self.session.state();
+        let zen = if state.partial_zen() {
+            state.workspace.layout.zen_toolbars(self.logical)
+        } else {
+            Default::default()
+        };
+        // Drawers and partial Zen can project panels absent from the ordinary
+        // dock groups. Publish their shared views as well, without moving docks.
+        let mut panel_ids: Vec<_> = layout
             .groups
             .iter()
             .flat_map(|g| &g.panels)
-            .filter_map(|&p| self.session.panel_view(p).ok())
+            .copied()
+            .collect();
+        for panel in zen
+            .sections
+            .iter()
+            .map(|s| s.panel)
+            .chain(
+                layout
+                    .collapsed
+                    .iter()
+                    .flat_map(|c| &c.groups)
+                    .flat_map(|g| &g.icons)
+                    .map(|i| i.panel),
+            )
+            .chain(
+                state
+                    .customization
+                    .drawer
+                    .iter()
+                    .chain(&state.customization.column_drawers)
+                    .flat_map(|d| d.columns.iter().flatten())
+                    .copied(),
+            )
+        {
+            if !panel_ids.contains(&panel) {
+                panel_ids.push(panel);
+            }
+        }
+        let panels: Vec<_> = panel_ids
+            .into_iter()
+            .filter_map(|p| self.session.panel_view(p).ok())
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
+            "partial_zen": state.partial_zen(), "zen_toolbars": zen,
             "color_panel": self.session.state().colors.view(),
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
@@ -520,6 +575,22 @@ impl NativeHost {
                 item: layer_ui::DockItem,
                 #[serde(default)]
                 expansion: Option<layer_ui::PanelExpansion>,
+            },
+            Drawer {
+                column: Option<u32>,
+                heights: Vec<f32>,
+                progress: f32,
+                from: Option<layer_ui::DrawerPlacement>,
+                #[serde(default)]
+                closing: bool,
+            },
+            DrawerToolbar {
+                panel: layer_ui::Panel,
+                width: f32,
+                height: f32,
+            },
+            Navigator {
+                viewport: [f32; 2],
             },
             Expansion {
                 panel: layer_ui::Panel,
@@ -625,6 +696,65 @@ impl NativeHost {
                 self.session
                     .drop_hint(self.logical, position, &tabs, item, expansion)
             ),
+            Query::Drawer {
+                column,
+                heights,
+                progress,
+                from,
+                closing,
+            } => {
+                let state = self.session.state();
+                let drawer = match column {
+                    None => state.customization.drawer.as_ref(),
+                    Some(id) => state.customization.column_drawers.iter().find(|d|
+                        matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
+                };
+                let end = if closing {
+                    from.as_ref().map(|p| p.closed())
+                } else {
+                    drawer.and_then(|d| {
+                        state.customization.drawer_placement(
+                            d,
+                            &state.workspace.layout,
+                            self.logical,
+                            &heights,
+                            state.partial_zen(),
+                        )
+                    })
+                };
+                json!(end.map(|end| {
+                    let from = from.unwrap_or_else(|| end.closed());
+                    let placement = end.interpolate_from(&from, progress);
+                    json!({"connection": placement.connection(), "placement": placement})
+                }))
+            }
+            Query::DrawerToolbar {
+                panel,
+                width,
+                height,
+            } => {
+                if ![width, height].into_iter().all(|v| v.is_finite() && v > 0.) {
+                    return Err("Invalid drawer toolbar size".into());
+                }
+                let config = self.session.state().workspace.layout.panel(panel)?;
+                json!(layer_ui::toolbar_tile_layout(
+                    width,
+                    height,
+                    layer_ui::Axis::Vertical,
+                    config.tiles(),
+                    false,
+                    config.tile_style
+                ))
+            }
+            Query::Navigator { viewport } => {
+                let state = self.session.state();
+                let doc = self.session.engine().document();
+                json!(layer_ui::NavigatorGeometry::new(
+                    &state.camera,
+                    [doc.width, doc.height],
+                    viewport
+                ))
+            }
             Query::Expansion {
                 panel,
                 heights,
@@ -654,6 +784,98 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2880, 1800, 1.75).unwrap();
+        let mut settings = app.session.state().settings.clone();
+        settings.total_zen = false;
+        app.dispatch(UiAction::RestoreSettings { settings })
+            .unwrap();
+        let layout = app.session.state().workspace.layout.clone();
+        app.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ZenMode,
+        })
+        .unwrap();
+        let snapshot = app.take_snapshot().unwrap();
+        assert_eq!(snapshot["partial_zen"], true);
+        let sections = snapshot["zen_toolbars"]["sections"].as_array().unwrap();
+        assert!(!sections.is_empty());
+        for section in sections {
+            let panel = snapshot["panels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == section["panel"])
+                .unwrap();
+            for tile in section["tiles"].as_array().unwrap() {
+                assert!(
+                    panel["tiles"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|t| t["id"] == tile[0])
+                );
+            }
+        }
+        assert_eq!(app.session.state().workspace.layout, layout);
+        app.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ZenMode,
+        })
+        .unwrap();
+        assert_eq!(app.take_snapshot().unwrap()["partial_zen"], false);
+    }
+    #[test]
+    fn android_drawer_queries_follow_collapsed_toolbar_measurements() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2880, 1800, 1.75).unwrap();
+        let group = app
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel_group(layer_ui::Panel::Brushes)
+            .unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"move_panel", "panel":"toolbar", "target":{"kind":"tab","group":group}, "viewport":app.logical})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"set_column_collapsed","group":group,"collapsed":true}})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
+        let column = app
+            .session
+            .state()
+            .workspace
+            .layout
+            .collapsed_column_for_group(group)
+            .unwrap();
+        let tile = app
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel(layer_ui::Panel::Toolbar)
+            .unwrap()
+            .tiles()[0]
+            .id;
+        app.dispatch(serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[{"column":column,"anchor":{"panel":"toolbar","tile":tile},"bounds":{"x":80.,"y":100.,"width":36.,"height":36.}}]})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_tool_drawer","anchor":{"panel":"toolbar","tile":tile}}})).unwrap()).unwrap();
+        let query = json!({"type":"drawer","heights":[900.,200.],"progress":1.});
+        let first = app.query(query.clone()).unwrap();
+        assert_eq!(first["placement"]["anchor"]["y"], 100.);
+        assert!(first["connection"].is_object());
+        app.dispatch(serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[{"column":column,"anchor":{"panel":"toolbar","tile":tile},"bounds":{"x":80.,"y":60.,"width":36.,"height":20.}}]})).unwrap()).unwrap();
+        assert_eq!(
+            app.query(query.clone()).unwrap()["placement"]["anchor"]["height"],
+            20.
+        );
+        app.dispatch(
+            serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[]}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            app.query(query).unwrap().is_null(),
+            "A clipped-out tile has no child drawer"
+        );
+    }
     #[test]
     fn workspace_persistence_only_emits_committed_topology_changes() {
         for platform in [layer_ui::Platform::Mac, layer_ui::Platform::Ios] {

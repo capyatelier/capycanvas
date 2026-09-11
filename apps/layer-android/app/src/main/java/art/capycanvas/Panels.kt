@@ -1,7 +1,5 @@
 package art.capycanvas
 
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,17 +13,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,7 +27,7 @@ import kotlin.math.roundToInt
 
 @Composable internal fun ToolRibbon(host: CanvasHost, panel: JSONObject, geometry: JSONObject, dock: DockInteraction, modifier: Modifier, vertical: Boolean = false) {
     val density = LocalDensity.current.density
-    Box(modifier) {
+    Box(modifier.chromeRegion(dock)) {
         val style = panel.getString("tile_style")
         val tiles = panel.array("tiles").objects()
         geometry.array("tiles").objects().forEachIndexed { index, bounds ->
@@ -42,7 +36,14 @@ import kotlin.math.roundToInt
                 val kind = control.getString("kind")
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
                     ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
-                val modifier = Modifier.placed(bounds, density).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
+                if (kind == "divider") {
+                    Box(Modifier.placed(bounds, density), contentAlignment = Alignment.Center) {
+                        Box((if (vertical) Modifier.fillMaxWidth(.7f).height(1.dp) else Modifier.width(1.dp).fillMaxHeight(.7f))
+                            .background(LocalPalette.current.secondary.copy(alpha = .3f)))
+                    }
+                    return@forEachIndexed
+                }
+                val modifier = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
                     obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
                 val fill = if (kind == "color") host.snapshot?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
                         Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
@@ -76,7 +77,7 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, onHeight: (Float) -> Unit = {}) {
+@Composable internal fun PanelControls(host: CanvasHost, state: JSONObject, panel: JSONObject, modifier: Modifier = Modifier, scrollable: Boolean = true, onHeight: (Float) -> Unit = {}) {
     val layers = panel.getString("id") == "layers"
     val density = LocalDensity.current.density
     if (layers) {
@@ -88,11 +89,14 @@ import kotlin.math.roundToInt
         return
     }
     Box(modifier) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).onSizeChanged { onHeight(it.height / density) }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
+        Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onSizeChanged { onHeight(it.height / density) }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
                 when (item.getString("control")) {
-                    "brushes" -> BrushList(host, state.getJSONObject("brush"))
+                    "brushes" -> ToolSetControls(host, state)
+                    "tool_settings" -> ToolSettingsControls(host, state)
+                    "color_wheel" -> ColorPanelControls(host)
+                    "navigator" -> NavigatorPanel(host)
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))
                     }
@@ -123,28 +127,6 @@ import kotlin.math.roundToInt
                 }
             }
         }
-    }
-}
-@Composable private fun BrushList(host: CanvasHost, brush: JSONObject) {
-    val colors = LocalPalette.current
-    val context = LocalContext.current
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-      host.catalog.array("brush_categories").objects().forEach { category ->
-        Text(category.getString("label"), Modifier.padding(8.dp), color = colors.secondary, fontWeight = FontWeight.Bold)
-        category.array("brushes").objects().forEach { choice ->
-            val id = choice.getInt("id")
-            val swatch = remember(id, colors.dark) {
-                context.assets.open("$id-${if (colors.dark) "dark" else "light"}.png").use { BitmapFactory.decodeStream(it).asImageBitmap() }
-            }
-            ActionTip(host, choice.getString("label"), obj("type" to "select_brush", "id" to id), Modifier.fillMaxWidth()) {
-            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(if (brush.getInt("preset") == id) colors.active else Color.Transparent)
-                .clickable { host.dispatch(obj("type" to "select_brush", "id" to id)) }.padding(horizontal = 6.dp, vertical = 3.dp)) {
-                Image(swatch, null, Modifier.fillMaxWidth().height(40.dp).testTag("brush-preview-$id"), contentScale = ContentScale.FillBounds)
-                Text(choice.getString("label"), Modifier.fillMaxWidth(), textAlign = TextAlign.End, fontWeight = FontWeight.Bold)
-            }
-            }
-        }
-      }
     }
 }
 @Composable private fun SizePresets(host: CanvasHost, current: Float) {
@@ -207,6 +189,9 @@ import kotlin.math.roundToInt
 @Composable private fun ConfigurationControl(host: CanvasHost, state: JSONObject, control: String, label: String) {
     val brush = state.getJSONObject("brush")
     when (control) {
+        "tool_settings" -> ToolSettingsControls(host, state)
+        "color_wheel" -> ColorPanelControls(host)
+        "navigator" -> NavigatorPanel(host)
         "brush_size" -> NumericSetting(label, brush.number("diameter"), host.catalog.getJSONObject("brush_size")) {
             host.dispatch(obj("type" to "set_brush_size", "value" to it))
         }
@@ -221,7 +206,8 @@ import kotlin.math.roundToInt
                 Box(Modifier.fillMaxSize().background(Color(rgba.getDouble(0).toFloat(), rgba.getDouble(1).toFloat(), rgba.getDouble(2).toFloat()), RoundedCornerShape(4.dp)))
             }
         }
-        "brushes", "layers" -> {
+        "brushes" -> ToolSetControls(host, state)
+        "layers" -> {
             var open by remember { mutableStateOf(false) }
             val choices = if (control == "brushes") host.catalog.array("brush_categories").objects().flatMap { it.array("brushes").objects() } else state.array("layers").objects()
             val selected = if (control == "brushes") choices.find { it.getInt("id") == brush.getInt("preset") } else choices.find { it.getBoolean("selected") }

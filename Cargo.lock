@@ -916,6 +916,7 @@ dependencies = [
  "layer-ui",
  "libadwaita",
  "libc",
+ "png",
  "pollster",
  "raw-window-handle",
  "serde_json",

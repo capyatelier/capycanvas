@@ -497,3 +497,22 @@ Physical pointer/keyboard acceptance, full workspace layout parity, connected
 drawers/customization, document workflows, lifecycle/device recovery and release
 packaging remain open. The 120 Hz benchmark stays deferred. Raw traces, captures,
 profiles and diagnostic logs remain ignored and local.
+
+The merged Android drawers/Navigator, Apple document workflows and GTK
+application-menu updates pass all 316 core/engine/UI/host/Windows Rust tests.
+Capability tests now cover Android's drawers and collapsed columns explicitly;
+Windows retains its current popup and dock-handle behavior. Native fixtures read
+the shared menu title, now Window, rather than hard-coding its previous label.
+
+The merged WinUI build passes the combined Tool Settings/Color fixtures, existing
+Preferences/header and workspace checks, and all five isolated settings-storage
+launches. Both hardware D3D12 project tests pass: retained/packed upload sources
+and exact save/reopen followed by wet painting. The full renderer suite was not
+rerun for this UI checkpoint.
+
+One combined review exceeded the fixture's five-second close wait and then
+exited normally without stderr. An uncontended repeat passed, with about 4.9
+seconds elapsed for the close fixture including automation overhead. Shutdown
+cost remains a lifecycle investigation; this is not presentation or input-latency
+acceptance. All owned review processes are closed, and the existing user drawing
+window is preserved.

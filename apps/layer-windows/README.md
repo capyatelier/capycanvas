@@ -219,7 +219,7 @@ to keep formatting updates distinct from edits before close.
 
 ## Color panel checks
 
-Workspace's Color panel and the toolbar's Brush color popup project the shared
+The Window menu's Color panel and the toolbar's Brush color popup project the shared
 HSV/HLS model with native controls and GPU gradients. Pointer-region selection
 and all color edits go through Rust. The image uses Windows'
 [Direct2D gradient meshes](https://learn.microsoft.com/en-us/windows/win32/api/d2d1_3/ns-d2d1_3-d2d1_gradient_mesh_patch)
@@ -243,7 +243,7 @@ physical pointer capture, full-window visual parity or presentation performance.
 ## Tool controls checks
 
 Tool Set projects shared groups and subtools. Its Drawing tool chooser exposes
-all primary drawing commands. Workspace's Tool Settings panel uses the shared
+all primary drawing commands. The Window menu's Tool Settings panel uses the shared
 numeric schema and command state in a retained native ScrollView.
 
 Run the fixture in a fresh isolated review instance with CAPY_TRACE_UI=1 and

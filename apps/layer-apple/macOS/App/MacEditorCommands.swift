@@ -9,8 +9,14 @@ extension FocusedValues {
 }
 
 struct MacEditorCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.editorStore) private var store
     var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            if let store { CatalogMenuItems(store: store, label: "File") }
+            Divider()
+            Button("New Window") { openWindow(id: "editor") }.keyboardShortcut("n", modifiers: [.command, .shift])
+        }
         CommandGroup(replacing: .undoRedo) {
             if let store { CatalogMenuItems(store: store, label: "Edit") }
         }

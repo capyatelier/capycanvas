@@ -51,7 +51,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
-private suspend fun CanvasHost.awaitQuery(query: JSONObject): JSONObject? = suspendCancellableCoroutine { continuation ->
+internal suspend fun CanvasHost.awaitQuery(query: JSONObject): JSONObject? = suspendCancellableCoroutine { continuation ->
     query(query) { if (continuation.isActive) continuation.resume(it as? JSONObject) }
 }
 internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offset {
@@ -154,7 +154,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val density = LocalDensity.current.density
     val dock = remember(host) { DockInteraction(host) }
     dock.density = density
-    dock.enabled = snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
+    dock.enabled = snapshot?.optBoolean("partial_zen") != true && snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
     val panels = snapshot?.array("panels")?.objects()?.associateBy { it.getString("id") } ?: emptyMap()
     val state = snapshot?.getJSONObject("state")
     val expanded = state?.getJSONObject("customization")?.opt("expanded")?.takeIf { it != JSONObject.NULL } as? String
@@ -208,6 +208,9 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                 ZenButton(host, state, dock, hidden)
             }
             val layout = snapshot.getJSONObject("layout")
+            if (snapshot.optBoolean("partial_zen")) ZenToolbars(host, snapshot, panels, dock)
+            if (!hidden) CollapsedColumns(host, snapshot, panels, dock)
+            ContentDrawers(host, snapshot, panels, dock)
             layout.array("groups").objects().filter { !hidden || (it.optBoolean("floating") && !snapshot.optBoolean("hide_floating_panels")) }
                 .sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEachIndexed { index, group ->
                 key(group.getInt("id")) {
@@ -218,7 +221,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     val bounds = expansion?.getJSONObject("bounds") ?: shown
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
                         ?.let { expandedShape(it, density) } ?: RoundedCornerShape(8.dp)
-                    Box(Modifier.placed(bounds, density).zIndex(100f + index).testTag("group-${group.getInt("id")}")
+                    Box(Modifier.placed(bounds, density).zIndex(100f + index).testTag("group-${group.getInt("id")}").chromeRegion(dock)
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)

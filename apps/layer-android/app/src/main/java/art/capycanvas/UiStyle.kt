@@ -198,9 +198,9 @@ internal val LocalCanvasHost = staticCompositionLocalOf<CanvasHost> { error("Mis
 }
 
 @Composable internal fun EditorCheck(checked: Boolean, label: String, modifier: Modifier = Modifier,
-    onChange: (Boolean) -> Unit) {
+    enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     val colors = LocalPalette.current
-    Box(modifier.size(22.dp, 28.dp).toggleable(checked, role = Role.Checkbox, onValueChange = onChange)
+    Box(modifier.size(22.dp, 28.dp).toggleable(checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChange)
         .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Box(Modifier.size(16.dp).clip(RoundedCornerShape(4.dp))
             .then(if (checked) Modifier.background(colors.accent) else Modifier.border(2.dp, colors.text.copy(alpha = .35f), RoundedCornerShape(4.dp)))) {

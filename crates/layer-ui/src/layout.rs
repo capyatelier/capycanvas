@@ -420,6 +420,11 @@ impl Panel {
         if matches!(self, Self::ToolSettings | Self::Color) && platform == crate::Platform::Windows {
             return true;
         }
+        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
+            && platform == crate::Platform::Android
+        {
+            return true;
+        }
         if matches!(self, Self::ToolSettings | Self::Color)
             && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
         {

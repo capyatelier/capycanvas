@@ -481,6 +481,51 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
     string(&mut env, result)
 }
 
+/// One bounded preview shared by all native Navigator projections.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_navigatorPreview(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    now: jlong,
+    visible: jboolean,
+) -> jni::sys::jobjectArray {
+    let result = (|| {
+        let host = &mut unsafe { app(handle) }.host;
+        if let Some(gpu) = &host.session.renderer_mut().0 {
+            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
+        } else {
+            return Ok(std::ptr::null_mut());
+        }
+        let Some(image) = host.session.poll_navigator_preview(
+            now.max(0) as u64,
+            visible != 0 && host.startup.canvas_ready && !host.dirty,
+        )?
+        else {
+            return Ok(std::ptr::null_mut());
+        };
+        let values = env
+            .new_object_array(2, "java/lang/Object", JObject::null())
+            .map_err(error)?;
+        let header = env
+            .new_string(serde_json::json!([image.width, image.height]).to_string())
+            .map_err(error)?;
+        let pixels = env.byte_array_from_slice(&image.bytes).map_err(error)?;
+        env.set_object_array_element(&values, 0, header)
+            .map_err(error)?;
+        env.set_object_array_element(&values, 1, pixels)
+            .map_err(error)?;
+        Ok(values.into_raw())
+    })();
+    match result {
+        Ok(value) => value,
+        Err(e) => {
+            fail(&mut env, Err(e));
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// One small metadata record and one packed RGBA array, not JSON per channel.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
@@ -561,5 +606,29 @@ pub extern "system" fn Java_art_capycanvas_Native_number(
         .and_then(|s| serde_json::from_str::<layer_ui::NumericRequest>(&s).map_err(error))
         .and_then(|request| request.resolve())
         .and_then(|value| serde_json::to_string(&value).map_err(error));
+    string(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_colorWheelHit(
+    mut env: JNIEnv,
+    _: JClass,
+    request: JString,
+) -> jstring {
+    #[derive(serde::Deserialize)]
+    struct Hit {
+        size: f32,
+        point: [f32; 2],
+        space: layer_ui::ColorSpace,
+    }
+    let result = read(&mut env, &request)
+        .and_then(|s| serde_json::from_str::<Hit>(&s).map_err(error))
+        .and_then(|hit| {
+            serde_json::to_string(
+                &layer_ui::ColorWheelGeometry::new(hit.size)
+                    .and_then(|geometry| geometry.hit(hit.point, hit.space)),
+            )
+            .map_err(error)
+        });
     string(&mut env, result)
 }

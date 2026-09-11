@@ -18,6 +18,21 @@ impl CanvasRenderer for Renderer {
     ) -> Result<(), Self::Error> {
         self.gpu()?.set_transform_preview(preview)
     }
+    fn request_canvas_preview(&mut self, revision: Option<u64>) -> Result<bool, Self::Error> {
+        self.gpu()?.request_canvas_preview(revision)
+    }
+    fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
+        self.0.as_mut()?.take_canvas_preview()
+    }
+    fn request_color_sample(
+        &mut self,
+        request: layer_render::ColorSampleRequest,
+    ) -> Result<bool, Self::Error> {
+        self.gpu()?.request_color_sample(request)
+    }
+    fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
+        self.0.as_mut()?.take_color_sample()
+    }
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,
@@ -83,6 +98,13 @@ impl CanvasRenderer for Renderer {
     }
     fn prepare_asset(&mut self, id: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
         self.gpu()?.prepare_asset(id, image)
+    }
+    fn prepare_owned_asset(
+        &mut self,
+        id: &AssetId,
+        asset: &layer_core::ProjectAsset,
+    ) -> Result<(), Self::Error> {
+        self.gpu()?.prepare_owned_asset(id, asset)
     }
     fn source_asset(&self, id: &AssetId) -> Option<layer_core::ProjectAsset> {
         self.0.as_ref()?.source_asset(id)
