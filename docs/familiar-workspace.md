@@ -5,6 +5,37 @@ tool set, panel layout and interactions below must work before the GTK review.
 Web/Android-specific presentation is not part of this approval milestone; shared
 models and behavior must remain portable.
 
+## Current GTK review checkpoint
+
+The integrated feature audit on 2026-09-11 passes the following native scenarios
+from `apps/layer-linux/src/tests.rs`. Older progress/remaining-work entries below
+are historical; this checkpoint and the current requirements take precedence.
+
+| Requirement | Current verification |
+| --- | --- |
+| Default columns, both ribbons, all 17 tool tiles, compact layout | `native_default_workspace` |
+| Tool families, subgroup memory, shortcuts, dynamic settings, three-tile minimum | `native_tool_families`, `native_tool_and_color_panels`, shared UI tests |
+| HSV/HLS wheel, components, foreground/background/transparent, swap | `native_tool_and_color_panels`, `native_default_workspace`, shared color tests |
+| Navigator, camera drag/rotation/flips, live Diagnostics | `native_navigator`, `native_navigation_tools`, `native_tool_drawers` |
+| Connected selection/fill, reference layers, selection-constrained brushes, gradients | `native_connected_tools`, `native_selected_brushes`, `native_gradient_tool`, GPU oracle tests |
+| Operation/linked masks, figures, editable/snapping rulers | `native_operation_tool`, `native_figure_tools`, `native_ruler_tools`, engine/GPU tests |
+| Connected tool drawers, nested drawers, collapsed-column movement/resize | `native_tool_drawers`, `native_nested_tool_drawers`, `native_collapsed_columns`, `native_collapsed_drop_and_resize` |
+| Partial/total Zen, eight menus, document files, workspace restore, native fullscreen | `native_zen_behaviors`, `native_menu_sections`, `native_document_files`, `native_workspace_restore`, `native_fullscreen_header_clock_and_battery` |
+
+All 20 integrated GTK scenarios pass, plus 298 core/engine/UI unit tests and
+117 hardware renderer tests (17 benchmarks separately ignored). The Navigator
+contrast correction found during visual inspection has its own failing-before,
+passing-after GPU regression. Strict GTK/renderer Clippy, the WebAssembly build
+check and the normal GTK release build pass. Updated dark/light review captures
+are in ignored `artifacts/familiar-workspace/`; default-layout captures are in
+its `default/` subdirectory. Targeted tests also render representative custom
+workspaces, which should not be mistaken for the shipped default.
+
+**Not complete:** human GTK approval, residual transform/presentation stalls,
+and the separately tracked strict Metal/D3D12 filter-pixel parity investigation.
+This audit does not claim physical stylus latency or new native-device testing
+on other platforms. The corrected native event-wait measurements are below.
+
 ## Required layout
 
 - Left edge: Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend, Liquify;
@@ -1927,6 +1958,12 @@ the resulting GTK appearance remains subject to human review.
 
 ### Active presentation phase and driver-stall investigation
 
+The historical synthetic sweeps in this section used a polling/sleeping test
+loop. See **Native event-wait correction** below for the corrected harness;
+do not pool their timer-lateness statistics or infer production event-loop
+delay from the old polling results. Separately captured native input and driver
+traces are not changed by this correction.
+
 - The test-only timing report now separates elapsed stage times from actual
   worker-thread CPU time (`CLOCK_THREAD_CPUTIME_ID`). Acquire, composition,
   encoding, submission, feedback and presentation can be correlated by frame
@@ -2333,3 +2370,81 @@ the resulting GTK appearance remains subject to human review.
   passes 115 tests (17 separately ignored benchmarks); strict GTK/renderer Clippy,
   the WebAssembly check and the normal GTK release build also pass. This validates
   the shared WGSL change on Vulkan, not a new Metal/D3D12/device-parity claim.
+
+### Native event-wait correction
+
+- The synthetic pacing harness previously slept GTK's main thread for 1ms
+  between event polls. That delays otherwise ready frame timers; the application
+  itself uses GLib's native wait. The harness now uses one recurring 2ms input
+  source and blocking main-context iteration, allowing frame, GDK and worker
+  events to wake it immediately. This changes the test, not production input or
+  rendering. Input remains synthetic and does not measure physical pen latency.
+- Whole-dispatch measurements now use thread CPU time, excluding the native
+  wait. Reports name this separately from the old elapsed dispatch measurement,
+  record actual synthetic input frequency, and the summarizer separates the
+  two harness versions. GPU queries remain independently optional.
+- Serial query-free full-workspace sweeps compare the existing 3/4-refresh lead
+  with a temporary 7/8 lead and then repeat the baseline. Each runs all seven
+  six-second workloads; transforms retain the preceding wet artwork. Native
+  event waiting reduces timer-lateness p99 from about 1ms to .019–.030ms in the
+  baseline runs. Input delivery is 480–487Hz, with input CPU p99 .026–.054ms.
+
+| Measurement | Baseline | Earlier scheduling | Baseline repeat |
+| --- | --- | --- | --- |
+| Pan presentation Hz | 120.009 | 120.003 | 120.008 |
+| Transform presentation Hz / discarded | 118.673 / 9 | 118.003 / 13 | 117.510 / 15 |
+| Transform CPU median/p95/p99 ms | 1.445/2.193/2.450 | 1.373/2.225/2.698 | 1.406/2.248/2.532 |
+| Transform enqueue-to-presentation median/p95/p99 ms | 5.892/6.146/6.223 | 7.224/7.425/7.858 | 6.101/6.335/9.619 |
+
+- Earlier scheduling does not demonstrate a consistent improvement and adds
+  roughly 1ms of nominal latency. The override is removed; the existing clock
+  policy and its phase/refresh tests remain unchanged. Correcting the harness
+  improves the evidence, **not** the application's performance. Residual transform
+  misses and occasional driver stalls remain open.
+- A separate private Vulkan trace distinguishes submission-to-GPU waiting from
+  execution: missed transform frames commonly wait longer to start, rather than
+  simply executing an expensive shader. Profiling overhead prevents treating
+  those spans as the unprofiled baseline or proving the cause of the wait.
+  Batch-mode GPU timestamps were inconsistent with presentation and rejected;
+  individual-workload tracing gave plausible spans. GTK and canvas used the same
+  GPU. No GPU-affinity change, clock override, alternate backend or dependency
+  patch is retained. Machine-identifying traces stay outside the repository.
+- The rebuilt, override-free harness also passes a GPU-timed sweep. Pan delivers
+  119.999Hz with CPU/GPU p99 .588/.466ms. Transforms deliver 116.843Hz with
+  CPU/GPU-span p99 2.501/5.755ms and 21 discarded frames. The G-Pen and watercolor
+  runs retain 17.785ms and 15.525ms worker outliers. GPU query submissions affect
+  scheduling; these are separate results, not pooled with the query-free table.
+  Four corrected native sweeps, the unchanged clock regression, report-generation
+  separation checks and strict GTK Clippy pass. No production latency fix is
+  claimed from this test-only correction.
+
+### Integrated GTK visual audit: Navigator contrast
+
+- The previous shader put a white surround behind the theme's outline color.
+  In dark UI the outline is also light, making the work-area rectangle disappear
+  against white artwork. A new hardware pixel test reproduces the all-white
+  result before the fix; it now passes black/white artwork and outline colors,
+  1×/2× display scales, and both explicit/hardware sRGB output paths.
+- The shared WGSL chooses the more contrasting black or white surround from
+  outline luminance in the vertex stage. No host-specific behavior, extra render
+  pass, texture, readback or change to the image interior is introduced. The
+  existing tests also preserve scrolling clips, window coverage, opacity,
+  rotated/flipped camera geometry and live overview updates. Updated GTK
+  Navigator captures show the complete rectangle over both paper and paint.
+- Serial 2048×1536 viewport measurements below are total presentation GPU
+  median/p95/p99 milliseconds, not isolated outline costs. The two changed runs
+  retain the same medians; tails fluctuate rather than showing a consistent
+  regression. CPU medians remain .008–.010ms for these cases.
+
+| Overview case | Before | After | After repeat |
+| --- | --- | --- | --- |
+| Default | .036/.038/.038 | .036/.088/.109 | .036/.037/.037 |
+| Two larger overviews | .045/.047/.048 | .045/.047/.048 | .045/.047/.060 |
+| Panning | .043/.051/.068 | .043/.044/.046 | .043/.080/.087 |
+
+The complete GPU suite and integrated GTK workflow audit pass. Navigator and
+the complete default-workspace tests were rerun after the shader change.
+Representative default, compact, three-tile, color, gradient, figure, mask-transform,
+Navigator, collapsed-column and Zen captures were inspected across both themes. Human
+design approval and the separate remaining performance/parity gates are still
+required; this is a consolidated review milestone, not final goal completion.

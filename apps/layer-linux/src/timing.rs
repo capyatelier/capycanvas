@@ -45,12 +45,12 @@ pub struct Timing {
     stages: std::cell::Cell<[[f64; 2]; 4]>,
 }
 
-fn thread_cpu_ms() -> f64 {
+pub fn thread_cpu_ms() -> f64 {
     let mut time = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // Test-only Linux worker instrumentation; no process-wide CPU counters.
+    // Test-only Linux thread instrumentation; no process-wide CPU counters.
     assert_eq!(
         unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
         0

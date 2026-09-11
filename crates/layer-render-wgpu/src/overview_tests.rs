@@ -33,6 +33,49 @@ fn pixel(bytes: &[u8], x: usize, y: usize) -> &[u8] {
 }
 
 #[test]
+fn overview_outline_remains_visible_on_light_and_dark_artwork_in_both_themes() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layers = [Layer::paint(LayerId(1), "outline contrast")];
+    submit(&mut r, &layers, &[], &[], true);
+    for format in [
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    ] {
+        let output = target(&r, [128, 128], format);
+        let surface = output.create_view(&Default::default());
+        let mut presenter = ViewportPresenter::for_renderer(&r, format);
+        for scale in [1., 2.] {
+            for background in [0., 1.] {
+                for outline in [0., 1.] {
+                    presenter.set_overviews(
+                        &r,
+                        &[OverviewPlacement {
+                            outline_linear: [outline; 3],
+                            background_linear: [background; 3],
+                            scale,
+                            ..placement()
+                        }],
+                    );
+                    presenter.present(&r, &surface, view(), [0.; 4]);
+                    let bytes = page_bytes(&r, &output);
+                    let edge: Vec<_> = (13..24).map(|x| pixel(&bytes, x, 32)[0]).collect();
+                    assert!(
+                        *edge.iter().min().unwrap() < 210 && *edge.iter().max().unwrap() > 160,
+                        "{format:?}, scale={scale}, background={background}, outline={outline}: {edge:?}"
+                    );
+                    let background_byte = background as u8 * 255;
+                    assert_eq!(
+                        pixel(&bytes, 32, 32),
+                        [background_byte, background_byte, background_byte, 255],
+                        "outline must not alter the image interior"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn overview_presents_transparency_live_paint_and_camera_without_image_exports() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let layers = [Layer::paint(LayerId(1), "overview")];
