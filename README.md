@@ -34,49 +34,54 @@ happen locally on your device, and the code is licensed under MIT or Apache-2.0.
 
 ## Overall architecture
 
-The application has three main parts. The shared Rust editor owns the document,
-interprets input and manages tools, commands and UI state. The GPU renderer draws
-brush marks and combines layers into the visible image. A platform client supplies
-widgets, collects input and presents that image in a native window or browser.
+When designing Capy Canvas, we did not want to compromise on UI responsiveness.
+Controls and pen input need to stay responsive while the drawing engine handles
+large brushes and complex layers, on every supported platform.
+
+We use each platform's own UI toolkit: GTK4/libadwaita on Linux, WinUI 3 on
+Windows, Jetpack Compose on Android, AppKit on macOS and UIKit on iPadOS. This
+gives each native client direct access to the platform's controls and input
+system. The web client uses browser controls. The drawing code must also work
+across Vulkan, Metal, Direct3D 12 and WebGPU.
+
+As a result, the app separates platform integration from a shared Rust editor
+and renderer. The platform client collects pen samples and sends tool commands
+to the editor. The editor manages the document and UI state on the CPU, applies
+edits and calculates brush placement. The renderer uses `wgpu`, a Rust
+graphics library that translates shared shaders and rendering commands to each
+platform's GPU API. Every client uses the same brush and compositing engines.
 
 ```text
 Platform client: native widgets or browser controls
-    │ tool commands and pen samples
-    ▼
+    | pen samples and tool commands
+    v
 Shared Rust editor
-    ├── document, layers and undo/redo
-    ├── tools, brush dynamics and stroke placement
-    └── workspace, preferences and command state
-    │ incremental drawing work
-    ▼
-Shared wgpu renderer
-    ├── brush rasterization into GPU textures
-    └── layer composition and canvas presentation
-    │
-    ▼
-GPU API: Vulkan / Metal / D3D12 / WebGPU
-    │
-    ▼
-Native window or browser canvas
+    +-- document, tools, undo/redo and UI state
+    +-- brush dynamics and stroke placement
+    | incremental drawing work
+    v
+Shared renderer (wgpu)
+    +-- GPU brushes, filters and layer composition
+    |
+    v
+Vulkan / Metal / Direct3D 12 / WebGPU
+    |
+    v
+Native drawing surface or browser canvas
 ```
 
-The CPU handles the ordered work: interpreting pen samples, placing brush marks
-and applying document edits. The GPU evaluates and combines the pixels. The
-renderer uses `wgpu`, a Rust graphics library that targets each platform's GPU
-API, so the native clients and browser use the same brush and composition code.
-Painting requires a hardware GPU; there is no CPU painting fallback.
+This separation also lets input handling and drawing follow different schedules.
+Native clients keep GPU waits off the UI thread, so controls and pen input can
+continue while the previous frame is rendering. The browser schedules drawing
+through animation callbacks. Each update batches new brush marks and recomputes
+changed regions, reusing the rest of the image.
 
-The drawing path is designed for high refresh rates, including 120 Hz displays.
-Input collection does not wait for the GPU, and each drawing update batches new
-brush marks into a render packet. The renderer retains its textures between
-frames and updates affected regions. Moving the view can reuse the rendered
-canvas instead of repainting the document. Native hosts keep GPU waits off their
-UI threads; the browser schedules work through its animation callbacks. Actual
-latency depends on the device, driver, brush and document; the
-[testing guide](docs/development/testing.md#performance) explains how it is measured.
+The drawing path targets high refresh rates, including 120 Hz displays, and
+requires a hardware GPU. The [performance guide](docs/development/testing.md#performance)
+explains how to measure frame time and input-to-display latency on a given device.
 
-See [architecture and frame flow](docs/architecture.md) for ownership boundaries
-and the path from a pen event to a displayed stroke.
+See [architecture and frame flow](docs/architecture.md) for the responsibilities
+of each component and the path from a pen event to a displayed stroke.
 
 ## Package layout
 
