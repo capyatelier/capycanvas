@@ -390,7 +390,8 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                         val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id))
                             .onGloballyPositioned { coords ->
                                 val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
-                                dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index,
+                                // Contact handling needs the panel ID as well as the drop-target geometry.
+                                dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
                                     "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
                             }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier).zIndex(if (selected) 1f else 0f)
                             .drawBehind {

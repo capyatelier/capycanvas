@@ -252,6 +252,50 @@ class AndroidFeatureParityTest {
         compose.onNodeWithTag("color-wheel").assertIsDisplayed()
         capture("full-editor-preset")
     }
+    @Test fun resetLayoutKeepsTabDraggingDockingAndSelectionUsable() {
+        fun group(panel: String) = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+            .first { it.array("panels").values().contains(panel) }
+        fun drag(tag: String, target: Offset) {
+            val source = compose.onNodeWithTag(tag)
+            val origin = source.fetchSemanticsNode().boundsInRoot.topLeft
+            source.performTouchInput { swipe(center, target - origin, 700) }
+        }
+        // Cover both an existing saved workspace and the new editor preset.
+        for (workspace in listOf(savedWorkspace, defaultWorkspace)) {
+            val input = JSONObject(workspace.toString()).put("zen_mode", false)
+            // Reset preserves tab appearance. Exercise a visible tab even if
+            // the saved workspace previously floated or explicitly hid it.
+            input.getJSONObject("layout").array("panels").objects().first { it.getString("id") == "tool_settings" }.put("hide_tab", false)
+            action(obj("type" to "restore_workspace", "workspace" to input))
+            val oldGroup = group("tool_settings").getInt("id")
+            compose.onNodeWithTag("application-menu-view").performClick()
+            compose.onNodeWithText("Reset layout").performClick()
+            // Closing the native menu precedes the worker applying Reset.
+            compose.waitUntil(10_000) { group("tool_settings").getInt("id") != oldGroup }
+            shown("tab-tool_settings")
+            assertFalse(group("tool_settings").getBoolean("floating"))
+            val canvas = compose.onNodeWithTag("workspace").fetchSemanticsNode().boundsInRoot
+            // Inject a real contact/drag on the tab, including native chrome
+            // hit-testing; a semantics-only click bypasses the faulty path.
+            drag("tab-tool_settings", canvas.center)
+            compose.waitUntil(10_000) { host.actionError != null || group("tool_settings").getBoolean("floating") }
+            assertNull(host.actionError)
+            assertTrue(group("tool_settings").getBoolean("floating"))
+            val grip = "group-grip-${group("tool_settings").getInt("id")}"
+            drag(grip, compose.onNodeWithTag("tab-layers").fetchSemanticsNode().boundsInRoot.center)
+            compose.waitUntil(10_000) { host.actionError != null || group("layers").array("panels").values().contains("tool_settings") }
+            assertNull(host.actionError)
+            assertTrue(group("layers").array("panels").values().contains("tool_settings"))
+            for (panel in listOf("layers", "tool_settings")) {
+                compose.onNodeWithTag("tab-$panel").performTouchInput { click() }
+                compose.waitUntil(10_000) { host.actionError != null || group(panel).getString("active") == panel }
+                assertNull(host.actionError)
+                assertEquals(panel, group(panel).getString("active"))
+            }
+            assertNull(host.failure)
+        }
+        capture("reset-layout-tab-drag")
+    }
     private fun newSmallDocument() {
         action(obj("type" to "invoke", "command" to "new_document"))
         shown("new-document-width")
