@@ -258,3 +258,28 @@ retention, draft contexts, gradient and figure subtools, ruler toggles and
 transform cancellation. It leaves Tool Settings visible, allowing the Color
 fixture to additionally test a narrow fractional-width allocation. These checks
 do not establish physical input, full-editor parity or presentation acceptance.
+
+## Document transport checkpoint
+
+The Windows host has a bounded document worker for source-project saving and
+background New/Open preparation. The worker writes a flushed sibling temporary
+file before atomic replacement, validates decoded project limits, prepares a
+separate renderer on the same D3D12 device, and retires replaced GPU resources
+off the canvas owner. Shared checkpoints and document generations protect newer
+edits during save, open and close decisions.
+
+The typed capy_document_action entry is ready for the native dialog presenter.
+File menu actions, pickers, the New drawing dialog, unsaved-close interception
+and PNG export are still pending in the Windows UI.
+
+~~~powershell
+cargo test --locked -p layer-windows --lib
+$env:LAYER_GPU_INDEX='<hardware-D3D12-adapter-index>'
+cargo test --locked -p layer-windows documents::gpu_tests::d3d12_background_save_open_new_and_stale_adoption -- --ignored --exact
+~~~
+
+The explicit GPU test asserts hardware D3D12, saves retained source pixels,
+creates a new document, reopens with exact pixels, and rejects corrupt files,
+invalid sizes and stale adoption. It drives the old renderer while the worker
+prepares the candidate. This is functional coverage, not frame-cadence or input
+latency acceptance. Local test files and reports are not committed.

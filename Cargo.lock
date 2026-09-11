@@ -990,6 +990,7 @@ dependencies = [
  "layer-render-wgpu",
  "layer-ui",
  "pollster",
+ "serde",
  "serde_json",
  "wgpu",
  "windows",

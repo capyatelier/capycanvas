@@ -53,6 +53,7 @@ pub struct CapyHost {
     scale: f32,
     blank_presented: bool,
     services: Option<crate::settings::SettingsService>,
+    documents: Option<crate::documents::DocumentService>,
 }
 impl CapyHost {
     unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32) -> Result<Self, String> {
@@ -60,6 +61,7 @@ impl CapyHost {
             return Err("Invalid Windows canvas surface".into());
         }
         let mut native = NativeHost::new(layer_ui::Platform::Windows)?;
+        native.session.set_document_replacement(true);
         native.startup = Default::default();
         native.resize(width, height, scale)?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -87,10 +89,14 @@ impl CapyHost {
             scale,
             blank_presented: false,
             services: None,
+            documents: None,
         })
     }
 
     fn poll_services(&mut self) -> Result<(), String> {
+        if let Some(service) = self.documents.as_mut() {
+            service.poll(&mut self.native)?;
+        }
         if let Some(service) = self.services.as_mut() {
             service.poll(&mut self.native)?;
         }
@@ -210,6 +216,14 @@ pub unsafe extern "C" fn capy_start_services(
     wake: Option<extern "C" fn(*mut c_void)>,
 ) -> i32 {
     guard(host, |host| {
+        if host.documents.is_none() {
+            let context = context as usize;
+            host.documents = Some(crate::documents::DocumentService::open(move || {
+                if let Some(wake) = wake {
+                    wake(context as *mut c_void);
+                }
+            })?);
+        }
         if host.services.is_none() {
             let context = context as usize;
             host.services = Some(crate::settings::SettingsService::open(
@@ -239,8 +253,14 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
     };
     // Cleanup must join the storage callback even when another host operation
     // poisoned the renderer. Do not dispatch more actions into a poisoned host.
+    let documents = catch_unwind(AssertUnwindSafe(|| {
+        host.documents
+            .as_mut()
+            .map_or(Ok(()), |service| service.stop_worker())
+    }))
+    .unwrap_or_else(|_| Err("Document shutdown failed".into()));
     match catch_unwind(AssertUnwindSafe(|| {
-        if let Some(service) = host.services.as_mut() {
+        let settings = if let Some(service) = host.services.as_mut() {
             if host.poisoned {
                 service.stop_worker()
             } else {
@@ -248,7 +268,8 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
             }
         } else {
             Ok(())
-        }
+        };
+        documents.and(settings)
     })) {
         Ok(Ok(())) => 0,
         Ok(Err(error)) => {
@@ -341,6 +362,23 @@ pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -
         if let Err(error) = host.native.dispatch(action) {
             fail(error);
             return Ok(1); // A valid action can be unavailable in the current state.
+        }
+        host.poll_services()?;
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const c_char) -> i32 {
+    guard(host, |host| {
+        let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        let result = host
+            .documents
+            .as_mut()
+            .ok_or("Document service is unavailable")?
+            .dispatch(&mut host.native, action);
+        if let Err(error) = result {
+            fail(error);
+            return Ok(1);
         }
         host.poll_services()?;
         Ok(0)

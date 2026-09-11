@@ -516,3 +516,31 @@ seconds elapsed for the close fixture including automation overhead. Shutdown
 cost remains a lifecycle investigation; this is not presentation or input-latency
 acceptance. All owned review processes are closed, and the existing user drawing
 window is preserved.
+
+### Windows document transport checkpoint
+
+A dedicated document worker now captures immutable source-project saves through
+the shared checkpoint policy. Compression, bounded project reading, atomic file
+replacement and isolated GPU preparation run outside the live canvas owner.
+The worker uses the same device and queue as the active renderer; only a fully
+prepared candidate can replace the document. Retired and rejected candidate
+resources return to the worker for destruction.
+
+Dialog responses carry shared request IDs. Open/New and unsaved approvals also
+carry the displayed document generation and revision. Intervening changes reject
+replacement or close, while an older completed save leaves newer edits dirty.
+Cancellation and file failures retire the request without acknowledging a save.
+The dedicated FFI entry leaves the existing action/input decode path unchanged.
+
+Validation passes 20 Windows adapter tests and one explicitly selected hardware
+D3D12 test. The GPU fixture saves an imported source image, creates a new drawing,
+reopens with exact pixels, preserves the live document after corrupt input and
+invalid dimensions, and rejects a candidate after a newer edit. It also drives
+the live renderer during candidate preparation. The WinUI build succeeds; all
+five isolated settings-storage launches pass, including drawing after a storage
+failure and normal shutdown with both workers.
+
+This checkpoint provides the transport for the forthcoming native dialogs.
+Windows File-menu commands, New/Open/Save dialogs, unsaved window-close handling
+and PNG export remain to be connected and tested. Full workspace/input/lifecycle
+and release acceptance also remain open. No 120 Hz probe was resumed.

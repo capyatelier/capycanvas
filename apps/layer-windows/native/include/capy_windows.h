@@ -37,6 +37,9 @@ __declspec(dllimport) int32_t capy_resize(CapyHost*, uint32_t width, uint32_t he
 __declspec(dllimport) int32_t capy_pointer(CapyHost*, const CapyPointer*, size_t count);
 /* 1=action rejected (capy_error explains); the host remains usable. -1=fatal. */
 __declspec(dllimport) int32_t capy_action(CapyHost*, const char* json);
+/* Typed document dialog responses, queued to the same render owner as actions.
+   capy_finish_services cancels outstanding document work and joins its callback. */
+__declspec(dllimport) int32_t capy_document_action(CapyHost*, const char* json);
 __declspec(dllimport) int32_t capy_input(CapyHost*, const char* json);
 /* Physical anchor, logical wheel deltas, current composition density. */
 __declspec(dllimport) int32_t capy_scroll(CapyHost*, float x, float y, float dx, float dy, float density, bool zoom, bool horizontal);

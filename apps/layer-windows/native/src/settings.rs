@@ -124,7 +124,7 @@ fn reserve(directory: &Path, kind: &str) -> Result<(PathBuf, File), String> {
     Err("Could not reserve a preferences file.".into())
 }
 #[cfg(target_os = "windows")]
-fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::{
         Win32::Storage::FileSystem::{
@@ -148,7 +148,7 @@ fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))
 }
 #[cfg(not(target_os = "windows"))]
-fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::rename(source, destination)
 }
 fn encode(settings: &Settings) -> Result<Vec<u8>, String> {
