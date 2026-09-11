@@ -20,41 +20,24 @@ struct PanelControls: View {
     }
     @ViewBuilder private func control(_ item: JSON) -> some View {
         switch item["control"].string {
-        case "brushes": brushes
+        case "brushes": ToolSetControls(store: store)
+        case "tool_settings": ToolSettingsControls(store: store)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes
         case "brush_color":
             ForEach(0..<3, id: \.self) { component in
-                NumberControl(store: store, label: ["Red", "Green", "Blue"][component], value: store.state["brush"]["color"][component].number, control: store.catalog["opacity"]) { value in
+                NumberControl(store: store, label: ["Red", "Green", "Blue"][component], value: store.state["brush"]["color"][component].number, control: store.catalog["opacity"]) { value, completion in
                     var rgba = store.state["brush"]["color"].array.map(\.number); rgba[component] = value
-                    store.dispatch(["type": "set_color", "rgba": rgba])
+                    store.edit(["type": "set_color", "rgba": rgba], completion: completion)
                 }
             }
         default: Text(item["label"].string).fontWeight(.bold)
         }
     }
     private func number(_ label: String, key: String, spec: String, action: String) -> some View {
-        NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) {
-            store.dispatch(["type": action, "value": $0])
-        }
-    }
-    private var brushes: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(store.catalog["brush_categories"].array.indices, id: \.self) { categoryIndex in
-                let category = store.catalog["brush_categories"][categoryIndex]
-                Text(category["label"].string).fontWeight(.bold).opacity(0.55).padding(8)
-                ForEach(category["brushes"].array.indices, id: \.self) { index in
-                    let brush = category["brushes"][index]
-                    Button { store.dispatch(["type": "select_brush", "id": brush["id"].raw]) } label: {
-                        VStack(alignment: .trailing, spacing: 0) {
-                            Image("preview-\(brush["id"].uint)-\(store.state["theme"].string)").resizable().frame(height: 40)
-                            Text(brush["label"].string).fontWeight(.bold)
-                        }.padding(.horizontal, 6).padding(.vertical, 3).frame(maxWidth: .infinity)
-                            .background(brush["id"].uint == store.state["brush"]["preset"].uint ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-                    }.buttonStyle(.plain).accessibilityIdentifier("brush-\(brush["id"].uint)")
-                }
-            }
+        NumberControl(store: store, label: label, value: store.state["brush"][key].number, control: store.catalog[spec]) { value, completion in
+            store.edit(["type": action, "value": value], completion: completion)
         }
     }
     private var sizes: some View {
@@ -72,38 +55,4 @@ struct PanelControls: View {
         }
     }
 
-}
-
-struct NumberControl: View {
-    @ObservedObject var store: EditorStore
-    let label: String
-    let value: Double
-    let control: JSON
-    let change: (Double) -> Void
-    @State private var text = ""
-    @State private var fill = 0.0
-    @FocusState private var editing: Bool
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(label)
-                Spacer()
-                TextField(label, text: $text).multilineTextAlignment(.trailing).frame(width: 90)
-                    .textFieldStyle(.plain).focused($editing).onSubmit { resolve(["type": "expression", "text": text]) }
-            }
-            Slider(value: Binding(get: { fill }, set: { fill = $0; resolve(["type": "position", "position": $0]) }), in: 0...1).accessibilityLabel(label)
-        }
-        .onAppear { format() }.onChange(of: value) { _, _ in if !editing { format() } }
-        .onChange(of: editing) { old, current in if old && !current { resolve(["type": "expression", "text": text]) } }
-    }
-    private func format() {
-        store.numeric(control, value: value, operation: ["type": "format"]) { result in
-            if !editing { text = result["edit"].string }; fill = result["fill"].number
-        }
-    }
-    private func resolve(_ operation: [String: Any]) {
-        store.numeric(control, value: value, operation: operation) { result in
-            change(result["value"].number)
-        }
-    }
 }

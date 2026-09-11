@@ -5,6 +5,8 @@ GPU timer. Ordinary launches leave recording and timestamp submissions disabled.
 The native CAMetalLayer subclass observes the drawables acquired by wgpu and
 uses Metal's `addPresentedHandler` and `presentedTime` to record actual display
 presentation. A display-link tick or completed Rust call is not a presentation.
+The iOS Simulator SDK does not expose drawable IDs or presentation callbacks;
+simulator runs omit these events and cannot establish presentation acceptance.
 
 This is instrumentation, not hardware performance acceptance. The workload
 matrix, physical input-to-pixel evidence, calibrated instrumentation overhead

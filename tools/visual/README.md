@@ -67,6 +67,13 @@ Document any narrowly justified text/shadow/system-control accommodation and
 retain full-image error reports. Keep screenshots and reports in ignored artifacts,
 especially captures or test bundles that may contain personal device metadata.
 
+Raw `simctl io screenshot` images may retain the device's portrait raster while
+the editor is landscape, without an EXIF orientation tag. Inspect the original
+capture and use `--candidate-rotation 90` (counterclockwise), `180` or `270` only
+to correct that known orientation. The original PNG stays untouched; the report
+records the explicit rotation and every pixel is compared without interpolation,
+cropping or resizing. Do not use rotation to compensate for mismatched layouts.
+
 Verify the comparator with:
 
 ```sh

@@ -7,6 +7,11 @@ final class ObservedMetalLayer: CAMetalLayer {
     // Read/written only by the serial render owner, including nextDrawable.
     var observation: (trace: FrameTrace, frame: UInt64)?
     override func nextDrawable() -> (any CAMetalDrawable)? {
+        #if targetEnvironment(simulator)
+        // The simulator SDK has no drawable ID or presentation callback.
+        // Never fabricate physical presentation evidence for simulator tests.
+        return super.nextDrawable()
+        #else
         guard let observation else { return super.nextDrawable() }
         let start = FrameTrace.now()
         let drawable = super.nextDrawable()
@@ -18,5 +23,6 @@ final class ObservedMetalLayer: CAMetalLayer {
                 c: FrameTrace.now(), d: UInt64(drawable.drawableID)))
         }
         return drawable
+        #endif
     }
 }

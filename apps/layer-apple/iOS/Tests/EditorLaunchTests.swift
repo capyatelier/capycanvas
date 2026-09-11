@@ -3,6 +3,16 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNumericToolControls() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]"#
+        app.launch()
+        checkNumericToolControls(in: app)
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "ipad-tool-controls"; shot.lifetime = .keepAlways; add(shot)
+    }
+
     @MainActor func testMetalLaunchAndEditorCapture() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()

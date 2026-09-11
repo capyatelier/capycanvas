@@ -43,7 +43,9 @@ struct SettingsView: View {
             case "text":
                 PreferenceText(label: row["title"].string, value: kind["value"].string) { edit(row, $0) }
             case "number":
-                NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"]) { edit(row, $0) }
+                NumberControl(store: store, label: row["title"].string, value: kind["value"].number, control: kind["control"]) { value, completion in
+                    store.edit(["type": "preferences", "action": ["type": "edit", "id": row["id"].raw, "value": value]], completion: completion)
+                }
             case "info":
                 LabeledContent(row["title"].string, value: kind["value"].string)
             case "link":

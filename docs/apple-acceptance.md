@@ -313,3 +313,49 @@ and the merged Mac build launches. The new import-color check covers 1,536
 pixels (all 256 encoded values per channel at six alpha levels). GUI parity
 captures, full native controls and sustained input/performance acceptance remain
 open; these direct checks do not substitute for them.
+
+The next Apple control milestone implements the shared Tool Settings schema and
+command actions on both platforms, reachable from the Workspace menu. Tool Set
+projects non-paint groups/subtools (including Operation, rulers, figures and
+region sources). Painting retains the full catalog list, matching the current
+web host, because restricting it to the active family would hide brushes before
+Apple toolbar customization is implemented. Complete drawers, toolbar pickers
+and the remaining specialized panels are still open.
+
+Numeric controls now use shared Rust expressions, units, hard/soft ranges,
+slider mappings and stepping, with thin tracks, value fields and step buttons.
+Apple shares the optimistic edit/acknowledgment state and local error feedback;
+small native text adapters handle platform focus, selection and key commands.
+Rapid snapshots preserve unfinished drafts; rejected semantic edits restore the
+accepted value. Changing the tool or layer/mask target discards old field drafts.
+The iOS Simulator omits unavailable Metal presentation callbacks, rather than
+reporting invented presentation events.
+
+Both final signed builds pass; the physical iPad installs and launches and the
+Mac launches. All nine Apple ABI tests and eight shared-host tests pass. The new
+ABI coverage edits every visible setting across the complete brush catalog for
+both Apple platform configurations, checks ruler toggles, and validates actual
+Metal transform preview, rejected zero scale, Apply/Cancel and exact pixel
+Undo/Redo. The standalone Swift checks cover draft preservation, queued edits,
+rollback and f32 acknowledgment. Platform panel-availability coverage passes.
+
+The focused native UI test passes on Mac and iPad Simulator: expression entry,
+step buttons, shared value updates, invalid-value feedback and brush selection.
+Mac Escape cancellation passes. On Simulator, both app-level and focused-field
+XCTest Escape probes reached neither UIKit key commands/presses nor text
+insertion; the final test verifies correction of a rejected expression instead.
+Physical iPad Escape delivery remains explicitly unverified. Temporary keyboard
+tracing was removed. No OS menu bar was coordinate-tested.
+
+Fresh initial light-theme captures use Mac 1200×870 and iPad Simulator
+1376×1032 logical pixels, both at 2×. Exact comparisons still fail: Mac has
+421,544 / 4,176,000 differing pixels (10.0944%); iPad has 372,895 / 5,680,128
+(6.5649%). The raw Simulator image required an explicit lossless 90-degree
+counterclockwise orientation correction, recorded by the comparison tool;
+original images and all full-image artifacts remain local. Five comparison-tool
+tests pass, including preservation of a single-pixel error after rotation.
+These initial-state results are not directly comparable to the earlier
+layer-added scenario. Tool Settings is currently implemented in GTK/shared
+models but absent from the web renderer, so its native captures are inspection
+evidence rather than matching Chrome fixtures. Complete visual, physical-input,
+persistence and sustained-performance acceptance remains open on both platforms.

@@ -6438,11 +6438,19 @@ mod tests {
 
     #[test]
     fn native_only_panel_controls_are_not_offered_to_other_hosts() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+        ] {
             let mut app = session();
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
-                let available = platform == Platform::Gtk;
+                let available = platform == Platform::Gtk
+                    || (panel == Panel::ToolSettings
+                        && matches!(platform, Platform::Ios | Platform::Mac));
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
