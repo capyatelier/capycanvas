@@ -1343,7 +1343,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   nine pixels down, and fresh GTK scroll adjustments clamping restored positions
   to zero. Native scroll offsets feed shared icon/drop geometry and survive
   widget rebuilds. Transient measurements do not create workspace undo entries.
-- Validation: 205 shared UI tests; native GTK collapsed columns, existing tool
+- Validation: 206 shared UI tests; native GTK collapsed columns, existing tool
   drawers, panel expansion, Zen and stacked-divider tests on the private Wayland
   display, with GTK critical warnings treated as failures. The column test checks
   dark/light pixel bounds, persistent drawers, tab switching, real grip routing,
@@ -1352,6 +1352,9 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   `artifacts/familiar-workspace/columns-*.png`. Workspace/Wasm compilation and
   strict UI/GTK Clippy are checked separately. No new physical-device or frame-rate
   claim is made by these UI tests.
+- Nested collapsed subcolumns retain their state when a containing column also
+  collapses. Drawer/context anchors resolve to the visible outer strip until it
+  expands, not to a hidden child strip.
 - Still required for columns: nested tool drawers opened from tiles inside a
   collapsed toolbar drawer, final constrained-viewport and native incoming-drop/
   resize interaction coverage, and the final presentation audit. This is not the

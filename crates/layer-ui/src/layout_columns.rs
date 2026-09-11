@@ -193,9 +193,23 @@ impl DockLayout {
     }
 
     pub fn collapsed_column_for_group(&self, group: u32) -> Option<u32> {
-        self.collapsed
+        fn visible(node: &DockNode, group: u32, layout: &DockLayout) -> Option<u32> {
+            node.find(group)?;
+            if layout.is_collapsed(node.id()) {
+                return Some(node.id());
+            }
+            match node {
+                DockNode::Tabs { .. } => None,
+                DockNode::Split { first, second, .. } => {
+                    visible(first, group, layout).or_else(|| visible(second, group, layout))
+                }
+            }
+        }
+        // An expanded column may itself contain collapsed subcolumns. When
+        // its parent collapses too, only the outer strip is a visible anchor.
+        self.bands
             .iter()
-            .find_map(|c| self.node(c.root)?.find(group).map(|_| c.root))
+            .find_map(|b| visible(&b.root, group, self))
     }
 
     /// A column moves intact through the same dock tree, never through a float
@@ -710,6 +724,36 @@ mod tests {
     const VIEW: [f32; 2] = [1600., 1000.];
     fn geometry(layout: &DockLayout) -> ResolvedLayout {
         layout.workspace(VIEW[0], VIEW[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+    }
+    #[test]
+    fn collapsed_parent_owns_drawers_until_it_reveals_its_collapsed_child() {
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Properties,
+                DockTarget::Split {
+                    group: 5,
+                    edge: Edge::Right,
+                },
+            )
+            .unwrap();
+        let child = layout.panel_group(Panel::Properties).unwrap();
+        layout.set_column_collapsed(child, true, VIEW).unwrap();
+        layout.set_column_collapsed(6, true, VIEW).unwrap();
+        assert_eq!(layout.collapsed.len(), 2);
+        assert_eq!(geometry(&layout).collapsed.len(), 1);
+        assert_eq!(layout.collapsed_column_for_group(child), Some(4));
+        let drawer = crate::ContentDrawer::for_column(&layout, child, Panel::Properties).unwrap();
+        assert!(drawer.placement(&layout, VIEW, &[200.], false).is_some());
+        layout.set_column_collapsed(4, false, VIEW).unwrap();
+        assert_eq!(layout.collapsed_column_for_group(child), Some(child));
+        assert!(
+            crate::ContentDrawer::for_column(&layout, child, Panel::Properties)
+                .unwrap()
+                .placement(&layout, VIEW, &[200.], false)
+                .is_some()
+        );
     }
     #[test]
     fn whole_column_moves_preserve_subtree_and_neighbor_widths() {
