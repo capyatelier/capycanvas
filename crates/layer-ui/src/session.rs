@@ -6,6 +6,8 @@ use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurv
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
+#[path = "figures.rs"]
+pub(crate) mod figures;
 #[path = "region_tools.rs"]
 mod region_tools;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
@@ -441,6 +443,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 editing,
                 divider,
             } => {
+                self.interaction.modifiers = modifiers;
+                if key.eq_ignore_ascii_case("shift")
+                    || key.eq_ignore_ascii_case("shift_l")
+                    || key.eq_ignore_ascii_case("shift_r")
+                {
+                    self.interaction.modifiers.shift = pressed;
+                }
+                if matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. })
+                    && !self.layer_interaction.path.is_empty()
+                {
+                    reply.change = self.changed(regions::DOCUMENT, true);
+                }
                 // Native editors/IMEs own their text. Elsewhere in settings,
                 // printable keys start search with the original case intact.
                 if pressed
@@ -607,6 +621,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || self.input_pending
                     || self.engine.has_active_stroke();
                 self.interaction.keys.clear();
+                self.interaction.modifiers = Modifiers::default();
                 self.interaction.pan_key = None;
                 self.interaction.keyboard_chrome = false;
                 self.interaction.facts.held = false;
@@ -1011,6 +1026,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Hand
             | CommandId::Eyedropper
             | CommandId::Gradient
+            | CommandId::Figure
             | CommandId::AutoSelect
             | CommandId::Fill
             | CommandId::RotateLeft
@@ -1029,6 +1045,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | (CommandId::Move, LayerCanvasTool::Move)
                     | (CommandId::Hand, LayerCanvasTool::Hand)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
+                    | (CommandId::Figure, LayerCanvasTool::Figure { .. })
                     | (
                         CommandId::AutoSelect,
                         LayerCanvasTool::Region { fill: false, .. }
@@ -1979,6 +1996,13 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Figure => {
+                let (shape, paint) = self.layer_interaction.figure;
+                self.layer_action(LayerAction::Tool {
+                    tool: LayerCanvasTool::Figure { shape, paint },
+                })?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
             CommandId::AutoSelect | CommandId::Fill => {
                 let fill = command == CommandId::Fill;
                 self.layer_action(LayerAction::Tool {
@@ -2255,6 +2279,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
         self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
+        } else if let LayerCanvasTool::Figure { paint, .. } = self.layer_interaction.tool {
+            tool_settings::controls(self.engine.configured_brush())
+                .into_iter()
+                .filter(|c| c.id == "opacity" || (c.id == "size" && paint != FigurePaint::Fill))
+                .map(|mut c| {
+                    if c.id == "size" {
+                        c.label = "Line width";
+                    }
+                    c
+                })
+                .collect()
         } else if let LayerCanvasTool::Region { fill, .. } = self.layer_interaction.tool {
             let mut controls = vec![tool_settings::ToolSetting {
                 id: "tolerance",
@@ -2852,6 +2887,204 @@ mod tests {
                 panic!("fill")
             };
             assert_eq!(color[3], 0.25);
+        }
+    }
+
+    #[test]
+    fn figure_tools_use_shared_controls_constrain_cancel_and_commit_once() {
+        use layer_core::{Edit, LayerOperationKind};
+        let mut s = session();
+        assert!(key(&mut s, "u", true, false, false).handled);
+        key(&mut s, "u", false, false, false);
+        assert_eq!(s.state.tool_set.groups.len(), 3);
+        assert_eq!(s.state.tool_set.subtools.len(), 1);
+        assert_eq!(
+            s.state
+                .tool_settings
+                .iter()
+                .map(|c| c.label)
+                .collect::<Vec<_>>(),
+            ["Line width", "Opacity"]
+        );
+        let id = s.engine.document().active_layer;
+        let mut layer = s.engine.document().layer(id).unwrap().clone();
+        layer.properties.offset = Point { x: 10., y: 20. };
+        layer.properties.alpha_locked = true;
+        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        s.dispatch(UiAction::SetColor {
+            rgba: [1., 0., 0., 1.],
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "opacity".into(),
+            value: 0.4,
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "size".into(),
+            value: 8.,
+        })
+        .unwrap();
+        s.state.camera.rotation = 0.3;
+        s.state.camera.flipped = [true, false];
+        s.frame(1, 1).unwrap();
+        let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+            let m = s.state.camera.document_to_surface();
+            let mut e = event(s, 1, phase, 1.);
+            e.surface_position = Point {
+                x: m[0] * p[0] + m[2] * p[1] + m[4],
+                y: m[1] * p[0] + m[3] * p[1] + m[5],
+            };
+            s.pen(e).unwrap();
+        };
+        for index in 0..3 {
+            let action = s.state.tool_set.groups[index].action.clone();
+            s.dispatch(action).unwrap();
+            let count = if index == 0 { 1 } else { 3 };
+            assert_eq!(s.state.tool_set.subtools.len(), count);
+            for mode in 0..count {
+                let action = s.state.tool_set.subtools[mode].action.clone();
+                s.dispatch(action).unwrap();
+                let remembered = s.layer_interaction.tool;
+                invoke(&mut s, CommandId::Hand);
+                invoke(&mut s, CommandId::Figure);
+                assert_eq!(s.layer_interaction.tool, remembered);
+                assert_eq!(s.state.tool_settings.len(), if mode == 1 { 1 } else { 2 });
+                send(&mut s, PenPhase::Down, [30., 40.]);
+                for i in 0..100 {
+                    send(&mut s, PenPhase::Move, [50. + i as f32, 90.]);
+                }
+                assert_eq!(s.layer_interaction.path.len(), 2);
+                let before = s.engine.document().layer(id).unwrap().operations.len();
+                let plain = s.current_figure().unwrap();
+                let change = s
+                    .input(UiInput::Key {
+                        key: "Shift_L".into(),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                        editing: false,
+                        divider: None,
+                    })
+                    .unwrap();
+                assert!(change.change.canvas_wake);
+                let constrained = s.current_figure().unwrap();
+                assert_ne!(plain.end, constrained.end);
+                let mut guide = Vec::new();
+                s.append_layer_overlay(&mut guide);
+                assert!(!guide.is_empty());
+                s.input(UiInput::Key {
+                    key: "Shift_L".into(),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    editing: false,
+                    divider: None,
+                })
+                .unwrap();
+                assert_eq!(
+                    s.current_figure().unwrap().end,
+                    plain.end,
+                    "release ignores stale GDK modifier bit"
+                );
+                key(&mut s, "shift", true, false, false);
+                send(&mut s, PenPhase::Up, [130., 90.]);
+                s.frame(2, 2).unwrap();
+                key(&mut s, "shift", false, false, false);
+                let ops = &s.engine.document().layer(id).unwrap().operations;
+                assert_eq!(ops.len(), before + 1);
+                let LayerOperationKind::Figure(f) = &ops.last().unwrap().kind else {
+                    panic!("figure");
+                };
+                assert!((f.start.x - 20.).abs() < 0.001 && (f.start.y - 20.).abs() < 0.001);
+                assert_eq!(f.colors[0], [1., 0., 0., 0.4]);
+                assert!(f.alpha_locked);
+                assert!(!f.erase);
+                assert_eq!(f.width, 8.);
+                if index != 0 {
+                    assert!(
+                        ((f.end.x - f.start.x).abs() - (f.end.y - f.start.y).abs()).abs() < 0.001
+                    );
+                }
+                invoke(&mut s, CommandId::Undo);
+                s.frame(3, 3).unwrap();
+                assert_eq!(
+                    s.engine.document().layer(id).unwrap().operations.len(),
+                    before
+                );
+                invoke(&mut s, CommandId::Redo);
+                s.frame(4, 4).unwrap();
+                assert_eq!(
+                    s.engine.document().layer(id).unwrap().operations.len(),
+                    before + 1
+                );
+                assert_eq!(s.renderer_mut().dabs, 0, "no brush stamping for figures");
+            }
+        }
+        let before = s.engine.document().layer(id).unwrap().operations.len();
+        for cancel in 0..3 {
+            send(&mut s, PenPhase::Down, [30., 40.]);
+            send(&mut s, PenPhase::Move, [90., 100.]);
+            match cancel {
+                0 => send(&mut s, PenPhase::Cancel, [90., 100.]),
+                1 => {
+                    key(&mut s, "escape", true, false, false);
+                    key(&mut s, "escape", false, false, false);
+                }
+                _ => {
+                    s.input(UiInput::Blur).unwrap();
+                }
+            }
+            send(&mut s, PenPhase::Up, [90., 100.]);
+            s.frame(5, 5).unwrap();
+            assert_eq!(
+                s.engine.document().layer(id).unwrap().operations.len(),
+                before
+            );
+        }
+        send(&mut s, PenPhase::Down, [30., 40.]);
+        send(&mut s, PenPhase::Up, [30., 40.]);
+        s.frame(6, 6).unwrap();
+        assert_eq!(
+            s.engine.document().layer(id).unwrap().operations.len(),
+            before
+        );
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Select {
+                slot: ColorSlot::Transparent,
+            },
+        })
+        .unwrap();
+        send(&mut s, PenPhase::Down, [30., 40.]);
+        send(&mut s, PenPhase::Move, [90., 100.]);
+        assert!(s.current_figure().unwrap().erase);
+        send(&mut s, PenPhase::Cancel, [90., 100.]);
+        // Protected content and mask targets cannot acquire figure operations.
+        for mask in [false, true] {
+            let mut layer = s.engine.document().layer(id).unwrap().clone();
+            if mask {
+                layer.mask = Some(layer_core::LayerMask::reveal_all(
+                    layer_core::LayerId(99),
+                    Point::default(),
+                ));
+            }
+            layer.properties.locked = !mask;
+            s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+            s.layer_edit(Edit::SetMaskTarget(mask)).unwrap();
+            send(&mut s, PenPhase::Down, [30., 40.]);
+            send(&mut s, PenPhase::Move, [90., 100.]);
+            send(&mut s, PenPhase::Up, [90., 100.]);
+            s.frame(7, 7).unwrap();
+            assert_eq!(
+                s.engine.document().layer(id).unwrap().operations.len(),
+                before
+            );
         }
     }
 

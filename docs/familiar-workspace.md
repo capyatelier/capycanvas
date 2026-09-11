@@ -696,3 +696,103 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   commands are implemented. Tool-family presentation on other hosts awaits GTK
   review, while core models and Wasm remain compatible.
 - Implementation in progress; the requested default workspace is not yet shipped.
+
+### Figure tools
+
+- Figure (`U`) now has Line, Rectangle and Ellipse groups. Line offers Outline;
+  the other groups offer Outline, Fill and Outline + fill. Shared Tool Settings
+  exposes Line width and Opacity, hiding width for Fill. Single-color modes use
+  the selected paint color; Outline + fill uses foreground for the outline and
+  background for the interior. The transparent color slot erases instead.
+- Shift constrains lines to 45° increments and rectangles/ellipses to equal
+  sides. Releasing Shift restores the unconstrained endpoint; Escape, canceled
+  contacts and focus loss discard the guide without adding history. The group
+  and mode survive switching to another tool and back. The shared toolbar picker
+  includes Figure, including the normal Tool Set/Tool Settings drawer behavior.
+- These initial modes follow [CSP's Figure controls](https://help.clip-studio.com/en-us/manual_en/810_subtools/F.htm)
+  and the Shift convention described for [Krita's ellipse tool](https://docs.krita.org/en/reference_manual/tools/ellipse.html).
+  They are raster operations, not editable vector objects. During a drag the
+  artist sees a rubber-band outline; release commits one operation, not repeated
+  copies of a filled shape. Filled live preview is not claimed here.
+- `layer-core::Figure` owns immutable geometry/colors and conservative bounds.
+  The shared UI owns tool choice, constraints, local coordinates and settings.
+  GTK uses existing generic group buttons and numerical controls; new original
+  SVGs live in the shared bank. No GTK-only figure behavior or CPU pixel rasterizer.
+- The existing GPU paint-operation pass handles figures alongside fills and
+  gradients, including coverage, alpha lock, clipping and masks. No new pipeline,
+  intermediate texture type or CPU readback is introduced. Only intersecting
+  tiles are allocated/updated. Ellipse outlines use a bounded closest-point
+  solve so stroke width is measured in image pixels, even on elongated ellipses.
+  Inner and outer coverage are partitioned, avoiding double opacity and excessive
+  subpixel outline weight. History replay uses exactly the same GPU operation.
+- Immutable scene layouts/pipelines are now initialized once per device and
+  shared by live composition, explicit captures and recreated scenes. Their
+  mutable uniforms, scratch and image caches remain separate. A GPU handle test
+  verifies reuse without retaining canvas pixels. Previously, a first figure,
+  fill or source capture could compile the same scene pipelines again.
+- Scene composition eligibility is computed once per frame from live layer
+  properties and **current** paint operations, not all retained undo history.
+  Applied fills, gradients, figures and masks already reside in paint pages;
+  subsequent ordinary strokes use the ordinary direct composition/preview path.
+  Active operations still use scene jobs, including watercolor appearance baking
+  before Apply Mask. Live masks, groups, blends, offsets and filters retain their
+  required scene semantics. Regression tests compare imported/baked pigment with
+  and without retained history, at full/partial layer opacity, using G-Pen,
+  Natural Blender and Watercolor previews, cancellation and committed strokes.
+- Validation includes an independent dense-geometry pixel oracle, all seven
+  modes, 0.25–60px outlines, highly elongated ellipses, clipping/masks/alpha lock,
+  erasing, transformed layers, inverted coverage crossing tile boundaries,
+  incremental versus replay equality, sparse allocation and idle stability.
+  Shared UI tests exercise settings, modifiers, cancellation and undo/redo.
+  GTK native buttons and expression inputs render all modes in both themes;
+  the GPU eyedropper verifies actual pigment. Visually reviewed captures are
+  `artifacts/familiar-workspace/figures-{Dark,Light}.png` and `figure-guide.png`.
+  These are ignored review artifacts, not production assets.
+- Figure's 2048×1536 release benchmark measures one committed operation
+  per frame, growing history to 160 operations; last 120 samples reported:
+
+  | Case | CPU median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | 96×64 rectangle | 0.030 / 0.037 / 0.237 | 0.023 / 0.023 / 0.023 | 0.085 / 0.094 / 0.300 |
+  | 1920×1400 rectangle | 0.721 / 1.030 / 1.460 | 0.696 / 0.697 / 0.708 | 1.505 / 1.820 / 2.344 |
+  | 1920×1400 ellipse | 0.829 / 1.179 / 2.164 | 0.757 / 0.758 / 0.763 | 1.689 / 2.055 / 2.449 |
+  | 1920×10 ellipse | 0.152 / 0.209 / 0.334 | 0.135 / 0.135 / 0.142 | 0.333 / 0.423 / 0.521 |
+  | Diagonal line across 1920×1400 | 0.754 / 1.040 / 1.521 | 0.690 / 0.691 / 0.714 | 1.558 / 1.853 / 2.315 |
+
+  This includes the GPU operation and canvas composition, with a test-only wait
+  to measure completed work. Production has no such wait. It is not physical
+  pen-to-display latency. The two-color rectangle/ellipse and line use 24px
+  width. Repeat with the ignored `figure_latency` renderer test in release mode.
+  The blank canvas is presented before timing, matching the app lifecycle;
+  operation-specific pages/scratch are not preallocated. First small rectangle
+  completed in 3.076ms, and the first large rectangle in 4.420ms. These share a
+  device and are not independent cold starts. The existing full-canvas Fill
+  benchmark still has an 11.564ms first-operation spike (7.425ms in the paired
+  pre-Figure baseline run); its final steady p99 was 3.123ms. This cold resource
+  cost remains a follow-up, not evidence that all first interactions fit 8.33ms.
+  Full-canvas paint-operation GPU medians changed from approximately 0.682ms
+  before Figure to 0.693ms; CPU tails varied between runs, so no zero-regression
+  claim is made. Eight-dab 384px brush GPU medians remain 0.020ms G-Pen,
+  0.078ms Natural Blender and 0.415ms Watercolor without selection (0.020,
+  0.085 and 0.464ms with selection). These are operation timings, not display Hz.
+- Actual six-second Wayland drawing over a committed large figure, 384px G-Pen:
+  before the history eligibility fix, worker CPU median/p95/p99 was
+  0.612/1.054/1.230ms and GPU 0.475/1.015/1.997ms. Afterward they are
+  0.311/0.599/0.762ms and 0.134/0.266/0.539ms, at 119.96Hz with no discarded
+  presentations. The matched blank-layer run was 119.92Hz, CPU
+  0.258/0.543/0.732ms, GPU 0.131/0.595/2.155ms; short-run tails are noisy.
+  GTK frame-handler p99 over the figure is 0.056ms and input-processing p99
+  0.047ms. Reports are `/tmp/capy-figure-fixed-{plain,painted}.json`; use
+  `LAYER_PACING_FIGURE=1` with `native_frame_pacing`. Input is synthetic; this
+  measures real GPU/presentation feedback, not physical pen-to-display latency.
+- The same figure-backed Wayland test with 384px Natural Blender presents at
+  119.54Hz (one discarded presentation); CPU median/p95/p99 is
+  0.642/1.120/1.448ms, GPU 0.643/1.332/1.694ms. Watercolor presents at 119.27Hz
+  (two discarded), CPU 1.313/2.121/2.618ms and GPU 1.533/2.672/4.231ms. These
+  sustain approximately 120Hz but do not prove an absence of occasional missed
+  frames. Reports: `/tmp/capy-figure-fixed-{blender,watercolor}.json`.
+- The isolated staged source passes 27 core, 25 engine, 182 shared UI and 80 GPU
+  correctness tests (12 hardware benchmarks are separate). Strict all-target
+  Clippy, workspace compilation and Wasm compilation pass. Native Figure buttons,
+  settings, Shift constraints, undo/redo and pixel sampling pass on GTK in both
+  themes. This does not claim native web/Android Figure input validation.

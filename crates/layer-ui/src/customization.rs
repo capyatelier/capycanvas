@@ -772,6 +772,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Hand => "Drag to move the canvas view",
                 CommandId::Eyedropper => "Pick a color from the canvas",
                 CommandId::Gradient => "Drag to fill with a gradient",
+                CommandId::Figure => "Draw lines, rectangles and ellipses",
                 CommandId::AutoSelect => "Select a connected area of similar color",
                 CommandId::Fill => "Fill a connected area with the drawing color",
                 CommandId::Undo => "Undo the last change",

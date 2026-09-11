@@ -116,6 +116,7 @@ pub(crate) struct PointerContact {
 
 #[derive(Default)]
 pub(crate) struct Interaction {
+    pub modifiers: Modifiers,
     pub hidden: bool,
     pub pan_key: Option<String>,
     pub keyboard_chrome: bool,

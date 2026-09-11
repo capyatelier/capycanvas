@@ -289,6 +289,9 @@ pub struct ToolSetView {
     pub subtools: Vec<ToolSetItem>,
 }
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
+    if let LayerCanvasTool::Figure { shape, paint } = canvas_tool {
+        return crate::session::figures::tool_set(shape, paint);
+    }
     if let LayerCanvasTool::Region { fill, source } = canvas_tool {
         let command = if fill {
             CommandId::Fill
@@ -399,6 +402,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
             LayerCanvasTool::Hand => ("Hand", "hand"),
             LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
             LayerCanvasTool::Gradient { .. } => unreachable!(),
+            LayerCanvasTool::Figure { .. } => unreachable!(),
             LayerCanvasTool::Region { .. } => unreachable!(),
             LayerCanvasTool::Paint => unreachable!(),
         };

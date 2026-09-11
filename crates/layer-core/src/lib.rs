@@ -11,6 +11,8 @@ mod layers;
 pub use effects::*;
 mod presets;
 pub use layers::*;
+mod figures;
+pub use figures::{Figure, FigurePaint, FigureShape};
 
 pub use presets::{
     BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,

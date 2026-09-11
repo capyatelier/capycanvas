@@ -659,6 +659,193 @@ fn native_connected_tools() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_figure_tools() {
+    let app = native_test_app("art.capycanvas.FigureTools");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .insert_tools(
+            Panel::Toolbar,
+            None,
+            &[ToolbarControl::Command {
+                command: CommandId::Figure,
+            }],
+        )
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
+    workspace
+        .layout
+        .move_panel(
+            [w.surface.width() as f32, w.surface.height() as f32],
+            Panel::ToolSettings,
+            DockTarget::Split {
+                group,
+                edge: Edge::Bottom,
+            },
+        )
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(100);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::FitCanvas,
+    });
+    w.dispatch(UiAction::Color {
+        action: layer_ui::ColorAction::Select {
+            slot: layer_ui::ColorSlot::Background,
+        },
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [1., 0.66, 0.15, 1.],
+    });
+    w.dispatch(UiAction::Color {
+        action: layer_ui::ColorAction::Select {
+            slot: layer_ui::ColorSlot::Foreground,
+        },
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.12, 0.30, 0.75, 1.],
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Figure,
+    });
+    pump(100);
+    assert_eq!(w.tool_set.group_buttons.borrow().len(), 3);
+    let width = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-size")
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap();
+    edit_number(&width, "18");
+    assert_eq!(state(&w).brush.diameter, 18.);
+    let opacity = find_named(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity")
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap();
+    edit_number(&opacity, "85");
+    assert!((state(&w).brush.opacity - 0.85).abs() < 0.001);
+    let send = |phase, p: [f32; 2]| {
+        let camera = state(&w).camera;
+        let m = camera.document_to_surface();
+        let e = PenEvent {
+            device_id: 1,
+            sequence: 0,
+            timestamp_ns: glib::monotonic_time() as u64 * 1000,
+            view_revision: camera.revision,
+            surface_position: Point {
+                x: m[0] * p[0] + m[2] * p[1] + m[4],
+                y: m[1] * p[0] + m[3] * p[1] + m[5],
+            },
+            pressure: 1.,
+            tilt_radians: [0.; 2],
+            twist_radians: 0.,
+            distance: 0.,
+            phase,
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
+        };
+        w.cursor_input(Some(e));
+        w.input.send(&w, e);
+        pump(30);
+    };
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for row in 0..3 {
+        let group = w.tool_set.group_buttons.borrow()[row].clone();
+        click(&group);
+        pump(50);
+        for col in 0..if row == 0 { 1 } else { 3 } {
+            let subtool = w.tool_set.buttons.borrow()[col].1.clone();
+            click(&subtool);
+            pump(40);
+            let start = [440. + col as f32 * 390., 300. + row as f32 * 400.];
+            let end = [start[0] + 280., start[1] + 220.];
+            send(PenPhase::Down, start);
+            send(PenPhase::Move, end);
+            if row == 2 && col == 2 {
+                pump(100);
+                capture_reference(&w, &format!("{dir}/figure-guide.png"), 1.);
+            }
+            send(PenPhase::Up, end);
+            pump(100);
+            assert!(!w.status.is_visible(), "{}", w.status.text());
+        }
+    }
+    let controllers = w.window.observe_controllers();
+    let keys = (0..controllers.n_items())
+        .find_map(|i| {
+            controllers
+                .item(i)
+                .and_downcast::<gtk::EventControllerKey>()
+        })
+        .unwrap();
+    for index in 1..3 {
+        let button = w.tool_set.group_buttons.borrow()[index].clone();
+        click(&button);
+        pump(40);
+        let start = [830. + (index - 1) as f32 * 390., 300.];
+        let end = [start[0] + 200., start[1] + 80.];
+        send(PenPhase::Down, start);
+        send(PenPhase::Move, end);
+        keys.emit_by_name::<bool>(
+            "key-pressed",
+            &[&gdk::Key::Shift_L, &0u32, &gdk::ModifierType::empty()],
+        );
+        send(PenPhase::Up, end);
+        pump(100);
+        keys.emit_by_name::<()>(
+            "key-released",
+            &[&gdk::Key::Shift_L, &0u32, &gdk::ModifierType::SHIFT_MASK],
+        );
+        let gpu = w.gpu.borrow();
+        let doc = gpu.as_ref().unwrap().session.engine().document();
+        let layer_core::LayerOperationKind::Figure(f) =
+            &doc.layers[0].operations.last().unwrap().kind
+        else {
+            panic!("figure");
+        };
+        assert!(
+            ((f.end.x - f.start.x).abs() - (f.end.y - f.start.y).abs()).abs() < 0.001,
+            "native Shift constrains proportions"
+        );
+    }
+    w.cursor_input(None);
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(150);
+        capture_reference(&w, &format!("{dir}/figures-{theme:?}.png"), 1.);
+    }
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    pump(100);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    pump(100);
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    // Real asynchronous GPU sampling verifies ink, not only command state.
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::Tool {
+            tool: LayerCanvasTool::PickLayer,
+        },
+    });
+    send(PenPhase::Down, [950., 800.]);
+    send(PenPhase::Up, [950., 800.]);
+    pump(150);
+    let color = state(&w).colors.foreground;
+    assert!(color[2] > 0.7 && color[0] < 0.2, "fill ink: {color:?}");
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_gradient_tool() {
     let app = native_test_app("art.capycanvas.GradientTool");
     let w = Workspace::new(&app);
@@ -7340,6 +7527,31 @@ fn native_frame_pacing() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1500);
+    if std::env::var("LAYER_PACING_FIGURE").as_deref() == Ok("1") {
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::Figure {
+                    shape: layer_ui::FigureShape::Ellipse,
+                    paint: layer_ui::FigurePaint::Both,
+                },
+            },
+        });
+        native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
+        pump(150);
+        assert_eq!(
+            w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .document()
+                .layers[0]
+                .operations
+                .len(),
+            1
+        );
+    }
     let selection = std::env::var("LAYER_PACING_SELECTION").unwrap_or_default();
     if selection == "1" || selection == "pixels" {
         let points: Vec<_> = (0..=256)

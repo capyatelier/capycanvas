@@ -439,6 +439,7 @@ pub struct LayerOperation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerOperationKind {
     ApplyMask,
+    Figure(Figure),
     Fill {
         color: [f32; 4],
         alpha_locked: bool,
@@ -455,6 +456,16 @@ impl LayerOperation {
     /// Conservative affected area in layer coordinates. Inverted coverage and
     /// applying a mask can change pixels outside the selection's geometry.
     pub fn bounds(&self, extent: [u32; 2]) -> Rect {
+        let mut bounds = match &self.kind {
+            LayerOperationKind::Figure(figure) => figure.bounds(),
+            _ => Rect {
+                min: Point::default(),
+                max: Point {
+                    x: extent[0] as f32,
+                    y: extent[1] as f32,
+                },
+            },
+        };
         if self.kind != LayerOperationKind::ApplyMask
             && self.coverage.default_coverage == 0.0
             && !self.coverage.inverted
@@ -462,20 +473,19 @@ impl LayerOperation {
             && let Some(selection) = &self.coverage.initial
             && !selection.inverted
         {
-            return selection.translated(self.coverage.offset).bounds();
+            let selection = selection.translated(self.coverage.offset).bounds();
+            bounds.min.x = bounds.min.x.max(selection.min.x);
+            bounds.min.y = bounds.min.y.max(selection.min.y);
+            bounds.max.x = bounds.max.x.min(selection.max.x);
+            bounds.max.y = bounds.max.y.min(selection.max.y);
         }
-        Rect {
-            min: Point::default(),
-            max: Point {
-                x: extent[0] as f32,
-                y: extent[1] as f32,
-            },
-        }
+        bounds
     }
     fn validate(&self) -> Result<(), DocumentError> {
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v));
         let valid = match &self.kind {
             LayerOperationKind::ApplyMask => true,
+            LayerOperationKind::Figure(figure) => figure.valid(),
             LayerOperationKind::Fill { color, .. } => color_ok(color),
             LayerOperationKind::Gradient {
                 start, end, colors, ..

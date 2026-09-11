@@ -6,6 +6,7 @@
 
 mod camera;
 mod eyedropper;
+pub use layer_core::{FigurePaint, FigureShape};
 mod navigator;
 pub use navigator::NavigatorGeometry;
 mod color;
@@ -255,6 +256,10 @@ pub fn ui_catalog() -> UiCatalog {
             "hand",
             "eyedropper",
             "gradient",
+            "figure",
+            "line",
+            "rectangle",
+            "ellipse",
             "auto-select",
             "fill",
             "rotate-left",
@@ -328,6 +333,7 @@ pub enum CommandId {
     Hand,
     Eyedropper,
     Gradient,
+    Figure,
     AutoSelect,
     Fill,
     Undo,
@@ -386,6 +392,7 @@ impl CommandId {
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
+            Self::Figure => "figure",
             Self::AutoSelect => "auto-select",
             Self::Fill => "fill",
             Self::Undo | Self::UndoWorkspace => "undo",
@@ -406,7 +413,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 40] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -420,6 +427,7 @@ impl CommandId {
         Self::Hand,
         Self::Eyedropper,
         Self::Gradient,
+        Self::Figure,
         Self::AutoSelect,
         Self::Fill,
         Self::Undo,
@@ -468,6 +476,7 @@ impl CommandId {
             Self::Hand => "Hand",
             Self::Eyedropper => "Eyedropper",
             Self::Gradient => "Gradient",
+            Self::Figure => "Figure",
             Self::AutoSelect => "Auto select",
             Self::Fill => "Fill",
             Self::Undo => "Undo",

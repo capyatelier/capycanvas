@@ -23,6 +23,10 @@ pub enum LayerCanvasTool {
         radial: bool,
         transparent: bool,
     },
+    Figure {
+        shape: FigureShape,
+        paint: FigurePaint,
+    },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -228,6 +232,7 @@ pub(super) struct LayerInteraction {
     solo: Option<Vec<(LayerId, bool)>>,
     pub changed: bool,
     pub gradient: [bool; 2],
+    pub figure: (FigureShape, FigurePaint),
 }
 impl LayerInteraction {
     pub fn depth(&self, doc: &Document, l: &Layer) -> u32 {
@@ -566,6 +571,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if let LayerCanvasTool::Figure { shape, paint } = tool {
+                    if shape == FigureShape::Line && paint != FigurePaint::Outline {
+                        return Err("Lines only support an outline".into());
+                    }
+                    self.layer_interaction.figure = (shape, paint);
+                }
+                self.cancel_layer_gesture()?;
                 if let LayerCanvasTool::Region { fill, source } = tool {
                     self.region_tools.source[usize::from(fill)] = source;
                 }
@@ -1382,7 +1394,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 match self.layer_interaction.tool {
                     LayerCanvasTool::Move if !controls.move_layer => return Ok(()),
                     LayerCanvasTool::LassoFill if !controls.fill => return Ok(()),
-                    LayerCanvasTool::Gradient { .. } if !controls.fill || doc.active_mask => {
+                    LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
+                        if !controls.fill || doc.active_mask =>
+                    {
                         return Ok(());
                     }
                     _ => (),
@@ -1397,7 +1411,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 if matches!(
                     self.layer_interaction.tool,
-                    LayerCanvasTool::Gradient { .. }
+                    LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
                 ) && self.layer_interaction.path.len() == 2
                 {
                     self.layer_interaction.path[1] = p;
@@ -1425,6 +1439,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                 }
                 if event.phase == PenPhase::Up {
+                    if matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. }) {
+                        self.commit_figure()?;
+                    }
                     if let LayerCanvasTool::Gradient {
                         radial,
                         transparent,
@@ -1618,6 +1635,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }
         ) {
             path(&self.layer_interaction.path, false, Point::default());
+        }
+        if let Some(figure) = self.current_figure() {
+            let guide = figure
+                .shape
+                .guide(figure.start, figure.end, self.state.camera.zoom);
+            let offset = self
+                .engine
+                .document()
+                .layer_offset(self.engine.document().active_layer);
+            path(&guide, figure.shape != FigureShape::Line, offset);
         }
     }
 }
