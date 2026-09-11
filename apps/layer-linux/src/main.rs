@@ -8,6 +8,9 @@ mod navigator;
 mod number_control;
 mod preferences;
 mod previews;
+mod system_status;
+#[cfg(test)]
+mod fullscreen_tests;
 mod render_thread;
 mod tiles;
 #[cfg(test)]
@@ -71,6 +74,7 @@ fn main() -> gtk::glib::ExitCode {
     let result = app.run();
     let windows = std::mem::take(&mut *active.borrow_mut());
     drop(windows);
+    layer_render_wgpu::finish_shader_compiler_shutdown();
     result
 }
 

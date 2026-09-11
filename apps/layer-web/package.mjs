@@ -58,7 +58,7 @@ export function fingerprintAssets(directory) {
   };
   // Our small, explicit graph: artwork/Wasm first, then CSS, glue and app.
   // Hash final bytes after rewriting dependencies; no bundler required.
-  const modules = ["editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "pkg/layer_web.js", "app.js"];
+  const modules = ["system-status.js","editor-panels.js","workspace-chrome.js","documents.js","preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "pkg/layer_web.js", "app.js"];
   for (const path of files) {
     if (path.endsWith(".js") && !modules.includes(path))
       throw new Error(`Add the new module to the package dependency order: ${path}`);
@@ -71,6 +71,7 @@ export function fingerprintAssets(directory) {
     return `url(${JSON.stringify(name)})`;
   });
   publish("style.css", css);
+  publish("system-status.js");
   publish("editor-panels.js");
   publish("workspace-chrome.js");
   publish("documents.js");
@@ -149,7 +150,7 @@ export function packageWeb() {
     for (const path of filesIn(join(runtime, "pkg"))) {
       if (path.endsWith(".d.ts")) rmSync(join(runtime, "pkg", path));
     }
-    for (const path of ["app.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "style.css"])
+    for (const path of ["app.js", "system-status.js", "editor-panels.js", "workspace-chrome.js", "documents.js", "preferences.js", "gpu.js", "customization.js", "numeric.js", "layers.js", "effects.js", "style.css"])
       cpSync(join(web, path), join(runtime, path));
     for (const directory of ["icons", "brush-previews"]) {
       mkdirSync(join(runtime, directory));

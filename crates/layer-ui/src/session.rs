@@ -132,6 +132,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             files: document_files::DocumentFiles::default(),
             state: UiState {
                 revision: 0,
+                fullscreen: false,
                 workspace: WorkspaceState::default(),
                 brush: BrushState {
                     preset: DefaultBrushPreset::GPen as u32,
@@ -1068,6 +1069,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
         if id == CommandId::ZenMode {
             Some(self.state.settings.zen_icon.icon())
+        } else if id == CommandId::Fullscreen && self.state.fullscreen {
+            Some("fullscreen-exit")
         } else {
             id.icon()
         }
@@ -1178,6 +1181,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+            || (id == CommandId::Fullscreen && self.state.fullscreen)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
             || (id == CommandId::TransformAspect && self.operation.aspect)
@@ -1856,6 +1860,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.settings.theme = theme;
                 (SETTINGS, true)
             }
+            UiAction::WindowFullscreen { fullscreen } => {
+                let changed = self.state.fullscreen != fullscreen;
+                self.state.fullscreen = fullscreen;
+                (if changed { DOCUMENT } else { 0 }, false)
+            }
             UiAction::SystemThemeChanged { theme } => {
                 self.system_theme = theme;
                 if self.state.settings.theme.is_none() && self.state.theme != theme {
@@ -2295,6 +2304,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Fullscreen => {
+                self.request(HostRequestKind::SetFullscreen {
+                    fullscreen: !self.state.fullscreen,
+                })?;
+                Ok((HOST, false))
+            }
             CommandId::NewDocument | CommandId::OpenDocument => {
                 self.request_document_open(command == CommandId::OpenDocument)?;
                 Ok((DOCUMENT | HOST, false))
@@ -9256,11 +9271,66 @@ mod tests {
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],
                 ["show_rulers", "snap_rulers"],
-                ["zen_mode", "toggle_theme"],
+                ["zen_mode", "fullscreen", "toggle_theme"],
                 ["reset_layout"]
             ])
         );
     }
+    #[test]
+    fn fullscreen_follows_host_notifications_and_leaves_browser_f11_unbound() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let workspace = s.state.workspace.clone();
+        assert_eq!(s.command(CommandId::Fullscreen).shortcut, "F11");
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::Fullscreen,
+        })
+        .unwrap();
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::SetFullscreen { fullscreen: true }
+        ));
+        assert!(
+            !s.command(CommandId::Fullscreen).selected,
+            "Wait for the compositor acknowledgement"
+        );
+        s.dispatch(UiAction::WindowFullscreen { fullscreen: true })
+            .unwrap();
+        assert!(s.command(CommandId::Fullscreen).selected);
+        assert_eq!(
+            s.command(CommandId::Fullscreen).icon,
+            Some("fullscreen-exit")
+        );
+        assert_eq!(
+            s.state.workspace, workspace,
+            "Fullscreen is transient host state"
+        );
+        s.set_platform(Platform::Mac);
+        assert!(s.command(CommandId::Fullscreen).enabled);
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::Fullscreen,
+        })
+        .unwrap();
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::SetFullscreen { fullscreen: false }
+        ));
+        assert!(s.command(CommandId::Fullscreen).selected);
+        s.set_platform(Platform::Ios);
+        assert!(!s.command(CommandId::Fullscreen).enabled);
+        s.set_platform(Platform::Web);
+        assert_eq!(s.command(CommandId::Fullscreen).shortcut, "");
+        assert!(
+            s.state
+                .settings
+                .shortcut_match(&KeyChord::new("F11", Default::default()), Platform::Web)
+                .is_none()
+        );
+        s.dispatch(UiAction::WindowFullscreen { fullscreen: false })
+            .unwrap();
+        assert!(!s.command(CommandId::Fullscreen).selected);
+    }
+
     #[test]
     fn catalog_covers_each_brush_panel_and_declared_command() {
         let catalog = ui_catalog();

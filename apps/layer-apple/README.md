@@ -76,6 +76,15 @@ captures plus measured wheel geometry for the shared
 [color sampling check](../../tools/visual/README.md). The headless ABI tests
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
+Properties choice controls share an Apple button/popover projection, sizing the
+closed control to the longest option while keeping room for its row label.
+The layer blend control exposes its current value to accessibility.
+`testEditorControlLayout` checks all six Navigator hit targets, changes a blend
+mode through Properties, verifies the Layers value and undoes the change. It
+also attaches matching `initial` and `canvas-under-header` captures. The latter
+uses four shared zoom-in steps so the paper is visible through empty header
+space; title, Zen and Settings retain their own background plates.
+
 ## Install and run
 
 ```sh
@@ -108,11 +117,40 @@ supports search, alternate bindings, conflict replacement and resets; Settings
 search uses the shared results. The focused
 `EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
 and the resulting Zen action without automating the system menu bar. The shared
-inventory command emits representative menu and shortcut states:
+inventory command emits the full default workspace, every command and panel's
+availability, all five settings pages, and representative menu/layer/shortcut
+states for **both** Apple policies. Schema 2 stores these under `platforms.ios`
+and `platforms.mac`; unavailable commands remain in the inventory. The
+[command review](command-coverage.json) classifies every command with separate
+platform notes and references to existing checks or implementation. Its audit
+detects added/removed commands, missing classifications and changed availability:
 
 ```sh
 cargo run -p layer-host --example inventory > /tmp/capy-inventory.json
+python3 apps/layer-apple/scripts/audit-commands.py /tmp/capy-inventory.json
 ```
+
+Passing this audit establishes catalog coverage, not feature acceptance. The
+review records open work for each command group; all native workflows, dynamic
+controls, visual states and hardware performance still require their own evidence.
+
+Mac customized controls can now invoke the shared Full Screen command. AppKit
+notifications update its selected state and icon after the window actually
+changes mode. View keeps AppKit's native Full Screen menu item, and native
+Control-Command shortcuts pass through the canvas responder. Repeated requests,
+native transitions, failures and detachment are checked without system-menu
+automation or visible test windows:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/window-presentation.swift
+```
+
+The native adapter uses [AppKit window full screen](https://developer.apple.com/documentation/appkit/nswindow/togglefullscreen(_:)).
+The installed UIKit SDK's [iOS geometry preferences](https://developer.apple.com/documentation/uikit/uiwindowscene/geometrypreferences/ios)
+expose orientation changes but no equivalent iPad window toggle. That shared
+command capability remains explicitly unavailable on iPad and open in the review.
+Full-screen editor layout/rendering and the browser's optional system-status
+surface also remain open acceptance items.
 
 Launch a local Mac build with:
 

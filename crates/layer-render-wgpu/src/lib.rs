@@ -36,6 +36,8 @@ use pipeline_device::PipelineDevice;
 mod shader_cache;
 mod startup;
 pub use startup::StartupProgress;
+#[cfg(not(target_arch = "wasm32"))]
+pub use startup::finish_shader_compiler_shutdown;
 mod effect_validation;
 mod effects;
 mod flood;

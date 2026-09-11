@@ -58,3 +58,17 @@ and icon tools, the `node apps/layer-web/package.mjs` build, service-worker beha
 and browser checks. The resulting `dist/capycanvas/` directory can be hosted at a
 domain root or subpath. Development serving and offline-package testing are
 separate workflows.
+
+For the editor workflow against the running development server:
+
+```bash
+node apps/layer-web/test.mjs --headless --editor
+```
+
+Set `CHROME` to the browser executable and `LAYER_WEB_URL` if the server uses a
+different address. For example, macOS can use
+`CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`.
+Linux tests select offscreen Vulkan; other hosts retain their native GPU backend.
+The editor check includes actual Navigator pointer hits and a rendered-pixel
+check that zoomed paper appears through empty header space. These checks do not
+establish complete editor parity or hardware performance.

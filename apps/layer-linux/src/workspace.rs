@@ -737,6 +737,8 @@ pub struct Workspace {
     palette_css: gtk::CssProvider,
     palette: Cell<Option<ThemePalette>>,
     header: adw::HeaderBar,
+    header_status: gtk::Box,
+    system_status: Rc<crate::system_status::SystemStatus>,
     popovers: RefCell<Vec<glib::WeakRef<gtk::Popover>>>,
     chrome_held: Cell<bool>,
     dragging: Cell<bool>,
@@ -838,6 +840,10 @@ impl Workspace {
         let header = adw::HeaderBar::new();
         header.add_css_class("workspace-header");
         header.set_title_widget(Some(&tab));
+        let system_status = crate::system_status::SystemStatus::new();
+        let header_status = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        header_status.set_widget_name("header-status");
+        header_status.append(&system_status.root);
         let view_info = gtk::Label::new(Some("100% · 0°"));
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         status_bar.add_css_class("workspace-status");
@@ -887,6 +893,8 @@ impl Workspace {
             palette_css,
             palette: Cell::new(None),
             header,
+            header_status,
+            system_status,
             popovers: RefCell::new(Vec::new()),
             chrome_held: Cell::new(false),
             dragging: Cell::new(false),
@@ -1143,6 +1151,13 @@ impl Workspace {
     }
 
     fn install_chrome(self: &Rc<Self>) {
+        self.window.connect_fullscreened_notify(glib::clone!(
+            #[weak(rename_to = this)]
+            self,
+            move |window| {
+                this.fullscreen_changed(window.is_fullscreen());
+            }
+        ));
         // Leave the default manager following the system; apply explicit
         // overrides only to the display manager, so system changes stay observable.
         adw::StyleManager::default().connect_dark_notify(glib::clone!(
@@ -1175,6 +1190,7 @@ impl Workspace {
         let primary = self.chrome_menu(ApplicationMenu::Primary);
         primary.set_icon_name("layer-menu-symbolic");
         self.header.pack_end(&primary);
+        self.header.pack_end(&self.header_status);
         // Observe native title-bar grabs without claiming events from Adw's
         // window handle. WM grabs can consume release; the next unpressed
         // motion also clears the latch, never a leave/cancel during the drag.
@@ -1483,6 +1499,23 @@ impl Workspace {
             }
         }
     }
+    fn fullscreen_changed(self: &Rc<Self>, fullscreen: bool) {
+        if fullscreen && self.tab.parent().as_ref() != Some(self.header_status.upcast_ref()) {
+            self.header
+                .set_title_widget(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 0)));
+            self.tab.set_max_width_chars(35);
+            self.header_status.prepend(&self.tab);
+        } else if !fullscreen && self.tab.parent().as_ref() == Some(self.header_status.upcast_ref())
+        {
+            self.header_status.remove(&self.tab);
+            self.tab.set_max_width_chars(-1);
+            self.header.set_title_widget(Some(&self.tab));
+        }
+        self.system_status.root.set_visible(fullscreen);
+        self.header.set_show_start_title_buttons(!fullscreen);
+        self.header.set_show_end_title_buttons(!fullscreen);
+        self.dispatch(UiAction::WindowFullscreen { fullscreen });
+    }
     pub fn dispatch(self: &Rc<Self>, action: UiAction) {
         if self.refreshing.get() {
             return;
@@ -1683,6 +1716,7 @@ impl Workspace {
                 match GpuCanvas::with_project(area, this.initial_project.borrow_mut().take()) {
                     Ok(gpu) => {
                         *this.gpu.borrow_mut() = Some(gpu);
+                        this.fullscreen_changed(this.window.is_fullscreen());
                         this.refresh(regions::ALL);
                         this.wake();
                     }

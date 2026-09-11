@@ -480,6 +480,7 @@ pub struct HostRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostRequestKind {
+    SetFullscreen { fullscreen: bool },
     NewWindow,
     OpenLink { link: crate::ApplicationLink },
     Document { request: crate::DocumentRequest },

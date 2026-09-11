@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "scope": "Command catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
+  "unavailable": {
+    "ios": {"fullscreen": "The installed UIKit SDK offers scene orientation requests, but no native iPad window full-screen toggle. This capability remains open; Mac Catalyst's geometry API does not apply to this UIKit target."},
+    "mac": {}
+  },
+  "groups": [
+    {
+      "name": "Document transport",
+      "commands": ["new_document", "open_document", "save_document", "save_document_as", "export_document", "close_document"],
+      "checks": ["tests/project-files.swift", "tests/recovery.swift"],
+      "ios": "partial: direct transport and simulator workflows; full physical provider/lifecycle matrix remains",
+      "mac": "partial: direct transport and focused window/restart workflows; full provider/lifecycle matrix remains"
+    },
+    {
+      "name": "Drawing tools",
+      "commands": ["pen", "pencil", "brush", "eraser", "airbrush", "decoration", "blend", "liquify"],
+      "checks": ["native/src/workspace_tests.rs", "native/src/input_tests.rs", "native/src/tests.rs"],
+      "ios": "partial: grouped catalog reachability and synthetic pixel/input oracles; complete physical tool/sensor/performance matrix remains",
+      "mac": "partial: grouped catalog reachability and synthetic pixel/input oracles; complete physical tablet/tool/performance matrix remains"
+    },
+    {
+      "name": "Selection, fill, and shapes",
+      "commands": ["lasso", "auto_select", "fill", "gradient", "figure"],
+      "checks": ["native/src/tests.rs"],
+      "ios": "partial: shared action/property checks; all native modes, modifiers, and resulting-pixel workflows remain",
+      "mac": "partial: shared action/property checks; all native modes, modifiers, and resulting-pixel workflows remain"
+    },
+    {
+      "name": "Object transforms",
+      "commands": ["move", "scale_rotate", "apply_transform", "cancel_transform", "transform_aspect"],
+      "checks": ["native/src/tests.rs"],
+      "ios": "partial: transform settings and pixel transactions; complete native drag/handle workflows remain",
+      "mac": "partial: transform settings and pixel transactions; complete native drag/handle workflows remain"
+    },
+    {
+      "name": "Hand and eyedropper",
+      "commands": ["hand", "eyedropper"],
+      "checks": ["native/src/tests.rs", "native/src/navigator_tests.rs"],
+      "ios": "partial: shared routing/camera/color checks; full touch navigation and color sampling workflows remain",
+      "mac": "partial: shared routing/camera/color checks; full trackpad/tablet and color sampling workflows remain"
+    },
+    {
+      "name": "Rulers",
+      "commands": ["ruler", "show_rulers", "snap_rulers", "delete_ruler"],
+      "checks": ["native/src/tests.rs"],
+      "ios": "partial: shared tool settings; full create/select/edit/snap/delete workflows remain",
+      "mac": "partial: shared tool settings; full create/select/edit/snap/delete workflows remain"
+    },
+    {
+      "name": "Artwork history",
+      "commands": ["undo", "redo"],
+      "checks": ["native/src/tests.rs", "native/src/input_tests.rs", "Shared/Tests/NumericControlChecks.swift"],
+      "ios": "partial: exact pixel restoration and physical Pencil smoke check; full history across all edit types remains",
+      "mac": "partial: exact pixel restoration and focused editor actions; full history across all edit types remains"
+    },
+    {
+      "name": "Layer operations",
+      "commands": ["clear_layer", "add_layer", "delete_layer", "raise_layer", "lower_layer"],
+      "checks": ["native/src/tests.rs"],
+      "ios": "partial: hierarchy/target/mask/menu policy oracles; complete native layer workflows remain",
+      "mac": "partial: hierarchy/target/mask/menu policy oracles; complete native layer workflows remain"
+    },
+    {
+      "name": "Pixel selection actions",
+      "commands": ["fill_selection", "select_all", "deselect", "invert_selection"],
+      "checks": ["native/src/tests.rs"],
+      "ios": "partial: direct menu-action pixel checks; all selection modes and native workflows remain",
+      "mac": "partial: direct menu-action pixel checks; all selection modes and native workflows remain"
+    },
+    {
+      "name": "Workspace and Zen",
+      "commands": ["undo_workspace", "redo_workspace", "new_toolbar", "manage_toolbars", "reset_layout", "zen_mode"],
+      "checks": ["native/src/workspace_tests.rs", "Shared/Tests/WorkspaceControlChecks.swift"],
+      "ios": "partial: direct topology/history and focused simulator controls; full customization/Zen/physical layout matrix remains",
+      "mac": "partial: direct topology/history and focused editor controls; full customization/Zen/window layout matrix remains"
+    },
+    {
+      "name": "Camera",
+      "commands": ["fit_canvas", "zoom_in", "zoom_out", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"],
+      "checks": ["native/src/navigator_tests.rs", "Shared/Tests/NumericControlChecks.swift"],
+      "ios": "partial: direct camera/Navigator geometry and focused controls; full gesture/input/geometry matrix remains",
+      "mac": "partial: direct camera/Navigator geometry and focused controls; full gesture/input/geometry matrix remains"
+    },
+    {
+      "name": "Preferences and shortcuts",
+      "commands": ["toggle_theme", "settings", "keyboard_shortcuts"],
+      "checks": ["tests/persistence-owner.swift", "Shared/Tests/MenuSettingsChecks.swift"],
+      "ios": "partial: persistence, search and shortcut conflict workflows; every preference and hardware-keyboard combination remains",
+      "mac": "partial: persistence, search and shortcut conflict workflows; every preference and keyboard/focus combination remains"
+    },
+    {
+      "name": "Native windows",
+      "commands": ["fullscreen", "new_window"],
+      "checks": ["tests/window-presentation.swift", "Shared/Tests/WindowChecks.swift"],
+      "ios": "partial: independent simulator windows; full-screen toggle unavailable and physical scene/window matrix remains",
+      "mac": "partial: independent windows and direct full-screen request/observation/failure checks; full-screen editor layout/rendering remains"
+    },
+    {
+      "name": "Application information and links",
+      "commands": ["about", "website", "source_code"],
+      "checks": ["Shared/Editor/EditorView.swift", "Shared/Settings/SettingsView.swift"],
+      "ios": "open: shared About/link routes implemented; complete displayed information and URL handoff checks remain",
+      "mac": "open: shared About/link routes implemented; complete displayed information and URL handoff checks remain"
+    }
+  ]
+}

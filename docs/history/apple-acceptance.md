@@ -1232,3 +1232,143 @@ byte across 70 of 160 cases, maximum error 47), complete feature inventory,
 physical lifecycle/input matrix and sustained hardware performance gates remain
 open on both targets. A concurrent Android-only native time/battery header change
 was also pulled before publication; it does not change these tested Apple paths.
+
+## Editor control geometry and live header compositing
+
+The Apple tool rows now use the browser panel's padding, text-line sizing and
+spacing; numeric readouts use tabular digits. Properties uses a shared Apple
+button/popover control instead of the Mac menu style that discarded the custom
+label's appearance. Choice rows reserve the longest option's intrinsic width,
+capped at 60% of the row, and keep the label alongside it. The Layers blend
+control now exposes its current value to accessibility. Both targets retain a
+background plate behind Settings when paper extends under the header.
+
+The browser's fixed Navigator height clipped its controls in the default short
+panel. Its overview now fits the available height above six 32-point controls,
+matching the Apple layout. The surrounding background has its own cutout around
+the live GPU image, with no bitmap readback or separate preview renderer. Flip
+buttons also project the shared selected state. A later opaque-header CSS rule
+was removed so the canvas remains visible between the header's individual
+control backgrounds.
+
+The focused `testEditorControlLayout` workflow passes on Mac and iPad Simulator.
+It checks all Navigator targets, uses four actual zoom-in actions, selects
+Multiply in Properties, observes the same value in Layers and restores Normal
+through the in-app Undo control. It captures the initial editor and paper zoomed
+behind the header before changing document history. The Mac fixture moves the
+pointer back onto a panel tab to avoid a brush-hover mark in the capture. It does
+not address the system menu bar. The first Mac run reached Multiply but failed
+because the Layers button did not expose its value; the final projection and
+check use that accessibility value. No failed run is counted as a pass.
+
+The browser editor workflow passes with actual Navigator pointer hits and a
+rendered-pixel assertion that paper is visible through empty header space. An
+older fixture reselected already-active tabs and opened configuration over the
+controls; it now activates a tab only when needed. The remaining editor workflow
+also passes: color/tool actions, Navigator drag, partial Zen, collapsed columns,
+nested drawers, project Save/Open/New, PNG export, cancellation and persistence.
+The browser runner keeps Linux's offscreen Vulkan options while allowing native
+GPU backends on other hosts.
+
+Both native captures match local Chrome at 2× scale. Full-image comparisons with
+zero channel tolerance retain every pixel and intentionally still fail:
+
+| Native target / scenario | Logical viewport | Different pixels / total | Different fraction | Maximum channel error |
+| --- | --- | --- | --- | --- |
+| iPad Simulator / initial | 1376 × 1032 | 295,639 / 5,680,128 | 5.2048% | 219 |
+| iPad Simulator / canvas under header | 1376 × 1032 | 393,062 / 5,680,128 | 6.9199% | 219 |
+| macOS / initial | 1200 × 870 | 389,668 / 4,176,000 | 9.3311% | 255 |
+| macOS / canvas under header | 1200 × 870 | 522,018 / 4,176,000 | 12.5004% | 255 |
+
+The four edges of both the main paper rectangle and Navigator paper rectangle
+match Chrome exactly in each initial capture. Three fixed points four logical
+pixels below the top edge change from the shared gray surround to white paper
+after zooming on each native target. These are scoped geometry/compositing
+checks, not proof that every control meets the one-point alignment requirement.
+Remaining differences include text rasterization, tabs/grips, color controls,
+control details and the intentional Mac window/menu adaptation. Other themes,
+documents, UI states and physical-device visual coverage remain open.
+
+Before publication, the milestone integrates concurrent Windows Navigator,
+watercolor selection-boundary, native shader-worker shutdown and web/GTK
+fullscreen/system-status changes. All 32 Apple bridge, 15 host and 221 UI tests
+pass, with one host hardware check ignored. The focused selected-watercolor
+transport and shader-shutdown tests pass on the local native backend. Signed Mac
+and iPad builds and WebAssembly build pass; the integrated iPad app installs and
+launches. The browser editor workflow passes again after integration.
+
+The native UI workflows/captures precede that shared integration; no Apple view
+or tested property-action implementation changed in it. All four Chrome
+references were recaptured afterward. Three match their earlier references
+exactly; the Mac initial reference differs in 653 pixels with a maximum channel
+error of 5. The table uses that later reference and applies no masking or extra
+tolerance. This checkpoint does not establish Apple coverage for the new
+fullscreen/system-status surfaces or close the complete feature inventory.
+
+## Apple command coverage and native full-screen requests
+
+The command inventory now uses the same initial full editor workspace and
+document-replacement policy as `capy_apple_create`, at a declared 1200×900 logical
+viewport and scale 2. Both Apple platforms have initial snapshots, all five
+settings pages, every command and panel's availability, and the existing dynamic
+menu/layer/shortcut scenarios. Schema 2 places the platform-specific fixtures
+under `platforms.ios` and `platforms.mac`. The old iPad-only initial/settings
+fixture used the generic `NativeHost` workspace and did not represent a fresh
+Apple editor.
+
+`apps/layer-apple/command-coverage.json` classifies all 62 current commands in 14
+groups, with references and separate iPad/Mac remaining-work notes. The audit
+requires every catalog entry exactly once in both platform inventories and in
+the review, verifies referenced files exist, and detects availability changes.
+It passes with 62 commands, 11 panels and five settings pages per platform. An
+injected new command, omitted iPad entry, duplicate classification and changed
+Mac capability are each rejected. These are inventory checks; partial/open
+group notes are not promoted to successful workflow or complete UI acceptance.
+
+The newly shared Full Screen command now routes to the native Mac window.
+`WindowPresentation` serializes requests per editor; `DocumentWindowDelegate`
+adapts AppKit transitions while forwarding SwiftUI's original delegate callbacks.
+The requested mode does not optimistically change selection or the enter/exit
+icon. Actual notifications, including changes through native controls, update
+the shared state. Repeated enter requests cannot toggle the window back out;
+requests during a native transition wait for its result. Failed transitions and
+detachment complete the shared request with a visible error. Consecutive native
+observations are retained even when the serial owner has not published the first
+snapshot yet. Other Mac/iPad editor sessions retain their independent state.
+
+Mac View uses its existing native Full Screen item; the shared command remains
+available to toolbar customization and shortcut editing. Control-Command chords
+pass through the canvas's key-equivalent handler to AppKit. The adapter follows
+[AppKit's full-screen request](https://developer.apple.com/documentation/appkit/nswindow/togglefullscreen(_:))
+and [completion notification](https://developer.apple.com/documentation/appkit/nswindowdelegate/windowdidenterfullscreen(_:)).
+The installed UIKit SDK's iOS scene geometry preferences expose orientation
+changes, with no corresponding native iPad full-screen request. Mac Catalyst's
+separate geometry preferences do not apply to this UIKit target. The inventory
+retains `fullscreen` as explicitly unavailable on iPad; this capability remains
+open instead of being omitted from the parity review.
+
+The direct Swift window check passes request/acknowledgement ordering, repeated
+requests, external changes, rapid observations, failed enter/exit, detachment,
+delegate forwarding and session isolation against actual serial Rust owners.
+Its invisible AppKit test window simulates OS notifications; it verifies our
+adapter and editor state, not system menu mechanics or full-screen rendering.
+The existing shared full-screen test additionally exercises the Mac availability
+and exit request, while retaining the iPad exclusion and browser F11 behavior.
+Both signed Apple builds and all 32 Apple bridge, 15 host and 221 UI tests pass
+(268 total; the existing host hardware-only test remains ignored). Incoming
+README changes through `5c94d3b` are integrated.
+The signed iPad build is installed and launches on the attached device. No new
+physical input or GUI workflow assertion is inferred from that launch.
+
+Local evidence is retained under `artifacts/apple-window-*`: command fixtures and
+audit, direct Swift check, both build logs and shared regression output. These
+private artifacts are excluded from Git. This checkpoint adds no new visual,
+physical Pencil, latency or sustained-performance evidence. Full-screen editor
+geometry/rendering, optional system-status parity, full feature workflow coverage,
+existing pixel-difference failures and the hardware targets remain open.
+
+The previous strict filter-reference failure, physical input/lifecycle matrix,
+physical iPad automation setup and sustained hardware performance gates remain
+open. Capture bundles, logs, device/signing data and pixel reports stay in ignored
+local artifacts. Test editors and the temporary web server are closed; the
+original user editor is preserved.

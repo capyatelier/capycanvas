@@ -11,7 +11,7 @@ const width = Number(widthArg), height = Number(heightArg), scale = Number(scale
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -69,6 +69,7 @@ try {
   const captures = [];
   for (const selectedTheme of [theme]) {
     await evaluate(`layerApp.dispatch({type:'system_theme_changed',theme:'${selectedTheme}'}); layerApp.dispatch({type:'invoke',command:'fit_canvas'});`);
+    if (scenario === 'canvas-under-header') await evaluate(`for(let i=0;i<4;i++) layerApp.dispatch({type:'invoke',command:'zoom_in'});`);
     if (scenario === 'layer-added') await evaluate(`layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});`);
     if (scenario === 'panel-configuration') await evaluate(`layerApp.dispatch({type:'customize',action:{type:'show_all_controls',panel:'sizes'}});`);
     if (scenario === 'partial-zen') await evaluate(`layerApp.dispatch({type:'invoke',command:'zen_mode'});`);

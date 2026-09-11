@@ -12,6 +12,11 @@ Arguments are logical width, height, pixel scale, output directory and theme.
 An optional final `layer-added` argument captures one new empty layer selected
 above the original ink/paper layers, matching the iPad layer workflow's final
 capture. The default scenario is `initial`.
+`canvas-under-header` applies four shared zoom-in steps after fitting the default
+document. Paper then extends behind the header, exposing opaque-header mistakes
+that the initial gray surround cannot reveal. The native
+`EditorLaunchTests/testEditorControlLayout` workflow attaches this scenario and
+`initial` on both Apple targets, using the actual Navigator buttons.
 `filter-properties` reproduces the final state of the shared Apple
 `testFilterSearchPreviewAndProperties` workflow: Gaussian Blur radius 5, identity
 Curves and default Gradient Map, with Properties open. The test attaches the full
@@ -56,7 +61,7 @@ covering the editor makes the fixture invalid and must not be counted as parity
 evidence. Captures can include system corner backgrounds; keep artifacts local.
 
 The focused Apple `EditorLaunchTests/testCompleteEditorCapture` test attaches
-`complete-editor-initial` and `complete-editor-geometry` on either target. It uses
+`complete-editor-initial` and `complete-editor-geometry-initial` on either target. It uses
 a fresh light-theme workspace and waits for the canvas and live Navigator.
 Compare its exported native screenshot with a matching Chrome `initial` capture:
 

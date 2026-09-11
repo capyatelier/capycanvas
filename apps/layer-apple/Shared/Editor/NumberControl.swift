@@ -29,7 +29,7 @@ struct NumberControl: View {
                         numericEntry
                     } else {
                         Button { showsEntry = true } label: {
-                            Text(formatted["text"].string).padding(.horizontal, 6).frame(height: 24)
+                            Text(formatted["text"].string).monospacedDigit().padding(.horizontal, 6).frame(height: 24)
                         }.buttonStyle(.plain).accessibilityLabel(label)
                             .accessibilityValue(formatted["text"].string)
                             .accessibilityIdentifier("number-value-" + key)

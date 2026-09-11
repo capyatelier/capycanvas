@@ -879,6 +879,7 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::LowerLayer => "Move the active layer down",
                 CommandId::ResetLayout => "Restore panel docking positions",
                 CommandId::ZenMode => "Hide or show the editor controls",
+                CommandId::Fullscreen => "Enter or leave full screen",
                 CommandId::NewWindow => "Open another drawing window",
                 CommandId::NewDocument => "Create a drawing",
                 CommandId::OpenDocument => "Open an editable drawing",

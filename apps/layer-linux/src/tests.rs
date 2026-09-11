@@ -3644,11 +3644,18 @@ fn native_tool_and_color_panels() {
     }
     w.dispatch(UiAction::RestoreWorkspace { workspace });
     pump(150);
-    capture_reference(
-        &w,
-        output.join("three-tile-minimum.png").to_str().unwrap(),
-        1.0,
-    );
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(100);
+        capture_reference(
+            &w,
+            output
+                .join(format!("three-tile-minimum-{theme:?}.png"))
+                .to_str()
+                .unwrap(),
+            1.0,
+        );
+    }
     w.window.close();
     pump(50);
 }
@@ -9950,7 +9957,7 @@ fn native_frame_pacing() {
                 }
             }
         ));
-        let mut dispatch_cpu = Vec::with_capacity(4096);
+        let mut dispatch_thread_cpu = Vec::with_capacity(4096);
         let strokes_before = w
             .gpu
             .borrow()
@@ -9966,6 +9973,20 @@ fn native_frame_pacing() {
         let start = Instant::now();
         let mut first = true;
         let mut last_event = None;
+        let first_sequence = sequence;
+        let sample_due = Rc::new(Cell::new(false));
+        let input_tick = glib::timeout_add_local(
+            Duration::from_millis(2),
+            glib::clone!(
+                #[strong]
+                sample_due,
+                move || {
+                    sample_due.set(true);
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
+        let context = glib::MainContext::default();
         while start.elapsed() < Duration::from_secs(6) {
             let t = start.elapsed().as_secs_f32() * 5.0;
             let mut event = PenEvent {
@@ -10022,20 +10043,19 @@ fn native_frame_pacing() {
             }
             first = false;
             last_event = Some(event);
-            // Observe all native dispatch, including GTK painting and preview
-            // callbacks, not just our input/frame handlers. Never block waiting
-            // for an event: the sleep is the same synthetic input cadence as pump.
-            let until = Instant::now() + Duration::from_millis(2);
-            let context = glib::MainContext::default();
-            while Instant::now() < until {
-                while context.pending() && Instant::now() < until {
-                    let dispatch_start = Instant::now();
-                    context.iteration(false);
-                    dispatch_cpu.push(dispatch_start.elapsed().as_secs_f64() * 1000.);
-                }
-                std::thread::sleep(Duration::from_millis(1));
+            // Wait like the application: any frame/GDK/worker event can wake
+            // GLib immediately. Sleeping this thread between synthetic samples
+            // would add artificial frame-timer latency. Thread CPU excludes
+            // the event wait while including GTK paint and native callbacks.
+            while !sample_due.replace(false) {
+                let dispatch_start = crate::timing::thread_cpu_ms();
+                context.iteration(true);
+                dispatch_thread_cpu.push(crate::timing::thread_cpu_ms() - dispatch_start);
             }
         }
+        input_tick.remove();
+        let input_seconds = start.elapsed().as_secs_f64();
+        let input_events = sequence - first_sequence;
         clock.disconnect(before_paint);
         clock.disconnect(after_paint);
         let preview_updates = worker_stats.lock().unwrap().overview_revisions.len();
@@ -10143,7 +10163,9 @@ fn native_frame_pacing() {
             "input_handler_cpu": stats.input_handler_cpu,
             "frame_handler_cpu": stats.frame_handler_cpu,
             "gtk_paint_cpu": *paint_cpu.borrow(),
-            "main_dispatch_cpu": dispatch_cpu,
+            "main_dispatch_thread_cpu": dispatch_thread_cpu,
+            "event_loop": "native_wait",
+            "input_events": input_events, "input_hz": input_events as f64 / input_seconds,
             "wake_lateness": stats.wake_lateness,
             "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
             "worker_thread_cpu": stats.thread_cpu,

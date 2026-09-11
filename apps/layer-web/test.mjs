@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkEditor } from "./editor.test.mjs";
+import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
 import { checkAdjustments, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
@@ -31,11 +32,10 @@ const chrome = spawn(
     "--force-color-profile=srgb",
     "--enable-gpu",
     "--enable-unsafe-webgpu",
-    "--use-angle=vulkan",
     // Offscreen Vulkan avoids Wayland's Vulkan swapchain incompatibility while
-    // retaining the hardware WebGPU renderer and capturable window contents.
-    "--enable-features=Vulkan",
-    "--disable-vulkan-surface",
+    // retaining hardware rendering. Other hosts use their native GPU backend.
+    ...(process.platform === "linux" ? ["--use-angle=vulkan",
+      "--enable-features=Vulkan", "--disable-vulkan-surface"] : []),
     "--window-size=1440,1000",
     "about:blank",
   ],
@@ -153,15 +153,17 @@ try {
   await call("Page.enable");
   await call("Log.enable");
   // Keep the test tab focused even when the surrounding desktop is in use.
-  await call("Emulation.setFocusEmulationEnabled", { enabled: true });
+  if (!process.argv.includes("--fullscreen")) await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   if (process.argv.includes("--parity") || process.argv.includes("--preferences"))
     await call("Input.setIgnoreInputEvents", { ignore: true });
-  await call("Emulation.setDeviceMetricsOverride", {
+  if (!process.argv.includes("--fullscreen")) await call("Emulation.setDeviceMetricsOverride", {
     width: 1440,
     height: 1000,
     deviceScaleFactor: 1,
     mobile: false,
   });
+  if (process.argv.includes("--fullscreen")) await call("Page.addScriptToEvaluateOnNewDocument", {source:
+    'window.__statusBattery=Object.assign(new EventTarget(),{level:.72,charging:true});Object.defineProperty(navigator,"getBattery",{configurable:true,value:async()=>window.__statusBattery});'});
   await call("Page.navigate", {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
@@ -169,7 +171,11 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--editor")) {
+  if (process.argv.includes("--fullscreen")) {
+    const {windowId} = await call("Browser.getWindowForTarget",{targetId:target.targetId},null);
+    await checkFullscreen({call,evaluate,settle,windowId});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--editor")) {
     await checkEditor({call,evaluate,settle,canvasPixels});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--staged-startup")) {
