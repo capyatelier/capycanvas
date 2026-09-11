@@ -10,6 +10,7 @@ import SwiftUI
     let camera = CameraReadout()
     @Published var catalog = JSON()
     @Published var failure: String?
+    @Published var canvasSubmitted = false
     /// Measured native window controls; editor geometry otherwise comes from Rust.
     @Published var headerLeadingInset: CGFloat = 0
     var cameraRevision: UInt64 = 0

@@ -179,6 +179,7 @@ pub unsafe extern "C" fn capy_apple_gesture(
 
 /// # Safety
 /// Valid handle and retained CAMetalLayer; layer outlives attach through detach.
+/// Cache directory is a NUL-terminated UTF-8 path valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_attach(
     app: *mut CapyApple,
@@ -186,16 +187,38 @@ pub unsafe extern "C" fn capy_apple_attach(
     width: u32,
     height: u32,
     scale: f32,
+    cache_directory: *const c_char,
 ) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
     app.perform(|a| {
-        if layer.is_null() {
-            return Err("Missing Metal layer".into());
+        if layer.is_null() || cache_directory.is_null() {
+            return Err("Missing Metal layer or cache directory".into());
         }
+        let cache = unsafe { CStr::from_ptr(cache_directory) }
+            .to_str()
+            .map_err(|e| e.to_string())?;
         a.host.resize(width, height, scale)?;
-        unsafe { a.metal.attach(&mut a.host, layer) }
+        unsafe {
+            a.metal
+                .attach(&mut a.host, layer, std::path::Path::new(cache))
+        }
+    })
+    .map_or(-1, |_| 0)
+}
+/// # Safety
+/// Valid exclusively owned handle. Call after submitting the bundled filters.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_finish_startup_cache(app: *mut CapyApple) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        if let Some(gpu) = a.host.session.renderer_mut().0.as_mut() {
+            gpu.finish_startup_cache();
+        }
+        Ok(())
     })
     .map_or(-1, |_| 0)
 }

@@ -15,6 +15,7 @@ pub struct MetalHost {
     surface: Option<Surface>,
     instance: Option<wgpu::Instance>,
     cursor: CanvasCursor,
+    blank_presented: bool,
 }
 
 fn error(e: impl std::fmt::Display) -> String {
@@ -28,6 +29,7 @@ impl MetalHost {
         &mut self,
         host: &mut NativeHost,
         layer: *mut c_void,
+        cache: &std::path::Path,
     ) -> Result<(), String> {
         self.detach();
         // Keep the device when replacing a layer: document textures remain live.
@@ -41,6 +43,8 @@ impl MetalHost {
         }
         .map_err(error)?;
         if host.session.engine().backend().0.is_none() {
+            host.startup = Default::default();
+            self.blank_presented = false;
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                     compatible_surface: Some(&surface),
@@ -53,13 +57,16 @@ impl MetalHost {
             let (device, queue) =
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                     label: Some("Capy Canvas Apple"),
-                    required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                    required_features: adapter.features()
+                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE),
                     required_limits: limits,
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            host.session.renderer_mut().0 =
-                Some(WgpuRasterizer::from_wgpu(adapter, device, queue).map_err(error)?);
+            host.session.renderer_mut().0 = Some(
+                WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, cache)
+                    .map_err(error)?,
+            );
         }
         let [width, height] = host.session.state().camera.viewport;
         let gpu = host.session.renderer_mut().0.as_ref().unwrap();
@@ -78,7 +85,7 @@ impl MetalHost {
             config.format = format;
         }
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::new(gpu.device(), config.format);
+        let presenter = ViewportPresenter::for_renderer(gpu, config.format);
         self.surface = Some(Surface {
             surface,
             config,
@@ -90,7 +97,12 @@ impl MetalHost {
     }
 
     #[cfg(not(target_vendor = "apple"))]
-    pub unsafe fn attach(&mut self, _: &mut NativeHost, _: *mut c_void) -> Result<(), String> {
+    pub unsafe fn attach(
+        &mut self,
+        _: &mut NativeHost,
+        _: *mut c_void,
+        _: &std::path::Path,
+    ) -> Result<(), String> {
         Err("Metal presentation requires an Apple target".into())
     }
 
@@ -106,14 +118,11 @@ impl MetalHost {
         presentation: u64,
     ) -> Result<(bool, [u64; 5]), String> {
         let mut costs = [0; 5];
-        if !host.dirty || self.surface.is_none() {
+        if (!host.dirty && host.startup.complete) || self.surface.is_none() {
             return Ok((false, costs));
         }
         let clock = Instant::now();
-        let previous = host.session.state().revision;
-        let change = host.session.frame(now, presentation)?;
-        host.dirty = change.canvas_wake;
-        host.apply_change(previous, change);
+        host.prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = host.session.state().camera.view();
         let surround = host.session.state().palette.surround_linear;
         let scale = view.width_px as f32 / host.logical[0];
@@ -164,6 +173,7 @@ impl MetalHost {
         );
         costs[2] = clock.elapsed().as_nanos() as u64 - costs[..2].iter().sum::<u64>();
         gpu.queue().present(target);
+        self.blank_presented = true;
         costs[3] = clock.elapsed().as_nanos() as u64 - costs[..3].iter().sum::<u64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         costs[4] = clock.elapsed().as_nanos() as u64 - costs[..4].iter().sum::<u64>();

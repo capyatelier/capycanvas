@@ -18,7 +18,9 @@ void capy_apple_string_free(char *text);
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
-                         uint32_t width, uint32_t height, float scale);
+                         uint32_t width, uint32_t height, float scale,
+                         const char *cache_directory);
+int32_t capy_apple_finish_startup_cache(CapyApple *app);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_detach(CapyApple *app);
 /* Nine doubles per record: x/y physical pixels, pressure, tilt x/y radians,

@@ -73,6 +73,18 @@ The Apple tests dispatch through the real C ABI for both platform configurations
 They check brush/zoom/settings actions, session isolation, committed ink after
 pen-up, and exact GPU document pixels through undo/redo. The GPU tests require
 hardware Metal access; they do not establish physical input or presentation timing.
+The staged-startup check also verifies pending ink survives the initial paper
+frame and stays undoable while document/brush shaders become ready.
+
+The shared Swift scheduler has a fast standalone check, with an asynchronous
+native-owner test double and no application launch:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/CanvasFrameDriver.swift \
+  apps/layer-apple/tests/frame-driver.swift -o /tmp/capy-frame-driver-tests
+/tmp/capy-frame-driver-tests
+```
 
 Use launch tests for native surface geometry and targeted event-delivery checks:
 
@@ -107,6 +119,13 @@ Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state
 before going idle. Each window owns its own session. Reattaching a Metal layer
 does not reload bundled filters over a session's edited filter library.
+Both Apple targets now use the same staged GPU frame preparation as Android:
+paper first without consuming document replay, then document and active-brush
+dependencies, followed by remaining shaders. The editor uses its shared theme
+background until the first Metal viewport submission. Bundled filters merge
+after document readiness, and shader caches remain in the app's local caches
+directory. Submission is distinct from GPU completion and on-screen presentation;
+cold/warm startup latency and hardware frame cadence still require measurement.
 Use direct window captures and editor action/state/output checks for routine
 parity work. Coordinate testing within the app is appropriate for custom canvas
 and control behavior when useful. Reserve UI automation for targeted app

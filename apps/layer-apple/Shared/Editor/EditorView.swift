@@ -12,6 +12,9 @@ struct EditorView<Canvas: View>: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             canvas().ignoresSafeArea()
+            if !store.canvasSubmitted {
+                palette["bg"].ignoresSafeArea().allowsHitTesting(false)
+            }
             if !store.state.isNull {
                 if !store.snapshot["chrome_hidden"].bool { header }
                 ForEach(store.snapshot["layout"]["groups"].array.indices, id: \.self) { i in
