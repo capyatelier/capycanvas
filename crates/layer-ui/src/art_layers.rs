@@ -10,6 +10,7 @@ pub enum LayerCanvasTool {
     #[default]
     Paint,
     Move,
+    Transform,
     Select,
     LassoFill,
     Hand,
@@ -574,6 +575,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if tool == LayerCanvasTool::Transform {
+                    return self.begin_transform();
+                }
                 if let LayerCanvasTool::Ruler { kind } = tool {
                     self.rulers.kind = kind;
                 }
@@ -1394,6 +1398,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. }) {
             return self.ruler_pen(event, p);
         }
+        if self.layer_interaction.tool == LayerCanvasTool::Transform {
+            return self.transform_pen(event, p);
+        }
+        if self.layer_interaction.tool == LayerCanvasTool::Move
+            && self.operation_ruler_pen(event, p)?
+        {
+            return Ok(());
+        }
         match event.phase {
             PenPhase::Down => {
                 self.layer_interaction.path.clear();
@@ -1485,11 +1497,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
+        let transform = self.cancel_transform()?;
         self.cancel_ruler_gesture();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(region);
+            return Ok(region || transform);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine
@@ -1597,6 +1610,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
         self.append_ruler_overlay(segments);
+        self.append_transform_overlay(segments);
         let matrix = self.state.camera.view().document_to_surface;
         let scale = self
             .logical_viewport

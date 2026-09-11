@@ -903,6 +903,7 @@ impl WgpuRasterizer {
         let telemetry = telemetry::Telemetry::new(&device, &queue);
         let selection_clip = selection_clip::SelectionClip::new(&device);
         let scene_pipelines = scene::Pipelines::new(&device);
+        let transforms = Some(paint_transform::PaintTransforms::new(&device));
         let mut renderer = Self {
             startup: None,
             telemetry,
@@ -917,7 +918,7 @@ impl WgpuRasterizer {
             regions: None,
             unclipped,
             scene: None,
-            transforms: None,
+            transforms,
             transform_preview: None,
             transform_damage: Vec::with_capacity(2),
             filter_previews: None,
@@ -987,6 +988,9 @@ impl WgpuRasterizer {
             renderer.pipelines.compile_all();
             renderer.layer_masks.compile_all();
             renderer.selection_clip.compile_all();
+            for pipeline in renderer.transforms.as_ref().unwrap().pipelines() {
+                pipeline.compile();
+            }
         }
         if staged {
             renderer.upload_mask(&AssetId::from(WHITE_MASK_ASSET), 1, 1, 1, &[255])?;
@@ -4282,7 +4286,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     let mut transforms = self
                         .transforms
                         .take()
-                        .unwrap_or_else(|| paint_transform::PaintTransforms::new(self));
+                        .expect("retained transform renderer");
                     let result = transforms.apply(
                         self,
                         &mut encoder,
@@ -4558,7 +4562,7 @@ impl CanvasRenderer for WgpuRasterizer {
             let mut transforms = self
                 .transforms
                 .take()
-                .unwrap_or_else(|| paint_transform::PaintTransforms::new(self));
+                .expect("retained transform renderer");
             let result = transforms.update_preview(
                 self,
                 &mut encoder,

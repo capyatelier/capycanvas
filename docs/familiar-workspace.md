@@ -684,9 +684,8 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   is claimed from shared-schema compilation alone.
 - Region follow-ups before the final complete tool review:
   Gap closing, edge expansion and antialiasing need explicit follow-up rather
-  than being silently conflated with color tolerance. Fractional raster-selection
-  translations currently use nearest sampling; general transforms need an
-  explicit resampling policy. Watercolor's display-only outer edge still needs
+  than being silently conflated with color tolerance. Affine raster-selection
+  resampling is now implemented, as recorded below. Watercolor's display-only outer edge still needs
   its final selection-boundary policy, as noted above.
 - Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, remaining shortcuts
@@ -805,8 +804,9 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   endpoints to 45° increments immediately, including without pointer movement.
   Escape or canceled contact discards the provisional guide. Release records one
   document edit; guide deletion, movement and creation share document undo/redo.
-  Operation-tool integration and project serialization remain in the pending
-  Operation/file milestones; guides currently persist within the open document.
+  Operation-tool integration is now implemented in the controller milestone below.
+  Project serialization remains in the file milestone; guides currently persist
+  within the open document.
 - Show rulers and Snap to rulers appear in View and in shared Tool Settings.
   Hiding guides disables snapping without forgetting the snap preference. Delete
   ruler is enabled only for a selected guide. GTK projects generic command rows
@@ -1133,3 +1133,65 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   delayed GPU-validation readiness, native web settings and drawing/panning
   during optional compilation, and startup with a loaded domain-warp filter.
   No new physical Android or Apple run is claimed by this GTK milestone.
+
+### Operation controller and GTK interaction
+
+- Operation now offers Move and Scale / rotate. The shared Rust controller owns
+  eight resize handles, rotation, dragging inside the box, X/Y position,
+  percentage scale, angle, Keep proportions, and Apply/Cancel. Ctrl/Cmd+T starts
+  a transform; Enter applies and Escape cancels. Shift constrains movement,
+  preserves resize proportions or snaps rotation to 15 degrees; Alt resizes
+  around the center. Modifier changes apply without another pointer movement.
+  Reflection and rotation retain the opposite resize anchor without an initial
+  grab-offset jump. Move also edits existing rulers, never creates new ones.
+- All updates use the immutable GPU preview transaction described above. Apply
+  commits pixels and transformed selection as one undo entry; Cancel, tool
+  changes and conflicting document edits restore the original. Numeric edits
+  update only Tool Settings, not the Layers panel. Position sliders have useful
+  content-relative soft ranges while typed expressions retain wider hard bounds.
+  Scale display uses whole percentages but retains fractional stored values.
+- GTK renders the ordinary Tool Set and numeric/action schemas. The GPU overlay
+  adds one reusable filled-rectangle primitive for clean handles, replacing
+  overlapping thick line corners. It allocates no additional image or render
+  pass. Tool Settings action/checkbox labels now ellipsize with full tooltips,
+  keeping the three-tile 128px minimum instead of forcing 165px.
+- Color and scalar transform pipelines now use the shared deferred compiler and
+  native cache. Unused transforms compile in stage four; a saved document with
+  transforms promotes them into document dependencies before replay. Both
+  recipes exist from construction, removing lazy scalar-renderer creation during
+  the first wet transform. Only tiny empty bindings are added before use; image
+  captures and parameter buffers remain demand-allocated and reused.
+- Validation: 32 core, 29 engine, 186 shared UI tests; 97 GPU correctness tests
+  plus the new saved-transform startup regression (16 hardware benchmarks
+  excluded from the suite). Strict UI/renderer/GTK Clippy and workspace/Wasm
+  checks pass. GTK input tests cover dragging, resizing, expression input,
+  proportional scale, Apply/Cancel, undo and actual GPU color sampling at moved
+  and restored locations. Dark/light and 128px screenshots are inspected under
+  ignored `artifacts/familiar-workspace/operation-*.png`. No physical input or
+  native web/Android transform UI validation is claimed.
+- Six-second release GTK transform drag, with live Tool Settings, on the
+  private 120Hz Wayland display:
+
+  | Measurement | Median | p95 | p99 |
+  | --- | ---: | ---: | ---: |
+  | Worker render/present CPU (ms) | 0.572 | 1.034 | 1.216 |
+  | Canvas GPU (ms) | 0.692 | 1.251 | 1.678 |
+  | GTK frame handler (ms) | 0.096 | 0.262 | 0.315 |
+  | Shared frame processing (ms) | 0.009 | 0.027 | 0.034 |
+
+  720 submitted frames, 718 successful presentations, approximately 119.38Hz.
+  Input is synthetic; presentation feedback is real. This covers a large
+  ordinary-paint layer, not linked masks or continuous numeric editing. Source
+  capture and first-use timing are separate from these steady-state numbers.
+  A subsequent ordinary 384px G-Pen run delivers 119.96Hz with no discarded
+  presentations. Worker CPU median/p95/p99 is 0.304/0.585/0.715ms; GPU is
+  0.151/0.289/0.430ms; GTK handler is 0.015/0.040/0.056ms. Medians are slightly
+  higher than the previous startup milestone's run; these separate short runs
+  do not isolate driver/timing variation from code cost. The frame budget holds.
+- Still outstanding for Operation: active/linked-mask transforms and a readiness
+  gate if interaction begins before optional transform compilation finishes.
+  Until mask support is implemented, Scale / rotate is unavailable for an active
+  mask or paint with a linked mask; unlinked masks remain stationary. Bounds are
+  conservative document-history bounds rather than a pixel-tight GPU reduction.
+  Collapsible columns, region refinements, complete menus/file workflows, the
+  final default layout, final validation and human approval remain required.

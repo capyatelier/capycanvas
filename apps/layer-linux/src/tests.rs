@@ -953,6 +953,247 @@ fn native_ruler_tools() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_operation_tool() {
+    let app = native_test_app("art.capycanvas.OperationTool");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .set_panel_visible(Panel::Sizes, false)
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
+    workspace
+        .layout
+        .move_panel(
+            [w.surface.width() as f32, w.surface.height() as f32],
+            Panel::ToolSettings,
+            DockTarget::Split {
+                group,
+                edge: Edge::Bottom,
+            },
+        )
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(100);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let divider = w
+        .resolved()
+        .dividers
+        .into_iter()
+        .find(|d| d.axis == Axis::Vertical && d.bounds.x < 100.)
+        .unwrap();
+    w.dispatch(UiAction::ResizeDock {
+        id: divider.id,
+        position: [100., 220.],
+        viewport,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::FitCanvas,
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.12, 0.38, 0.72, 1.],
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Lasso,
+    });
+    native_pen_path(
+        &w,
+        &[
+            [650., 500.],
+            [1350., 500.],
+            [1350., 1000.],
+            [650., 1000.],
+            [650., 500.],
+        ],
+    );
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::FillSelection,
+    });
+    pump(200);
+    let document = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .clone()
+    };
+    let original = document();
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Move,
+    });
+    pump(100);
+    assert_eq!(w.tool_set.group_buttons.borrow().len(), 2);
+    let transform = w.tool_set.group_buttons.borrow()[1].clone();
+    click(&transform);
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
+    // Exercise the real canvas input/controller: moving inside the box, then
+    // its lower-right handle. The opposite corner must not jump on resize.
+    native_pen_path(&w, &[[1000., 750.], [1100., 800.]]);
+    let value = |id: &str| {
+        state(&w)
+            .tool_settings
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .value
+    };
+    assert!((value("transform_x") - 100.).abs() < 0.1);
+    assert!((value("transform_y") - 50.).abs() < 0.1);
+    native_pen_path(&w, &[[1450., 1050.], [1590., 1150.]]);
+    assert!((value("transform_width") - 1.2).abs() < 0.01);
+    assert!((value("transform_height") - 1.2).abs() < 0.01);
+    let number = |id: &str| {
+        find_named(
+            &w.panel_widget(Panel::ToolSettings),
+            &format!("tool-setting-{id}"),
+        )
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap()
+    };
+    edit_number(&number("transform_angle"), "360/12");
+    pump(150);
+    assert!((value("transform_angle") - std::f32::consts::PI / 6.).abs() < 0.001);
+    let toggle: gtk::CheckButton = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-action-TransformAspect",
+    )
+    .unwrap()
+    .downcast()
+    .unwrap();
+    toggle.set_active(true);
+    edit_number(&number("transform_width"), "150");
+    pump(100);
+    assert!((value("transform_height") - 1.5).abs() < 0.01);
+    assert_eq!(
+        document().revision,
+        original.revision,
+        "preview does not edit history"
+    );
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(150);
+        number("transform_x")
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .unwrap()
+            .downcast::<gtk::ScrolledWindow>()
+            .unwrap()
+            .vadjustment()
+            .set_value(0.);
+        pump(50);
+        capture_reference(&w, &format!("{dir}/operation-{theme:?}.png"), 1.);
+        let divider = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.band && d.bounds.x < 400. && d.axis == Axis::Horizontal)
+            .unwrap();
+        w.dispatch(UiAction::ResizeDock {
+            id: divider.id,
+            position: [134., 0.],
+            viewport,
+        });
+        pump(120);
+        let panel = w.panel_widget(Panel::ToolSettings);
+        assert_eq!(panel.width(), 128);
+        assert!(
+            w.tool_settings
+                .root
+                .measure(gtk::Orientation::Horizontal, -1)
+                .0
+                <= 128,
+            "tool settings exceed three-tile minimum"
+        );
+        capture_reference(&w, &format!("{dir}/operation-narrow-{theme:?}.png"), 1.);
+        w.dispatch(UiAction::ResizeDock {
+            id: divider.id,
+            position: [232., 0.],
+            viewport,
+        });
+        pump(120);
+    }
+    let cancel: gtk::Button = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-action-CancelTransform",
+    )
+    .unwrap()
+    .downcast()
+    .unwrap();
+    click(&cancel);
+    assert_eq!(document().layers, original.layers);
+    assert_eq!(document().selection, original.selection);
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Move);
+    let transform = w.tool_set.group_buttons.borrow()[1].clone();
+    click(&transform);
+    edit_number(&number("transform_x"), "240");
+    let apply: gtk::Button = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-action-ApplyTransform",
+    )
+    .unwrap()
+    .downcast()
+    .unwrap();
+    click(&apply);
+    pump(150);
+    assert_eq!(
+        document()
+            .layer(original.active_layer)
+            .unwrap()
+            .operations
+            .len(),
+        original
+            .layer(original.active_layer)
+            .unwrap()
+            .operations
+            .len()
+            + 1
+    );
+    assert_ne!(document().selection, original.selection);
+    // Sample real GPU pixels after Apply, then undo; the displaced left edge
+    // becomes paper and returns to blue. This is not only a model assertion.
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::Deselect,
+    });
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::Tool {
+            tool: LayerCanvasTool::PickVisible,
+        },
+    });
+    native_pen_path(&w, &[[700., 750.], [700., 750.]]);
+    assert!(
+        state(&w).colors.foreground[0] > 0.9,
+        "old location should be paper"
+    );
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    }); // deselect
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    }); // transform + selection
+    pump(200);
+    assert_eq!(document().layers, original.layers);
+    assert_eq!(document().selection, original.selection);
+    native_pen_path(&w, &[[700., 750.], [700., 750.]]);
+    let c = state(&w).colors.foreground;
+    assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    w.window.destroy();
+    pump(50);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_figure_tools() {
     let app = native_test_app("art.capycanvas.FigureTools");
     let w = Workspace::new(&app);
@@ -7979,6 +8220,7 @@ fn native_frame_pacing() {
         ("WatercolorWash", Some(DefaultBrushPreset::WatercolorWash)),
         ("Pan", None),
         ("Hand", None),
+        ("Transform", None),
     ] {
         if std::env::var("LAYER_PACING_BRUSH").is_ok_and(|s| s != name) {
             continue;
@@ -7990,6 +8232,28 @@ fn native_frame_pacing() {
             w.dispatch(UiAction::Invoke {
                 command: CommandId::Hand,
             });
+        } else if name == "Transform" {
+            let mut workspace = state(&w).workspace;
+            workspace
+                .layout
+                .set_panel_visible(Panel::ToolSettings, true)
+                .unwrap();
+            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::FitCanvas,
+            });
+            w.dispatch(UiAction::Layer {
+                action: LayerAction::Tool {
+                    tool: LayerCanvasTool::Figure {
+                        shape: layer_ui::FigureShape::Rectangle,
+                        paint: layer_ui::FigurePaint::Fill,
+                    },
+                },
+            });
+            native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::ScaleRotate,
+            });
         }
         pump(300);
         *worker_stats.lock().unwrap() = Default::default();
@@ -7999,7 +8263,7 @@ fn native_frame_pacing() {
         let mut last_event = None;
         while start.elapsed() < Duration::from_secs(6) {
             let t = start.elapsed().as_secs_f32() * 5.0;
-            let event = PenEvent {
+            let mut event = PenEvent {
                 device_id: 1,
                 sequence,
                 timestamp_ns: glib::monotonic_time() as u64 * 1000,
@@ -8021,8 +8285,16 @@ fn native_frame_pacing() {
                 flags: SampleFlags::PRIMARY,
             };
             sequence += 1;
-            if preset.is_some() {
-                if std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0") {
+            if name == "Transform" {
+                let m = camera.document_to_surface();
+                let (x, y) = (1024. + 350. * t.sin(), 768. + 200. * (t * 1.3).sin());
+                event.surface_position = Point {
+                    x: m[0] * x + m[2] * y + m[4],
+                    y: m[1] * x + m[3] * y + m[5],
+                };
+            }
+            if preset.is_some() || name == "Transform" {
+                if preset.is_some() && std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0") {
                     w.cursor_input(Some(event));
                 }
                 w.input.send(&w, event);
@@ -8047,7 +8319,7 @@ fn native_frame_pacing() {
             last_event = Some(event);
             pump(2);
         }
-        if preset.is_some() {
+        if preset.is_some() || name == "Transform" {
             if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
                 assert!(
                     w.navigator_images.updating(),
@@ -8114,7 +8386,10 @@ fn native_frame_pacing() {
         );
         reports.push(report);
     }
-    assert!(!reports.is_empty(), "LAYER_PACING_BRUSH did not match a benchmark workload");
+    assert!(
+        !reports.is_empty(),
+        "LAYER_PACING_BRUSH did not match a benchmark workload"
+    );
     let path = std::env::var("LAYER_PACING_REPORT")
         .unwrap_or_else(|_| "/tmp/layer-wayland-pacing.json".into());
     std::fs::write(path, serde_json::to_vec_pretty(&reports).unwrap()).unwrap();

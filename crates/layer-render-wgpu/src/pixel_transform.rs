@@ -1,6 +1,7 @@
 //! GPU affine cut-and-place primitive. A host captures the original layer once,
 //! then reuses its source binding for previews and commit. No readback, waits,
 //! per-update textures or per-tile bindings. Output regions may be canvas tiles.
+use super::{Deferred, PipelineDevice};
 use layer_core::{Affine, ImageTransform, Interpolation};
 
 pub struct TransformSource {
@@ -20,7 +21,7 @@ pub struct TransformTarget<'a> {
 
 pub struct PixelTransform {
     scalar: bool,
-    pipeline: wgpu::RenderPipeline,
+    pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
     empty_selection: wgpu::Buffer,
@@ -34,14 +35,19 @@ impl PixelTransform {
     /// Construct on the renderer worker before interactive previews, then retain
     /// across transactions. Synchronous pipeline compilation is not frame work.
     pub fn new(device: &wgpu::Device) -> Self {
-        Self::with_scalar(device, false)
+        Self::headless(device, false)
     }
     /// The same resampling kernel for R8 wetness. Overlapping wetness uses max,
     /// not color's source-over; a move must not invent extra water in overlap.
     pub fn scalar(device: &wgpu::Device) -> Self {
-        Self::with_scalar(device, true)
+        Self::headless(device, true)
     }
-    fn with_scalar(device: &wgpu::Device, scalar: bool) -> Self {
+    fn headless(device: &wgpu::Device, scalar: bool) -> Self {
+        let pass = Self::staged(&device.clone().into(), scalar);
+        pass.pipeline.compile();
+        pass
+    }
+    pub(super) fn staged(device: &PipelineDevice, scalar: bool) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("affine transform parameters"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -80,49 +86,55 @@ impl PixelTransform {
                 },
             ],
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("affine pixels with selection"),
-            source: wgpu::ShaderSource::Wgsl(super::compose_wgsl(&[
-                include_str!("pixel_transform.wgsl"),
-                include_str!("selection_clip.wgsl"),
-            ])),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("affine pixels"),
-            bind_group_layouts: &[Some(&layout), Some(&source_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("affine cut and place"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fragment_main"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("scalar", f64::from(scalar))],
-                    ..Default::default()
+        let compile_device = device.clone();
+        let parameters = layout.clone();
+        let source = source_layout.clone();
+        let pipeline = Deferred::new(move || {
+            let device = &compile_device;
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("affine pixels with selection"),
+                source: wgpu::ShaderSource::Wgsl(super::compose_wgsl(&[
+                    include_str!("pixel_transform.wgsl"),
+                    include_str!("selection_clip.wgsl"),
+                ])),
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("affine pixels"),
+                bind_group_layouts: &[Some(&parameters), Some(&source)],
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("affine cut and place"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
                 },
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: if scalar {
-                        wgpu::TextureFormat::R8Unorm
-                    } else {
-                        super::COLOR_FORMAT
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fragment_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("scalar", f64::from(scalar))],
+                        ..Default::default()
                     },
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: if scalar {
+                            wgpu::TextureFormat::R8Unorm
+                        } else {
+                            super::COLOR_FORMAT
+                        },
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
         });
         Self {
             scalar,
