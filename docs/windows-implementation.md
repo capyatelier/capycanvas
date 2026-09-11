@@ -173,3 +173,12 @@ remain outstanding. Workspace/settings parity and final packaging also remain.
 
 Upstream now provides layer-host and staged GPU startup. Integrate these shared
 facilities as the Windows shell expands, keeping the Windows surface ABI local.
+
+The checkpoint was rebuilt from a fresh C++ intermediate directory after merging
+upstream b39e025. All 10 adapter/shared-host tests pass, and the merged runtime
+again produced the replayed stroke and passed resize/close checks. The upstream
+renderer now deprecates the eager constructor still used by this bootstrap;
+staged startup integration remains required. Rounded physical extents avoid
+truncation, but XAML content and the Win32 client capture still differ by one
+physical row on the test setup. Resolve native-frame capture accounting before
+using full-image comparisons to claim parity.

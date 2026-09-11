@@ -54,3 +54,8 @@ and Close, and inspect-window.ps1 to capture the app after each change. The ordi
 Stroke action uses OS SendInput and fails unless the pointer reaches this process.
 Raw pointer tracing is separately opt-in through CAPY_TRACE_INPUT=1 and must be
 disabled for timing runs. All generated diagnostics remain local.
+
+Use inspect-window.ps1 -ClientOnly for Win32 client-area captures. Record the
+XAML viewport separately: the observed client capture includes one extra physical
+row compared with the SwapChainPanel extent. Native-frame accounting remains part
+of the parity setup; do not rescale or silently crop reference captures to hide it.

@@ -110,8 +110,8 @@ void CanvasWindow::Open() {
 void CanvasWindow::Resize() {
     float scale=panel.CompositionScaleX();
     inputScale.store(scale);
-    Size next{uint32_t(std::max(1.0, panel.ActualWidth()*scale)),
-              uint32_t(std::max(1.0, panel.ActualHeight()*scale)),scale};
+    Size next{uint32_t(std::max(1L, std::lround(panel.ActualWidth()*scale))),
+              uint32_t(std::max(1L, std::lround(panel.ActualHeight()*scale))),scale};
     // Physical-pixel drag regions leave the app controls and system caption buttons interactive.
     window.AppWindow().TitleBar().SetDragRectangles({
         Windows::Graphics::RectInt32{int32_t(330*scale),0,
