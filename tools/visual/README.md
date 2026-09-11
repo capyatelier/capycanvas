@@ -17,6 +17,11 @@ capture. The default scenario is `initial`.
 Curves and default Gradient Map, with Properties open. The test attaches the full
 native window/screen and logical viewport dimensions. Use those dimensions and
 light theme for each platform's separate Chrome reference and full-image diff.
+`panel-configuration` opens the Brush size configuration with every control
+visible. On an isolated Apple debug launch, set `CAPY_INITIAL_ACTIONS` to
+`[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]`.
+Capture after the expansion settles, at the same viewport and scale. Native
+control heights can differ; keep those differences in the full-image report.
 `CAPY_CHROME` overrides the default macOS Chrome executable path. WebGPU must use
 a hardware adapter. Captures wait for staged GPU startup, fonts/images, visible
 layer thumbnail pixels and layout. GPU attachment alone can precede the actual

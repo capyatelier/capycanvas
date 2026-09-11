@@ -936,7 +936,11 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .chain(
             matches!(
                 platform,
-                Platform::Gtk | Platform::Generic | Platform::Android
+                Platform::Gtk
+                    | Platform::Generic
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
             )
             .then_some(ToolbarControl::Divider),
         )

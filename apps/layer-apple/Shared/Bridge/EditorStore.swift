@@ -24,6 +24,7 @@ import SwiftUI
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var navigatorImages = NavigatorImages(store: self)
     lazy var rendererStats = RendererStats(store: self)
+    lazy var workspace = WorkspacePresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
@@ -62,6 +63,7 @@ import SwiftUI
                 navigatorImages.refresh()
                 camera.value = state["camera"]
                 projectFiles.receive(state)
+                workspace.refresh()
             }
             else if !next["camera"].isNull {
                 // Camera patches update the readout alone; dragging the canvas
@@ -116,6 +118,13 @@ import SwiftUI
     func layer(_ action: [String: Any]) { dispatch(["type": "layer", "action": action]) }
     func importLayer(_ url: URL) { native?.importLayer(url); wake?() }
     func customize(_ action: [String: Any]) { dispatch(["type": "customize", "action": action]) }
+    func doubleClickHandle(_ item: JSON) {
+        query(["type": "panel_handle_target", "item": item.raw]) { [weak self] group in
+            guard let self, !group.isNull else { return }
+            self.dispatch(["type": "double_click_panel_handle", "group": group.raw,
+                "viewport": self.snapshot["layout"]["viewport"].raw])
+        }
+    }
     func input(_ value: [String: Any]) { native?.submit(1, JSON(value)); wake?() }
     /// A captured chord is a complete input pair; closing its sheet cannot leave
     /// a held key in the canvas interaction state.

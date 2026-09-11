@@ -123,7 +123,7 @@ private struct ColorSpaceSymbol: Shape {
         }
     }
 }
-private struct ColorSwatch: View {
+struct ColorSwatch: View {
     let rgba: JSON
     var body: some View {
         Canvas { graphics, size in

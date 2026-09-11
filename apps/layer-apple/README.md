@@ -40,7 +40,7 @@ the Apple bundle stages them and the root filter library without separate art.
 
 Tool Set consumes shared figure, region, ruler and Operation choices. Painting
 keeps the complete catalog brush list, also used by the web host, so every brush
-remains reachable while Apple toolbar customization is being implemented.
+remains reachable alongside custom toolbar tools.
 Enable **Workspace → Tool Settings panel** for the
 active tool's numeric fields and actions. Numeric expressions, units, ranges,
 slider mappings and stepping resolve through Rust. The shared Apple control
@@ -263,6 +263,26 @@ performance acceptance remains in [the matrix](../../docs/apple-acceptance.md).
 
 ## Implementation status
 
+Workspace customization shares its presentation and gesture ownership across
+iPad and Mac. Panel/group/toolbar/tile and Zen context menus query the live Rust
+models on activation. Toolbar creation, search, selection, naming, duplication,
+management and delete confirmation use shared validation/actions. Expanded
+configuration keeps its live preview beside editable controls and visibility
+toggles. Dragging a panel/group, resizing floating panels and dividers, and
+dropping tiles use Rust placement, eligibility and workspace history. The root
+owns a drag across tab tear-off; source views register only measured rectangles.
+Expansion queries run only during layout/configuration changes and animation;
+ordinary painting/camera updates do not start menu or expansion queries.
+
+The focused `testToolbarCustomization` and
+`testPanelConfigurationAndLiveDrag` checks use in-app controls. The iPad toolbar
+check also verifies canvas pinch navigation through empty workspace regions.
+Run the faster shared Metal/action regressions with
+`cargo test -p layer-apple workspace -- --test-threads=1`.
+The Chrome `panel-configuration` fixture enables direct full-image comparison.
+Collapsed columns/drawers, remaining panel projections and complete interaction
+and visual acceptance remain open on both targets.
+
 This is an editor-shell milestone, not a finished port. The simulator renders
 the live canvas; the iPad target builds, signs, installs and launches; the AppKit
 target builds and launches, with mouse drawing and keyboard undo/redo checked.
@@ -276,7 +296,7 @@ previews are current. Context gestures, dragging and all menu workflows still
 need complete acceptance on both platforms.
 
 Shared Filters/Properties, menus/shortcut editing, color/tool settings,
-Navigator and Diagnostics are implemented, with focused workflow evidence in
+Navigator, Diagnostics and workspace customization are implemented, with focused workflow evidence in
 the acceptance document. Still required: complete panel/drawer/menu/dialog
 behavior and customization, the remaining specialized controls and complete
 workflow coverage, document recovery and settings/workspace lifecycle coverage, Pencil estimated-property

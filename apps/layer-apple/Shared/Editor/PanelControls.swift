@@ -28,7 +28,7 @@ struct PanelControls: View {
             }.padding(8).frame(maxWidth: .infinity, alignment: .topLeading)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    @ViewBuilder private func control(_ item: JSON) -> some View {
+    @ViewBuilder func control(_ item: JSON) -> some View {
         switch item["control"].string {
         case "brushes": ToolSetControls(store: store)
         case "tool_settings": ToolSettingsControls(store: store)

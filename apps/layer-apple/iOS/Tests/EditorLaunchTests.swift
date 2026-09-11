@@ -4,6 +4,31 @@ final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
 
+
+    @MainActor func testToolbarCustomization() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"new_toolbar"}]"#
+        app.launch()
+        checkToolbarCustomization(in: app)
+    }
+
+    @MainActor func testPanelConfigurationAndLiveDrag() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]"#
+        app.launch()
+        checkPanelConfigurationAndLiveDrag(in: app)
+    }
+
     @MainActor func testNavigatorAndDiagnostics() throws {
         let app = editorTestApplication()
         #if os(iOS)
