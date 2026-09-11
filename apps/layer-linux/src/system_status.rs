@@ -125,13 +125,13 @@ impl SystemStatus {
                 cr.rectangle(23., 4., 2., 6.);
                 let _ = cr.fill();
                 if battery.charging {
-                    cr.move_to(23., 1.5);
-                    cr.line_to(18.5, 7.7);
-                    cr.line_to(21.2, 7.7);
-                    cr.line_to(20., 12.5);
-                    cr.line_to(25., 6.2);
-                    cr.line_to(22.7, 6.2);
-                    cr.line_to(24.1, 1.5);
+                    cr.move_to(23., 2.);
+                    cr.line_to(18.5, 8.);
+                    cr.line_to(21.2, 8.);
+                    cr.line_to(20., 12.);
+                    cr.line_to(25., 5.9);
+                    cr.line_to(22.7, 5.9);
+                    cr.line_to(24.1, 2.);
                     cr.close_path();
                     cr.set_line_width(1.75);
                     cr.set_line_join(gtk::cairo::LineJoin::Round);
