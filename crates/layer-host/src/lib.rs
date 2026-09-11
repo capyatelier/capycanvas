@@ -686,10 +686,20 @@ impl NativeHost {
                 tabs,
                 item,
                 expansion,
-            } => json!(
-                self.session
-                    .drop_hint(self.logical, position, &tabs, item, expansion)
-            ),
+            } => self
+                .session
+                .drop_hint(self.logical, position, &tabs, item, expansion)
+                .map_or(Value::Null, |hint| {
+                    let action = item.move_action(hint.target.clone(), self.logical);
+                    let mut value = json!(hint);
+                    // Panel/group gestures use DragWorkspace for live movement,
+                    // grab offsets and one history transaction. Tile drops apply
+                    // a single action after their final preview has resolved.
+                    if matches!(item, layer_ui::DockItem::Tile { .. }) {
+                        value["action"] = json!(action);
+                    }
+                    value
+                }),
             Query::Drawer {
                 column,
                 heights,
@@ -765,10 +775,28 @@ impl NativeHost {
                 );
                 let from =
                     from.or_else(|| layout.expanded_panel(self.logical, panel, heights, 0.0));
-                json!(
-                    end.zip(from)
-                        .map(|(end, from)| end.interpolate_from(from, progress))
-                )
+                let resolved = self.session.layout(self.logical);
+                end.zip(from).map_or(Value::Null, |(end, from)| {
+                    let placement = end.interpolate_from(from, progress);
+                    let mut value = json!(placement);
+                    if panel.kind() == layer_ui::PanelKind::Tiles {
+                        let config = layout.panel(panel).expect("expanded panel exists");
+                        let group = resolved
+                            .groups
+                            .iter()
+                            .find(|g| g.panels.contains(&panel))
+                            .expect("expanded group exists");
+                        value["tiles"] = json!(layer_ui::toolbar_tile_layout(
+                            placement.preview.width,
+                            (placement.preview.height - placement.configuration.y).max(0.0),
+                            group.axis,
+                            config.tiles(),
+                            !group.tabs_visible,
+                            config.tile_style,
+                        ));
+                    }
+                    value
+                })
             }
         };
         Ok(result)

@@ -696,3 +696,56 @@ The current web host does not expose Navigator, so this native Navigator capture
 has no matching Chrome fixture and is not a pixel-parity pass. Complete main
 editor visual acceptance, custom panel projections/drawers, recovery, physical
 input/lifecycle coverage and sustained performance remain open on both platforms.
+
+## Shared workspace customization and live dragging
+
+Both Apple targets now share panel/group/toolbar/tile and Zen context menus,
+tool selection/search, toolbar creation/rename/duplicate/management/delete
+dialogs, standalone color/opacity editing and expanded panel configuration.
+The Rust models supply labels, eligibility, validation, selection and actions.
+Context queries happen on activation; ordinary paint/camera publication does
+not query menus or expansion geometry. A single cancellable task resolves the
+shared expansion animation from native content measurements.
+
+Panel/group movement and floating/divider resizing send shared down/move/up/
+cancel actions. The gesture belongs to the persistent workspace root so tearing
+a tab into a floating group preserves input ownership. Native source views only
+register rectangles. Tile dragging allows one pending drop query, coalesces
+position changes, rejects stale replies and applies the final Rust action.
+Expanded toolbar tile geometry comes from the same layout used for drop hints.
+Divider tiles are exposed on both Apple platforms.
+
+All 256 affected regression tests pass (217 UI, 12 host, 27 Apple), after
+integrating the incoming GTK in-surface Navigator and shared renderer updates.
+The three new Apple checks exercise both platform policies: toolbar naming,
+duplication, deletion cancellation and workspace undo; live drag cancellation,
+resize and history; and exact expanded tile/drop geometry. Actual Metal artwork
+pixels remain unchanged through the workspace edits. Both final signed builds
+pass, the Mac UI test target compiles, and the physical iPad installs and launches.
+
+The focused iPad workflows pass toolbar creation/rename/duplicate/delete and
+control visibility/panel tear-off. Toolbar testing also verifies canvas pinch
+navigation through empty workspace regions. Accessibility grouping and control
+lookup errors found during these checks are corrected. The drag assertion
+accepts the shared policy that hides a lone floating built-in panel's tab and
+retains its footer grip. No system-menu coordinate testing was used. The
+separate XCTest authentication dialog remains pending on Mac; a direct screen
+capture verifies recording permission but is obstructed and rejected for parity.
+Mac interaction evidence for this milestone remains incomplete.
+
+The new Chrome `panel-configuration` fixture runs on hardware WebGPU at the
+iPad's 1376 by 1032 logical viewport and 2x scale. Its full-image comparison
+exposed SwiftUI clipping the expanded group to one child's width; the container
+now fills the complete Rust bounds and its right-side controls are visible.
+The configuration/tear-off check passes again after that correction. Exact
+different pixels fall from 21.1210% to 18.0784%; the final maximum channel error
+is 232. The portrait native raster is rotated 90 degrees counterclockwise
+without resampling, and every pixel remains in the comparison. Configuration
+control heights/styles, header, layer controls and other differences remain:
+this is a failing visual gate, not a parity pass. Raw images, reports, device
+details and test bundles remain local and ignored.
+
+Collapsed columns/drawers, remaining panel projections and complete context/
+dialog/drag workflows still require acceptance on both platforms. Recovery,
+physical Pencil/tablet and lifecycle coverage, the complete visual fixture
+matrix and sustained hardware performance remain open.
