@@ -11,6 +11,8 @@ typedef struct CapyPreview CapyPreview;
 /* Render-owner-only request/poll, nonblocking GPU readback. CPU-only packet
    transfers to a worker and is freed once; buffers live until that free. */
 __declspec(dllimport) CapyPreview* capy_filter_previews(CapyHost*, const char* json);
+__declspec(dllimport) CapyPreview* capy_layer_thumbnails(CapyHost*, const char* json);
+__declspec(dllimport) CapyPreview* capy_layer_menu(CapyHost*, const char* json);
 __declspec(dllimport) const char* capy_preview_metadata(const CapyPreview*);
 __declspec(dllimport) const uint8_t* capy_preview_bytes(const CapyPreview*, size_t* length);
 __declspec(dllimport) void capy_preview_free(CapyPreview*);

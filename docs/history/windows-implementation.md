@@ -836,3 +836,49 @@ close requested before brush readiness, close during speculative shader warmup,
 minimized clean close, Cancel preserving the drawing and previous maximized
 state, and dirty Discard. Captures and temporary pipeline diagnostics remain
 local; the temporary instrumentation was removed before publication.
+
+## 2026-09-11: native Layers editing and binary thumbnails
+
+Replaced the provisional two-button layer list with retained, virtualized WinUI
+rows following the Android panel's spacing, indentation, icons and editing
+markers. Separate selection and content/mask editing targets, visibility, blend,
+opacity, alpha/edit locks, clipping, references, masks, rename, grouping,
+collapse/expand, duplication, deletion and recursive shared context menus are
+projected natively. Drag-and-drop forwards row position to shared Drop policy,
+with exact group thresholds, a paper anchor, edge scrolling and cancellation
+that survives recycling the source row. Physical drag acceptance is still open.
+
+The optional query transport now admits bounded thumbnail and filter work
+together, prioritizes menus, and replaces obsolete queued menu requests. It
+does not consume reserved input command capacity. Thumbnail requests and
+readbacks are bounded at eight, CPU conversion runs off the UI thread, and the
+cache retains at most 128 images. The shared host's existing thumbnail query was
+factored into an owned-image method; its JSON response remains compatible with
+other ports. Windows keeps pixel bytes out of JSON.
+
+The footer resolves its menu target on the canvas owner after earlier selection
+actions. Widget actions and effect drafts carry a document epoch checked on that
+owner, so an obsolete queued edit cannot target a replacement document. Native
+workspace popups participate in chrome state. Numeric and rename fields commit
+in synchronous LosingFocus handlers; close moves focus before asking shared
+policy whether the document has unsaved edits.
+
+The adapter's 31 unit tests pass, with two explicit GPU tests ignored, and strict
+adapter Clippy with --no-deps passes. Queue tests cover ordering, reserved input
+capacity, retained allocation bounds, refusal ownership, latest-menu replacement
+and callback disposal. The native Layers fixture passes real app thumbnail
+changes after replayed paint with exact Undo restoration, retained rows, header
+locks and values, independent selection, mask target/link/enable state, clipping,
+references, rename/duplicate/delete/Undo, grouping without redirecting the
+editing target, edits inside a collapsed group, and ungrouping. It creates 68
+layers while checking fewer than 40 native rows are realized, scrolls back to
+older thumbnails, switches theme, replaces the document, commits a focused
+numeric draft before close, cancels that close and then discards with exit zero.
+The scroll presenter is named after its template becomes available. All
+screenshots, profiles and diagnostics remain local and ignored.
+
+This is a Layers editing milestone. Image-as-layer import, runtime filter
+package import, full editor columns/drawers/expansion/docking, remaining command
+coverage and native packaging are not complete. The full Windows editor preset
+remains gated. These checks do not establish physical drag/pen/touch behavior,
+full matched-state visual parity, 120 Hz painting or input-to-present latency.

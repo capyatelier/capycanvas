@@ -2,6 +2,8 @@
 //! canvas thread exclusively owns this object; UI callbacks only enqueue work.
 #![deny(unsafe_op_in_unsafe_fn)]
 #[cfg(any(target_os = "windows", test))]
+mod actions;
+#[cfg(any(target_os = "windows", test))]
 mod document_io;
 #[cfg(any(target_os = "windows", test))]
 mod documents;

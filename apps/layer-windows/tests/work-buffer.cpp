@@ -1,4 +1,5 @@
 #include "../CanvasWorkBuffer.h"
+#include "../CanvasQueryQueue.h"
 #include <cassert>
 #include <iostream>
 
@@ -56,4 +57,25 @@ int main() {
     queue.Take();
     assert(queue.Push(CanvasScroll{1,2,3,4,2,true,false}));
     std::cout<<"Canvas queue: ordered boundaries, reserved commands, refusal ownership, item and allocation limits passed\n";
+
+    CanvasQueryQueue queries;
+    auto payload=std::make_shared<int>(7);std::weak_ptr<int> lifetime=payload;
+    for(size_t i=0;i<CanvasQueryQueue::MaxItems;i++)
+        assert(queries.Push({i==3?CanvasQueryKind::LayerMenu:CanvasQueryKind::Thumbnails,std::to_string(i),
+            [payload](PreviewPacket){}}));
+    payload.reset();
+    CanvasQuery extra{CanvasQueryKind::Filters,"retry",{}};
+    assert(!queries.Push(std::move(extra)));assert(extra.json=="retry");
+    assert(queries.Take()->json=="3");
+    for(auto expected:{"0","1","2","4","5","6","7"})assert(queries.Take()->json==expected);
+    assert(queries.Empty()&&!queries.Take()&&lifetime.expired());
+    extra.json.reserve(CanvasQueryQueue::MaxPayload+1);
+    assert(!queries.Push(std::move(extra)));assert(extra.json=="retry");
+    assert(queries.Push({CanvasQueryKind::Filters,"discard",{}}));queries.Clear();
+    assert(queries.Empty());
+    assert(queries.Push({CanvasQueryKind::LayerMenu,"old",{}}));
+    assert(queries.Push({CanvasQueryKind::Thumbnails,"pixels",{}}));
+    assert(queries.Push({CanvasQueryKind::LayerMenu,"latest",{}}));
+    assert(queries.Take()->json=="latest");assert(queries.Take()->json=="pixels");assert(queries.Empty());
+    std::cout<<"Canvas queries: menu priority, FIFO pixels, bounded retained allocation, retry ownership and disposal passed\n";
 }

@@ -4,8 +4,8 @@ Development prototype using WinUI 3/C++/WinRT and the shared Rust/wgpu D3D12
 renderer. The prototype builds and runs with a GPU canvas, an independent input
 dispatcher, correct DPI composition, and asynchronous resize/shutdown. Controlled
 pointer replay verifies drawing, undo/redo, and a painted document continuing
-behind titlebar controls. Real OS input, workspace parity, recovery, bounded input
-transport, and presentation acceptance remain open; this is not a release package.
+behind titlebar controls. Full OS input, workspace parity, recovery and
+presentation acceptance remain open; this is not a release package.
 
 ## Milestone integration
 
@@ -72,7 +72,7 @@ cargo test --locked -p layer-host -p layer-windows --lib
 ## Native workspace checkpoint
 
 The shell now displays shared-layout tool tiles, brush previews, size presets,
-and basic layer controls. Numeric editing uses Rust's expressions, units,
+and native layer controls (see the Layers checkpoint below). Numeric editing uses Rust's expressions, units,
 logarithmic mapping and stepping. Color and opacity open native flyouts.
 Unchanged panel structures retain their controls across value updates; camera
 patches update only the camera readout. Full and camera snapshots use separate
@@ -90,8 +90,8 @@ directory. No generated assets or captures need to be committed.
 The current web app has also been built and captured in local hardware-backed
 Chrome using tools/visual/chrome-capture.mjs. Comparison identified and corrected
 uniform spacing/corner construction, numeric units and track styling, and UTF-8
-source decoding. Detailed layer layout, docking/customization, durable settings,
-remaining panels and full visual parity are unfinished. Native frame accounting
+source decoding. Full editor docking/customization, imports, remaining panels
+and matched-state visual parity are unfinished. Native frame accounting
 and presentation/input acceptance remain open.
 
 ## Input transport checks
@@ -391,3 +391,38 @@ debuggable application Rust. Process exit joins retired shader workers after
 all canvas hosts are destroyed. The lifecycle fixture covers close before
 brush readiness, during shader warmup and from clean/dirty minimized windows;
 it retains the five-second zero-exit requirement.
+
+## Native Layers editing checkpoint
+
+Layers uses a virtualized WinUI ItemsRepeater. Its rows follow the Android
+spacing, indentation, shared icons, selection tint, and separate content/mask
+editing markers. Blend and opacity, alpha/edit locks, clipping, references,
+selection checkboxes, visibility, masks, renaming, grouping and the recursive
+context menus dispatch shared layer actions. Native drag-and-drop supplies row
+geometry to the shared Drop action, including the paper anchor and group
+insertion boundaries. Physical drag/pen/touch acceptance remains open.
+
+Thumbnail requests and menu queries use a bounded queue separate from pen
+input. Menu requests replace older queued menus; pixel queries retain FIFO
+ordering. The shared host returns owned 32px thumbnail pixels without serializing
+them into JSON. Windows converts them off the UI thread and retains at most
+128 thumbnails, with at most eight pending readbacks. Document epochs and
+thumbnail revisions reject obsolete results. Layer actions and effect drafts
+also carry an epoch checked by the canvas owner.
+
+Run the isolated native fixture against a built executable:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-layers.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+The fixture uses a disposable settings directory and app-only captures under
+ignored artifacts. It covers painting and exact thumbnail restoration after
+Undo, retained rows, shared controls, masks, multi-selection, rename,
+duplication/deletion, grouping, collapsed editing targets, row virtualization,
+theme changes and document replacement. It does not measure presentation or
+physical input latency.
+
+Image-as-layer import and runtime filter package import remain pending. Full
+editor columns, drawers, panel expansion and docking also remain pending, so
+the full Windows editor preset is still gated.

@@ -166,9 +166,9 @@ void CanvasWindow::Start() {
         if(auto self=weak.lock())self->Send(std::move(json));
     },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)),[weak=weak_from_this()](std::string json){
         if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Overviews);
-    },[weak=weak_from_this()](std::string json,PreviewReply reply){
-        if(auto self=weak.lock())return self->RequestPreviews(std::move(json),std::move(reply));return false;
-    });
+    },[weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
+        if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
+    },[weak=weak_from_this()](bool open){if(auto self=weak.lock()){self->workspacePopupOpen=open;self->UpdatePopup();}});
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
@@ -195,10 +195,10 @@ void CanvasWindow::Start() {
     inputDispatcher=inputController.DispatcherQueue();
     renderer=std::jthread([this]{Run();});
 }
-bool CanvasWindow::RequestPreviews(std::string json,PreviewReply reply) {
+bool CanvasWindow::RequestPreviews(CanvasQueryKind kind,std::string json,PreviewReply reply) {
     {std::lock_guard lock(mutex);
-        if(closing||!host||rendererDone.load()||transportFailed||previewWork||json.size()>8192)return false;
-        previewWork=PreviewWork{std::move(json),std::move(reply)};
+        if(closing||!host||rendererDone.load()||transportFailed)return false;
+        if(!previewWork.Push(CanvasQuery{kind,std::move(json),std::move(reply)}))return false;
     }
     wake.notify_one();return true;
 }
@@ -436,7 +436,7 @@ void CanvasWindow::Run() {
             bool pollServices=false;
             {
                 std::unique_lock lock(mutex);
-                wake.wait(lock,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||previewWork.has_value();});
+                wake.wait(lock,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();});
                 if(closing) break;
                 if(resize) {
                     paused=true;resize=false;probeReady=false;
@@ -531,10 +531,12 @@ void CanvasWindow::Run() {
             }
             // Optional readbacks run after painting and yield to newly queued input.
             // The GPU poll never waits; CPU conversion belongs to another worker.
-            std::optional<PreviewWork> preview;
-            {std::lock_guard lock(mutex);if(!closing&&work.Empty())preview=std::exchange(previewWork,std::nullopt);}
+            std::optional<CanvasQuery> preview;
+            {std::lock_guard lock(mutex);if(!closing&&work.Empty())preview=previewWork.Take();}
             if(preview){
-                PreviewPacket packet(capy_filter_previews(host,preview->json.c_str()),capy_preview_free);
+                auto request=preview->kind==CanvasQueryKind::Filters?capy_filter_previews:
+                    preview->kind==CanvasQueryKind::Thumbnails?capy_layer_thumbnails:capy_layer_menu;
+                PreviewPacket packet(request(host,preview->json.c_str()),capy_preview_free);
                 if(!packet)Fail(capy_error());
                 preview->reply(std::move(packet));
             }
@@ -550,7 +552,7 @@ void CanvasWindow::Run() {
     // UI close commits drafts before rejecting new work. Drain accepted commands
     // so a final preferences edit reaches storage even when no next frame runs.
     std::deque<CanvasWork> finalWork;
-    {std::lock_guard lock(mutex);finalWork=work.Take();previewWork.reset();}
+    {std::lock_guard lock(mutex);finalWork=work.Take();previewWork.Clear();}
     space.notify_all();
     for(auto& item:finalWork)if(auto command=std::get_if<CanvasCommand>(&item)){
         auto result=DispatchCanvasCommand(host,*command);
@@ -585,6 +587,8 @@ void CanvasWindow::RequestClose() {
     {std::lock_guard lock(mutex);if(closing||closed)return;}
     if(!host||!renderer.joinable()||rendererDone.load()){Stop();return;}
     if(documents&&documents->IsOpen())return;
+    // Commit the focused workspace draft before shared close policy checks dirty state.
+    canvasFocus.Focus(FocusState::Programmatic);
     if(settings)settings->CommitEdits();
     Send(R"({"type":"close_settings"})");
     CapyLifecycle("close_requested");
@@ -685,7 +689,7 @@ void CanvasWindow::UpdatePopup() {
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
-    bool open=headerPopupOpen||blocked;
+    bool open=headerPopupOpen||workspacePopupOpen||blocked;
     if(menuOpen.exchange(open)==open)return;
     using namespace CapyUi;
     A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));

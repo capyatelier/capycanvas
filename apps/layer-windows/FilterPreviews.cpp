@@ -99,7 +99,7 @@ struct FilterPreviewCache : std::enable_shared_from_this<FilterPreviewCache> {
         A size;size.Append(N(width));size.Append(N(height));
         auto query=O({{L"request",S(to_hstring(request))},{L"revision",S(revision)},{L"filters",missing},{L"size",size}});
         auto weak=weak_from_this();auto queue=dispatcher;busy=true;
-        bool sent=transport(to_string(query.Stringify()),[weak,queue,request,requestedKey](PreviewPacket packet){
+        bool sent=transport(CanvasQueryKind::Filters,to_string(query.Stringify()),[weak,queue,request,requestedKey](PreviewPacket packet){
             queue.TryEnqueue([weak,packet=std::move(packet),request,requestedKey]{
                 if(auto self=weak.lock())self->receive(packet,request,requestedKey);
             });

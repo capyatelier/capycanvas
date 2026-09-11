@@ -6,11 +6,7 @@
 #include <string>
 #include <vector>
 
-using PreviewPacket=std::shared_ptr<CapyPreview>;
-using PreviewReply=std::function<void(PreviewPacket)>;
-using PreviewTransport=std::function<bool(std::string,PreviewReply)>;
-// One request slot per window, separate from the reserved input command queue.
-struct PreviewWork {std::string json; PreviewReply reply;};
+#include "CanvasQueryQueue.h"
 
 namespace CapyUi {
 struct FilterPreviewCache;

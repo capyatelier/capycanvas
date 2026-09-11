@@ -4,6 +4,8 @@
 #include "ToolView.h"
 #include "NavigatorView.h"
 #include "EffectControls.h"
+#include "LayersView.h"
+#include "NativeMenus.h"
 #include "UiControls.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -41,8 +43,10 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
     Bindings popupBindings;
     TextBlock camera;
-    Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews):overviews(std::move(report)){
-        data->previews=CreateFilterPreviewCache(std::move(previews));
+    Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged):overviews(std::move(report)){
+        data->popupChanged=std::move(popupChanged);
+        data->thumbnails=CreateLayerThumbnailCache(previews);
+        data->query=previews;data->previews=CreateFilterPreviewCache(std::move(previews));
         data->send=std::move(send);data->catalog=catalog;
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
@@ -71,33 +75,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 pick.Background(num(object(data->state,L"brush"),L"diameter")==value?selected():clear());
             });
         }return grid;
-    }
-    StackPanel layers(Bindings& bindings){
-        StackPanel rows;rows.Spacing(2);
-        for(auto value:array(data->state,L"layers")){
-            auto layer=value.GetObject();double id=num(layer,L"id");
-            Grid row;
-            ColumnDefinition eyeColumn;eyeColumn.Width({28,GridUnitType::Pixel});row.ColumnDefinitions().Append(eyeColumn);
-            ColumnDefinition nameColumn;nameColumn.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(nameColumn);
-            auto eye=button(data,L"Layer visibility",[data=data,id]{
-                auto current=findId(array(data->state,L"layers"),id);
-                data->dispatch(O({{L"type",S(L"set_layer_visibility")},{L"id",N(id)},{L"visible",B(!flag(current,L"visible"))}}));
-            });eye.Width(28);eye.Height(40);row.Children().Append(eye);
-            auto pick=button(data,str(layer,L"label"),[data=data,id]{
-                data->dispatch(O({{L"type",S(L"select_layer")},{L"id",N(id)}}));
-            });pick.Height(40);pick.FontWeight(Windows::UI::Text::FontWeights::Normal());pick.HorizontalAlignment(HorizontalAlignment::Stretch);
-            pick.HorizontalContentAlignment(HorizontalAlignment::Left);pick.Padding(Thickness{6,0,6,0});
-            pick.Margin(Thickness{num(layer,L"depth")*12,0,0,0});
-            Grid::SetColumn(pick,1);row.Children().Append(pick);rows.Children().Append(row);
-            bindings.emplace_back([data=data,id,pick,eye]{
-                auto current=findId(array(data->state,L"layers"),id);
-                pick.Background(flag(current,L"selected")?selected():clear());
-                auto shown=flag(current,L"visible")?L"eye":L"eye-hidden";
-                if(unbox_value_or<hstring>(eye.Tag(),L"")!=shown){
-                    eye.Content(icon(shown,data->theme()));eye.Tag(box_value(shown));
-                }
-            });
-        }return rows;
     }
     void build(Group& group,J const& geometry,J const& panel){
         auto& bindings=group.bindings;bindings.clear();group.navigator.reset();
@@ -131,6 +108,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto view=group.navigator->Root();Grid::SetRow(view,1);frame.Children().Append(view);
         }else if(str(panel,L"id")==L"adjustments"){
             auto view=FiltersPanel(data,bindings);Grid::SetRow(view,1);frame.Children().Append(view);
+        }else if(str(panel,L"id")==L"layers"){
+            auto view=LayersPanel(data,bindings);Grid::SetRow(view,1);frame.Children().Append(view);
         }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
@@ -167,7 +146,6 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 auto kind=str(control,L"control");
                 if(kind==L"brushes")content.Children().Append(ToolSetPanel(data,bindings));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16,bindings));
-                else if(kind==L"layers")content.Children().Append(layers(bindings));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel")content.Children().Append(ColorPanel(data,bindings));
                 else if(kind==L"properties")content.Children().Append(PropertiesPanel(data,bindings));
@@ -221,7 +199,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             }else if(next==L"brush_color"){
                 content.Children().Append(ColorPanel(data,popupBindings));
             }
-            popup=Flyout();popup.Content(content);
+            popup=Flyout();popup.Content(content);TrackPopup(popup,data);
             popup.Closed([data=data,generation=popupGeneration,current=*popupGeneration](auto&&,auto&&){
                 if(*generation==current)data->dispatch(O({{L"type",S(L"customize")},
                     {L"action",O({{L"type",S(L"close_control")}})}}));
@@ -256,17 +234,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto structure=J::Parse(geometry.Stringify());
             auto size=object(structure,L"bounds");size.Remove(L"x");size.Remove(L"y");
             structure.Insert(L"bounds",size);
-            if(str(panel,L"id")==L"navigator"||str(panel,L"id")==L"properties"||str(panel,L"id")==L"adjustments")structure.Remove(L"bounds");
+            if(str(panel,L"id")==L"navigator"||str(panel,L"id")==L"properties"||str(panel,L"id")==L"adjustments"||str(panel,L"id")==L"layers")structure.Remove(L"bounds");
             J signature=O({{L"geometry",structure},{L"controls",array(panel,L"controls")},
                 {L"style",S(str(panel,L"tile_style"))}});
             A tileKeys;for(auto item:array(panel,L"tiles")){
                 auto tile=item.GetObject();tileKeys.Append(O({{L"id",N(num(tile,L"id"))},{L"control",object(tile,L"control")}}));
             }signature.Insert(L"tiles",tileKeys);
-            if(str(panel,L"id")==L"layers"){
-                A keys;for(auto item:array(data->state,L"layers")){auto layer=item.GetObject();
-                    keys.Append(O({{L"id",N(num(layer,L"id"))},{L"label",S(str(layer,L"label"))},{L"depth",N(num(layer,L"depth"))}}));}
-                signature.Insert(L"layers",keys);
-            }
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key){group.key=std::move(key);build(group,geometry,panel);}
             place(group.border,object(geometry,L"bounds"));
@@ -301,7 +274,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             to_hstring(int(std::round(num(view,L"rotation")*180/3.141592653589793)))+L"°");
     }
 };
-WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews))){}
+WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews),std::move(popupChanged))){}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 void WorkspaceView::Apply(Json const& snapshot){impl->apply(snapshot);}

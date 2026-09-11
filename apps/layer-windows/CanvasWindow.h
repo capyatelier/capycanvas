@@ -47,7 +47,7 @@ private:
     std::unique_ptr<SettingsView> settings;
     std::unique_ptr<DocumentView> documents;
     winrt::Windows::Data::Json::JsonObject lastModel;
-    bool applyingDialogs=false,headerPopupOpen=false;
+    bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
     std::atomic<bool> menuOpen{false},dialogOpen{false};
     struct Hover {float x,y;bool leave,touch;};
     std::optional<Hover> pendingHover;
@@ -70,8 +70,8 @@ private:
     std::condition_variable wake;
     std::condition_variable space;
     CanvasWorkBuffer work;
-    std::optional<PreviewWork> previewWork;
-    bool RequestPreviews(std::string,PreviewReply);
+    CanvasQueryQueue previewWork;
+    bool RequestPreviews(CanvasQueryKind,std::string,PreviewReply);
     bool transportFailed=false;
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;

@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "HeaderView.h"
 #include "UiControls.h"
+#include "NativeMenus.h"
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.UI.Text.h>
 #include <array>
@@ -16,36 +17,7 @@ struct PopupState {int count=0;std::function<void(bool)> changed;};
 J invoke(hstring const& command){return O({{L"type",S(L"invoke")},{L"command",S(command)}});}
 void menuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,
     A const& sections,std::shared_ptr<WorkspaceData> const& data) {
-    bool populated=false;
-    for(auto sectionValue:sections) {
-        auto section=sectionValue.GetArray();
-        if(!section.Size())continue;
-        if(populated)target.Append(MenuFlyoutSeparator());
-        populated=true;
-        for(auto value:section) {
-            auto spec=value.GetObject();auto children=array(spec,L"sections");
-            auto text=str(spec,L"label");auto action=object(spec,L"action");
-            if(children.Size()) {
-                MenuFlyoutSubItem item;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));
-                item.FontSize(data->textSize());menuItems(item.Items(),children,data);target.Append(item);
-            } else {
-                auto checked=spec.GetNamedValue(L"selected",JsonValue::CreateNullValue());
-                if(checked.ValueType()==JsonValueType::Boolean) {
-                    ToggleMenuFlyoutItem item;item.Text(text);item.IsChecked(checked.GetBoolean());
-                    item.IsEnabled(flag(spec,L"enabled",true));item.FontSize(data->textSize());item.MinHeight(34);
-                    item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));
-                    AutomationProperties::SetAutomationId(item,str(action,L"command"));
-                    item.Click([data,action](auto&&,auto&&){if(action.Size())data->dispatch(action);});target.Append(item);
-                } else {
-                    MenuFlyoutItem item;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));
-                    item.FontSize(data->textSize());item.MinHeight(34);
-                    item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));
-                    AutomationProperties::SetAutomationId(item,str(action,L"command"));
-                    item.Click([data,action](auto&&,auto&&){if(action.Size())data->dispatch(action);});target.Append(item);
-                }
-            }
-        }
-    }
+    NativeMenuItems(target,sections,data,[data](J action){data->dispatch(action);});
 }
 A commandSections(A const& sections,std::shared_ptr<WorkspaceData> const& data) {
     A result;

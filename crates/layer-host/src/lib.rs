@@ -171,6 +171,37 @@ impl NativeHost {
         self.apply_change(previous, change);
         Ok(())
     }
+
+    /// Idle-time layer thumbnails with owned pixels, also used by JSON adapters.
+    /// Native binary bridges can keep pixel arrays out of their metadata format.
+    pub fn layer_thumbnails(
+        &mut self,
+        requests: impl IntoIterator<Item = (u64, u64)>,
+    ) -> Result<(Vec<u64>, Vec<layer_render::ReadbackImage>), String> {
+        let mut accepted = Vec::new();
+        if !self.dirty && !self.session.engine().has_pending_document_edits() {
+            for (request, target) in requests.into_iter().take(8) {
+                if self
+                    .session
+                    .renderer_mut()
+                    .request_thumbnail(request, layer_core::LayerId(target))
+                    .is_ok()
+                {
+                    accepted.push(request);
+                }
+            }
+        }
+        let mut images = Vec::new();
+        if let Some(gpu) = &self.session.renderer_mut().0 {
+            gpu.device()
+                .poll(wgpu::PollType::Poll)
+                .map_err(|e| e.to_string())?;
+        }
+        while let Some(image) = self.session.renderer_mut().take_thumbnail() {
+            images.push(image.map_err(|e| e.to_string())?);
+        }
+        Ok((accepted, images))
+    }
     pub fn import_layer_image(
         &mut self,
         name: &str,
@@ -731,29 +762,11 @@ impl NativeHost {
             }
             Query::LayerMenu { id, mask } => json!(self.session.layer_menu(id, mask)?),
             Query::LayerThumbnails { requests } => {
-                let mut accepted = Vec::new();
-                if !self.dirty && !self.session.engine().has_pending_document_edits() {
-                    for (request, target) in requests.into_iter().take(8) {
-                        if self
-                            .session
-                            .renderer_mut()
-                            .request_thumbnail(request, layer_core::LayerId(target))
-                            .is_ok()
-                        {
-                            accepted.push(request);
-                        }
-                    }
-                }
-                let mut images = Vec::new();
-                if let Some(gpu) = &self.session.renderer_mut().0 {
-                    gpu.device()
-                        .poll(wgpu::PollType::Poll)
-                        .map_err(|e| e.to_string())?;
-                }
-                while let Some(image) = self.session.renderer_mut().take_thumbnail() {
-                    let image = image.map_err(|e| e.to_string())?;
-                    images.push((image.request_id, image.width, image.height, image.bytes));
-                }
+                let (accepted, images) = self.layer_thumbnails(requests)?;
+                let images: Vec<_> = images
+                    .into_iter()
+                    .map(|image| (image.request_id, image.width, image.height, image.bytes))
+                    .collect();
                 json!({ "accepted": accepted, "images": images })
             }
             Query::Context { target } => json!(self.session.context_menu(target)?),

@@ -1,6 +1,7 @@
 #pragma once
 #include "pch.h"
 #include "FilterPreviews.h"
+#include "LayerThumbnails.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -89,6 +90,11 @@ using Bindings=std::vector<std::function<void()>>;
 struct WorkspaceData {
     J state,catalog,model;
     std::shared_ptr<FilterPreviewCache> previews;
+    std::shared_ptr<LayerThumbnailCache> thumbnails;
+    PreviewTransport query;
+    std::function<void(bool)> popupChanged;
+    int popupCount=0;
+    void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
     std::function<void(std::string)> send;
     bool updating=false;
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
@@ -97,6 +103,9 @@ struct WorkspaceData {
         for(auto const& [role,brush]:paletteBrushes)brush.Color(color(str(palette,role.c_str(),L"#414141")));
     }
     void dispatch(J const& action) const {send(to_string(action.Stringify()));}
+    void dispatchDocument(J const& action,hstring const& epoch) const {
+        dispatch(O({{L"windows_epoch",S(epoch)},{L"action",action}}));
+    }
     hstring theme()const{return str(state,L"theme",L"dark");}
     SolidColorBrush brush(wchar_t const* role)const{
         auto found=paletteBrushes.find(role);if(found!=paletteBrushes.end())return found->second;
@@ -187,6 +196,9 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
         auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
         if(!local->editing)setText(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));
     });
+    // LosingFocus is synchronous; close and target-change commands must follow
+    // the draft commit, rather than race the later LostFocus notification.
+    entry.LosingFocus([commit](auto&&,auto&&){commit(false);});
     entry.LostFocus([commit,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();commit(false);entry.Background(clear());
         if(!local->editing)setText(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"text"));

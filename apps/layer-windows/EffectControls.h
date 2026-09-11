@@ -32,7 +32,7 @@ struct Property {
     void action(J operation)const{
         if(data->updating||!current()||!flag(view(),L"enabled"))return;
         operation.Insert(L"layer",N(layer));operation.Insert(L"key",S(key));
-        data->dispatch(O({{L"type",S(L"effect")},{L"action",operation}}));
+        data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",operation}}),to_hstring(uint64_t(epoch)));
     }
     void set(V const& value)const{
         action(O({{L"op",S(L"set")},{L"value",O({{L"kind",S(str(object(model(),L"kind"),L"kind"))},{L"value",value}})}}));

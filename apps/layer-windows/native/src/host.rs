@@ -398,8 +398,9 @@ unsafe fn read_json<'a>(json: *const c_char) -> Result<&'a str, String> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
-        if let Err(error) = host.native.dispatch(action) {
+        let action: crate::actions::Action =
+            serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        if let Err(error) = action.dispatch(&mut host.native) {
             fail(error);
             return Ok(1); // A valid action can be unavailable in the current state.
         }
@@ -714,4 +715,41 @@ pub extern "C" fn capy_finish_process() -> i32 {
             -1
         }
     }
+}
+
+/// # Safety
+/// Exclusive render-owner access; json is a readable NUL-terminated request.
+/// Free the returned CPU-only packet with capy_preview_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_layer_menu(
+    host: *mut CapyHost,
+    json: *const c_char,
+) -> *mut crate::previews::CapyPreview {
+    let mut result = std::ptr::null_mut();
+    guard(host, |host| {
+        result = Box::into_raw(Box::new(crate::previews::layer_menu(
+            &mut host.native,
+            unsafe { read_json(json) }?,
+        )?));
+        Ok(0)
+    });
+    result
+}
+/// # Safety
+/// Exclusive render-owner access; json is a readable NUL-terminated request.
+/// Free the returned CPU-only packet with capy_preview_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_layer_thumbnails(
+    host: *mut CapyHost,
+    json: *const c_char,
+) -> *mut crate::previews::CapyPreview {
+    let mut result = std::ptr::null_mut();
+    guard(host, |host| {
+        result = Box::into_raw(Box::new(crate::previews::layer_thumbnails(
+            &mut host.native,
+            unsafe { read_json(json) }?,
+        )?));
+        Ok(0)
+    });
+    result
 }
