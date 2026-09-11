@@ -27,6 +27,7 @@ import SwiftUI
     lazy var workspace = WorkspacePresentation(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
+    lazy var windowPresentation = WindowPresentation(store: self)
     lazy var recovery = ArtworkRecovery(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
@@ -64,6 +65,7 @@ import SwiftUI
                 filterPreviews.refresh()
                 camera.value = state["camera"]
                 projectFiles.receive(state)
+                windowPresentation.receive(state)
                 recovery.observe(state["document_file"])
                 contentDrawers.refresh()
                 workspace.refresh()

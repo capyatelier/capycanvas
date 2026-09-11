@@ -9305,6 +9305,19 @@ mod tests {
             s.state.workspace, workspace,
             "Fullscreen is transient host state"
         );
+        s.set_platform(Platform::Mac);
+        assert!(s.command(CommandId::Fullscreen).enabled);
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::Fullscreen,
+        })
+        .unwrap();
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::SetFullscreen { fullscreen: false }
+        ));
+        assert!(s.command(CommandId::Fullscreen).selected);
+        s.set_platform(Platform::Ios);
+        assert!(!s.command(CommandId::Fullscreen).enabled);
         s.set_platform(Platform::Web);
         assert_eq!(s.command(CommandId::Fullscreen).shortcut, "");
         assert!(
