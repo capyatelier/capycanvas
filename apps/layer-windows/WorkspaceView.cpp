@@ -2,6 +2,7 @@
 #include "WorkspaceView.h"
 #include "ColorView.h"
 #include "ToolView.h"
+#include "NavigatorView.h"
 #include "UiControls.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -25,10 +26,12 @@ using J=JsonObject;
 using A=JsonArray;
 using V=IJsonValue;
 using namespace CapyUi;
-struct WorkspaceView::Impl {
+struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     Canvas root;
-    struct Group {Border border;std::wstring key;Bindings bindings;};
+    Dispatch overviews;
+    hstring lastOverviews;
+    struct Group {Border border;std::wstring key;Bindings bindings;std::unique_ptr<NavigatorView> navigator;};
     std::map<uint32_t,Group> groups;
     hstring previousTheme,previousPalette;
     std::map<std::wstring,FrameworkElement> anchors;
@@ -37,11 +40,12 @@ struct WorkspaceView::Impl {
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
     Bindings popupBindings;
     TextBlock camera;
-    Impl(Dispatch send,J catalog){
+    Impl(Dispatch send,J catalog,Dispatch report):overviews(std::move(report)){
         data->send=std::move(send);data->catalog=catalog;
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
         camera.IsHitTestVisible(false);
+        AutomationProperties::SetAutomationId(camera,L"canvas-camera");
     }
     Grid sizes(double width,Bindings& bindings){
         Grid grid;int columns=std::max(1,int(width/44));
@@ -94,7 +98,7 @@ struct WorkspaceView::Impl {
         }return rows;
     }
     void build(Group& group,J const& geometry,J const& panel){
-        auto& bindings=group.bindings;bindings.clear();
+        auto& bindings=group.bindings;bindings.clear();group.navigator.reset();
         group.border.Background(data->brush(L"panel"));group.border.CornerRadius(CornerRadius{8,8,8,8});
         Grid frame;
         RowDefinition tabRow;tabRow.Height({flag(geometry,L"tabs_visible")?36.:0.,GridUnitType::Pixel});
@@ -119,7 +123,11 @@ struct WorkspaceView::Impl {
             frame.Children().Append(tabScroll);
         }
         auto tileGeometry=object(geometry,L"tiles");
-        if(tileGeometry.Size()){
+        if(str(panel,L"id")==L"navigator"){
+            group.border.Background(clear());
+            group.navigator=std::make_unique<NavigatorView>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
+            auto view=group.navigator->Root();Grid::SetRow(view,1);frame.Children().Append(view);
+        }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
                 auto tile=views.GetObjectAt(i);double id=num(tile,L"id");auto panelId=str(panel,L"id");
@@ -240,7 +248,11 @@ struct WorkspaceView::Impl {
             if(added)root.Children().Append(group.border);
             // Geometry and structure may rebuild this group. Value-only updates
             // below keep its native focus, slider capture and scroll position.
-            J signature=O({{L"geometry",geometry},{L"controls",array(panel,L"controls")},
+            auto structure=J::Parse(geometry.Stringify());
+            auto size=object(structure,L"bounds");size.Remove(L"x");size.Remove(L"y");
+            structure.Insert(L"bounds",size);
+            if(str(panel,L"id")==L"navigator")structure.Remove(L"bounds");
+            J signature=O({{L"geometry",structure},{L"controls",array(panel,L"controls")},
                 {L"style",S(str(panel,L"tile_style"))}});
             A tileKeys;for(auto item:array(panel,L"tiles")){
                 auto tile=item.GetObject();tileKeys.Append(O({{L"id",N(num(tile,L"id"))},{L"control",object(tile,L"control")}}));
@@ -255,6 +267,7 @@ struct WorkspaceView::Impl {
             place(group.border,object(geometry,L"bounds"));
             bool hidden=flag(snapshot,L"chrome_hidden")&&(!flag(geometry,L"floating")||flag(snapshot,L"hide_floating_panels"));
             group.border.Visibility(hidden?Visibility::Collapsed:Visibility::Visible);
+            if(group.navigator)group.navigator->Apply(!hidden);
             for(auto const& bind:group.bindings)bind();
         }
         for(auto it=groups.begin();it!=groups.end();){
@@ -265,14 +278,25 @@ struct WorkspaceView::Impl {
         }
         camera.Foreground(data->brush(L"text"));place(camera,object(layout,L"status"));
         camera.TextAlignment(TextAlignment::Right);updateCamera(object(data->state,L"camera"));
-        updatePopup();
+        updatePopup();publishOverviews();
+    }
+    void publishOverviews(){
+        A slots;
+        Windows::Foundation::Rect clip{0,0,float(root.ActualWidth()),float(root.ActualHeight())};
+        for(auto const& [id,group]:groups){
+            if(!group.navigator||group.border.Visibility()!=Visibility::Visible)continue;
+            auto slot=group.navigator->Placement(root,clip,Canvas::GetZIndex(group.border));
+            if(slot.Size())slots.Append(slot);
+        }
+        auto json=slots.Stringify();
+        if(json!=lastOverviews){lastOverviews=json;overviews(to_string(json));}
     }
     void updateCamera(J const& view){
         if(view.Size())camera.Text(to_hstring(int(std::round(num(view,L"zoom",1)*100)))+L"% · "+
             to_hstring(int(std::round(num(view,L"rotation")*180/3.141592653589793)))+L"°");
     }
 };
-WorkspaceView::WorkspaceView(Dispatch send,Json catalog):impl(std::make_unique<Impl>(std::move(send),catalog)){}
+WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews))){}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 void WorkspaceView::Apply(Json const& snapshot){impl->apply(snapshot);}

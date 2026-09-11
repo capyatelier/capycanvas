@@ -1,9 +1,9 @@
 // Deterministic shared-editor capture, using an isolated local Chrome profile.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve, extname, sep } from 'node:path';
+import { join, resolve, extname, sep, dirname, basename } from 'node:path';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
 const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light', scenario='initial'] = process.argv.slice(2);
@@ -25,7 +25,8 @@ const server = createServer(async (req, res) => {
 });
 server.listen(0, '127.0.0.1');
 await once(server, 'listening');
-const profile = await mkdtemp(join(tmpdir(), 'capy-parity-chrome-'));
+const profileRoot = await realpath(tmpdir());
+const profile = await mkdtemp(join(profileRoot, 'capy-parity-chrome-'));
 const chrome = spawn(process.env.CAPY_CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
   '--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
   '--no-first-run', '--no-default-browser-check', '--force-color-profile=srgb',
@@ -109,5 +110,11 @@ try {
   const exited = once(chrome,'exit');
   chrome.kill(); await exited;
   server.closeAllConnections(); await new Promise(resolve=>server.close(resolve));
-  await rm(profile,{recursive:true,force:true});
+  // Delete only the exact generated directory under the canonical temp root.
+  // Refuse a redirected/replaced profile path, including Windows junctions.
+  const cleanup = await realpath(profile);
+  assert.equal(cleanup, profile);
+  assert.equal(dirname(cleanup), profileRoot);
+  assert.ok(basename(cleanup).startsWith('capy-parity-chrome-'));
+  await rm(cleanup,{recursive:true,force:true});
 }

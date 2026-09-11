@@ -16,6 +16,16 @@ using namespace Microsoft::UI::Xaml::Input;
 using namespace Microsoft::UI::Xaml::Media;
 using namespace Microsoft::UI::Windowing;
 using namespace Windows::Foundation;
+static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
+    auto json=command.json.c_str();
+    switch(command.kind){
+        case CanvasCommandKind::Input:return capy_input(host,json);
+        case CanvasCommandKind::Document:return capy_document_action(host,json);
+        case CanvasCommandKind::Overviews:return capy_overviews(host,json);
+        case CanvasCommandKind::Action:return capy_action(host,json);
+    }
+    return -1;
+}
 static uint64_t Now() {
     LARGE_INTEGER ticks, frequency;
     QueryPerformanceCounter(&ticks); QueryPerformanceFrequency(&frequency);
@@ -89,7 +99,7 @@ void CanvasWindow::Open() {
     panel.CompositionScaleChanged([weak=weak_from_this()](auto&&,auto&&) { if(auto self=weak.lock()) self->Resize(); });
     window.Activated([weak=weak_from_this()](auto&&, WindowActivatedEventArgs const& e) {
         if(e.WindowActivationState()==WindowActivationState::Deactivated)
-            if(auto self=weak.lock()){self->heldKeys.clear();self->Send(R"({"type":"blur"})",true);}
+            if(auto self=weak.lock()){self->heldKeys.clear();self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);}
     });
     window.AppWindow().Closing([weak=weak_from_this()](auto&&,AppWindowClosingEventArgs const& e) {
         if(auto self=weak.lock()) {
@@ -154,7 +164,9 @@ void CanvasWindow::Start() {
     std::unique_ptr<char,decltype(&capy_string_free)> ownedCatalog(catalog,capy_string_free);
     workspace=std::make_unique<WorkspaceView>([weak=weak_from_this()](std::string json){
         if(auto self=weak.lock())self->Send(std::move(json));
-    },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)));
+    },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)),[weak=weak_from_this()](std::string json){
+        if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Overviews);
+    });
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
@@ -168,7 +180,7 @@ void CanvasWindow::Start() {
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail("Cannot open Preferences: "+error);},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
     documents=std::make_unique<DocumentView>(
-        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),false,true);},
+        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Document);},
         model,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
     if(auto snapshot=capy_snapshot(host)){
@@ -181,12 +193,12 @@ void CanvasWindow::Start() {
     inputDispatcher=inputController.DispatcherQueue();
     renderer=std::jthread([this]{Run();});
 }
-void CanvasWindow::Send(std::string json, bool input, bool document) {
+void CanvasWindow::Send(std::string json, CanvasCommandKind kind) {
     bool overflow=false;
     {
         std::lock_guard lock(mutex);
         if(closing||!host||rendererDone.load()||transportFailed)return;
-        if(!work.Push(CanvasCommand{input,std::move(json),document}))overflow=transportFailed=true;
+        if(!work.Push(CanvasCommand{kind,std::move(json)}))overflow=transportFailed=true;
     }
     // UI callbacks never wait for the render worker. An exhausted command
     // channel fails explicitly, drains accepted work and cancels active input.
@@ -378,7 +390,7 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     input.Insert(L"repeat",JsonValue::CreateBooleanValue(pressed&&e.KeyStatus().WasKeyDown));
     input.Insert(L"editing",JsonValue::CreateBooleanValue(editing));
     input.Insert(L"modifiers",modifiers);
-    Send(to_string(input.Stringify()),true);
+    Send(to_string(input.Stringify()),CanvasCommandKind::Input);
     if(!editing)e.Handled(true);
 }
 
@@ -471,8 +483,7 @@ void CanvasWindow::Run() {
                     result=dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
                 else {
                     auto& command=std::get<CanvasCommand>(item);
-                    result=command.document?capy_document_action(host,command.json.c_str()):
-                        command.input?capy_input(host,command.json.c_str()):capy_action(host,command.json.c_str());
+                    result=DispatchCanvasCommand(host,command);
                     if(result>0)Fail(capy_error()); // A rejected UI action leaves the canvas running.
                 }
                 if(result<0) {Fail(capy_error());failed=true;break;}
@@ -524,8 +535,7 @@ void CanvasWindow::Run() {
     {std::lock_guard lock(mutex);finalWork=work.Take();}
     space.notify_all();
     for(auto& item:finalWork)if(auto command=std::get_if<CanvasCommand>(&item)){
-        auto result=command->document?capy_document_action(host,command->json.c_str()):
-            command->input?capy_input(host,command->json.c_str()):capy_action(host,command->json.c_str());
+        auto result=DispatchCanvasCommand(host,*command);
         if(result!=0)Fail(capy_error());
         if(result<0)break;
     }
@@ -560,7 +570,7 @@ void CanvasWindow::RequestClose() {
     if(settings)settings->CommitEdits();
     Send(R"({"type":"close_settings"})");
     CapyLifecycle("close_requested");
-    Send(R"({"operation":"close"})",false,true);
+    Send(R"({"operation":"close"})",CanvasCommandKind::Document);
 }
 void CanvasWindow::Stop() {
     {std::lock_guard lock(mutex);if(closing)return;}
@@ -655,7 +665,7 @@ void CanvasWindow::UpdatePopup() {
     bool blocked=(settings&&settings->IsOpen())||(documents&&documents->IsOpen());
     canvasFocus.IsEnabled(!blocked);
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
-        heldKeys.clear();Send(R"({"type":"blur"})",true);
+        heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
     bool open=headerPopupOpen||blocked;
     if(menuOpen.exchange(open)==open)return;
@@ -663,7 +673,7 @@ void CanvasWindow::UpdatePopup() {
     A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));
     Send(to_string(O({{L"type",S(L"chrome")},{L"event",O({{L"kind",S(L"refresh")}})},
         {L"facts",O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(open)}})},
-        {L"viewport",viewport}}).Stringify()),true);
+        {L"viewport",viewport}}).Stringify()),CanvasCommandKind::Input);
 }
 void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
     if(closing||closed)return;

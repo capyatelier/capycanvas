@@ -26,6 +26,10 @@ __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
    storage thread and must only signal owned synchronization state. */
 __declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void (*wake)(void*));
 __declspec(dllimport) int32_t capy_poll_services(CapyHost*);
+/* Logical native overview slots; call only on the canvas owner. */
+__declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
+/* Pure shared image bounds for the native cutout; output has four floats. */
+__declspec(dllimport) bool capy_navigator_image(float width, float height, uint32_t document_width, uint32_t document_height, float* output);
 /* Stateless shared color hit policy: 0 none, 1 hue, 2 field; space 0 HSV / 1 HLS. */
 __declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t space);
 /* Flush/join on the render owner before destroying the callback context.

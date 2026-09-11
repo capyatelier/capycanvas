@@ -9,7 +9,8 @@
 
 // Protected by CanvasWindow's mutex. Both item count and payload storage are
 // bounded. Callers must split pointer histories into small, ordered batches.
-struct CanvasCommand { bool input=false; std::string json; bool document=false; };
+enum class CanvasCommandKind { Action, Input, Document, Overviews };
+struct CanvasCommand { CanvasCommandKind kind=CanvasCommandKind::Action; std::string json; };
 struct CanvasScroll {
     float x, y, dx, dy, density;
     bool zoom, horizontal;

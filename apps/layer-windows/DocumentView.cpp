@@ -2,6 +2,7 @@
 #include "DocumentView.h"
 #include "UiControls.h"
 #include <winrt/Microsoft.Windows.Storage.Pickers.h>
+#include <microsoft.ui.xaml.window.h>
 #include <array>
 
 using namespace winrt;
@@ -33,6 +34,14 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             {L"revision",N(num(file,L"revision"))},{L"decision",S(L"cancel")}});
         showing=true;changed();
         try {
+            // A taskbar close can request a decision while the owner is minimized.
+            // Restore only when this request needs UI, preserving background saves.
+            if(type!=L"save"||str(object(request,L"location"),L"uri").empty()){
+                HWND handle=nullptr;
+                check_hresult(window.as<IWindowNative>()->get_WindowHandle(&handle));
+                // SW_RESTORE retains the maximized state from before minimization.
+                if(IsIconic(handle))ShowWindow(handle,SW_RESTORE);
+            }
             auto options=object(model,L"document_options");
             if(type==L"new"||type==L"confirm_close") {
                 dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
