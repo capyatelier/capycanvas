@@ -98,3 +98,11 @@ regression resets both a saved workspace and the editor preset, drags Tool
 Settings out by its tab, docks it with Layers, and selects both tabs using actual
 touch input. This regression reproduces the exact error before the fix; artifacts
 are under `artifacts/android/panel-drag-fix/`.
+
+The integrated drag fix passes all 18 tablet regressions in 82.845 seconds
+(`panel-drag-fix/integrated-device.txt`), with ARM64 app/test builds and Android
+lint passing (`panel-drag-fix/integrated-build.txt`). The regression waits for the
+worker to apply Reset and makes its test tab visible independently of saved tab
+preferences. The startup pixel check samples an uncovered placeholder location
+before opening a menu, so floating panels cannot masquerade as a background-color
+failure.
