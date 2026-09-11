@@ -821,6 +821,11 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::Fill => "Fill a connected area with the drawing color",
                 CommandId::Undo => "Undo the last change",
                 CommandId::Redo => "Restore the last undone change",
+                CommandId::ClearLayer => "Erase all artwork on the editing layer",
+                CommandId::FillSelection => "Fill selected pixels with the drawing color",
+                CommandId::SelectAll => "Select the entire canvas",
+                CommandId::Deselect => "Remove the pixel selection",
+                CommandId::InvertSelection => "Select pixels outside the current selection",
                 CommandId::UndoWorkspace => "Undo the last workspace change",
                 CommandId::RedoWorkspace => "Restore the last undone workspace change",
                 CommandId::NewToolbar => "Create a named toolbar",
@@ -843,6 +848,8 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::CloseDocument => "Close the current drawing",
                 CommandId::KeyboardShortcuts => "Customize application shortcuts",
                 CommandId::About => "Application information and links",
+                CommandId::Website => "Visit the Capy Canvas website",
+                CommandId::SourceCode => "View the source code on GitHub",
                 CommandId::ZoomIn | CommandId::ZoomOut => "Change the canvas viewing scale",
                 CommandId::RotateLeft | CommandId::RotateRight => {
                     "Rotate the view without changing the image"

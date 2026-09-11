@@ -4282,11 +4282,31 @@ fn command(w: &Workspace, id: CommandId) -> gtk::Button {
         }
     }
     // Menu commands are native GActions, not ad-hoc GtkButtons.
-    let action = w.menu_actions.lookup_action(&id.shortcut_id()).unwrap();
-    let button = gtk::Button::new();
-    button.set_sensitive(action.is_enabled());
-    button.connect_clicked(move |_| action.activate(None));
-    button
+    let popups: Vec<_> = w
+        .popovers
+        .borrow()
+        .iter()
+        .filter_map(|p| p.upgrade())
+        .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
+        .filter(|p| p.parent().is_some_and(|p| p.is::<gtk::MenuButton>()))
+        .collect();
+    for popup in popups {
+        popup.popup();
+        pump(30);
+        let action = popup
+            .menu_model()
+            .and_then(|model| menu_action(&model, id.label()));
+        popup.popdown();
+        if let Some(action) = action {
+            let button = gtk::Button::new();
+            button.set_sensitive(w.gpu.borrow().as_ref().unwrap().session.command(id).enabled);
+            button.connect_clicked(move |_| {
+                popup.activate_action(&action, None).unwrap();
+            });
+            return button;
+        }
+    }
+    panic!("No native control for {id:?}");
 }
 fn click(button: &gtk::Button) {
     assert!(button.is_sensitive());
@@ -5972,7 +5992,7 @@ fn native_workspace_management() {
         menu.popup();
         pump(100);
     };
-    let activate = |popup: &gtk::PopoverMenu, label| {
+    let activate = |popup: &gtk::PopoverMenu, label: &str| {
         let action = menu_action(&popup.menu_model().unwrap(), label)
             .unwrap_or_else(|| panic!("Missing menu item {label}"));
         popup.activate_action(&action, None).unwrap();
@@ -6037,7 +6057,10 @@ fn native_workspace_management() {
             workspace_menu.upcast_ref(),
             &format!("{dir}/workspace-menu-{theme:?}.png"),
         );
-        activate(&workspace_menu, "Brushes panel");
+        activate(
+            &workspace_menu,
+            &format!("{} panel", Panel::Brushes.label()),
+        );
         assert!(
             state(&w)
                 .workspace
@@ -6046,7 +6069,10 @@ fn native_workspace_management() {
                 .is_none()
         );
         workspace_menu.popup();
-        activate(&workspace_menu, "Brushes panel");
+        activate(
+            &workspace_menu,
+            &format!("{} panel", Panel::Brushes.label()),
+        );
         assert!(
             state(&w)
                 .workspace
@@ -6072,7 +6098,7 @@ fn native_workspace_management() {
             .downcast::<adw::EntryRow>()
             .unwrap();
         assert_eq!(name.text(), "Tools Copy");
-        name.set_text("Brushes");
+        name.set_text(Panel::Brushes.label());
         assert!(!prompt().is_response_enabled("confirm"));
         name.set_text("Painting Tools");
         assert!(prompt().is_response_enabled("confirm"));
@@ -6253,10 +6279,15 @@ fn native_workspace_management() {
         pump(100);
         let header = find_css(root.upcast_ref(), "dock-tabs").unwrap();
         let original = placement(panel).bounds;
-        let drag = begin_workspace_drag(&w, &header, header.width() as f32 - 28.0, 12.0);
-        drag.update([-25.0f64, 20.0f64]);
+        let grab = gtk::graphene::Point::new(header.width() as f32 - 28.0, 12.0);
+        let anchor = header.compute_point(&w.surface, &grab).unwrap();
+        let area = w.resolved().work_area;
+        // Release in free canvas, not within the neighboring sidebar's snap zone.
+        let dx = area.x + area.width * 0.5 - anchor.x();
+        let drag = begin_workspace_drag(&w, &header, grab.x(), grab.y());
+        drag.update([dx as f64, 20.0f64]);
         pump(100);
-        assert_eq!(placement(panel).bounds.x, original.x - 25.0);
+        assert_eq!(placement(panel).bounds.x, original.x + dx);
         assert_eq!(
             w.groups
                 .borrow()
@@ -6266,7 +6297,12 @@ fn native_workspace_management() {
                 .root,
             root
         );
+        assert!(
+            w.drop_hint.borrow().is_none(),
+            "Free movement must end outside snap targets"
+        );
         drag.end();
+        pump(100);
         let resize = find_named(
             w.surface.upcast_ref(),
             &format!("floating-resize-{floated}-BottomRight"),
@@ -7018,103 +7054,165 @@ fn native_menu_sections() {
     pump(500);
     let dir = "../../artifacts/ui/menus";
     std::fs::create_dir_all(dir).unwrap();
-    for theme in [Theme::Dark, Theme::Light] {
-        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        let theme_action = w
-            .menu_actions
-            .lookup_action(&CommandId::ToggleTheme.shortcut_id())
+    let open = |id: ApplicationMenu| {
+        let popup = w
+            .popovers
+            .borrow()
+            .iter()
+            .filter_map(|p| p.upgrade())
+            .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
+            .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(id.label()))
             .unwrap();
-        assert_eq!(
-            theme_action.state().unwrap().get::<bool>(),
-            Some(theme == Theme::Dark)
-        );
-        theme_action.activate(None);
-        assert_eq!(
-            theme_action.state().unwrap().get::<bool>(),
-            Some(theme != Theme::Dark)
-        );
-        theme_action.activate(None);
-        assert_eq!(state(&w).theme, theme);
-        for (label, sections) in std::iter::once(&FILE_MENU)
-            .chain(MENUS)
-            .map(|m| (m.label, m.sections))
-            .chain([("Main Menu", PRIMARY_MENU)])
-        {
-            let menu = w
-                .popovers
-                .borrow()
-                .iter()
-                .filter_map(|p| p.upgrade())
-                .filter_map(|p| p.downcast::<gtk::PopoverMenu>().ok())
-                .find(|p| p.parent().unwrap().tooltip_text().as_deref() == Some(label))
-                .unwrap();
-            menu.popup();
-            pump(100);
-            let root = menu.menu_model().unwrap();
-            let expected: Vec<Vec<String>> = if sections.is_empty() {
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .unwrap()
-                    .session
-                    .workspace_menu()
-                    .sections
-                    .into_iter()
-                    .map(|section| section.into_iter().map(|item| item.label).collect())
-                    .collect()
-            } else {
-                sections
-                    .iter()
-                    .map(|section| {
-                        section
-                            .iter()
-                            .map(|command| command.label().to_owned())
-                            .collect()
-                    })
-                    .collect()
-            };
-            assert_eq!(root.n_items() as usize, expected.len());
-            for (index, commands) in expected.iter().enumerate() {
-                let model = root.item_link(index as i32, "section").unwrap();
-                assert_eq!(model.n_items() as usize, commands.len());
-                for (index, command) in commands.iter().enumerate() {
+        popup.popup();
+        pump(100);
+        popup
+    };
+    let activate = |popup: &gtk::PopoverMenu, label: &str| {
+        let action = menu_action(&popup.menu_model().unwrap(), label).unwrap();
+        popup.activate_action(&action, None).unwrap();
+        pump(100);
+    };
+    fn check(model: &gtk::gio::MenuModel, sections: &[Vec<ContextMenuItem>]) {
+        let sections: Vec<_> = sections.iter().filter(|s| !s.is_empty()).collect();
+        assert_eq!(model.n_items() as usize, sections.len());
+        for (s, items) in sections.iter().enumerate() {
+            let section = model.item_link(s as i32, "section").unwrap();
+            assert_eq!(section.n_items() as usize, items.len());
+            for (i, item) in items.iter().enumerate() {
+                assert_eq!(
+                    section
+                        .item_attribute_value(i as i32, "label", None)
+                        .unwrap()
+                        .str(),
+                    Some(item.label.as_str())
+                );
+                if item.action.is_none() {
+                    check(
+                        &section.item_link(i as i32, "submenu").unwrap(),
+                        &item.sections,
+                    );
+                } else {
                     assert_eq!(
-                        model
-                            .item_attribute_value(index as i32, "label", None)
-                            .unwrap()
-                            .str(),
-                        Some(command.as_str())
+                        section
+                            .item_attribute_value(i as i32, "custom", None)
+                            .is_some(),
+                        !item.hint.is_empty()
+                    );
+                    assert!(
+                        section
+                            .item_attribute_value(i as i32, "action", None)
+                            .is_some()
                     );
                 }
             }
-            menu.popup();
+        }
+    }
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        activate(&open(ApplicationMenu::View), CommandId::ToggleTheme.label());
+        assert_ne!(state(&w).theme, theme);
+        activate(&open(ApplicationMenu::View), CommandId::ToggleTheme.label());
+        assert_eq!(state(&w).theme, theme);
+        for id in ApplicationMenu::ALL
+            .into_iter()
+            .chain([ApplicationMenu::Primary])
+        {
+            let menu = open(id);
+            let expected = w
+                .gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .application_menu(id);
+            check(&menu.menu_model().unwrap(), &expected.sections);
             pump(200);
-            capture_popover(menu.upcast_ref(), &format!("{dir}/{label}-{theme:?}.png"));
+            capture_popover(
+                menu.upcast_ref(),
+                &format!("{dir}/{}-{theme:?}.png", id.label()),
+            );
             menu.popdown();
             pump(100);
         }
     }
-    // Replacing an accelerator must update an item inside its section, not
-    // replace a section in the root or leave the old hint on screen.
+    activate(&open(ApplicationMenu::Select), CommandId::SelectAll.label());
+    assert!(state(&w).layer_tools.has_selection);
+    activate(
+        &open(ApplicationMenu::Edit),
+        CommandId::FillSelection.label(),
+    );
+    let checkpoint = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .checkpoint();
+    activate(&open(ApplicationMenu::Edit), CommandId::ClearLayer.label());
+    assert_ne!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .checkpoint(),
+        checkpoint
+    );
+    activate(&open(ApplicationMenu::Edit), CommandId::Undo.label());
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .checkpoint(),
+        checkpoint
+    );
+    activate(&open(ApplicationMenu::Select), CommandId::Deselect.label());
+    assert!(!state(&w).layer_tools.has_selection);
+    let filter = state(&w).adjustments[0].label.clone();
+    activate(&open(ApplicationMenu::Filter), &filter);
+    {
+        let gpu = w.gpu.borrow();
+        let doc = gpu.as_ref().unwrap().session.engine().document();
+        assert_eq!(
+            doc.layer(doc.active_layer).unwrap().kind,
+            layer_core::LayerKind::Effect
+        );
+    }
+    // Reopening must refresh removed shortcuts in every menu using the command.
     let mut settings = state(&w).settings;
     settings
         .shortcuts
         .insert(CommandId::Settings.shortcut_id(), vec![]);
     w.dispatch(UiAction::RestoreSettings { settings });
-    let menus = w.menus.borrow();
-    let section = menus
-        .iter()
-        .find(|m| m.commands.contains(&CommandId::Settings))
-        .unwrap();
-    assert_eq!(section.model.n_items(), 3);
-    assert_eq!(
-        section
-            .model
-            .item_attribute_value(0, "accel", None)
+    for id in [ApplicationMenu::Primary, ApplicationMenu::Edit] {
+        let menu = open(id);
+        let expected = w
+            .gpu
+            .borrow()
+            .as_ref()
             .unwrap()
-            .str(),
-        Some("")
-    );
+            .session
+            .application_menu(id);
+        check(&menu.menu_model().unwrap(), &expected.sections);
+        assert!(
+            expected
+                .sections
+                .iter()
+                .flatten()
+                .find(|i| i.label == CommandId::Settings.label())
+                .unwrap()
+                .hint
+                .is_empty()
+        );
+        menu.popdown();
+    }
+    w.window.destroy();
+    pump(100);
 }
 
 #[test]
@@ -8009,7 +8107,10 @@ fn native_preferences_and_shortcuts() {
     app.activate_action("new-window", None);
     let w = windows.borrow()[0].clone();
     pump(300);
-    assert_eq!(w.window.title().as_deref(), Some(APP_NAME));
+    assert_eq!(
+        w.window.title().as_deref(),
+        Some(format!("Untitled — {APP_NAME}").as_str())
+    );
     click(&command(&w, CommandId::NewWindow));
     assert_eq!(windows.borrow().len(), 2);
     let second = windows.borrow()[1].clone();
@@ -8387,8 +8488,9 @@ fn native_preferences_and_shortcuts() {
     }
     search.set_text("");
     pump(300);
+    // Hand has a direct default; Brush's B now belongs to its cycling family.
     let row: adw::ActionRow =
-        find_named(w.preferences.dialog.upcast_ref(), "shortcut-command.Brush")
+        find_named(w.preferences.dialog.upcast_ref(), "shortcut-command.Hand")
             .unwrap()
             .downcast()
             .unwrap();
@@ -8398,14 +8500,14 @@ fn native_preferences_and_shortcuts() {
     pump(200);
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::RemoveShortcut {
-            id: CommandId::Brush.shortcut_id(),
+            id: CommandId::Hand.shortcut_id(),
             index: 0,
         },
     });
     assert!(binding.has_css_class("heading"));
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::ResetShortcut {
-            id: CommandId::Brush.shortcut_id(),
+            id: CommandId::Hand.shortcut_id(),
         },
     });
     assert!(!binding.has_css_class("heading"));
@@ -8445,7 +8547,7 @@ fn native_preferences_and_shortcuts() {
         .unwrap();
     click(&confirm);
     assert!(state(&w).preferences.capture.is_none());
-    assert_eq!(state(&w).settings.shortcuts["command.Brush"][1].key, "e");
+    assert_eq!(state(&w).settings.shortcuts["command.Hand"][1].key, "e");
     assert!(binding.has_css_class("heading"));
     w.dispatch(UiAction::Preferences {
         action: PreferenceAction::CloseShortcutEditor,
@@ -8493,12 +8595,22 @@ fn native_preferences_and_shortcuts() {
         state(&w).requests.is_empty(),
         "host acknowledged the saved snapshot"
     );
-    assert!(w.menus.borrow().iter().any(|menu| {
-        menu.commands
+    assert!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .application_menu(ApplicationMenu::Primary)
+            .sections
             .iter()
-            .zip(&menu.accelerators)
-            .any(|(id, accel)| *id == CommandId::Settings && accel == "<Control>comma")
-    }));
+            .flatten()
+            .any(|item| item.action
+                == Some(UiAction::Invoke {
+                    command: CommandId::Settings
+                })
+                && item.hint == "Ctrl+,")
+    );
     // Explicit override isolates persistence from the user's actual config.
     if std::env::var_os("LAYER_SETTINGS_FILE").is_some() {
         assert_eq!(

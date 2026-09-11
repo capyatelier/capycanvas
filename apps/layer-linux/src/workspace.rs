@@ -601,11 +601,6 @@ struct GroupView {
     tabs: Vec<(Panel, gtk::Button)>,
     tab_joins: gtk::DrawingArea,
 }
-struct NativeMenu {
-    model: gtk::gio::Menu,
-    commands: Vec<CommandId>,
-    accelerators: Vec<String>,
-}
 pub(crate) fn native_accelerator(chord: &KeyChord) -> String {
     let name = match chord.key.as_str() {
         " " | "space" => "space",
@@ -718,8 +713,6 @@ pub struct Workspace {
     panels: [(Panel, gtk::Widget); Panel::ALL.len()],
     groups: RefCell<Vec<GroupView>>,
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
-    menus: RefCell<Vec<NativeMenu>>,
-    menu_actions: gtk::gio::SimpleActionGroup,
     tool_set: crate::tool_panels::ToolSet,
     size_buttons: RefCell<Vec<(f32, gtk::Button)>>,
     size_number: crate::number_control::NumberControl,
@@ -879,8 +872,6 @@ impl Workspace {
                 (Panel::Navigator, navigator.root.clone().upcast()),
             ],
             commands: RefCell::new(Vec::new()),
-            menus: RefCell::new(Vec::new()),
-            menu_actions: gtk::gio::SimpleActionGroup::new(),
             tool_set,
             size_buttons: RefCell::new(Vec::new()),
             size_number,
@@ -1114,8 +1105,6 @@ impl Workspace {
     }
 
     fn install_chrome(self: &Rc<Self>) {
-        self.window
-            .insert_action_group("editor", Some(&self.menu_actions));
         // Leave the default manager following the system; apply explicit
         // overrides only to the display manager, so system changes stay observable.
         adw::StyleManager::default().connect_dark_notify(glib::clone!(
@@ -1142,11 +1131,10 @@ impl Workspace {
         self.header.pack_start(&zen_space);
         self.surface.add(Slot::ZenButton, &zen);
         self.install_context(&zen, ContextTarget::ZenMode);
-        for menu in std::iter::once(&FILE_MENU).chain(MENUS) {
-            self.header
-                .pack_start(&self.chrome_menu(menu.label, menu.sections));
+        for menu in ApplicationMenu::ALL {
+            self.header.pack_start(&self.chrome_menu(menu));
         }
-        let primary = self.chrome_menu("Main Menu", PRIMARY_MENU);
+        let primary = self.chrome_menu(ApplicationMenu::Primary);
         primary.set_icon_name("layer-menu-symbolic");
         self.header.pack_end(&primary);
         // Observe native title-bar grabs without claiming events from Adw's
@@ -1222,54 +1210,33 @@ impl Workspace {
         self.window.add_controller(motion);
     }
 
-    fn chrome_menu(self: &Rc<Self>, label: &str, sections: &[&[CommandId]]) -> gtk::MenuButton {
+    fn chrome_menu(self: &Rc<Self>, id: ApplicationMenu) -> gtk::MenuButton {
         let menu = gtk::MenuButton::builder()
-            .label(label)
-            .tooltip_text(label)
+            .label(id.label())
+            .tooltip_text(id.label())
             .build();
         menu.add_css_class("flat");
         menu.add_css_class("chrome-control");
         menu.set_direction(gtk::ArrowType::None);
         let root = gtk::gio::Menu::new();
-        for &commands in sections {
-            let model = gtk::gio::Menu::new();
-            for &id in commands {
-                let name = id.shortcut_id();
-                let action = if id.is_toggle() {
-                    gtk::gio::SimpleAction::new_stateful(&name, None, &false.to_variant())
-                } else {
-                    gtk::gio::SimpleAction::new(&name, None)
-                };
-                action.connect_activate(glib::clone!(
-                    #[weak(rename_to = this)]
-                    self,
-                    move |_, _| this.dispatch(UiAction::Invoke { command: id })
-                ));
-                self.menu_actions.add_action(&action);
-                model.append(Some(id.label()), Some(&format!("editor.{name}")));
-            }
-            root.append_section(None, &model);
-            // Keep each section's model so shortcut updates target its own items.
-            self.menus.borrow_mut().push(NativeMenu {
-                model,
-                commands: commands.to_vec(),
-                accelerators: vec![String::new(); commands.len()],
-            });
-        }
         let popover = gtk::PopoverMenu::from_model(Some(&root));
-        if sections.is_empty() {
+        if id == ApplicationMenu::Window {
             popover.set_widget_name("workspace-menu");
-            popover.connect_show(glib::clone!(
-                #[weak(rename_to = w)]
-                self,
-                move |popup| {
-                    let model = w.gpu.borrow().as_ref().map(|g| g.session.workspace_menu());
-                    if let Some(model) = model {
-                        w.populate_workspace_menu(popup, model);
-                    }
-                }
-            ));
         }
+        popover.connect_show(glib::clone!(
+            #[weak(rename_to = w)]
+            self,
+            move |popup| {
+                let model = w
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .map(|g| g.session.application_menu(id));
+                if let Some(model) = model {
+                    w.populate_workspace_menu(popup, model);
+                }
+            }
+        ));
         self.watch_popover(popover.upcast_ref());
         menu.set_popover(Some(&popover));
         menu
@@ -1763,37 +1730,6 @@ impl Workspace {
                         let name = format!("layer-{icon}-symbolic");
                         if image.icon_name().as_deref() != Some(&name) {
                             image.set_icon_name(Some(&name));
-                        }
-                    }
-                }
-            }
-            for menu in self.menus.borrow_mut().iter_mut() {
-                for (index, id) in menu.commands.iter().enumerate() {
-                    if let Some(command) = state.commands.iter().find(|c| c.id == *id) {
-                        let action = self
-                            .menu_actions
-                            .lookup_action(&id.shortcut_id())
-                            .unwrap()
-                            .downcast::<gtk::gio::SimpleAction>()
-                            .unwrap();
-                        action.set_enabled(command.enabled);
-                        if action.state().is_some() {
-                            action.set_state(&command.selected.to_variant());
-                        }
-                        let accel = command
-                            .bindings
-                            .first()
-                            .map(native_accelerator)
-                            .unwrap_or_default();
-                        if menu.accelerators[index] != accel {
-                            let item = gtk::gio::MenuItem::new(
-                                Some(command.label),
-                                Some(&format!("editor.{}", id.shortcut_id())),
-                            );
-                            item.set_attribute_value("accel", Some(&accel.to_variant()));
-                            menu.model.remove(index as i32);
-                            menu.model.insert_item(index as i32, &item);
-                            menu.accelerators[index] = accel;
                         }
                     }
                 }

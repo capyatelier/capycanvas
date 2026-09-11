@@ -15,8 +15,11 @@ mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
+#[path = "application_menu.rs"]
+mod application_menu;
 #[path = "document_files.rs"]
 mod document_files;
+pub use application_menu::{ApplicationLink, ApplicationMenu};
 #[path = "effects.rs"]
 mod effects;
 #[path = "filter_loading.rs"]
@@ -1104,6 +1107,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::Undo => idle && self.engine.can_undo(),
             CommandId::Redo => idle && self.engine.can_redo(),
+            CommandId::SelectAll => self.require_document_idle().is_ok(),
+            CommandId::Deselect | CommandId::InvertSelection => {
+                self.require_document_idle().is_ok() && document.selection.is_some()
+            }
+            CommandId::ClearLayer | CommandId::FillSelection => {
+                self.require_document_idle().is_ok()
+                    && editable
+                    && !document.active_mask
+                    && !document.is_locked(document.active_layer)
+                    && (id == CommandId::ClearLayer || document.selection.is_some())
+            }
             CommandId::UndoWorkspace => self.workspace_history.can_undo(),
             CommandId::RedoWorkspace => self.workspace_history.can_redo(),
             CommandId::AddLayer => idle,
@@ -2357,6 +2371,32 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.engine.redo().map_err(error)?;
                 Ok((0, true))
             }
+            CommandId::SelectAll => {
+                let doc = self.engine.document();
+                let [w, h] = [doc.width as f32, doc.height as f32];
+                let selection = layer_core::Selection::polygon(
+                    [[0., 0.], [w, 0.], [w, h], [0., h]]
+                        .map(|[x, y]| layer_core::Point { x, y })
+                        .to_vec(),
+                )
+                .map_err(error)?;
+                self.layer_edit(layer_core::Edit::SetSelection(Some(selection)))?;
+                Ok((DOCUMENT, true))
+            }
+            CommandId::ClearLayer
+            | CommandId::FillSelection
+            | CommandId::Deselect
+            | CommandId::InvertSelection => {
+                self.layer_action(match command {
+                    CommandId::ClearLayer => LayerAction::Clear {
+                        id: self.engine.document().active_layer.0,
+                    },
+                    CommandId::FillSelection => LayerAction::FillSelection,
+                    CommandId::Deselect => LayerAction::Deselect,
+                    _ => LayerAction::InvertSelection,
+                })?;
+                Ok((DOCUMENT, true))
+            }
             CommandId::AddLayer => {
                 self.layer_action(LayerAction::New {
                     group: false,
@@ -2439,6 +2479,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::NewWindow => {
                 self.request(HostRequestKind::NewWindow)?;
+                Ok((HOST, false))
+            }
+            CommandId::Website | CommandId::SourceCode => {
+                self.request(HostRequestKind::OpenLink {
+                    link: if command == CommandId::Website {
+                        ApplicationLink::Website
+                    } else {
+                        ApplicationLink::SourceCode
+                    },
+                })?;
                 Ok((HOST, false))
             }
             CommandId::ToggleTheme => {
@@ -4694,12 +4744,16 @@ mod tests {
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"
             );
-            s.dispatch(UiAction::Effect {
-                action: EffectAction::Insert {
-                    effect: "test:runtime".into(),
-                },
-            })
-            .unwrap();
+            let menu = s.application_menu(ApplicationMenu::Filter);
+            let category = menu
+                .sections
+                .iter()
+                .flatten()
+                .find(|i| i.label == "Examples")
+                .unwrap();
+            let filter = &category.sections[0][0];
+            assert_eq!(filter.label, "Runtime test");
+            s.dispatch(filter.action.clone().unwrap()).unwrap();
             assert_eq!(s.state.layer_properties.controls.len(), 2);
         }
     }
@@ -6895,6 +6949,138 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn application_menus_reuse_live_models_and_selection_commands_are_undoable() {
+        let mut app = session();
+        app.set_platform(Platform::Gtk);
+        assert_eq!(
+            ApplicationMenu::ALL.map(|m| m.label()),
+            [
+                "File", "Edit", "Layer", "Select", "Filter", "View", "Window", "Help"
+            ]
+        );
+        for menu in ApplicationMenu::ALL {
+            assert!(!app.application_menu(menu).sections.is_empty());
+        }
+        for (command, link) in [
+            (CommandId::Website, ApplicationLink::Website),
+            (CommandId::SourceCode, ApplicationLink::SourceCode),
+        ] {
+            invoke(&mut app, command);
+            let request = app.state.requests.last().unwrap();
+            assert!(
+                matches!(request.kind, HostRequestKind::OpenLink { link: actual } if actual == link)
+            );
+            app.dispatch(UiAction::CompleteRequest {
+                id: request.id,
+                error: None,
+            })
+            .unwrap();
+        }
+        let serialize = |menu: ContextMenu| serde_json::to_value(menu.sections).unwrap();
+        let doc = app.engine.document();
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Layer)),
+            serialize(app.layer_menu(doc.active_layer.0, doc.active_mask).unwrap())
+        );
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Window)),
+            serialize(app.workspace_menu())
+        );
+        let all_filters = serialize(app.application_menu(ApplicationMenu::Filter));
+        app.dispatch(UiAction::FilterPicker {
+            action: FilterPickerAction::Search {
+                query: "no such filter".into(),
+            },
+        })
+        .unwrap();
+        assert!(app.state.adjustments.is_empty());
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Filter)),
+            all_filters
+        );
+        assert!(!app.command(CommandId::FillSelection).enabled);
+        assert!(!app.command(CommandId::Deselect).enabled);
+        let saved = app.engine.checkpoint();
+        invoke(&mut app, CommandId::SelectAll);
+        assert_eq!(
+            app.engine.checkpoint(),
+            saved,
+            "selection is not saved artwork"
+        );
+        assert!(app.command(CommandId::FillSelection).enabled);
+        let all = app.engine.document().selection.clone().unwrap();
+        assert_eq!(all.contours()[0].len(), 4);
+        invoke(&mut app, CommandId::InvertSelection);
+        assert!(app.engine.document().selection.as_ref().unwrap().inverted);
+        invoke(&mut app, CommandId::Undo);
+        assert_eq!(app.engine.document().selection.as_ref(), Some(&all));
+        invoke(&mut app, CommandId::FillSelection);
+        let painted = app.engine.document().layers.clone();
+        assert!(app.engine.checkpoint() != saved);
+        invoke(&mut app, CommandId::ClearLayer);
+        assert!(
+            app.engine
+                .document()
+                .layer(app.engine.document().active_layer)
+                .unwrap()
+                .operations
+                .is_empty()
+        );
+        invoke(&mut app, CommandId::Undo);
+        assert_eq!(app.engine.document().layers, painted);
+        invoke(&mut app, CommandId::Deselect);
+        assert!(app.engine.document().selection.is_none());
+        let mask_layer = app.engine.document().active_layer.0;
+        invoke(&mut app, CommandId::SelectAll);
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: mask_layer,
+                value: true,
+            },
+        })
+        .unwrap();
+        assert!(!app.command(CommandId::ClearLayer).enabled);
+        assert!(!app.command(CommandId::FillSelection).enabled);
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::Lock {
+                id: mask_layer,
+                value: false,
+            },
+        })
+        .unwrap();
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::AddMask {
+                id: mask_layer,
+                replace: false,
+            },
+        })
+        .unwrap();
+        app.dispatch(UiAction::Layer {
+            action: LayerAction::Select {
+                id: mask_layer,
+                mask: true,
+            },
+        })
+        .unwrap();
+        assert!(!app.command(CommandId::ClearLayer).enabled);
+        let doc = app.engine.document();
+        assert_eq!(
+            serialize(app.application_menu(ApplicationMenu::Layer)),
+            serialize(app.layer_menu(doc.active_layer.0, true).unwrap())
+        );
+        app.input_pending = true;
+        assert!(!app.command(CommandId::SelectAll).enabled);
+        assert!(
+            app.application_menu(ApplicationMenu::Filter)
+                .sections
+                .iter()
+                .flatten()
+                .flat_map(|c| c.sections.iter().flatten())
+                .all(|item| !item.enabled)
+        );
     }
 
     #[test]
