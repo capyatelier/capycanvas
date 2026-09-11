@@ -1,0 +1,717 @@
+//! Collapsing is a projection of the existing recursive dock tree. Its nodes,
+//! tab selection and internal split ratios survive; no floating panels or
+//! duplicate panel registrations are created.
+use super::*;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CollapsedColumn {
+    pub root: u32,
+    pub expanded_width: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ColumnIcon {
+    pub panel: Panel,
+    pub bounds: Bounds,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CollapsedGroup {
+    pub group: u32,
+    pub active: Panel,
+    pub bounds: Bounds,
+    pub icons: Vec<ColumnIcon>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CollapsedColumnPlacement {
+    pub id: u32,
+    pub bounds: Bounds,
+    pub expand: Bounds,
+    pub grip: Bounds,
+    pub empty: Bounds,
+    /// Clip/scroll the groups in this area, leaving expand and grip fixed.
+    pub content: Bounds,
+    pub groups: Vec<CollapsedGroup>,
+}
+impl CollapsedColumnPlacement {
+    /// Vertical strips insert tabs vertically; inter-group gaps create groups.
+    /// Expand/grip controls and clipped overflow are never accidental targets.
+    pub fn drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
+        let [x, y] = point;
+        if !self.bounds.contains(x, y)
+            || self.expand.contains(x, y)
+            || self.grip.contains(x, y)
+            || (!self.content.contains(x, y) && !self.empty.contains(x, y))
+        {
+            return None;
+        }
+        for group in &self.groups {
+            if group
+                .bounds
+                .intersection(self.content)
+                .is_some_and(|b| b.contains(x, y))
+            {
+                let index = group
+                    .icons
+                    .iter()
+                    .position(|i| y < i.bounds.y + i.bounds.height * 0.5)
+                    .unwrap_or(group.icons.len());
+                let at = group
+                    .icons
+                    .get(index)
+                    .map_or(group.bounds.y + group.bounds.height, |i| i.bounds.y);
+                return Some(DropHint {
+                    target: DockTarget::Tab {
+                        group: group.group,
+                        index: Some(index),
+                    },
+                    bounds: Bounds {
+                        x: group.bounds.x,
+                        y: (at - 1.5).clamp(
+                            self.content.y,
+                            (self.content.y + self.content.height - 3.).max(self.content.y),
+                        ),
+                        width: group.bounds.width,
+                        height: 3.0_f32.min(self.content.height),
+                    },
+                });
+            }
+            if y < group.bounds.y {
+                return Some(DropHint {
+                    target: DockTarget::Split {
+                        group: group.group,
+                        edge: Edge::Top,
+                    },
+                    bounds: edge_line(group.bounds, Edge::Top),
+                });
+            }
+        }
+        let last = self.groups.last()?;
+        Some(DropHint {
+            target: DockTarget::Split {
+                group: last.group,
+                edge: Edge::Bottom,
+            },
+            bounds: Bounds {
+                y: self.empty.y,
+                height: 3.0_f32.min(self.empty.height),
+                ..self.empty
+            },
+        })
+    }
+    pub(super) fn translate(&mut self, delta: [f32; 2]) {
+        let shift = |b: &mut Bounds| {
+            b.x += delta[0];
+            b.y += delta[1];
+        };
+        shift(&mut self.bounds);
+        shift(&mut self.expand);
+        shift(&mut self.grip);
+        shift(&mut self.empty);
+        shift(&mut self.content);
+        for group in &mut self.groups {
+            shift(&mut group.bounds);
+            for icon in &mut group.icons {
+                shift(&mut icon.bounds);
+            }
+        }
+    }
+}
+
+impl DockLayout {
+    pub fn is_collapsed(&self, root: u32) -> bool {
+        self.collapsed.iter().any(|c| c.root == root)
+    }
+
+    /// The closest horizontal split establishes a separate column; vertical
+    /// splits stack groups within it. Standalone toolbars retain ribbon behavior.
+    pub fn column_for_group(&self, group: u32) -> Option<u32> {
+        fn find(node: &DockNode, group: u32, column: u32) -> Option<u32> {
+            if node.id() == group {
+                return Some(column);
+            }
+            let DockNode::Split {
+                axis,
+                first,
+                second,
+                ..
+            } = node
+            else {
+                return None;
+            };
+            [first, second].into_iter().find_map(|child| {
+                find(
+                    child,
+                    group,
+                    if *axis == Axis::Horizontal {
+                        child.id()
+                    } else {
+                        column
+                    },
+                )
+            })
+        }
+        self.group_panels(group).ok()?;
+        let band = self.bands.iter().find(|b| b.root.find(group).is_some())?;
+        if !matches!(band.edge, Edge::Left | Edge::Right) {
+            return None;
+        }
+        let root = find(&band.root, group, band.root.id())?;
+        if matches!(band.root.find(root)?, DockNode::Tabs { panels, active, .. }
+            if panels.len() == 1 && active.kind() == PanelKind::Tiles)
+        {
+            return None;
+        }
+        Some(root)
+    }
+
+    pub fn collapsed_column_for_group(&self, group: u32) -> Option<u32> {
+        self.collapsed
+            .iter()
+            .find_map(|c| self.node(c.root)?.find(group).map(|_| c.root))
+    }
+
+    /// `group` is any contained tab group when collapsing, or the strip's root
+    /// when expanding. Only width outside the subtree changes; its internal
+    /// split proportions remain the expanded layout's proportions.
+    pub fn set_column_collapsed(
+        &mut self,
+        group: u32,
+        collapsed: bool,
+        viewport: [f32; 2],
+    ) -> Result<(), String> {
+        if !viewport.into_iter().all(|v| v.is_finite() && v > 0.) {
+            return Err("Invalid workspace size".into());
+        }
+        let root = if self.is_collapsed(group) {
+            group
+        } else {
+            self.column_for_group(group)
+                .ok_or("This group has no collapsible column")?
+        };
+        if self.is_collapsed(root) == collapsed {
+            return Ok(());
+        }
+        let before = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        let node = self.node(root).ok_or("The column no longer exists")?;
+        let bounds = subtree_bounds(node, &before).ok_or("The column is not visible")?;
+        let width = if collapsed {
+            self.collapsed.push(CollapsedColumn {
+                root,
+                expanded_width: bounds.width,
+            });
+            TILE_SIZE
+        } else {
+            let index = self.collapsed.iter().position(|c| c.root == root).unwrap();
+            self.collapsed.remove(index).expanded_width
+        };
+        let band = self
+            .bands
+            .iter_mut()
+            .find(|b| b.root.find(root).is_some())
+            .unwrap();
+        band.extent =
+            column_width(&mut band.root, root, width, &before).unwrap() + WORKSPACE_SPACING;
+        Ok(())
+    }
+
+    pub(super) fn validate_columns(&self) -> Result<(), String> {
+        for (index, column) in self.collapsed.iter().enumerate() {
+            if !column.expanded_width.is_finite()
+                || column.expanded_width <= 0.
+                || self.collapsed[..index]
+                    .iter()
+                    .any(|c| c.root == column.root)
+                || !self.bands.iter().any(|b| {
+                    matches!(b.edge, Edge::Left | Edge::Right) && b.root.find(column.root).is_some()
+                })
+            {
+                return Err("Invalid collapsed column".into());
+            }
+        }
+        Ok(())
+    }
+
+    // Removing the final member of one branch can replace a split root with
+    // its surviving child. Transfer collapse state to that child, not a stale ID.
+    pub(super) fn detach_column_members(&mut self, panels: &[Panel]) {
+        let mut columns: Vec<CollapsedColumn> = Vec::new();
+        for column in &self.collapsed {
+            let mut retained = self.node(column.root).cloned();
+            for panel in panels {
+                retained = retained.and_then(|n| n.remove(*panel));
+            }
+            if let Some(node) = retained {
+                if let Some(existing) = columns.iter_mut().find(|c| c.root == node.id()) {
+                    existing.expanded_width = existing.expanded_width.max(column.expanded_width);
+                } else {
+                    columns.push(CollapsedColumn {
+                        root: node.id(),
+                        ..column.clone()
+                    });
+                }
+            }
+        }
+        self.collapsed = columns;
+    }
+}
+
+fn subtree_bounds(node: &DockNode, geometry: &ResolvedLayout) -> Option<Bounds> {
+    if let Some(column) = geometry.collapsed.iter().find(|c| c.id == node.id()) {
+        return Some(column.bounds);
+    }
+    match node {
+        DockNode::Tabs { id, .. } => geometry
+            .groups
+            .iter()
+            .find(|g| g.id == *id)
+            .map(|g| g.bounds),
+        DockNode::Split { first, second, .. } => {
+            let a = subtree_bounds(first, geometry)?;
+            let b = subtree_bounds(second, geometry)?;
+            Some(Bounds {
+                x: a.x.min(b.x),
+                y: a.y.min(b.y),
+                width: (a.x + a.width).max(b.x + b.width) - a.x.min(b.x),
+                height: (a.y + a.height).max(b.y + b.height) - a.y.min(b.y),
+            })
+        }
+    }
+}
+// Size the changed branch from actual child allocations, not saved fractions.
+// Full-width rows follow it; independently split rows retain their own widths.
+fn column_width(
+    node: &mut DockNode,
+    root: u32,
+    width: f32,
+    geometry: &ResolvedLayout,
+) -> Option<f32> {
+    if node.id() == root {
+        return Some(width);
+    }
+    if let DockNode::Split {
+        axis,
+        fraction,
+        first,
+        second,
+        ..
+    } = node
+    {
+        let in_first = first.find(root).is_some();
+        let (changed, other) = if in_first {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        let changed_width = column_width(changed, root, width, geometry)?;
+        let other_width = subtree_bounds(other, geometry)?.width;
+        if *axis == Axis::Horizontal {
+            let total = changed_width + other_width;
+            *fraction = if in_first { changed_width } else { other_width } / total.max(1.);
+            Some(total + WORKSPACE_SPACING)
+        } else {
+            fn split_columns(node: &DockNode) -> bool {
+                match node {
+                    DockNode::Tabs { .. } => false,
+                    DockNode::Split {
+                        axis,
+                        first,
+                        second,
+                        ..
+                    } => *axis == Axis::Horizontal || split_columns(first) || split_columns(second),
+                }
+            }
+            Some(changed_width.max(if split_columns(other) {
+                other_width
+            } else {
+                0.
+            }))
+        }
+    } else {
+        None
+    }
+}
+
+pub(super) fn resolve_column(node: &DockNode, bounds: Bounds) -> CollapsedColumnPlacement {
+    let width = bounds.width.min(TILE_SIZE);
+    let bounds = Bounds { width, ..bounds };
+    let expand = Bounds {
+        height: 24.0_f32.min(bounds.height * 0.5),
+        width,
+        ..bounds
+    };
+    let grip_height = PANEL_GRIP_HEIGHT.min(bounds.height - expand.height);
+    let grip = Bounds {
+        y: bounds.y + bounds.height - grip_height,
+        height: grip_height,
+        width,
+        ..bounds
+    };
+    let top = (expand.y + expand.height + WORKSPACE_SPACING).min(grip.y);
+    let content = Bounds {
+        y: top,
+        height: (grip.y - WORKSPACE_SPACING - top).max(0.),
+        width,
+        ..bounds
+    };
+    let mut groups = Vec::new();
+    fn visit(node: &DockNode, content: Bounds, y: &mut f32, groups: &mut Vec<CollapsedGroup>) {
+        match node {
+            DockNode::Tabs {
+                id, panels, active, ..
+            } => {
+                let bounds = Bounds {
+                    y: *y,
+                    height: panels.len() as f32 * (TILE_SIZE + 2.) - 2.,
+                    ..content
+                };
+                let icons = panels
+                    .iter()
+                    .enumerate()
+                    .map(|(index, panel)| ColumnIcon {
+                        panel: *panel,
+                        bounds: Bounds {
+                            y: *y + index as f32 * (TILE_SIZE + 2.),
+                            height: TILE_SIZE,
+                            ..content
+                        },
+                    })
+                    .collect();
+                groups.push(CollapsedGroup {
+                    group: *id,
+                    active: *active,
+                    bounds,
+                    icons,
+                });
+                *y += bounds.height + WORKSPACE_SPACING;
+            }
+            DockNode::Split { first, second, .. } => {
+                visit(first, content, y, groups);
+                visit(second, content, y, groups);
+            }
+        }
+    }
+    let mut y = content.y;
+    visit(node, content, &mut y, &mut groups);
+    let empty = Bounds {
+        y: y.min(grip.y),
+        height: (grip.y - y).max(0.),
+        width,
+        ..bounds
+    };
+    CollapsedColumnPlacement {
+        id: node.id(),
+        bounds,
+        expand,
+        grip,
+        content,
+        empty,
+        groups,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const VIEW: [f32; 2] = [1600., 1000.];
+    fn geometry(layout: &DockLayout) -> ResolvedLayout {
+        layout.workspace(VIEW[0], VIEW[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+    }
+    #[test]
+    fn collapse_preserves_groups_and_restores_exact_widths() {
+        let mut layout = DockLayout::default();
+        let before = layout.clone();
+        let expanded = geometry(&layout);
+        layout.set_column_collapsed(5, true, VIEW).unwrap();
+        layout.validate().unwrap();
+        assert_eq!(layout.bands[0].root, before.bands[0].root);
+        let narrow = geometry(&layout);
+        let col = &narrow.collapsed[0];
+        assert_eq!(col.bounds.width, TILE_SIZE);
+        assert_eq!(
+            col.groups.iter().map(|g| g.group).collect::<Vec<_>>(),
+            [5, 6]
+        );
+        assert_eq!(col.groups[0].icons[0].panel, Panel::Brushes);
+        assert_eq!(
+            col.grip.y + col.grip.height,
+            col.bounds.y + col.bounds.height
+        );
+        assert!(narrow.work_area.width > expanded.work_area.width);
+        assert!(!narrow.groups.iter().any(|g| g.id == 5 || g.id == 6));
+        layout.set_column_collapsed(4, false, VIEW).unwrap();
+        assert_eq!(layout, before);
+        assert_eq!(
+            geometry(&layout).groups[0].bounds,
+            expanded.groups[0].bounds
+        );
+    }
+    #[test]
+    fn nested_columns_keep_neighbors_fixed_and_survive_removing_members() {
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Properties,
+                DockTarget::Split {
+                    group: 5,
+                    edge: Edge::Right,
+                },
+            )
+            .unwrap();
+        let group = layout.panel_group(Panel::Properties).unwrap();
+        let width =
+            |r: &ResolvedLayout, id| r.groups.iter().find(|g| g.id == id).unwrap().bounds.width;
+        let before = geometry(&layout);
+        assert_eq!(layout.column_for_group(group), Some(group));
+        layout.set_column_collapsed(group, true, VIEW).unwrap();
+        assert!((width(&geometry(&layout), 5) - width(&before, 5)).abs() < 0.01);
+        layout.set_column_collapsed(group, false, VIEW).unwrap();
+        assert!((width(&geometry(&layout), group) - width(&before, group)).abs() < 0.01);
+        layout.set_column_collapsed(6, true, VIEW).unwrap();
+        layout.set_panel_visible(Panel::Brushes, false).unwrap();
+        layout.validate().unwrap();
+        let saved = serde_json::to_string(&layout).unwrap();
+        let loaded: DockLayout = serde_json::from_str(&saved).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!(loaded.collapsed, layout.collapsed);
+        assert_eq!(geometry(&loaded).collapsed.len(), 1);
+        layout.set_panel_visible(Panel::Properties, false).unwrap();
+        layout.validate().unwrap();
+        assert_eq!(layout.collapsed[0].root, 6);
+        layout.set_panel_visible(Panel::Sizes, false).unwrap();
+        layout.validate().unwrap();
+        assert!(layout.collapsed.is_empty());
+    }
+    #[test]
+    fn invalid_columns_and_toolbar_columns_are_rejected() {
+        let mut layout = DockLayout::default();
+        assert!(layout.set_column_collapsed(2, true, VIEW).is_err());
+        assert!(
+            layout
+                .set_column_collapsed(5, true, [f32::NAN, 100.])
+                .is_err()
+        );
+        layout.collapsed.push(CollapsedColumn {
+            root: 999,
+            expanded_width: 200.,
+        });
+        assert!(layout.validate().is_err());
+        layout.collapsed[0].root = 2;
+        assert!(layout.validate().is_err());
+    }
+
+    #[test]
+    fn collapsed_drop_targets_keep_tab_and_group_insertion_distinct() {
+        let mut layout = DockLayout::default();
+        layout.set_column_collapsed(5, true, VIEW).unwrap();
+        let r = geometry(&layout);
+        let c = &r.collapsed[0];
+        let x = c.bounds.x + c.bounds.width * 0.5;
+        let hint = r
+            .drop_hint(x, c.groups[0].bounds.y + 2., &[], true)
+            .unwrap();
+        assert_eq!(
+            hint.target,
+            DockTarget::Tab {
+                group: 5,
+                index: Some(0)
+            }
+        );
+        assert!(
+            r.drop_hint(x, c.groups[0].bounds.y + 2., &[], false)
+                .is_none()
+        );
+        layout
+            .move_panel(VIEW, Panel::Properties, hint.target)
+            .unwrap();
+        assert_eq!(
+            layout.group_panels(5).unwrap(),
+            [Panel::Properties, Panel::Brushes]
+        );
+        assert_eq!(layout.collapsed[0].root, c.id);
+        let r = geometry(&layout);
+        let c = &r.collapsed[0];
+        let hint = c.drop_hint([x, c.groups[1].bounds.y - 2.]).unwrap();
+        assert_eq!(
+            hint.target,
+            DockTarget::Split {
+                group: 6,
+                edge: Edge::Top
+            }
+        );
+        layout
+            .move_panel(VIEW, Panel::Adjustments, hint.target)
+            .unwrap();
+        layout.validate().unwrap();
+        let r = geometry(&layout);
+        let c = &r.collapsed[0];
+        assert_eq!(c.groups.len(), 3);
+        assert_eq!(c.groups[1].icons[0].panel, Panel::Adjustments);
+        let hint = c.drop_hint([x, c.empty.y + 2.]).unwrap();
+        assert_eq!(
+            hint.target,
+            DockTarget::Split {
+                group: 6,
+                edge: Edge::Bottom
+            }
+        );
+        assert!(c.drop_hint([x, c.expand.y + 2.]).is_none());
+        assert!(c.drop_hint([x, c.grip.y + 2.]).is_none());
+    }
+
+    #[test]
+    fn adding_a_group_to_a_single_group_column_preserves_collapse() {
+        let mut layout = DockLayout::default();
+        layout.set_column_collapsed(8, true, VIEW).unwrap();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Sizes,
+                DockTarget::Split {
+                    group: 8,
+                    edge: Edge::Top,
+                },
+            )
+            .unwrap();
+        layout.validate().unwrap();
+        let r = geometry(&layout);
+        assert_eq!(r.collapsed.len(), 1);
+        assert_eq!(r.collapsed[0].groups.len(), 2);
+        assert_eq!(r.collapsed[0].groups[0].icons[0].panel, Panel::Sizes);
+        assert_eq!(r.collapsed[0].bounds.width, TILE_SIZE);
+    }
+
+    #[test]
+    fn collapse_does_not_reset_neighbor_width_during_removal() {
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Properties,
+                DockTarget::Split {
+                    group: 5,
+                    edge: Edge::Right,
+                },
+            )
+            .unwrap();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Adjustments,
+                DockTarget::Split {
+                    group: 5,
+                    edge: Edge::Left,
+                },
+            )
+            .unwrap();
+        let group = layout.panel_group(Panel::Properties).unwrap();
+        layout.set_column_collapsed(group, true, VIEW).unwrap();
+        let before = layout.clone();
+        let r = geometry(&layout);
+        let original = r.groups.iter().find(|g| g.id == 5).unwrap().bounds.width;
+        layout.set_panel_visible(Panel::Adjustments, false).unwrap();
+        layout.reclaim_removed_columns(&before, &r);
+        layout.validate().unwrap();
+        let r = geometry(&layout);
+        assert!(
+            (r.groups.iter().find(|g| g.id == 5).unwrap().bounds.width - original).abs() < 0.01
+        );
+        assert_eq!(r.collapsed[0].bounds.width, TILE_SIZE);
+    }
+
+    #[test]
+    fn collapse_is_undoable_without_changing_document_or_tab_state() {
+        let mut state = crate::WorkspaceState::default();
+        state.layout.select_tab(8, Panel::Properties).unwrap();
+        let before = state.clone();
+        let mut history = crate::workspace::WorkspaceHistory::default();
+        history.begin(&state);
+        state.layout.set_column_collapsed(8, true, VIEW).unwrap();
+        history.finish(&state);
+        let collapsed = state.clone();
+        history.undo(&mut state);
+        assert_eq!(state, before);
+        history.redo(&mut state);
+        assert_eq!(state, collapsed);
+        let col = &geometry(&state.layout).collapsed[0];
+        assert_eq!(col.groups[0].active, Panel::Properties);
+        state.layout.select_tab(8, Panel::Adjustments).unwrap();
+        assert_eq!(
+            geometry(&state.layout).collapsed[0].groups[0].active,
+            Panel::Adjustments
+        );
+        state.layout.reset_docking().unwrap();
+        assert!(state.layout.collapsed.is_empty());
+        state.validate().unwrap();
+    }
+
+    #[test]
+    fn strip_controls_stay_bounded_and_overflow_is_not_a_drop_target() {
+        let mut layout = DockLayout::default();
+        layout.set_column_collapsed(8, true, VIEW).unwrap();
+        for height in [10., 30., 80., 120., 400.] {
+            let bounds = Bounds {
+                x: 5.,
+                y: 12.,
+                width: TILE_SIZE,
+                height,
+            };
+            let c = resolve_column(layout.node(8).unwrap(), bounds);
+            for b in [c.expand, c.grip, c.content, c.empty] {
+                assert!(b.x >= bounds.x && b.x + b.width <= bounds.x + bounds.width);
+                assert!(b.y >= bounds.y && b.y + b.height <= bounds.y + bounds.height);
+            }
+            assert!(c.expand.y + c.expand.height <= c.grip.y);
+            for icon in c.groups.iter().flat_map(|g| &g.icons) {
+                let point = [icon.bounds.x + 18., icon.bounds.y + 18.];
+                if !c.content.contains(point[0], point[1]) {
+                    assert!(c.drop_hint(point).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_collapsed_subcolumns_do_not_stretch_to_a_full_width_sibling() {
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Properties,
+                DockTarget::Split {
+                    group: 5,
+                    edge: Edge::Right,
+                },
+            )
+            .unwrap();
+        let right = layout.panel_group(Panel::Properties).unwrap();
+        layout.add_panel_to_group(Panel::ToolSettings, 6).unwrap();
+        let before = geometry(&layout);
+        layout.set_column_collapsed(5, true, VIEW).unwrap();
+        layout.set_column_collapsed(right, true, VIEW).unwrap();
+        let r = geometry(&layout);
+        assert_eq!(r.collapsed.len(), 2);
+        assert!(r.collapsed.iter().all(|c| c.bounds.width == TILE_SIZE));
+        assert!(
+            r.collapsed[0]
+                .bounds
+                .intersection(r.collapsed[1].bounds)
+                .is_none()
+        );
+        layout.validate().unwrap();
+        layout.set_column_collapsed(right, false, VIEW).unwrap();
+        layout.set_column_collapsed(5, false, VIEW).unwrap();
+        let after = geometry(&layout);
+        for g in &before.groups {
+            let restored = after.groups.iter().find(|r| r.id == g.id).unwrap();
+            assert!((restored.bounds.width - g.bounds.width).abs() < 0.01);
+        }
+    }
+}

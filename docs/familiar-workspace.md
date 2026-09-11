@@ -1267,3 +1267,51 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   Next: early optional-pipeline readiness/first-use responsiveness, collapsible
   columns, region refinements, complete menus/file workflows, final default layout
   and the complete GTK validation/human approval gate. The goal remains active.
+
+### Live transform startup readiness
+
+- Live transform presence now participates in the existing shader dependency
+  key alongside document revision and brush settings. GTK, web and the shared
+  native host check it before draining a frame. Starting a transform promotes
+  its color/scalar and selection shaders to interactive priority; the caller
+  polls readiness instead of synchronously compiling them during submission.
+  Cancelling removes that readiness requirement. Once stage four completes,
+  transform changes require no further startup scheduling.
+- A deliberately blocked compiler regression verifies immediate not-ready
+  status, cancellation, repeated-request deduplication and readiness after
+  release without document or brush changes. All five startup regressions,
+  eight native-host tests, 30 engine tests, workspace/Wasm compilation and
+  strict renderer/engine/host/GTK Clippy pass. GTK's private-Wayland startup
+  test also passes, including contact gating and painting before the optional
+  catalog completes. Browser/physical-device interaction was not rerun here.
+- This removes a shader-readiness hole, not the separate first-use texture
+  capture/driver cost recorded above. No new steady-state speedup or cold
+  120Hz guarantee is claimed. Collapsible columns are next; the remaining
+  region, menu/file, default-layout and final-review requirements are unchanged.
+
+### Collapsible-column shared layout foundation
+
+- The dock tree now retains collapsed-column identity and expanded width,
+  without replacing its groups with floating toolbars. Vertical splits remain
+  stacked groups; the nearest horizontal split identifies a nested column.
+  Resolution emits a one-tile-wide strip, fixed expand/grip geometry, grouped
+  icons, a bounded content area and a trailing insertion area. Actual GTK
+  widgets and collapse actions are not exposed yet.
+- Collapse/expand preserves internal split ratios and tab state. Neighboring
+  columns keep their width; full-width rows follow the changed column, while
+  independent split rows retain their widths. Allocation uses actual constrained
+  child sizes, avoiding width drift when expanding after minimum-width clamping.
+  Removing groups transfers collapsed identity to the surviving subtree.
+- Shared drop hints distinguish tab insertion, inter-group insertion and trailing
+  insertion. New vertically stacked groups inherit collapse state; hidden Zen
+  docks and clipped icons do not create targets. Existing removal/reweighting
+  treats a collapsed subtree as a single fixed-width item.
+- Nine new layout regressions cover nested columns, restore, save/load,
+  undo/redo, insertion, pruning, sibling widths and small-view overflow. The
+  complete shared UI suite passes 196 tests, with strict UI Clippy and
+  workspace/Wasm compilation. These are core tests, not native UI validation.
+- Remaining for columns: shared action/gesture integration (context menu,
+  resize-to-collapse and header double-click), whole-column movement and
+  eligible drop targets, persistent tabbed content drawers, GTK rendering,
+  scrolling/animation and native validation. No feature-completion claim or GTK
+  review request is made at this foundation milestone.

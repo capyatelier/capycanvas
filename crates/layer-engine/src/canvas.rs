@@ -289,6 +289,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
+    /// Current disposable transform, including its startup shader dependency.
+    pub fn transform_preview(&self) -> Option<&layer_render::TransformPreview> {
+        self.transform_preview.as_ref()
+    }
+
     /// Disposable absolute pixel transform. History changes only on Apply.
     pub fn set_transform_preview(
         &mut self,

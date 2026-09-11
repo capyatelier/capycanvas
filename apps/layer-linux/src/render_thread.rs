@@ -52,7 +52,10 @@ impl Frame {
 }
 enum Command {
     TransformPreview(Option<layer_render::TransformPreview>),
-    Startup(u64, Box<(layer_core::Document, layer_core::BrushSnapshot)>),
+    Startup(
+        u64,
+        Box<(layer_core::Document, layer_core::BrushSnapshot, bool)>,
+    ),
     FinishStartupCache,
     Selection(Option<layer_core::Selection>),
     Region(layer_render::RegionRequest),
@@ -94,7 +97,7 @@ pub struct RenderWorker {
     first_frame_sent: bool,
     pub(super) startup: layer_render_wgpu::StartupProgress,
     startup_generation: u64,
-    startup_key: Option<(layer_core::Revision, layer_core::BrushSnapshot)>,
+    startup_key: Option<(layer_core::Revision, layer_core::BrushSnapshot, bool)>,
     selection: Option<layer_core::Selection>,
     region: Option<Result<layer_render::RegionResult, String>>,
     region_pending: bool,
@@ -171,12 +174,15 @@ impl RenderWorker {
                         worker.child.dispatch()?;
                         if !startup_progress.complete
                             && worker.paper_ready.load(Ordering::Acquire)
-                            && let Some((generation, document, brush)) = &startup_input
+                            && let Some((generation, document, brush, transform)) = &startup_input
                         {
-                            if worker.renderer.startup_needs_update(document, brush) {
+                            if worker
+                                .renderer
+                                .startup_needs_update(document, brush, *transform)
+                            {
                                 worker
                                     .renderer
-                                    .prepare_startup(document, brush)
+                                    .prepare_startup(document, brush, *transform)
                                     .map_err(error)?;
                             }
                             let progress = worker.renderer.poll_startup().map_err(error)?;
@@ -304,8 +310,8 @@ impl RenderWorker {
                                 .set_transform_preview(preview.as_ref())
                                 .map_err(error)?,
                             Command::Startup(generation, inputs) => {
-                                let (document, brush) = *inputs;
-                                startup_input = Some((generation, document, brush));
+                                let (document, brush, transform) = *inputs;
+                                startup_input = Some((generation, document, brush, transform));
                                 startup_progress = Default::default();
                             }
                             Command::FinishStartupCache => worker.renderer.finish_startup_cache(),
@@ -492,24 +498,28 @@ impl RenderWorker {
         &self,
         document: &layer_core::Document,
         brush: &layer_core::BrushSnapshot,
+        transform: bool,
     ) -> bool {
         !self.startup.complete
             && self
                 .startup_key
                 .as_ref()
-                .is_none_or(|(revision, old)| *revision != document.revision || old != brush)
+                .is_none_or(|(revision, old, previous)| {
+                    *revision != document.revision || old != brush || *previous != transform
+                })
     }
     pub(super) fn prepare_startup(
         &mut self,
         document: layer_core::Document,
         brush: layer_core::BrushSnapshot,
+        transform: bool,
     ) -> Result<(), String> {
         self.startup_generation += 1;
-        self.startup_key = Some((document.revision, brush.clone()));
+        self.startup_key = Some((document.revision, brush.clone(), transform));
         self.startup = Default::default();
         self.send(Command::Startup(
             self.startup_generation,
-            Box::new((document, brush)),
+            Box::new((document, brush, transform)),
         ))
         .map_err(error)
     }
@@ -517,8 +527,9 @@ impl RenderWorker {
         &self,
         document: &layer_core::Document,
         brush: &layer_core::BrushSnapshot,
+        transform: bool,
     ) -> bool {
-        self.startup.brush_ready && !self.startup_needs_update(document, brush)
+        self.startup.brush_ready && !self.startup_needs_update(document, brush, transform)
     }
     pub(super) fn ready(&mut self) -> Result<bool, String> {
         while let Ok(reply) = self.replies.try_recv() {
