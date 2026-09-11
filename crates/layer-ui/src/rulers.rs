@@ -94,10 +94,27 @@ impl<B: CanvasRenderer> UiSession<B> {
         Ok(())
     }
     pub(super) fn ruler_pen(&mut self, event: PenEvent, p: Point) -> Result<(), String> {
+        self.ruler_contact(event, p, false).map(|_| ())
+    }
+    pub(super) fn operation_ruler_pen(
+        &mut self,
+        event: PenEvent,
+        p: Point,
+    ) -> Result<bool, String> {
+        if event.phase != PenPhase::Down && self.rulers.drag.is_none() {
+            return Ok(false);
+        }
+        self.ruler_contact(event, p, true)
+    }
+    fn ruler_contact(
+        &mut self,
+        event: PenEvent,
+        p: Point,
+        existing_only: bool,
+    ) -> Result<bool, String> {
         match event.phase {
             PenPhase::Down => {
                 self.rulers.drag = None;
-                self.layer_interaction.path = vec![p];
                 let reach = self.ruler_reach();
                 let doc = self.engine.document();
                 let hit = self
@@ -122,6 +139,10 @@ impl<B: CanvasRenderer> UiSession<B> {
                             .min_by(|a, b| a.0.total_cmp(&b.0))
                     })
                     .flatten();
+                if existing_only && hit.is_none() {
+                    return Ok(false);
+                }
+                self.layer_interaction.path = vec![p];
                 let (original, part, existing) = if let Some((_, r, part)) = hit {
                     (r, part, true)
                 } else {
@@ -144,9 +165,11 @@ impl<B: CanvasRenderer> UiSession<B> {
                 };
                 self.rulers.selected = Some(original.id);
                 self.rulers.kind = original.geometry.kind();
-                self.layer_interaction.tool = LayerCanvasTool::Ruler {
-                    kind: self.rulers.kind,
-                };
+                if !existing_only {
+                    self.layer_interaction.tool = LayerCanvasTool::Ruler {
+                        kind: self.rulers.kind,
+                    };
+                }
                 self.rulers.visible = true;
                 self.sync_ruler_snapping();
                 self.rulers.drag = Some(Drag {
@@ -186,13 +209,13 @@ impl<B: CanvasRenderer> UiSession<B> {
                 self.cancel_ruler_gesture();
                 self.layer_interaction.path.clear();
             }
-            PenPhase::Hover => return Ok(()),
+            PenPhase::Hover => return Ok(false),
         }
         if event.phase != PenPhase::Move {
             self.refresh_tools();
             self.layer_interaction.changed = true;
         }
-        Ok(())
+        Ok(true)
     }
     pub(super) fn update_ruler_preview(&mut self) -> bool {
         let Some(drag) = &mut self.rulers.drag else {

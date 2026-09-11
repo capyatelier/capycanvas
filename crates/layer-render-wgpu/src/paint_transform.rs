@@ -5,7 +5,7 @@ use pixel_transform::{PixelTransform, TransformSource, TransformTarget};
 
 pub(super) struct PaintTransforms {
     color: PixelTransform,
-    scalar: Option<PixelTransform>,
+    scalar: PixelTransform,
     captures: [Option<wgpu::Texture>; 3],
     sources: [Option<TransformSource>; 3],
     selection: Option<wgpu::Buffer>,
@@ -17,10 +17,10 @@ pub(super) struct PaintTransforms {
     pub source_captures: u64,
 }
 impl PaintTransforms {
-    pub fn new(r: &WgpuRasterizer) -> Self {
+    pub fn new(device: &PipelineDevice) -> Self {
         Self {
-            color: PixelTransform::new(&r.device),
-            scalar: None,
+            color: PixelTransform::staged(device, false),
+            scalar: PixelTransform::staged(device, true),
             captures: Default::default(),
             sources: Default::default(),
             selection: None,
@@ -32,19 +32,17 @@ impl PaintTransforms {
             source_captures: 0,
         }
     }
+    pub fn pipelines(&self) -> [&Deferred<wgpu::RenderPipeline>; 2] {
+        [&self.color.pipeline, &self.scalar.pipeline]
+    }
     pub fn begin_frame(&mut self) {
         self.color.begin_frame();
-        if let Some(s) = &mut self.scalar {
-            s.begin_frame();
-        }
+        self.scalar.begin_frame();
     }
     pub fn storage_bytes(&self) -> u64 {
         self.color.storage_bytes()
             + self.selection.as_ref().map_or(0, wgpu::Buffer::size)
-            + self
-                .scalar
-                .as_ref()
-                .map_or(0, PixelTransform::storage_bytes)
+            + self.scalar.storage_bytes()
             + self
                 .captures
                 .iter()
@@ -239,8 +237,7 @@ impl PaintTransforms {
             let pass = if channel == 0 {
                 &mut self.color
             } else {
-                self.scalar
-                    .get_or_insert_with(|| PixelTransform::scalar(&r.device))
+                &mut self.scalar
             };
             self.sources[channel] = Some(
                 pass.source(
@@ -343,8 +340,7 @@ impl PaintTransforms {
             let pass = if channel == 0 {
                 &mut self.color
             } else {
-                self.scalar
-                    .get_or_insert_with(|| PixelTransform::scalar(&r.device))
+                &mut self.scalar
             };
             let source = self.sources[channel].as_ref().unwrap();
             let pages: Vec<_> = match channel {

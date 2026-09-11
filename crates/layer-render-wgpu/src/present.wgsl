@@ -68,6 +68,12 @@ struct CursorVertex {
     @location(0) start_point: vec2<f32>, @location(1) end_point: vec2<f32>,
     @location(2) offset: f32, @location(3) marker: f32, @location(4) scale: f32) -> CursorVertex {
     let corners = array<vec2<f32>, 6>(vec2<f32>(0.,-1.), vec2<f32>(1.,-1.), vec2<f32>(0.,1.), vec2<f32>(0.,1.), vec2<f32>(1.,-1.), vec2<f32>(1.,1.));
+    if marker > 1.5 {
+        let half = abs(end_point - start_point) * 0.5;
+        let local = vec2<f32>(corners[vertex].x * 2. - 1., corners[vertex].y) * (half + 0.5);
+        let point = (start_point + end_point) * 0.5 + local;
+        return CursorVertex(vec4<f32>(point / camera.viewport.xy * vec2<f32>(2.,-2.) + vec2<f32>(-1.,1.),0.,1.), local, vec4<f32>(half, marker, scale));
+    }
     let extent = length(end_point-start_point);
     let along = (end_point-start_point) / max(extent, 0.0001);
     let corner = corners[vertex];
@@ -78,8 +84,14 @@ struct CursorVertex {
 @fragment fn cursor_fragment(v: CursorVertex) -> @location(0) vec4<f32> {
     let distance = length(vec2<f32>(max(max(-v.local.x, v.local.x-v.line.x), 0.0), v.local.y));
     let scale = v.line.w;
-    let alpha = clamp(select(0.5, 1.5, v.line.z > 0.5) * scale + 0.5 - distance, 0.0, 1.0);
-    let white = clamp(0.5 * scale + 0.5 - distance, 0.0, 1.0) * select(select(0.0, 1.0, ((v.local.x + v.line.y) / scale) % 6.0 < 3.0), 1.0, v.line.z > 0.5);
+    var alpha = clamp(select(0.5, 1.5, v.line.z > 0.5) * scale + 0.5 - distance, 0.0, 1.0);
+    var white = clamp(0.5 * scale + 0.5 - distance, 0.0, 1.0) * select(select(0.0, 1.0, ((v.local.x + v.line.y) / scale) % 6.0 < 3.0), 1.0, v.line.z > 0.5);
+    if v.line.z > 1.5 {
+        let edge = abs(v.local) - v.line.xy;
+        let d = max(edge.x, edge.y);
+        alpha = clamp(0.5 - d, 0., 1.);
+        white = clamp(0.5 - scale - d, 0., 1.);
+    }
     let radius = camera.viewport.w;
     let q = abs(v.position.xy-camera.viewport.xy*0.5)-camera.viewport.xy*0.5+radius;
     let clip = select(1.0, clamp(0.5-length(max(q,vec2<f32>(0.0)))-min(max(q.x,q.y),0.0)+radius,0.0,1.0), radius > 0.0);

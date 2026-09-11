@@ -15,7 +15,7 @@ mod telemetry;
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
-/// Display-only cursor line, already transformed to logical viewport pixels.
+/// Display-only overlay primitive in logical viewport pixels.
 /// Kept separate from brush dabs: cursors never touch document textures.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
@@ -23,6 +23,8 @@ pub struct CursorSegment {
     pub from: [f32; 2],
     pub to: [f32; 2],
     pub distance: f32,
+    /// 0: dashed line, 1: solid line, 2: filled rectangular handle (`from`/`to`
+    /// are opposite corners). Handles have a one-pixel contrasting border.
     pub marker: f32,
     pub scale: f32,
 }

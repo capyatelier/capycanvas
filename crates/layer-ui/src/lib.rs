@@ -335,6 +335,10 @@ pub enum CommandId {
     Liquify,
     Lasso,
     Move,
+    ScaleRotate,
+    ApplyTransform,
+    CancelTransform,
+    TransformAspect,
     Hand,
     Eyedropper,
     Gradient,
@@ -389,6 +393,7 @@ impl CommandId {
                 | Self::FlipVertical
                 | Self::ShowRulers
                 | Self::SnapRulers
+                | Self::TransformAspect
         )
     }
     pub fn icon(self) -> Option<&'static str> {
@@ -403,6 +408,9 @@ impl CommandId {
             Self::Liquify => "liquify",
             Self::Lasso => "lasso",
             Self::Move => "move",
+            Self::ScaleRotate => "fit",
+            Self::ApplyTransform => "check",
+            Self::CancelTransform => "undo",
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
@@ -430,7 +438,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 48] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -441,6 +449,10 @@ impl CommandId {
         Self::Liquify,
         Self::Lasso,
         Self::Move,
+        Self::ScaleRotate,
+        Self::ApplyTransform,
+        Self::CancelTransform,
+        Self::TransformAspect,
         Self::Hand,
         Self::Eyedropper,
         Self::Gradient,
@@ -493,7 +505,11 @@ impl CommandId {
             Self::Blend => "Blend",
             Self::Liquify => "Liquify",
             Self::Lasso => "Lasso selection",
-            Self::Move => "Move",
+            Self::Move => "Operation",
+            Self::ScaleRotate => "Scale / rotate",
+            Self::ApplyTransform => "Apply transform",
+            Self::CancelTransform => "Cancel transform",
+            Self::TransformAspect => "Keep proportions",
             Self::Hand => "Hand",
             Self::Eyedropper => "Eyedropper",
             Self::Gradient => "Gradient",
