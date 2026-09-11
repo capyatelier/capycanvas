@@ -23,5 +23,8 @@ final class EditorLaunchTests: XCTestCase {
         shot.name = "ipad-editor-initial"
         shot.lifetime = .keepAlways
         add(shot)
+        checkLayerControls(in: app)
+        let layers = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        layers.name = "ipad-layer-added"; layers.lifetime = .keepAlways; add(layers)
     }
 }

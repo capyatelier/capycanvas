@@ -77,6 +77,30 @@ pub unsafe extern "C" fn capy_apple_string_free(text: *mut c_char) {
     }
 }
 /// # Safety
+/// `json` is a NUL-terminated UTF-8 numeric request, valid for this call.
+/// This stateless operation has no session, GPU or file access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char {
+    catch_unwind(|| {
+        let result = (|| {
+            if json.is_null() {
+                return Err("Missing numeric request".to_string());
+            }
+            let source = unsafe { CStr::from_ptr(json) }
+                .to_str()
+                .map_err(|e| e.to_string())?;
+            let request: layer_ui::NumericRequest =
+                serde_json::from_str(source).map_err(|e| e.to_string())?;
+            serde_json::to_value(request.resolve()?).map_err(|e| e.to_string())
+        })();
+        let response = result.unwrap_or_else(|error| serde_json::json!({"error": error}));
+        CString::new(response.to_string())
+            .map(CString::into_raw)
+            .unwrap_or(std::ptr::null_mut())
+    })
+    .unwrap_or(std::ptr::null_mut())
+}
+/// # Safety
 /// Valid handle; json must be a NUL-terminated UTF-8 string when request != 3.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_request(
@@ -248,6 +272,48 @@ pub unsafe extern "C" fn capy_apple_detach(app: *mut CapyApple) -> i32 {
         a.host.input(layer_ui::UiInput::Blur)?;
         a.metal.detach();
         Ok(())
+    })
+    .map_or(-1, |_| 0)
+}
+/// # Safety
+/// Valid exclusively owned handle, UTF-8 NUL-terminated name and `count` readable
+/// image bytes. Neither input is retained after this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_import_layer(
+    app: *mut CapyApple,
+    name: *const c_char,
+    width: u32,
+    height: u32,
+    rgba: *const u8,
+    count: usize,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        if name.is_null()
+            || rgba.is_null()
+            || width == 0
+            || height == 0
+            || width > 8192
+            || height > 8192
+            || count != width as usize * height as usize * 4
+        {
+            return Err("Import an image up to 8192 × 8192 pixels with complete RGBA data".into());
+        }
+        let name = unsafe { CStr::from_ptr(name) }
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        a.host.import_layer_image(
+            name,
+            layer_render::HostImage {
+                width,
+                height,
+                stride: width * 4,
+                format: layer_render::PixelFormat::Rgba8Srgb,
+                bytes: unsafe { std::slice::from_raw_parts(rgba, count) },
+            },
+        )
     })
     .map_or(-1, |_| 0)
 }

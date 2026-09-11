@@ -13,6 +13,9 @@ CapyApple *capy_apple_create(uint32_t platform); /* 0 iPadOS, 1 macOS */
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
+/* Stateless numeric policy; safe on the UI thread. Owned JSON result contains
+   either the shared numeric response or {"error": ...}. */
+char *capy_apple_numeric(const char *json);
 /* request: 0 action, 1 UI input, 2 query, 3 changed snapshot, 4 numeric control.
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
@@ -21,6 +24,9 @@ int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
                          const char *cache_directory);
 int32_t capy_apple_finish_startup_cache(CapyApple *app);
+/* Straight-alpha RGBA8 sRGB, tightly packed top-to-bottom rows. */
+int32_t capy_apple_import_layer(CapyApple *app, const char *name, uint32_t width,
+                               uint32_t height, const uint8_t *rgba, size_t count);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_detach(CapyApple *app);
 /* Nine doubles per record: x/y physical pixels, pressure, tilt x/y radians,

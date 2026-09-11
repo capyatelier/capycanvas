@@ -38,13 +38,21 @@ impl App {
     }
     fn draw_frame(&self) {
         let app = unsafe { &mut *self.0 };
-        let previous = app.host.session.state().revision;
-        let change = app
-            .host
-            .session
-            .frame(2_000_000_000, 2_000_000_000)
+        app.host
+            .prepare_canvas_frame(2_000_000_000, 2_000_000_000, true)
             .unwrap();
-        app.host.apply_change(previous, change);
+    }
+    fn layer_action(&self, action: Value) {
+        self.action(json!({"type": "layer", "action": action}));
+    }
+    fn layer(&self, id: u64) -> Value {
+        self.state()["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|layer| layer["id"] == id)
+            .unwrap()
+            .clone()
     }
     fn stroke(&self) {
         let revision = unsafe { capy_apple_camera_revision(self.0) };
@@ -232,4 +240,188 @@ fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
             "Replayed ink remains exactly undoable"
         );
     }
+}
+
+#[test]
+fn layer_panel_actions_preserve_targets_masks_hierarchy_and_menu_policy() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let original = app.state()["layer_tools"]["editing_layer"]["id"]
+            .as_u64()
+            .unwrap();
+        app.layer_action(json!({"op":"new","group":false,"clipped":false}));
+        let id = app.state()["layer_tools"]["editing_layer"]["id"]
+            .as_u64()
+            .unwrap();
+        app.layer_action(json!({"op":"begin_rename","id":id}));
+        assert_eq!(app.state()["layer_tools"]["rename_layer"], id);
+        app.layer_action(json!({"op":"rename","id":id,"name":"Test ink"}));
+        assert_eq!(app.layer(id)["label"], "Test ink");
+        app.layer_action(json!({"op":"blend","id":id,"value":2}));
+        assert_eq!(app.layer(id)["blend"], 2);
+        app.action(json!({"type":"set_layer_opacity","opacity":0.35}));
+        assert!((app.layer(id)["opacity"].as_f64().unwrap() - 0.35).abs() < 0.00001);
+        app.layer_action(json!({"op":"alpha_lock","id":id,"value":true}));
+        assert_eq!(app.layer(id)["alpha_locked"], true);
+        app.layer_action(json!({"op":"lock","id":id,"value":true}));
+        assert_eq!(app.state()["layer_tools"]["controls"]["opacity"], false);
+        let locked = app
+            .request(2, json!({"type":"layer_menu","id":id,"mask":false}))
+            .unwrap();
+        let rename = locked["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s.as_array().unwrap())
+            .find(|item| item["action"]["action"]["op"] == "begin_rename")
+            .unwrap();
+        assert_eq!(
+            rename["enabled"], false,
+            "Menu capabilities must come from shared policy"
+        );
+        app.layer_action(json!({"op":"lock","id":id,"value":false}));
+        app.layer_action(json!({"op":"toggle_selection","id":original}));
+        assert_eq!(app.state()["layer_tools"]["editing_layer"]["id"], id);
+        assert_eq!(app.layer(original)["selected"], true);
+        app.layer_action(json!({"op":"context","id":id,"mask":false}));
+        assert_eq!(
+            app.layer(original)["selected"],
+            true,
+            "Context on a selected row keeps checked selection"
+        );
+        app.layer_action(json!({"op":"reference_selection"}));
+        assert_eq!(app.layer(original)["reference"], true);
+        assert_eq!(app.layer(id)["reference"], true);
+        app.layer_action(json!({"op":"add_mask","id":id,"replace":false}));
+        assert_eq!(app.layer(id)["has_mask"], true);
+        app.layer_action(json!({"op":"select","id":id,"mask":true}));
+        assert_eq!(app.layer(id)["mask_selected"], true);
+        app.layer_action(json!({"op":"link_mask","id":id,"value":false}));
+        app.layer_action(json!({"op":"enable_mask","id":id,"value":false}));
+        assert_eq!(app.layer(id)["mask_linked"], false);
+        let menu = app
+            .request(2, json!({"type":"layer_menu","id":id,"mask":true}))
+            .unwrap();
+        let enabled = menu["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s.as_array().unwrap())
+            .find(|item| item["label"] == "Enable mask")
+            .unwrap();
+        assert_eq!(enabled["selected"], false);
+        assert_eq!(enabled["enabled"], true);
+        app.layer_action(json!({"op":"delete_mask","id":id}));
+        assert_eq!(app.layer(id)["has_mask"], false);
+        app.invoke("undo");
+        assert_eq!(app.layer(id)["has_mask"], true);
+        app.layer_action(json!({"op":"new","group":true,"clipped":false}));
+        let group = app.state()["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["group"] == true)
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        app.layer_action(json!({"op":"drop","id":original,"target":group,"fraction":0.5}));
+        assert_eq!(app.layer(original)["depth"], 1);
+        app.layer_action(json!({"op":"collapse","id":group}));
+        assert!(
+            !app.state()["layers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|l| l["id"] == original)
+        );
+        app.layer_action(json!({"op":"collapse","id":group}));
+        assert_eq!(app.layer(original)["depth"], 1);
+    }
+}
+
+#[test]
+fn image_import_changes_gpu_pixels_is_undoable_and_produces_a_thumbnail() {
+    use std::time::{Duration, Instant};
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
+        app.draw_frame();
+        let paper = app.pixels();
+        let name = CString::new("Test image").unwrap();
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 128, 0, 0, 0, 0];
+        let before = app.state();
+        assert_eq!(
+            unsafe { capy_apple_import_layer(app.0, name.as_ptr(), 2, 2, rgba.as_ptr(), 15) },
+            -1
+        );
+        assert_eq!(
+            app.state(),
+            before,
+            "Incomplete pixels cannot mutate the document"
+        );
+        assert_eq!(
+            unsafe {
+                capy_apple_import_layer(app.0, name.as_ptr(), 2, 2, rgba.as_ptr(), rgba.len())
+            },
+            0
+        );
+        let id = app.state()["layer_tools"]["editing_layer"]["id"]
+            .as_u64()
+            .unwrap();
+        assert_eq!(app.layer(id)["label"], "Test image");
+        app.draw_frame();
+        let imported = app.pixels();
+        assert!(imported != paper, "Import must reach the GPU document");
+        let mut reply = app
+            .request(2, json!({"type":"layer_thumbnails","requests":[[99,id]]}))
+            .unwrap();
+        assert_eq!(reply["accepted"], json!([99]));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reply["images"].as_array().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "Thumbnail readback timed out");
+            std::thread::sleep(Duration::from_millis(1));
+            reply = app
+                .request(2, json!({"type":"layer_thumbnails","requests":[]}))
+                .unwrap();
+        }
+        let image = &reply["images"][0];
+        assert_eq!(image[0], 99);
+        assert_eq!(
+            image[3].as_array().unwrap().len(),
+            image[1].as_u64().unwrap() as usize * image[2].as_u64().unwrap() as usize * 4
+        );
+        app.invoke("undo");
+        app.draw_frame();
+        assert!(app.pixels() == paper);
+        app.invoke("redo");
+        app.draw_frame();
+        assert!(app.pixels() == imported);
+    }
+}
+
+#[test]
+fn stateless_numeric_input_uses_shared_policy_without_a_session() {
+    let control = serde_json::to_value(layer_ui::ui_catalog()).unwrap()["layer_opacity"].clone();
+    let resolve = |operation| {
+        let json =
+            CString::new(json!({"control":control,"value":1.,"operation":operation}).to_string())
+                .unwrap();
+        let output = unsafe { capy_apple_numeric(json.as_ptr()) };
+        assert!(!output.is_null());
+        let result: Value =
+            serde_json::from_slice(unsafe { CStr::from_ptr(output) }.to_bytes()).unwrap();
+        unsafe { capy_apple_string_free(output) };
+        result
+    };
+    assert_eq!(
+        resolve(json!({"type":"expression","text":"25+25"}))["value"],
+        0.5
+    );
+    assert_eq!(
+        resolve(json!({"type":"position","position":0.25}))["value"],
+        0.25
+    );
+    assert_eq!(resolve(json!({"type":"format"}))["text"], "100");
+    assert!(resolve(json!({"type":"expression","text":"invalid"}))["error"].is_string());
 }

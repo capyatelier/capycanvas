@@ -17,7 +17,7 @@ struct MacEditorCommands: Commands {
         CommandGroup(replacing: .appSettings) {
             if let store { SettingsMenuItem(store: store) }
         }
-        CommandMenu("View") {
+        CommandGroup(after: .toolbar) {
             if let store { CatalogMenuItems(store: store, label: "View") }
         }
         CommandMenu("Workspace") {

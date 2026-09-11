@@ -53,6 +53,6 @@ final class EditorLaunchTests: XCTestCase {
         waitForExpectations(timeout: 10)
         let painted = XCTAttachment(screenshot: window.screenshot())
         painted.name = "mac-editor-mouse-stroke"; painted.lifetime = .keepAlways; add(painted)
-
+        checkLayerControls(in: app)
     }
 }
