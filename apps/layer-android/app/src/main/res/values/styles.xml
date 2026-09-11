@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <color name="canvas_launch_background">#808080</color>
     <style name="Theme.CapyCanvas" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Match the shared light theme's default canvas surround. -->
+    <color name="canvas_launch_background">#B8B8B8</color>
     <color name="capy_brand_background">#767676</color>
 </resources>

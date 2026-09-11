@@ -74,7 +74,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val state = snapshot?.getJSONObject("state")
     if (state == null) {
         // The session publishes its palette before the native surface attaches.
-        // Only the launch/error screen uses the fixed launch background.
+        // Only the launch/error screen uses the system-themed launch background.
         Box(Modifier.fillMaxSize().background(colorResource(R.color.canvas_launch_background)), contentAlignment = Alignment.Center) {
             host.failure?.let { Text(it, Modifier.padding(24.dp), color = Color.White) }
         }

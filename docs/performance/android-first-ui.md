@@ -1,6 +1,6 @@
 # Android UI before canvas shaders
 
-Android now shows a neutral gray launch background, then the workspace controls
+Android now shows a gray launch background matching the system theme, then the workspace controls
 over the theme's gray surround while the canvas GPU initializes. This path has no
 dependency on the application's Vulkan shaders. Drawing still follows the staged
 canvas/brush readiness rules.
@@ -21,10 +21,30 @@ check polls without waiting on the UI thread. Canvas rendering continues through
 the existing native SurfaceView compositor layer.
 
 The system splash, window background, and initial Compose fallback use the same
-neutral gray (`#808080`). Once the model is available, the placeholder uses the
-current theme's surround color.
+Android color resource: light gray (`#B8B8B8`) by default and dark gray (`#333333`)
+from `values-night` when the system is dark. These match the shared theme's default
+surround colors. Android resolves the resource without waiting for app settings,
+the Rust session, or canvas shaders. Once the model is available, the placeholder
+uses the selected app theme's surround color, including any custom base color.
+An explicit app theme override may therefore differ from the initial system theme.
 
-Measured on the USB-connected Wacom MovinkPad 14, Android 15, September 10, 2026.
+The resource-color follow-up was built and linted for ARM64 and checked on the
+same tablet with system night mode both off and on. Screen recordings showed the
+expected light/dark launch colors and no black canvas frames. Initial window draw
+completion was 343 ms in the light sample and 398 ms in the dark sample; these
+single samples are a smoke check, not a statistical latency comparison. No new
+startup code or shader work is needed to select the color. The original system
+night-mode setting and app preferences were restored afterward.
+
+Follow-up evidence: `artifacts/android/theme-launch-{light,dark}.mp4`, matching
+traces/logs, `theme-launch-colors.json`, `theme-launch-timings.json`, and
+`theme-launch-build.txt`. Installed follow-up APK:
+`capy-canvas-themed-startup-arm64-debug.apk`, SHA-256
+`5dbe5107d0c65be1ce05eb509b3b5365c99bb59e3f72884bdd8c12defe8e8c2a`.
+
+The following measurements predate the system-theme color adjustment and used
+the original neutral gray (`#808080`). Measured on the USB-connected Wacom
+MovinkPad 14, Android 15, September 10, 2026.
 The final ARM64 debug APK was built from isolated commit `bcda425`, containing fix
 `42d06dd` and the other agents' published milestones. Uncommitted shared-renderer
 work was excluded from this final build.
