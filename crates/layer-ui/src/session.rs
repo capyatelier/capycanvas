@@ -6,8 +6,12 @@ use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurv
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
+#[path = "figures.rs"]
+pub(crate) mod figures;
 #[path = "region_tools.rs"]
 mod region_tools;
+#[path = "rulers.rs"]
+pub(crate) mod rulers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
 #[path = "effects.rs"]
 mod effects;
@@ -53,6 +57,7 @@ pub struct UiSession<R: CanvasRenderer> {
     navigator_preview: crate::navigator::Preview,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
+    rulers: rulers::RulerInteraction,
     system_theme: Theme,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -97,6 +102,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             navigator_preview: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
+            rulers: Default::default(),
             system_theme: Theme::Light,
             logical_viewport: None,
             initial_fit: true,
@@ -121,6 +127,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 colors: ColorState::default(),
                 tool_settings: Vec::new(),
+                tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
@@ -303,9 +310,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let scale = self
             .logical_viewport
             .map_or(1.0, |v| self.state.camera.viewport[0] as f32 / v[0]);
-        let dabs =
+        let dabs = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             self.engine
-                .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns);
+                .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns)
+        } else {
+            Vec::new()
+        };
         self.cursor.view(
             self.engine.backend(),
             &self.engine.brush().tip,
@@ -441,6 +451,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 editing,
                 divider,
             } => {
+                self.interaction.modifiers = modifiers;
+                if key.eq_ignore_ascii_case("shift")
+                    || key.eq_ignore_ascii_case("shift_l")
+                    || key.eq_ignore_ascii_case("shift_r")
+                {
+                    self.interaction.modifiers.shift = pressed;
+                }
+                if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. })
+                    && !self.layer_interaction.path.is_empty())
+                    || self.update_ruler_preview()
+                {
+                    reply.change = self.changed(regions::DOCUMENT, true);
+                }
                 // Native editors/IMEs own their text. Elsewhere in settings,
                 // printable keys start search with the original case intact.
                 if pressed
@@ -607,6 +630,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || self.input_pending
                     || self.engine.has_active_stroke();
                 self.interaction.keys.clear();
+                self.interaction.modifiers = Modifiers::default();
                 self.interaction.pan_key = None;
                 self.interaction.keyboard_chrome = false;
                 self.interaction.facts.held = false;
@@ -993,6 +1017,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::ShowRulers => idle,
+            CommandId::SnapRulers => idle && self.rulers.visible,
+            CommandId::DeleteRuler => {
+                idle && self
+                    .rulers
+                    .selected
+                    .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
+            }
             CommandId::Undo => idle && self.engine.can_undo(),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::UndoWorkspace => self.workspace_history.can_undo(),
@@ -1011,6 +1043,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Hand
             | CommandId::Eyedropper
             | CommandId::Gradient
+            | CommandId::Figure
+            | CommandId::Ruler
             | CommandId::AutoSelect
             | CommandId::Fill
             | CommandId::RotateLeft
@@ -1029,6 +1063,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | (CommandId::Move, LayerCanvasTool::Move)
                     | (CommandId::Hand, LayerCanvasTool::Hand)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
+                    | (CommandId::Figure, LayerCanvasTool::Figure { .. })
+                    | (CommandId::Ruler, LayerCanvasTool::Ruler { .. })
                     | (
                         CommandId::AutoSelect,
                         LayerCanvasTool::Region { fill: false, .. }
@@ -1040,6 +1076,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+            || (id == CommandId::ShowRulers && self.rulers.visible)
+            || (id == CommandId::SnapRulers && self.rulers.snapping)
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
@@ -1979,6 +2017,25 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Ruler => {
+                self.layer_action(LayerAction::Tool {
+                    tool: LayerCanvasTool::Ruler {
+                        kind: self.rulers.kind,
+                    },
+                })?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::ShowRulers | CommandId::SnapRulers | CommandId::DeleteRuler => {
+                self.ruler_command(command)?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::Figure => {
+                let (shape, paint) = self.layer_interaction.figure;
+                self.layer_action(LayerAction::Tool {
+                    tool: LayerCanvasTool::Figure { shape, paint },
+                })?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
             CommandId::AutoSelect | CommandId::Fill => {
                 let fill = command == CommandId::Fill;
                 self.layer_action(LayerAction::Tool {
@@ -2252,9 +2309,42 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_tools(&mut self) {
+        self.state.tool_actions =
+            if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
+                || !self.engine.document().rulers.is_empty()
+            {
+                [
+                    CommandId::ShowRulers,
+                    CommandId::SnapRulers,
+                    CommandId::DeleteRuler,
+                ]
+                .into_iter()
+                .filter(|c| {
+                    *c != CommandId::DeleteRuler
+                        || matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
+                })
+                .map(|command| ToolSettingAction {
+                    command,
+                    checkable: command.is_toggle(),
+                })
+                .collect()
+            } else {
+                Vec::new()
+            };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
         self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
+        } else if let LayerCanvasTool::Figure { paint, .. } = self.layer_interaction.tool {
+            tool_settings::controls(self.engine.configured_brush())
+                .into_iter()
+                .filter(|c| c.id == "opacity" || (c.id == "size" && paint != FigurePaint::Fill))
+                .map(|mut c| {
+                    if c.id == "size" {
+                        c.label = "Line width";
+                    }
+                    c
+                })
+                .collect()
         } else if let LayerCanvasTool::Region { fill, .. } = self.layer_interaction.tool {
             let mut controls = vec![tool_settings::ToolSetting {
                 id: "tolerance",
@@ -2295,6 +2385,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn sync_camera(&mut self) {
+        self.sync_ruler_snapping();
         self.engine.set_view(
             self.state.camera.view(),
             self.state.camera.input_transform(),
@@ -2371,6 +2462,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        if self
+            .rulers
+            .selected
+            .is_some_and(|id| !self.engine.document().rulers.iter().any(|r| r.id == id))
+            && self.layer_interaction.path.is_empty()
+        {
+            self.rulers.selected = None;
+        }
         let doc = self.engine.document();
         let interaction = &mut self.layer_interaction;
         if interaction.editing != Some(doc.active_layer) {
@@ -2474,6 +2573,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             width: doc.width,
             height: doc.height,
         }];
+        self.refresh_tools();
     }
 }
 
@@ -2852,6 +2952,322 @@ mod tests {
                 panic!("fill")
             };
             assert_eq!(color[3], 0.25);
+        }
+    }
+
+    #[test]
+    fn ruler_tools_preview_edit_cancel_and_undo_without_repainting() {
+        use layer_core::RulerGeometry;
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.set_viewport([600., 500.], [1200, 1000]).unwrap();
+            s.state.camera.rotation = 0.3;
+            s.state.camera.flipped = [true, true];
+            s.state.camera.zoom = 2.;
+            s.sync_camera();
+            s.frame(1, 1).unwrap();
+            invoke(&mut s, CommandId::Ruler);
+            assert_eq!(s.state.tool_set.groups.len(), 3);
+            assert_eq!(s.state.tool_actions.len(), 3);
+            let composites = s.renderer_mut().composites;
+            let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+                let m = s.state.camera.document_to_surface();
+                let mut e = event(s, 1, phase, 1.);
+                e.surface_position = Point {
+                    x: m[0] * p[0] + m[2] * p[1] + m[4],
+                    y: m[1] * p[0] + m[3] * p[1] + m[5],
+                };
+                s.pen(e).unwrap();
+                s.frame(1, 1).unwrap();
+                assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
+            };
+            for (index, y) in [(0, 100.), (1, 400.), (2, 700.)] {
+                s.dispatch(s.state.tool_set.groups[index].action.clone())
+                    .unwrap();
+                send(&mut s, PenPhase::Down, [100., y]);
+                send(&mut s, PenPhase::Move, [300., y + 50.]);
+                assert_eq!(
+                    s.engine.document().rulers.len(),
+                    index,
+                    "preview is not history"
+                );
+                let mut plain = Vec::new();
+                s.append_layer_overlay(&mut plain);
+                assert!(!plain.is_empty());
+                if index < 2 {
+                    let reply = key(&mut s, "Shift_L", true, false, false);
+                    assert!(reply.change.canvas_wake);
+                    let mut snapped = Vec::new();
+                    s.append_layer_overlay(&mut snapped);
+                    assert_ne!(format!("{plain:?}"), format!("{snapped:?}"));
+                    key(&mut s, "Shift_L", false, false, false);
+                }
+                send(&mut s, PenPhase::Up, [300., y + 50.]);
+                assert_eq!(s.engine.document().rulers.len(), index + 1);
+                let geometry = s.engine.document().rulers[index].geometry;
+                invoke(&mut s, CommandId::Undo);
+                s.frame(1, 1).unwrap();
+                assert_eq!(s.engine.document().rulers.len(), index);
+                invoke(&mut s, CommandId::Redo);
+                s.frame(1, 1).unwrap();
+                assert_eq!(s.engine.document().rulers[index].geometry, geometry);
+            }
+            let saved = s.engine.document().rulers.clone();
+            // Drag the straight guide's body, then edit its start handle.
+            send(&mut s, PenPhase::Down, [200., 125.]);
+            send(&mut s, PenPhase::Up, [200., 160.]);
+            let (a, b) = s.engine.document().rulers[0].geometry.handles();
+            assert!((a.y - 135.).abs() < 0.001);
+            send(&mut s, PenPhase::Down, [a.x, a.y]);
+            send(&mut s, PenPhase::Up, [a.x - 20., a.y + 20.]);
+            let (moved, end) = s.engine.document().rulers[0].geometry.handles();
+            assert!((moved.x - 80.).abs() < 0.001);
+            assert_eq!(end, b);
+            let before = s.engine.document().rulers.clone();
+            send(&mut s, PenPhase::Down, [moved.x, moved.y]);
+            send(&mut s, PenPhase::Move, [50., 10.]);
+            key(&mut s, "Escape", true, false, false);
+            s.frame(1, 1).unwrap();
+            assert_eq!(
+                s.engine.document().rulers,
+                before,
+                "cancel never commits a guide"
+            );
+            assert_eq!(
+                s.renderer_mut().composites,
+                composites,
+                "guide edits must not repaint"
+            );
+            assert_eq!(s.renderer_mut().dabs, 0);
+            invoke(&mut s, CommandId::DeleteRuler);
+            s.frame(1, 1).unwrap();
+            assert_eq!(s.engine.document().rulers.len(), 2);
+            invoke(&mut s, CommandId::Undo);
+            s.frame(1, 1).unwrap();
+            assert_eq!(s.engine.document().rulers, before);
+            invoke(&mut s, CommandId::ShowRulers);
+            let mut hidden = Vec::new();
+            s.append_layer_overlay(&mut hidden);
+            assert!(hidden.is_empty());
+            assert!(
+                !s.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::SnapRulers)
+                    .unwrap()
+                    .enabled
+            );
+            invoke(&mut s, CommandId::ShowRulers);
+            assert!(
+                s.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::SnapRulers)
+                    .unwrap()
+                    .selected
+            );
+            invoke(&mut s, CommandId::SnapRulers);
+            assert!(!s.rulers.snapping);
+            assert!(matches!(saved[2].geometry, RulerGeometry::Radial { .. }));
+        }
+    }
+
+    #[test]
+    fn figure_tools_use_shared_controls_constrain_cancel_and_commit_once() {
+        use layer_core::{Edit, LayerOperationKind};
+        let mut s = session();
+        assert!(key(&mut s, "u", true, false, false).handled);
+        key(&mut s, "u", false, false, false);
+        assert_eq!(s.state.tool_set.groups.len(), 3);
+        assert_eq!(s.state.tool_set.subtools.len(), 1);
+        assert_eq!(
+            s.state
+                .tool_settings
+                .iter()
+                .map(|c| c.label)
+                .collect::<Vec<_>>(),
+            ["Line width", "Opacity"]
+        );
+        let id = s.engine.document().active_layer;
+        let mut layer = s.engine.document().layer(id).unwrap().clone();
+        layer.properties.offset = Point { x: 10., y: 20. };
+        layer.properties.alpha_locked = true;
+        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        s.dispatch(UiAction::SetColor {
+            rgba: [1., 0., 0., 1.],
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "opacity".into(),
+            value: 0.4,
+        })
+        .unwrap();
+        s.dispatch(UiAction::SetToolSetting {
+            id: "size".into(),
+            value: 8.,
+        })
+        .unwrap();
+        s.state.camera.rotation = 0.3;
+        s.state.camera.flipped = [true, false];
+        s.frame(1, 1).unwrap();
+        let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+            let m = s.state.camera.document_to_surface();
+            let mut e = event(s, 1, phase, 1.);
+            e.surface_position = Point {
+                x: m[0] * p[0] + m[2] * p[1] + m[4],
+                y: m[1] * p[0] + m[3] * p[1] + m[5],
+            };
+            s.pen(e).unwrap();
+        };
+        for index in 0..3 {
+            let action = s.state.tool_set.groups[index].action.clone();
+            s.dispatch(action).unwrap();
+            let count = if index == 0 { 1 } else { 3 };
+            assert_eq!(s.state.tool_set.subtools.len(), count);
+            for mode in 0..count {
+                let action = s.state.tool_set.subtools[mode].action.clone();
+                s.dispatch(action).unwrap();
+                let remembered = s.layer_interaction.tool;
+                invoke(&mut s, CommandId::Hand);
+                invoke(&mut s, CommandId::Figure);
+                assert_eq!(s.layer_interaction.tool, remembered);
+                assert_eq!(s.state.tool_settings.len(), if mode == 1 { 1 } else { 2 });
+                send(&mut s, PenPhase::Down, [30., 40.]);
+                for i in 0..100 {
+                    send(&mut s, PenPhase::Move, [50. + i as f32, 90.]);
+                }
+                assert_eq!(s.layer_interaction.path.len(), 2);
+                let before = s.engine.document().layer(id).unwrap().operations.len();
+                let plain = s.current_figure().unwrap();
+                let change = s
+                    .input(UiInput::Key {
+                        key: "Shift_L".into(),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                        editing: false,
+                        divider: None,
+                    })
+                    .unwrap();
+                assert!(change.change.canvas_wake);
+                let constrained = s.current_figure().unwrap();
+                assert_ne!(plain.end, constrained.end);
+                let mut guide = Vec::new();
+                s.append_layer_overlay(&mut guide);
+                assert!(!guide.is_empty());
+                s.input(UiInput::Key {
+                    key: "Shift_L".into(),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    editing: false,
+                    divider: None,
+                })
+                .unwrap();
+                assert_eq!(
+                    s.current_figure().unwrap().end,
+                    plain.end,
+                    "release ignores stale GDK modifier bit"
+                );
+                key(&mut s, "shift", true, false, false);
+                send(&mut s, PenPhase::Up, [130., 90.]);
+                s.frame(2, 2).unwrap();
+                key(&mut s, "shift", false, false, false);
+                let ops = &s.engine.document().layer(id).unwrap().operations;
+                assert_eq!(ops.len(), before + 1);
+                let LayerOperationKind::Figure(f) = &ops.last().unwrap().kind else {
+                    panic!("figure");
+                };
+                assert!((f.start.x - 20.).abs() < 0.001 && (f.start.y - 20.).abs() < 0.001);
+                assert_eq!(f.colors[0], [1., 0., 0., 0.4]);
+                assert!(f.alpha_locked);
+                assert!(!f.erase);
+                assert_eq!(f.width, 8.);
+                if index != 0 {
+                    assert!(
+                        ((f.end.x - f.start.x).abs() - (f.end.y - f.start.y).abs()).abs() < 0.001
+                    );
+                }
+                invoke(&mut s, CommandId::Undo);
+                s.frame(3, 3).unwrap();
+                assert_eq!(
+                    s.engine.document().layer(id).unwrap().operations.len(),
+                    before
+                );
+                invoke(&mut s, CommandId::Redo);
+                s.frame(4, 4).unwrap();
+                assert_eq!(
+                    s.engine.document().layer(id).unwrap().operations.len(),
+                    before + 1
+                );
+                assert_eq!(s.renderer_mut().dabs, 0, "no brush stamping for figures");
+            }
+        }
+        let before = s.engine.document().layer(id).unwrap().operations.len();
+        for cancel in 0..3 {
+            send(&mut s, PenPhase::Down, [30., 40.]);
+            send(&mut s, PenPhase::Move, [90., 100.]);
+            match cancel {
+                0 => send(&mut s, PenPhase::Cancel, [90., 100.]),
+                1 => {
+                    key(&mut s, "escape", true, false, false);
+                    key(&mut s, "escape", false, false, false);
+                }
+                _ => {
+                    s.input(UiInput::Blur).unwrap();
+                }
+            }
+            send(&mut s, PenPhase::Up, [90., 100.]);
+            s.frame(5, 5).unwrap();
+            assert_eq!(
+                s.engine.document().layer(id).unwrap().operations.len(),
+                before
+            );
+        }
+        send(&mut s, PenPhase::Down, [30., 40.]);
+        send(&mut s, PenPhase::Up, [30., 40.]);
+        s.frame(6, 6).unwrap();
+        assert_eq!(
+            s.engine.document().layer(id).unwrap().operations.len(),
+            before
+        );
+        s.dispatch(UiAction::Color {
+            action: ColorAction::Select {
+                slot: ColorSlot::Transparent,
+            },
+        })
+        .unwrap();
+        send(&mut s, PenPhase::Down, [30., 40.]);
+        send(&mut s, PenPhase::Move, [90., 100.]);
+        assert!(s.current_figure().unwrap().erase);
+        send(&mut s, PenPhase::Cancel, [90., 100.]);
+        // Protected content and mask targets cannot acquire figure operations.
+        for mask in [false, true] {
+            let mut layer = s.engine.document().layer(id).unwrap().clone();
+            if mask {
+                layer.mask = Some(layer_core::LayerMask::reveal_all(
+                    layer_core::LayerId(99),
+                    Point::default(),
+                ));
+            }
+            layer.properties.locked = !mask;
+            s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+            s.layer_edit(Edit::SetMaskTarget(mask)).unwrap();
+            send(&mut s, PenPhase::Down, [30., 40.]);
+            send(&mut s, PenPhase::Move, [90., 100.]);
+            send(&mut s, PenPhase::Up, [90., 100.]);
+            s.frame(7, 7).unwrap();
+            assert_eq!(
+                s.engine.document().layer(id).unwrap().operations.len(),
+                before
+            );
         }
     }
 
@@ -7201,6 +7617,7 @@ mod tests {
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],
+                ["show_rulers", "snap_rulers"],
                 ["zen_mode", "toggle_theme"],
                 ["reset_layout"]
             ])

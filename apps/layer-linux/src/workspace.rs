@@ -1656,11 +1656,13 @@ impl Workspace {
         {
             self.navigator.refresh(&state);
         }
-        if regions & (regions::BRUSH | regions::SETTINGS) != 0 {
+        if regions & (regions::BRUSH | regions::SETTINGS | regions::DOCUMENT) != 0 {
             self.tool_set.refresh(self, &state.tool_set, state.theme);
         }
+        if regions & (regions::BRUSH | regions::DOCUMENT | regions::COMMANDS) != 0 {
+            self.tool_settings.refresh(self, &state);
+        }
         if regions & regions::BRUSH != 0 {
-            self.tool_settings.refresh(self, &state.tool_settings);
             self.color_panel.refresh(&state.colors);
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);

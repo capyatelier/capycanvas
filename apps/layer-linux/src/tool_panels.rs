@@ -6,7 +6,7 @@ use crate::{
 use gtk::{cairo, glib, prelude::*, subclass::prelude::*};
 use layer_ui::{
     ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, Theme, ToolSetItem,
-    ToolSetView, ToolSetting, UiAction,
+    ToolSetView, ToolSetting, ToolSettingAction, UiAction, UiState,
 };
 
 /// A body can be projected in a dock or a tool drawer without reparenting the
@@ -149,28 +149,41 @@ use std::{
 pub struct ToolSettings {
     pub root: gtk::Box,
     fields: RefCell<Vec<(ToolSetting, NumberControl)>>,
+    actions: RefCell<Vec<(ToolSettingAction, gtk::Widget)>>,
+    updating: Rc<Cell<bool>>,
 }
 impl ToolSettings {
     pub fn new() -> Self {
         Self {
             root: body(),
             fields: RefCell::default(),
+            actions: RefCell::default(),
+            updating: Rc::new(Cell::new(false)),
         }
     }
-    pub fn refresh(&self, workspace: &Rc<Workspace>, controls: &[ToolSetting]) {
+    pub fn refresh(&self, workspace: &Rc<Workspace>, state: &UiState) {
+        let controls = &state.tool_settings;
+        self.updating.set(true);
         let mut fields = self.fields.borrow_mut();
+        let mut actions = self.actions.borrow_mut();
         let same_schema = fields.len() == controls.len()
             && fields.iter().zip(controls).all(|((old, _), next)| {
                 old.id == next.id
                     && old.numeric == next.numeric
                     && old.group == next.group
                     && old.label == next.label
-            });
+            })
+            && actions.len() == state.tool_actions.len()
+            && actions
+                .iter()
+                .zip(&state.tool_actions)
+                .all(|((old, _), next)| old == next);
         if !same_schema {
             while let Some(child) = self.root.first_child() {
                 self.root.remove(&child);
             }
             fields.clear();
+            actions.clear();
             let mut group = "";
             for control in controls {
                 if group != control.group {
@@ -201,10 +214,54 @@ impl ToolSettings {
                 self.root.append(&input);
                 fields.push((control.clone(), input));
             }
+            for action in &state.tool_actions {
+                let command = state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == action.command)
+                    .expect("core command exists");
+                let widget: gtk::Widget = if action.checkable {
+                    let check = gtk::CheckButton::with_label(command.label);
+                    let updating = self.updating.clone();
+                    let id = action.command;
+                    check.connect_toggled(glib::clone!(
+                        #[weak]
+                        workspace,
+                        move |_| {
+                            if !updating.get() {
+                                workspace.dispatch(UiAction::Invoke { command: id });
+                            }
+                        }
+                    ));
+                    check.upcast()
+                } else {
+                    workspace
+                        .action_button(
+                            command.label,
+                            UiAction::Invoke {
+                                command: action.command,
+                            },
+                        )
+                        .upcast()
+                };
+                widget.set_widget_name(&format!("tool-action-{:?}", action.command));
+                self.root.append(&widget);
+                actions.push((*action, widget));
+            }
         }
         for ((_, input), control) in fields.iter().zip(controls) {
             input.set_value(control.value as f64);
         }
+        for (action, widget) in actions.iter() {
+            if let Some(command) = state.commands.iter().find(|c| c.id == action.command) {
+                widget.set_sensitive(command.enabled);
+                widget.set_tooltip_text(Some(&command.tooltip));
+                if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+                    check.set_active(command.selected);
+                }
+            }
+        }
+        self.updating.set(false);
     }
 }
 

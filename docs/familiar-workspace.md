@@ -208,7 +208,7 @@ all drawer variants consume the same per-panel width metadata.
 
 Use drawing-oriented CSP key families: P for Pen/Pencil, B for Brush/Airbrush/
 Decoration, E for Eraser, J for Blend/Liquify, M for Selection, W for Auto select,
-G for Gradient, F for Fill, O for Operation, U for Figure/Ruler, H for Hand and I for
+G for Gradient, F for Fill, O for Operation, U for Figure, Shift+U for Ruler, H for Hand and I for
 Eyedropper. Repeated family keys cycle its tools in toolbar order; direct custom
 bindings remain possible. Keep Space temporary pan and Tab zen. New/Open/Save
 use the platform command modifier with N/O/S; standard undo/redo stay unchanged.
@@ -689,10 +689,240 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   explicit resampling policy. Watercolor's display-only outer edge still needs
   its final selection-boundary policy, as noted above.
 - Still to implement: the new default layout, missing canvas tools/commands,
-  collapsible columns, the full application menus, rulers, remaining shortcuts
+  collapsible columns, the full application menus, remaining shortcuts
   and full functional/performance validation.
 - The complete eight-tool ribbon is currently exercised by the GTK review test;
   the shipped default toolbar/layout will change when its remaining tools and
   commands are implemented. Tool-family presentation on other hosts awaits GTK
   review, while core models and Wasm remain compatible.
 - Implementation in progress; the requested default workspace is not yet shipped.
+
+### Figure tools
+
+- Figure (`U`) now has Line, Rectangle and Ellipse groups. Line offers Outline;
+  the other groups offer Outline, Fill and Outline + fill. Shared Tool Settings
+  exposes Line width and Opacity, hiding width for Fill. Single-color modes use
+  the selected paint color; Outline + fill uses foreground for the outline and
+  background for the interior. The transparent color slot erases instead.
+- Shift constrains lines to 45° increments and rectangles/ellipses to equal
+  sides. Releasing Shift restores the unconstrained endpoint; Escape, canceled
+  contacts and focus loss discard the guide without adding history. The group
+  and mode survive switching to another tool and back. The shared toolbar picker
+  includes Figure, including the normal Tool Set/Tool Settings drawer behavior.
+- These initial modes follow [CSP's Figure controls](https://help.clip-studio.com/en-us/manual_en/810_subtools/F.htm)
+  and the Shift convention described for [Krita's ellipse tool](https://docs.krita.org/en/reference_manual/tools/ellipse.html).
+  They are raster operations, not editable vector objects. During a drag the
+  artist sees a rubber-band outline; release commits one operation, not repeated
+  copies of a filled shape. Filled live preview is not claimed here.
+- `layer-core::Figure` owns immutable geometry/colors and conservative bounds.
+  The shared UI owns tool choice, constraints, local coordinates and settings.
+  GTK uses existing generic group buttons and numerical controls; new original
+  SVGs live in the shared bank. No GTK-only figure behavior or CPU pixel rasterizer.
+- The existing GPU paint-operation pass handles figures alongside fills and
+  gradients, including coverage, alpha lock, clipping and masks. No new pipeline,
+  intermediate texture type or CPU readback is introduced. Only intersecting
+  tiles are allocated/updated. Ellipse outlines use a bounded closest-point
+  solve so stroke width is measured in image pixels, even on elongated ellipses.
+  Inner and outer coverage are partitioned, avoiding double opacity and excessive
+  subpixel outline weight. History replay uses exactly the same GPU operation.
+- Immutable scene layouts/pipelines are now initialized once per device and
+  shared by live composition, explicit captures and recreated scenes. Their
+  mutable uniforms, scratch and image caches remain separate. A GPU handle test
+  verifies reuse without retaining canvas pixels. Previously, a first figure,
+  fill or source capture could compile the same scene pipelines again.
+- Scene composition eligibility is computed once per frame from live layer
+  properties and **current** paint operations, not all retained undo history.
+  Applied fills, gradients, figures and masks already reside in paint pages;
+  subsequent ordinary strokes use the ordinary direct composition/preview path.
+  Active operations still use scene jobs, including watercolor appearance baking
+  before Apply Mask. Live masks, groups, blends, offsets and filters retain their
+  required scene semantics. Regression tests compare imported/baked pigment with
+  and without retained history, at full/partial layer opacity, using G-Pen,
+  Natural Blender and Watercolor previews, cancellation and committed strokes.
+- Validation includes an independent dense-geometry pixel oracle, all seven
+  modes, 0.25–60px outlines, highly elongated ellipses, clipping/masks/alpha lock,
+  erasing, transformed layers, inverted coverage crossing tile boundaries,
+  incremental versus replay equality, sparse allocation and idle stability.
+  Shared UI tests exercise settings, modifiers, cancellation and undo/redo.
+  GTK native buttons and expression inputs render all modes in both themes;
+  the GPU eyedropper verifies actual pigment. Visually reviewed captures are
+  `artifacts/familiar-workspace/figures-{Dark,Light}.png` and `figure-guide.png`.
+  These are ignored review artifacts, not production assets.
+- Figure's 2048×1536 release benchmark measures one committed operation
+  per frame, growing history to 160 operations; last 120 samples reported:
+
+  | Case | CPU median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | 96×64 rectangle | 0.030 / 0.037 / 0.237 | 0.023 / 0.023 / 0.023 | 0.085 / 0.094 / 0.300 |
+  | 1920×1400 rectangle | 0.721 / 1.030 / 1.460 | 0.696 / 0.697 / 0.708 | 1.505 / 1.820 / 2.344 |
+  | 1920×1400 ellipse | 0.829 / 1.179 / 2.164 | 0.757 / 0.758 / 0.763 | 1.689 / 2.055 / 2.449 |
+  | 1920×10 ellipse | 0.152 / 0.209 / 0.334 | 0.135 / 0.135 / 0.142 | 0.333 / 0.423 / 0.521 |
+  | Diagonal line across 1920×1400 | 0.754 / 1.040 / 1.521 | 0.690 / 0.691 / 0.714 | 1.558 / 1.853 / 2.315 |
+
+  This includes the GPU operation and canvas composition, with a test-only wait
+  to measure completed work. Production has no such wait. It is not physical
+  pen-to-display latency. The two-color rectangle/ellipse and line use 24px
+  width. Repeat with the ignored `figure_latency` renderer test in release mode.
+  The blank canvas is presented before timing, matching the app lifecycle;
+  operation-specific pages/scratch are not preallocated. First small rectangle
+  completed in 3.076ms, and the first large rectangle in 4.420ms. These share a
+  device and are not independent cold starts. The existing full-canvas Fill
+  benchmark still has an 11.564ms first-operation spike (7.425ms in the paired
+  pre-Figure baseline run); its final steady p99 was 3.123ms. This cold resource
+  cost remains a follow-up, not evidence that all first interactions fit 8.33ms.
+  Full-canvas paint-operation GPU medians changed from approximately 0.682ms
+  before Figure to 0.693ms; CPU tails varied between runs, so no zero-regression
+  claim is made. Eight-dab 384px brush GPU medians remain 0.020ms G-Pen,
+  0.078ms Natural Blender and 0.415ms Watercolor without selection (0.020,
+  0.085 and 0.464ms with selection). These are operation timings, not display Hz.
+- Actual six-second Wayland drawing over a committed large figure, 384px G-Pen:
+  before the history eligibility fix, worker CPU median/p95/p99 was
+  0.612/1.054/1.230ms and GPU 0.475/1.015/1.997ms. Afterward they are
+  0.311/0.599/0.762ms and 0.134/0.266/0.539ms, at 119.96Hz with no discarded
+  presentations. The matched blank-layer run was 119.92Hz, CPU
+  0.258/0.543/0.732ms, GPU 0.131/0.595/2.155ms; short-run tails are noisy.
+  GTK frame-handler p99 over the figure is 0.056ms and input-processing p99
+  0.047ms. Reports are `/tmp/capy-figure-fixed-{plain,painted}.json`; use
+  `LAYER_PACING_FIGURE=1` with `native_frame_pacing`. Input is synthetic; this
+  measures real GPU/presentation feedback, not physical pen-to-display latency.
+- The same figure-backed Wayland test with 384px Natural Blender presents at
+  119.54Hz (one discarded presentation); CPU median/p95/p99 is
+  0.642/1.120/1.448ms, GPU 0.643/1.332/1.694ms. Watercolor presents at 119.27Hz
+  (two discarded), CPU 1.313/2.121/2.618ms and GPU 1.533/2.672/4.231ms. These
+  sustain approximately 120Hz but do not prove an absence of occasional missed
+  frames. Reports: `/tmp/capy-figure-fixed-{blender,watercolor}.json`.
+- The isolated staged source passes 27 core, 25 engine, 182 shared UI and 80 GPU
+  correctness tests (12 hardware benchmarks are separate). Strict all-target
+  Clippy, workspace compilation and Wasm compilation pass. Native Figure buttons,
+  settings, Shift constraints, undo/redo and pixel sampling pass on GTK in both
+  themes. This does not claim native web/Android Figure input validation.
+
+### Ruler tools
+
+- Ruler (`Shift+U`, alongside Figure's `U`) offers Straight, Parallel and Radial.
+  Drag to create straight/parallel guides; tap or drag to place a radial center.
+  The same tool moves guide bodies and edits their endpoint handles. Shift snaps
+  endpoints to 45° increments immediately, including without pointer movement.
+  Escape or canceled contact discards the provisional guide. Release records one
+  document edit; guide deletion, movement and creation share document undo/redo.
+  Operation-tool integration and project serialization remain in the pending
+  Operation/file milestones; guides currently persist within the open document.
+- Show rulers and Snap to rulers appear in View and in shared Tool Settings.
+  Hiding guides disables snapping without forgetting the snap preference. Delete
+  ruler is enabled only for a selected guide. GTK projects generic command rows
+  as native checkboxes/buttons; command labels, state, availability and shortcuts
+  stay in Rust. Rulers are available in the toolbar picker and tool drawers.
+- Choose a guide once at stroke Down: nearby straight guides take precedence
+  within 12 logical pixels; otherwise the closest parallel/radial anchor wins.
+  Parallel strokes keep their own starting offset. Radial strokes use the ray
+  through their initial point; a stroke starting exactly at the center waits for
+  its first real movement to choose the ray. Predicted input cannot change this
+  durable direction. Moving a guide cannot alter already committed ink.
+- Projection composes with the existing input affine transform before pressure
+  processing, prediction and dab generation. Real and predicted samples use the
+  same constraint; replay uses stored points, never current rulers. The brush
+  outline follows the snapped contact while its optional crosshair remains at
+  the physical pointer. Layer offsets are removed during cursor dynamics and
+  restored for display, fixing moved-layer outline calculations as well.
+- Guides use the existing GPU presentation overlay, not document pixels. No new
+  texture, paint pass or readback is needed. Guide-only edits and undo/redo do
+  not trigger paint replay or recomposition. Pointer movement changes only the
+  guide preview, not panel models/history; the selected guide is a small immutable
+  stroke snapshot. The document accepts up to 1,024 validated guides.
+- Validation on the isolated staged source: 29 core, 27 engine, 183 shared UI
+  and 80 GPU correctness tests pass (12 hardware benchmarks run separately),
+  including all three host profiles for guide interactions and tests
+  of rotated/high-DPI views, moved layers, predictions, cancellation and history.
+  Strict all-target Clippy, workspace and Wasm compilation pass. GTK's actual controls,
+  snapped GPU ink sampling, hidden guides, deletion and undo pass. Dark/light
+  captures were visually inspected; GTK-specific SVG stroke classes corrected
+  missing/filled guide icons. Review images:
+  `artifacts/familiar-workspace/rulers-{Dark,Light}.png` and `rulers-hidden.png`.
+  This is GTK review coverage, not physical tablet or native web/Android testing.
+- Six-second 384px G-Pen tests on the private 120Hz Wayland compositor:
+
+  | Guides | Worker CPU median/p95/p99 ms | GPU median/p95/p99 ms | Displayed Hz | Discarded |
+  | --- | --- | --- | --- | --- |
+  | None | 0.292 / 0.559 / 0.729 | 0.122 / 0.302 / 1.082 | 119.91 | 0 |
+  | Visible, snapping off | 0.288 / 0.584 / 0.761 | 0.124 / 0.286 / 0.448 | 119.72 | 1 |
+  | Visible, snapping on | 0.294 / 0.614 / 0.757 | 0.129 / 0.336 / 0.462 | 119.91 | 0 |
+
+  Guide display adds about 0.002ms to GPU median in these runs. Snapping changes
+  the stroke's geometry and dab count, so its GPU times are not an identical-image
+  comparison. Input processing p99 is 0.040/0.045/0.046ms respectively; GTK frame
+  handlers are 0.047/0.053/0.054ms. CPU tails differ by tens of microseconds, not
+  milliseconds. This supports approximately 120Hz delivery but not zero missed
+  frames or physical pen-to-display latency. Reproduce with `native_frame_pacing`,
+  `LAYER_PACING_BRUSH=GPen` and optional `LAYER_PACING_RULER=visible` or `snap`.
+  Reports: `/tmp/capy-ruler-{none,visible,snap}.json`.
+
+### Operation / transform foundation (not yet exposed)
+
+- Shared affine geometry and a GPU cut-and-place primitive are implemented.
+  The intended interaction follows [CSP's transform controls](https://help.clip-studio.com/en-us/manual_en/360_transform/Transform_using_the_Tool_Settings_palette.htm)
+  and [Krita's transform handles](https://docs.krita.org/en/reference_manual/tools/transform.html):
+  a persistent transform box, move/scale/rotate, numeric values, and explicit
+  apply/cancel. These editor controls are **not implemented yet**. No inert
+  Operation button has been added.
+- `ImageTransform` holds a document-space affine matrix and nearest/linear
+  interpolation. CPU work is geometry, validation and parameter packing only.
+  `PixelTransform` consumes an immutable premultiplied source texture, optional
+  existing packed selection coverage, and a batch of output regions. Each
+  preview resamples the original, never the previous preview. Source and output
+  must be separate resources; a cropped source must include all original content
+  needed as the unselected backdrop, not just the selected pixels.
+- Selection coverage weights each source texel before interpolation. This
+  prevents unselected colors bleeding into transformed edges. Out-of-source
+  samples are transparent, including extreme translations. Exact identity
+  returns the original unchanged. Other transforms use ordinary cut then
+  source-over: partially selected overlap can change fractional alpha; the
+  identity fast path does not claim to solve that general compositing tradeoff.
+- A single uniform upload assigns distinct dynamic offsets to all output
+  regions; source bindings and parameter storage are retained. Only supplied
+  scissor regions are written. Full-image and tiled output match byte-for-byte.
+  Submit an encoded batch before the next batch updates the shared uniform arena.
+  There are no production waits/readbacks, per-frame textures or per-tile
+  bind-group creations in this primitive.
+- At 2048×1536 an uncropped immutable RGBA8 source costs 12MiB. A separate full
+  preview image would cost another 12MiB unless existing output pages are reused;
+  optional full-image packed selection coverage costs about 1.5MiB. The primitive
+  itself owns neither image. Measured retained GPU parameter storage is 304B for
+  one target and 16,432B for 48 targets, with 12KiB CPU packing for the latter.
+  Bind-group/pipeline driver overhead is not included in these byte counts.
+- Workstation release microbenchmark, 120 measured updates after 40 warmups,
+  2048×1536 RGBA8. Matrices change every update except the copy baseline:
+
+  | Work | CPU encode/submit median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | Identity copy baseline | 0.013 / 0.017 / 0.859 | 0.011 / 0.012 / 0.013 | 0.055 / 0.066 / 0.916 |
+  | Whole-layer transform | 0.018 / 0.020 / 0.042 | 0.030 / 0.030 / 0.031 | 0.080 / 0.085 / 0.111 |
+  | Selected transform | 0.018 / 0.025 / 0.125 | 0.042 / 0.043 / 0.043 | 0.093 / 0.120 / 0.291 |
+  | Selected, 48 output tiles | 0.172 / 0.276 / 0.545 | 0.100 / 0.102 / 0.103 | 0.318 / 0.436 / 0.720 |
+  | Selected, one 256px region | 0.013 / 0.014 / 0.019 | 0.005 / 0.006 / 0.006 | 0.049 / 0.052 / 0.059 |
+
+  These measure the primitive, not source capture, composition, GTK input or
+  presentation. Completed latency includes a test-only GPU wait. First pipeline
+  creation took 33.1ms: compile on the renderer worker before live interaction,
+  never inside pointer processing. A preliminary build including unrelated
+  concurrent startup changes had a 15.464ms copy-baseline completion p99; the
+  table is from an isolated source snapshot. That difference is not attributed
+  to a transform optimization. Reproduce with the ignored release renderer test
+  `pixel_transform::tests::transform_latency` on an otherwise idle GPU.
+  A repeat gave selected full-layer GPU p99 0.045ms and 48-tile GPU p99 0.102ms,
+  with completion p99 0.258/0.647ms respectively; cached pipeline creation was
+  1.008ms. Both runs fit the primitive's warm budget, not a full editor frame.
+- Correctness tests compare 48 combinations of interpolation, transforms and
+  coverage against an independent double-precision pixel oracle, including
+  fractional/inverted selection, alpha, cropped/offset source, flips, rotation,
+  enlargement, reduction and extreme translation. Additional tests verify tile
+  seams, untouched scissor pixels, immutable input, invalid-input rejection and
+  retained allocation reuse.
+  The isolated build passes 30 core, 27 engine, 183 shared-UI and 82 GPU
+  correctness tests, plus strict all-target Clippy for core/renderer and
+  workspace/Wasm compilation. Hardware benchmarks are separate from these totals.
+- Still required before exposing Operation: ordered document-history integration,
+  source capture and preview lifecycle, selection/linked-mask transforms,
+  watercolor/material-channel handling, dirty old/new footprint propagation,
+  cancel/commit/undo, shared handles and numeric settings, GTK rendering/input,
+  and end-to-end latency/visual tests. Existing painting is unchanged; this is a
+  tested rendering foundation, **not completion of the Operation milestone**.

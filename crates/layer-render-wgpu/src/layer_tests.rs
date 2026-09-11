@@ -5,6 +5,8 @@ use layer_core::{
     Rect, Selection, StrokeId,
 };
 use layer_render::{DabStyle, ViewState};
+#[path = "figure_tests.rs"]
+mod figures;
 
 fn view() -> ViewState {
     ViewState {
@@ -1369,6 +1371,124 @@ fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
 }
 
 #[test]
+fn baked_operations_keep_the_ordinary_brush_path() {
+    use layer_core::{DefaultBrushPreset::*, Figure, FigurePaint, FigureShape};
+    let mut r = WgpuRasterizer::new().unwrap();
+    let asset = AssetId::from("test:baked-operation");
+    let bytes = [60, 120, 180, 170].repeat(128 * 128);
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: 128,
+            height: 128,
+            stride: 512,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &bytes,
+        },
+    )
+    .unwrap();
+    for kind in [
+        LayerOperationKind::Fill {
+            color: [0.8, 0.2, 0.1, 0.6],
+            alpha_locked: false,
+        },
+        LayerOperationKind::Gradient {
+            start: Point { x: 8., y: 64. },
+            end: Point { x: 120., y: 64. },
+            colors: [[1., 0., 0., 0.6], [0., 0., 1., 0.6]],
+            radial: false,
+            alpha_locked: false,
+        },
+        LayerOperationKind::Figure(Figure {
+            shape: FigureShape::Ellipse,
+            paint: FigurePaint::Both,
+            start: Point { x: 16., y: 24. },
+            end: Point { x: 112., y: 104. },
+            width: 8.,
+            colors: [[1., 0., 0., 0.6], [0., 0., 1., 0.6]],
+            alpha_locked: false,
+            erase: false,
+        }),
+        LayerOperationKind::ApplyMask,
+    ] {
+        for preset in [GPen, NaturalBlender, WatercolorWash] {
+            for opacity in [1., 0.45] {
+                let mut reference = Vec::new();
+                for keep_history in [false, true] {
+                    let mut layer = Layer::paint(LayerId(1), "baked paint");
+                    layer.asset = Some(asset.clone());
+                    layer.opacity = opacity;
+                    layer.operations.push(LayerOperation {
+                        after_stroke: 0,
+                        coverage: left_mask(9),
+                        kind: kind.clone(),
+                    });
+                    let op = DabBatch {
+                        kind: DabBatchKind::LayerOperation(0),
+                        dab_count: 0,
+                        ..batch(1)
+                    };
+                    submit(&mut r, &[layer.clone()], &[], &[op], true);
+                    assert!(r.scene.is_some(), "operation executes through scene jobs");
+                    let before = r.readback_srgb_rgba8().unwrap();
+                    if !keep_history {
+                        // Reference: the same already-baked GPU pages without
+                        // history. Discarding history must not change rendering.
+                        layer.operations.clear();
+                    }
+                    let mut stroke = batch(1);
+                    stroke.stroke_id = StrokeId(2);
+                    stroke.style = preset_style(preset);
+                    stroke.damage = Rect {
+                        min: Point { x: 32., y: 32. },
+                        max: Point { x: 96., y: 96. },
+                    };
+                    let mut d = dab([0.8, 0.1, 0.2, 0.7]);
+                    d.radii = [24.; 2];
+                    d.motion = [4., 0.];
+                    d.material = [0.6, 0.8, 1., 0.8];
+                    for committed in [false, true] {
+                        stroke.kind = if committed {
+                            DabBatchKind::Persistent
+                        } else {
+                            DabBatchKind::Preview
+                        };
+                        stroke.stroke_end = committed;
+                        submit(&mut r, &[layer.clone()], &[d], &[stroke.clone()], false);
+                        assert!(
+                            r.scene.is_none(),
+                            "baked history cannot require composition jobs"
+                        );
+                        if preset == GPen && opacity == 1. && !committed {
+                            assert!(r.preview_direct_to_composite);
+                        }
+                        let image = r.readback_srgb_rgba8().unwrap();
+                        assert_ne!(image, before, "brush must actually change the baked image");
+                        if keep_history {
+                            assert_eq!(
+                                image,
+                                reference[usize::from(committed)],
+                                "{kind:?}, {preset:?}, opacity {opacity}, committed {committed}"
+                            );
+                        } else {
+                            reference.push(image);
+                        }
+                        if !committed {
+                            submit(&mut r, &[layer.clone()], &[], &[], false);
+                            assert_eq!(
+                                r.readback_srgb_rgba8().unwrap(),
+                                before,
+                                "cancel preserves baked pixels"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn inspection_is_not_exported_and_translated_mask_keeps_source() {
     let mut r = WgpuRasterizer::new().unwrap();
     let mut l = Layer::paint(LayerId(1), "paint");
@@ -1653,6 +1773,20 @@ fn paint_operation_latency() {
         height_px: extent[1],
         ..view()
     };
+    // The editor displays paper before accepting the first tool gesture. Exclude
+    // device uploads and canvas allocation, but not first operation resources.
+    r.submit(FramePacket {
+        view: v,
+        document_extent: extent,
+        layers: &[Layer::paint(LayerId(1), "paint operation")],
+        dabs: &[],
+        dab_batches: &[],
+        reset_layers: true,
+        time_seconds: 0.,
+        composite_all: false,
+    })
+    .unwrap();
+    r.wait_idle().unwrap();
     for selected in [false, true] {
         for (name, kind) in [
             (

@@ -217,6 +217,8 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Hand" => key("h", false, false),
         "command.Eyedropper" => key("i", false, false),
         "command.Gradient" => key("g", false, false),
+        "command.Figure" => key("u", false, false),
+        "command.Ruler" => key("u", false, true),
         "command.AutoSelect" => key("w", false, false),
         "command.Fill" => key("f", false, false),
         "command.FitCanvas" => key("0", true, false),
@@ -346,6 +348,22 @@ impl Settings {
                         },
                 } => UiAction::Invoke {
                     command: CommandId::Gradient,
+                },
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Figure { .. },
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::Figure,
+                },
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Ruler { .. },
+                        },
+                } => UiAction::Invoke {
+                    command: CommandId::Ruler,
                 },
                 UiAction::Layer {
                     action:

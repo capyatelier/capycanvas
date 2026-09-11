@@ -22,6 +22,7 @@ use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
 mod canvas_preview;
 mod color_sample;
+pub mod pixel_transform;
 mod effect_validation;
 mod effects;
 mod flood;
@@ -51,16 +52,22 @@ const RESERVOIR_BYTES: u64 = RESERVOIR_SIZE as u64 * RESERVOIR_SIZE as u64 * 4 *
 const PROCEDURAL_GRAIN_SIZE: u32 = 256;
 const WATERCOLOR_TRANSPORT_STEPS: u32 = 3;
 
-fn needs_scene(layers: &[Layer]) -> bool {
-    layers.iter().any(|l| {
-        !l.operations.is_empty()
-            || l.mask.is_some()
-            || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
-            || l.properties.clipped
-            || l.properties.parent.is_some()
-            || l.properties.blend != layer_core::LayerBlend::Normal
-            || l.properties.offset != layer_core::Point::default()
-    })
+fn needs_scene(packet: FramePacket<'_>) -> bool {
+    // Paint operations use scene jobs while executing, but their result is
+    // baked into the ordinary paint pages. Retained undo history must not keep
+    // subsequent brush frames on the more expensive scene composition path.
+    packet
+        .dab_batches
+        .iter()
+        .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+        || packet.layers.iter().any(|l| {
+            l.mask.is_some()
+                || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
+                || l.properties.clipped
+                || l.properties.parent.is_some()
+                || l.properties.blend != layer_core::LayerBlend::Normal
+                || l.properties.offset != layer_core::Point::default()
+        })
 }
 
 /// Native writes reuse staging resources. On web, Queue::write_buffer transfers
@@ -624,6 +631,7 @@ pub struct WgpuRasterizer {
     dab_buffer: wgpu::Buffer,
     dab_capacity_bytes: u64,
     pipelines: Pipelines,
+    scene_pipelines: scene::Pipelines,
     last_submission: Option<wgpu::SubmissionIndex>,
     pending_readback: Option<ReadbackImage>,
     inspection: Option<(layer_render::ViewState, Vec<Layer>, f32)>,
@@ -803,6 +811,7 @@ impl WgpuRasterizer {
             layer_masks::MaskRenderer::new(&device, &style_layout, &target_layout, &texture_layout);
         let telemetry = telemetry::Telemetry::new(&device, &queue);
         let selection_clip = selection_clip::SelectionClip::new(&device);
+        let scene_pipelines = scene::Pipelines::new(&device);
         let mut renderer = Self {
             telemetry,
             adapter,
@@ -869,6 +878,7 @@ impl WgpuRasterizer {
             dab_buffer,
             dab_capacity_bytes: INITIAL_DAB_BYTES,
             pipelines,
+            scene_pipelines,
             last_submission: None,
             pending_readback: None,
             inspection: None,
@@ -1778,6 +1788,7 @@ impl WgpuRasterizer {
     fn prepare_uploads(
         &mut self,
         packet: FramePacket<'_>,
+        scene_required: bool,
         encoder: &mut wgpu::CommandEncoder,
     ) -> Result<usize, GpuRasterError> {
         let background_index = packet.dab_batches.len() + packet.layers.len();
@@ -1817,14 +1828,10 @@ impl WgpuRasterizer {
                 });
             let mut record = StyleGpu::layer(
                 packet.document_extent,
-                if needs_scene(packet.layers) {
-                    1.0
-                } else {
-                    layer.opacity
-                },
+                if scene_required { 1.0 } else { layer.opacity },
                 watercolor,
             );
-            record.color[0] = f32::from(needs_scene(packet.layers));
+            record.color[0] = f32::from(scene_required);
             let offset = (packet.dab_batches.len() + index) * self.style_stride as usize;
             self.style_upload[offset..offset + mem::size_of::<StyleGpu>()]
                 .copy_from_slice(style_bytes(&record));
@@ -3746,7 +3753,8 @@ impl CanvasRenderer for WgpuRasterizer {
             self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
         }
         let started = self.telemetry.enabled.then(web_time::Instant::now);
-        if !needs_scene(packet.layers) {
+        let scene_required = needs_scene(packet);
+        if !scene_required {
             self.scene = None;
         }
         if let Some(scene) = &mut self.scene {
@@ -3925,7 +3933,7 @@ impl CanvasRenderer for WgpuRasterizer {
             // not equal applying it once to their combined layer result.
             new_preview_requires_base = true;
         }
-        let new_preview_direct_to_composite = !needs_scene(packet.layers)
+        let new_preview_direct_to_composite = !scene_required
             && new_preview_layer.is_some()
             && !new_preview_requires_base
             && new_preview_layer.is_some_and(|layer_id| {
@@ -3941,7 +3949,7 @@ impl CanvasRenderer for WgpuRasterizer {
             })
             .count();
         let new_preview_from_persistent = destination_preview_batches == 1
-            && !needs_scene(packet.layers)
+            && !scene_required
             && !preview_is_watercolor
             && packet
                 .dab_batches
@@ -3973,7 +3981,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 label: Some("layer incremental sparse frame"),
             });
         self.telemetry.begin(&self.device, &mut encoder);
-        let background_offset = self.prepare_uploads(packet, &mut encoder)?;
+        let background_offset = self.prepare_uploads(packet, scene_required, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
             &mut encoder,
@@ -4012,6 +4020,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     op.kind,
                     layer_core::LayerOperationKind::Fill { .. }
                         | layer_core::LayerOperationKind::Gradient { .. }
+                        | layer_core::LayerOperationKind::Figure(_)
                 ) {
                     // Coverage may be translated or inverted: its source mask
                     // pages are not necessarily the destination paint pages.
@@ -4212,7 +4221,7 @@ impl CanvasRenderer for WgpuRasterizer {
                         .iter()
                         .find(|page| page.coordinate == coordinate)
                         .expect("preview pages are prepared before encoding");
-                    let local = if preview_is_watercolor || needs_scene(packet.layers) {
+                    let local = if preview_is_watercolor || scene_required {
                         page_rect(coordinate).page_local(coordinate)
                     } else {
                         copied
@@ -4411,7 +4420,7 @@ impl CanvasRenderer for WgpuRasterizer {
         if !dirty.is_empty() || animated {
             self.composite_revision = self.composite_revision.wrapping_add(1);
         }
-        if (!dirty.is_empty() || animated) && needs_scene(packet.layers) {
+        if (!dirty.is_empty() || animated) && scene_required {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             scene.style_base = packet.dab_batches.len();
             // A moved target's damage is stored in image coordinates. Round to

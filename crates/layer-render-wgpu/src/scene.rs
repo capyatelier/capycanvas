@@ -60,6 +60,16 @@ pub(super) struct Scene {
     #[cfg(test)]
     tiled_composition: bool,
 }
+
+/// Immutable device resources, compiled before input is enabled and shared by
+/// live composition, captures and recreated scenes. No canvas pixels retained.
+#[derive(Clone)]
+pub(super) struct Pipelines {
+    uniforms: wgpu::BindGroupLayout,
+    layout: wgpu::BindGroupLayout,
+    pipeline: [wgpu::RenderPipeline; 2],
+}
+
 impl Scene {
     #[cfg(test)]
     pub fn set_tiled_composition(&mut self, enabled: bool) {
@@ -144,52 +154,11 @@ impl Scene {
     }
     pub fn new(r: &WgpuRasterizer) -> Self {
         let device = &r.device;
-        let uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene records"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: NonZeroU64::new(96),
-                },
-                count: None,
-            }],
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("scene sources"),
-            entries: &[
-                texture_entry(0),
-                texture_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("layer scene"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("scene composition"),
-            bind_group_layouts: &[Some(&uniforms), Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)].map(|blend| {
-            fullscreen_pipeline(
-                device,
-                &pipeline_layout,
-                &shader,
-                "fragment_main",
-                blend,
-                COLOR_FORMAT,
-                "tile layer composition",
-            )
-        });
+        let Pipelines {
+            uniforms,
+            layout,
+            pipeline,
+        } = r.scene_pipelines.clone();
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(96) as usize;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
@@ -874,12 +843,14 @@ impl Scene {
                         self.free(p);
                     }
                 }
-                LayerOperationKind::Fill { .. } | LayerOperationKind::Gradient { .. } => {
-                    let (colors, endpoints, radial, alpha_locked) = match op.kind {
+                LayerOperationKind::Fill { .. }
+                | LayerOperationKind::Gradient { .. }
+                | LayerOperationKind::Figure(_) => {
+                    let (colors, endpoints, options) = match op.kind {
                         LayerOperationKind::Fill {
                             color,
                             alpha_locked,
-                        } => ([color; 2], [0.0; 4], false, alpha_locked),
+                        } => ([color; 2], [0.0; 4], [6., 1., 0., f32::from(alpha_locked)]),
                         LayerOperationKind::Gradient {
                             start,
                             end,
@@ -889,8 +860,19 @@ impl Scene {
                         } => (
                             colors,
                             [start.x, start.y, end.x, end.y],
-                            radial,
-                            alpha_locked,
+                            [6., 1., f32::from(radial), f32::from(alpha_locked)],
+                        ),
+                        LayerOperationKind::Figure(ref f) => (
+                            f.colors,
+                            [f.start.x, f.start.y, f.end.x, f.end.y],
+                            [
+                                11.,
+                                f.shape as u32 as f32
+                                    + 3. * f.paint as u32 as f32
+                                    + 16. * f32::from(f.erase),
+                                f.width,
+                                f32::from(f.alpha_locked),
+                            ],
                         ),
                         _ => unreachable!(),
                     };
@@ -900,7 +882,7 @@ impl Scene {
                         self.pool[mask].view.clone(),
                         Some(source),
                         [0., 0., 256., 256.],
-                        [6., 1., f32::from(radial), f32::from(alpha_locked)],
+                        options,
                         false,
                     );
                     if let Some(Job::Draw { data, .. }) = self.jobs.last_mut() {
@@ -1263,6 +1245,76 @@ impl Scene {
         Ok(())
     }
 }
+
+impl Pipelines {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene records"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: NonZeroU64::new(96),
+                },
+                count: None,
+            }],
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene sources"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("layer scene"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene composition"),
+            bind_group_layouts: &[Some(&uniforms), Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)].map(|blend| {
+            fullscreen_pipeline(
+                device,
+                &pipeline_layout,
+                &shader,
+                "fragment_main",
+                blend,
+                COLOR_FORMAT,
+                "tile layer composition",
+            )
+        });
+        Self {
+            uniforms,
+            layout,
+            pipeline,
+        }
+    }
+}
+#[cfg(test)]
+#[test]
+fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
+    let r = WgpuRasterizer::new().unwrap();
+    let a = Scene::new(&r);
+    let b = Scene::new(&r);
+    assert_eq!(a.pipeline, r.scene_pipelines.pipeline);
+    assert_eq!(a.pipeline, b.pipeline);
+    assert_eq!(a.uniforms, b.uniforms);
+    assert_eq!(a.layout, b.layout);
+    assert_ne!(a.buffer, b.buffer, "mutable records are not shared");
+    assert!(a.pool.is_empty() && b.pool.is_empty());
+}
+
 fn direct_effect_mask(layers: &[Layer], layer: &Layer) -> bool {
     layer.mask.as_ref().is_none_or(|m| {
         !m.enabled || world_offset(layers, layer.id, true) == layer_core::Point::default()

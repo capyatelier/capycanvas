@@ -229,6 +229,8 @@ impl ToolbarControl {
                             | CommandId::Hand
                             | CommandId::Eyedropper
                             | CommandId::Gradient
+                            | CommandId::Figure
+                            | CommandId::Ruler
                             | CommandId::AutoSelect
                             | CommandId::Fill
                     ) =>

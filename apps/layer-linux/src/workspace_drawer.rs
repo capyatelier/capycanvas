@@ -86,8 +86,9 @@ impl Body {
     }
     fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) -> bool {
         let inputs = match self {
-            Self::Tools(_) => regions::BRUSH | regions::SETTINGS,
-            Self::Settings(_) | Self::Color(_) | Self::Sizes(_) => regions::BRUSH,
+            Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT,
+            Self::Settings(_) => regions::BRUSH | regions::DOCUMENT | regions::COMMANDS,
+            Self::Color(_) | Self::Sizes(_) => regions::BRUSH,
             Self::Layers(_) | Self::Effects(_, _) => regions::DOCUMENT,
             Self::Navigator(_) => {
                 regions::CAMERA | regions::LAYOUT | regions::DOCUMENT | regions::COMMANDS
@@ -98,7 +99,7 @@ impl Body {
         }
         match self {
             Self::Tools(v) => v.refresh(w, &state.tool_set, state.theme),
-            Self::Settings(v) => v.refresh(w, &state.tool_settings),
+            Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.colors),
             Self::Sizes(v) => v.refresh(&state.brush),
             Self::Layers(v) => v.refresh(state),
