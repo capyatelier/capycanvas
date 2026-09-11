@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -34,6 +35,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,7 +75,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     if (state == null) {
         // The session publishes its palette before the native surface attaches.
         // Only the launch/error screen uses the fixed launch background.
-        Box(Modifier.fillMaxSize().background(Color(0xff333333)), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().background(colorResource(R.color.canvas_launch_background)), contentAlignment = Alignment.Center) {
             host.failure?.let { Text(it, Modifier.padding(24.dp), color = Color.White) }
         }
         return
@@ -170,9 +172,16 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     }
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("workspace").workspaceGestures(dock)
+        .drawWithContent { drawContent(); host.recordUiDraw() }
         .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft }) {
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
         AndroidView(factory = { CanvasSurfaceView(it, host) }, modifier = Modifier.fillMaxSize())
+        // SurfaceView punches through the window background. Cover its empty
+        // layer with normal Android UI until this surface has a finished buffer.
+        // This requires none of the application's Vulkan shaders.
+        if (!host.surfaceReady) {
+            Box(Modifier.fillMaxSize().background(colors.surround).testTag("canvas-placeholder"))
+        }
         if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {
             Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
                 Text(if (snapshot.optBoolean("canvas_ready")) "Preparing brush…" else "Preparing canvas…", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))

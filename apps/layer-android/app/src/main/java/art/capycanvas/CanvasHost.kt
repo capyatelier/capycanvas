@@ -35,7 +35,13 @@ internal fun JSONObject.number(key: String, default: Double = 0.0) = optDouble(k
 /** Platform ownership and transport, not application policy. The UI never waits
  * for a GPU submission. One dedicated Looper owns both Rust and the swapchain. */
 class CanvasHost(application: Application) : AndroidViewModel(application) {
+    companion object {
+        /** Instrumentation can hold device creation while checking the real UI. */
+        @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
+    }
     var snapshot by mutableStateOf<JSONObject?>(null)
+        private set
+    var surfaceReady by mutableStateOf(false)
         private set
     internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
         private set
@@ -55,6 +61,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal val filterPreviewCache = FilterPreviewCache()
     private var choreographer: Choreographer? = null
     private var attached = false
+    private var awaitingSurfaceFrame = false
+    private var surfaceGeneration = 0
+    @Volatile private var firstUiDraw = 0L
+    @Volatile private var firstSurfaceReady = 0L
     private var filterResources: JSONObject? = null
     private var scheduled = false
     private var disposed = false
@@ -91,7 +101,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
                 }
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))
-                // Startup I/O only, before input is accepted. Rust determines
+                main.post { catalog = value }
+                publish(true)
+                // Publish the native UI before reading shader resources. Rust determines
                 // which files the package may read and owns publication policy.
                 attempt(canvas = false) {
                     val assets = application.assets
@@ -103,8 +115,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     }
                     filterResources = obj("type" to "load_filter_package", "manifest" to manifest, "modules" to modules, "mode" to "merge")
                 }
-                main.post { catalog = value }
-                publish(true)
             }
         }
     }
@@ -178,16 +188,28 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         "facts" to chromeFacts, "viewport" to JSONArray(listOf(logicalWidth, logicalHeight)))
     private fun refreshChrome() { Native.input(handle, chromeInput(obj("kind" to "refresh")).toString()) }
 
-    fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) = post(canvas = true) {
-        logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
-        frameInterval = (1_000_000_000.0 / refreshRate.coerceAtLeast(30f)).toLong()
-        Native.resize(handle, width, height, density)
-        Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
-        attached = true
-        main.post { failure = null }
-        publish(true)
-        wake()
+    fun attach(surface: Surface, width: Int, height: Int, density: Float, refreshRate: Float) {
+        surfaceReady = false
+        val generation = ++surfaceGeneration
+        post(canvas = true) {
+            activeSurfaceGeneration = generation
+            logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
+            frameInterval = (1_000_000_000.0 / refreshRate.coerceAtLeast(30f)).toLong()
+            Native.resize(handle, width, height, density)
+            // Sizing computes the toolbars/panels without a GPU. Publish their layout
+            // before device creation or even the first compositing shader can block.
+            publish(true)
+            if (BuildConfig.DEBUG) beforeGpuAttachForTest?.invoke()
+            Log.i("CapyStartup", "gpu_attach boot_ns=${SystemClock.elapsedRealtimeNanos()}")
+            Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
+            attached = true
+            awaitingSurfaceFrame = true
+            main.post { failure = null }
+            publish(true)
+            wake()
+        }
     }
+    private var activeSurfaceGeneration = 0 // Render Looper only.
     fun resize(width: Int, height: Int, density: Float) = post {
         logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
         Native.resize(handle, width, height, density)
@@ -197,6 +219,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     /** SurfaceHolder requires rendering to have stopped before this callback
      * returns. This wait is only at surface teardown, never in an input/frame. */
     fun detach() {
+        surfaceReady = false
+        ++surfaceGeneration
         val stopped = CountDownLatch(1)
         if (!worker.post {
             try { if (handle != 0L) { attached = false; Native.detach(handle) } }
@@ -257,10 +281,23 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         attempt {
             val start = System.nanoTime()
             val again = Native.frame(handle, start, expectedPresentation.coerceAtLeast(start))
+            if (awaitingSurfaceFrame && Native.surfaceReady(handle)) {
+                awaitingSurfaceFrame = false
+                val generation = activeSurfaceGeneration
+                main.post {
+                    if (generation == surfaceGeneration) {
+                        surfaceReady = true
+                        if (firstSurfaceReady == 0L) {
+                            firstSurfaceReady = SystemClock.elapsedRealtimeNanos()
+                            Log.i("CapyStartup", "surface_ready boot_ns=$firstSurfaceReady")
+                        }
+                    }
+                }
+            }
             val elapsed = System.nanoTime() - start
             if (frameCosts != null) Native.frameCost(handle, frameCosts)
             val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
-            if (again) wake()
+            if (again || awaitingSurfaceFrame) wake()
             publish(!again)
             if (!startupCacheFinished && lastCanvasReady) {
                 val resources = filterResources
@@ -290,6 +327,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             if (data != null) repeat(count) { row -> put(JSONArray().apply { repeat(width) { col -> put(data[row * width + col]) } }) }
         }
         val report = obj("startup_boot_ns" to JSONArray(startupTimes.toList()),
+            "ui_first_draw_boot_ns" to firstUiDraw, "surface_ready_boot_ns" to firstSurfaceReady,
             "frames" to rows(measuredFrames, frameCount, 11),
             "inputs" to rows(measuredInputs, inputCount, 5),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
@@ -299,6 +337,12 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
         if (reset) { frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0 }
         main.post { reply(report) }
+    }
+    internal fun recordUiDraw() {
+        if (firstUiDraw == 0L) {
+            firstUiDraw = SystemClock.elapsedRealtimeNanos()
+            Log.i("CapyStartup", "ui_first_draw boot_ns=$firstUiDraw")
+        }
     }
     private fun publish(force: Boolean) {
         val now = SystemClock.uptimeMillis()

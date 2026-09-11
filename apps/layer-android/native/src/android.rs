@@ -12,6 +12,10 @@ use raw_window_handle::{
     AndroidDisplayHandle, AndroidNdkWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use std::ptr::NonNull;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 struct Window(NonNull<ndk_sys::ANativeWindow>);
 impl Drop for Window {
@@ -24,6 +28,7 @@ pub(crate) struct Surface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
+    first_frame_complete: Option<Arc<AtomicBool>>,
     _instance: wgpu::Instance,
     _window: Window,
 }
@@ -123,6 +128,7 @@ impl App {
             surface,
             config,
             presenter,
+            first_frame_complete: None,
             _instance: instance,
             _window: window,
         });
@@ -244,6 +250,12 @@ impl App {
         );
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
+        if surface.first_frame_complete.is_none() {
+            let complete = Arc::new(AtomicBool::new(false));
+            surface.first_frame_complete = Some(complete.clone());
+            gpu.queue()
+                .on_submitted_work_done(move || complete.store(true, Ordering::Release));
+        }
         self.blank_presented = true;
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
@@ -477,6 +489,30 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
             0
         }
     }
+}
+/// Poll only during the first frame of each surface. The callback belongs to
+/// that surface, so completion from a destroyed surface cannot reveal a new one.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_surfaceReady(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) -> jboolean {
+    let app = unsafe { app(handle) };
+    let Some(complete) = app
+        .surface
+        .as_ref()
+        .and_then(|s| s.first_frame_complete.as_ref())
+    else {
+        return 0;
+    };
+    if let Some(gpu) = app.host.session.renderer_mut().0.as_ref() {
+        if let Err(e) = gpu.device().poll(wgpu::PollType::Poll) {
+            fail(&mut env, Err(error(e)));
+            return 0;
+        }
+    }
+    complete.load(Ordering::Acquire) as jboolean
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_snapshot(
