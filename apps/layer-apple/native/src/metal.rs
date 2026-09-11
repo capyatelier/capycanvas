@@ -1,6 +1,8 @@
 //! Native Metal presentation. Accessed only on the session's serial owner.
 use layer_host::NativeHost;
-use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{
+    GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats, ViewportPresenter, WgpuRasterizer,
+};
 use layer_ui::CanvasCursor;
 use std::{ffi::c_void, time::Instant};
 
@@ -16,6 +18,8 @@ pub struct MetalHost {
     instance: Option<wgpu::Instance>,
     cursor: CanvasCursor,
     blank_presented: bool,
+    timing_enabled: bool,
+    timing: Option<GpuFrameTimer>,
 }
 
 fn error(e: impl std::fmt::Display) -> String {
@@ -110,6 +114,25 @@ impl MetalHost {
         self.surface = None;
     }
 
+    pub fn set_timing_enabled(&mut self, enabled: bool) {
+        self.timing_enabled = enabled;
+    }
+
+    pub fn take_timing(
+        &mut self,
+        host: &mut NativeHost,
+        samples: &mut [GpuFrameSample],
+    ) -> Result<(usize, GpuFrameTimingStats), String> {
+        let Some(timing) = &mut self.timing else {
+            return Ok((0, GpuFrameTimingStats::default()));
+        };
+        if let Some(gpu) = &host.session.renderer_mut().0 {
+            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
+            timing.poll(gpu.device(), gpu.queue());
+        }
+        Ok((timing.take_into(samples), timing.stats()))
+    }
+
     /// Times are CPU stage durations, not GPU completion or presentation latency.
     pub fn frame(
         &mut self,
@@ -117,10 +140,34 @@ impl MetalHost {
         now: u64,
         presentation: u64,
     ) -> Result<(bool, [u64; 5]), String> {
-        let mut costs = [0; 5];
         if (!host.dirty && host.startup.complete) || self.surface.is_none() {
-            return Ok((false, costs));
+            return Ok((false, [0; 5]));
         }
+        // Own the timer locally so a panic cannot strand an active query in the
+        // host. Normal errors/early returns still close their GPU span.
+        let mut timing = self.timing.take();
+        if self.timing_enabled {
+            if let Some(gpu) = &host.session.renderer_mut().0 {
+                timing
+                    .get_or_insert_with(|| GpuFrameTimer::new(gpu.device(), gpu.queue()))
+                    .begin(gpu.device(), gpu.queue(), now);
+            }
+        }
+        let result = self.frame_inner(host, now, presentation);
+        if let (Some(timing), Some(gpu)) = (&mut timing, &host.session.renderer_mut().0) {
+            timing.end(gpu.device(), gpu.queue());
+        }
+        self.timing = timing;
+        result
+    }
+
+    fn frame_inner(
+        &mut self,
+        host: &mut NativeHost,
+        now: u64,
+        presentation: u64,
+    ) -> Result<(bool, [u64; 5]), String> {
+        let mut costs = [0; 5];
         let clock = Instant::now();
         host.prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = host.session.state().camera.view();

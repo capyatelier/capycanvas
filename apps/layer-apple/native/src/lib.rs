@@ -386,3 +386,51 @@ pub unsafe extern "C" fn capy_apple_frame(
 pub unsafe extern "C" fn capy_apple_camera_revision(app: *const CapyApple) -> u64 {
     unsafe { app.as_ref() }.map_or(0, |a| a.host.session.state().camera.revision)
 }
+
+/// # Safety
+/// Valid handle on its serial owner. Timing is opt-in and disabled by default.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_gpu_timing(app: *mut CapyApple, enabled: u32) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        if enabled > 1 {
+            return Err("Invalid GPU timing flag".into());
+        }
+        a.metal.set_timing_enabled(enabled != 0);
+        Ok(0)
+    })
+    .unwrap_or(-1)
+}
+
+/// # Safety
+/// Valid serial-owned handle, writable stats and samples (capacity <= 256).
+/// A zero-capacity call may pass NULL samples. Never waits for GPU completion.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_take_gpu_timing(
+    app: *mut CapyApple,
+    samples: *mut layer_render_wgpu::GpuFrameSample,
+    capacity: usize,
+    stats: *mut layer_render_wgpu::GpuFrameTimingStats,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        if capacity > 256 || stats.is_null() || (capacity > 0 && samples.is_null()) {
+            return Err("Invalid GPU timing output buffer".into());
+        }
+        let output = if capacity == 0 {
+            &mut []
+        } else {
+            unsafe { std::slice::from_raw_parts_mut(samples, capacity) }
+        };
+        let (count, status) = a.metal.take_timing(&mut a.host, output)?;
+        unsafe {
+            *stats = status;
+        }
+        Ok(count as i32)
+    })
+    .unwrap_or(-1)
+}

@@ -45,6 +45,8 @@ mod region_requests;
 mod scene;
 mod selection_clip;
 mod telemetry;
+mod frame_timing;
+pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
 pub use present::ViewportPresenter;
 

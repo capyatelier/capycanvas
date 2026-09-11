@@ -45,6 +45,17 @@ int32_t capy_apple_gesture(CapyApple *app, float x, float y, float scale, float 
 int32_t capy_apple_frame(CapyApple *app, uint64_t now_ns, uint64_t presentation_ns,
                         uint64_t *costs);
 uint64_t capy_apple_camera_revision(const CapyApple *app);
+/* Optional GPU queue span (includes submission gaps, not GPU busy time or
+   presentation latency). No timestamp submissions when disabled (default).
+   Sample status: 1 valid, 2 map/read failure, 3 invalid timestamps.
+   Support: 0 not initialized, 1 available, 2 unavailable. */
+typedef struct { uint64_t frame, elapsed_ns, status; } CapyGpuFrameSample;
+typedef struct { uint64_t support, requested, skipped, invalid, pending; } CapyGpuFrameTimingStats;
+int32_t capy_apple_gpu_timing(CapyApple *app, uint32_t enabled);
+/* Nonblocking poll and bounded drain: returns count or -1. Capacity <= 256;
+   samples may be NULL only when capacity is zero; stats must be writable. */
+int32_t capy_apple_take_gpu_timing(CapyApple *app, CapyGpuFrameSample *samples,
+                                size_t capacity, CapyGpuFrameTimingStats *stats);
 #ifdef __cplusplus
 }
 #endif

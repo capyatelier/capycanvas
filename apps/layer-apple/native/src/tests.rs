@@ -425,3 +425,34 @@ fn stateless_numeric_input_uses_shared_policy_without_a_session() {
     assert_eq!(resolve(json!({"type":"format"}))["text"], "100");
     assert!(resolve(json!({"type":"expression","text":"invalid"}))["error"].is_string());
 }
+
+#[test]
+fn optional_gpu_timing_has_explicit_uninitialized_state_and_bounded_abi() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let mut stats = layer_render_wgpu::GpuFrameTimingStats::default();
+        unsafe {
+            assert_eq!(capy_apple_gpu_timing(app.0, 1), 0);
+            assert_eq!(capy_apple_frame(app.0, 1, 1, std::ptr::null_mut()), 0);
+            assert_eq!(
+                capy_apple_take_gpu_timing(app.0, std::ptr::null_mut(), 0, &mut stats),
+                0
+            );
+            assert_eq!(
+                stats.support, 0,
+                "No renderer must not report available timestamps"
+            );
+            assert_eq!(stats.requested, 0);
+            assert_eq!(
+                capy_apple_take_gpu_timing(app.0, std::ptr::null_mut(), 1, &mut stats),
+                -1
+            );
+            assert_eq!(
+                capy_apple_take_gpu_timing(app.0, std::ptr::null_mut(), 257, &mut stats),
+                -1
+            );
+            assert_eq!(capy_apple_gpu_timing(app.0, 2), -1);
+            assert_eq!(capy_apple_gpu_timing(app.0, 0), 0);
+        }
+    }
+}
