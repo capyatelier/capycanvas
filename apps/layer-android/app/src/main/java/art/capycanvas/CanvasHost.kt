@@ -10,7 +10,6 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -48,28 +47,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var cameraState by mutableStateOf(JSONObject())
         private set
-    internal var navigatorImage by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
-        private set
-    private var navigatorViewers = 0 // Render Looper only.
-    private val navigatorPoll = object : Runnable {
-        override fun run() {
-            if (disposed || handle == 0L) return
-            attempt(canvas = false) {
-                if (attached) Native.navigatorPreview(handle, SystemClock.elapsedRealtimeNanos(), navigatorViewers > 0)?.let { data ->
-                    val size = JSONArray(data[0] as String)
-                    val bitmap = android.graphics.Bitmap.createBitmap(size.getInt(0), size.getInt(1), android.graphics.Bitmap.Config.ARGB_8888)
-                    bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(data[1] as ByteArray))
-                    val image = bitmap.asImageBitmap()
-                    main.post { navigatorImage = image }
-                }
-            }
-            if (navigatorViewers > 0) worker.postDelayed(this, 33)
-        }
-    }
-    internal fun navigatorVisible(visible: Boolean) = post {
-        val previous = navigatorViewers
-        navigatorViewers = (navigatorViewers + if (visible) 1 else -1).coerceAtLeast(0)
-        if (previous == 0 && navigatorViewers > 0) { worker.removeCallbacks(navigatorPoll); worker.post(navigatorPoll) }
+    internal var surfaceOrigin = androidx.compose.ui.geometry.Offset.Zero
+    private val overviewSlots = linkedMapOf<Any, JSONObject>() // UI thread; native owner receives immutable JSON.
+    internal fun navigatorPlacement(key: Any, placement: JSONObject?) {
+        if (overviewSlots[key]?.toString() == placement?.toString()) return
+        if (placement == null) overviewSlots.remove(key) else overviewSlots[key] = placement
+        val payload = JSONArray(overviewSlots.values.toList()).toString()
+        post { Native.navigatorPlacements(handle, payload); wake() }
     }
     var catalog by mutableStateOf(JSONObject())
         private set
@@ -413,7 +397,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val epoch = state.getJSONObject("document_file").optLong("epoch")
         if (epoch != documentEpoch) {
             documentEpoch = epoch
-            main.post { navigatorImage = null; filterPreviewCache.images.clear() }
+            main.post { filterPreviewCache.images.clear() }
         }
         val workspace = next.objectOrNull("workspace_persistence")?.toString()
         if (workspace != null && workspace != savedWorkspace) {
