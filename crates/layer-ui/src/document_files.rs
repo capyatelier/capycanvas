@@ -102,6 +102,28 @@ pub const DOCUMENT_HEIGHT_LABEL: &str = "Height (px)";
 pub const DEFAULT_DOCUMENT_EXTENT: [u32; 2] = [2048, 1536];
 pub const MAX_NEW_DOCUMENT_DIMENSION: u32 = 8192;
 
+#[derive(Clone, Debug, Serialize)]
+pub struct NewDocumentSpec {
+    pub title: &'static str,
+    pub labels: [&'static str; 2],
+    pub extent: [u32; 2],
+    pub minimum: u32,
+    pub maximum: u32,
+    pub accept: &'static str,
+    pub cancel: &'static str,
+}
+pub fn new_document_spec() -> NewDocumentSpec {
+    NewDocumentSpec {
+        title: "New drawing",
+        labels: [DOCUMENT_WIDTH_LABEL, DOCUMENT_HEIGHT_LABEL],
+        extent: DEFAULT_DOCUMENT_EXTENT,
+        minimum: 1,
+        maximum: MAX_NEW_DOCUMENT_DIMENSION,
+        accept: "Create",
+        cancel: CANCEL_DOCUMENT_LABEL,
+    }
+}
+
 /// Shared new-document constraints; creation is a host operation so native
 /// windows and future tabbed/mobile hosts can use different presentation.
 pub fn new_drawing(width: u32, height: u32) -> Result<Project, String> {

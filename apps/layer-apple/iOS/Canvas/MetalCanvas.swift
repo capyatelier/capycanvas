@@ -48,6 +48,10 @@ final class CanvasView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if let window {
+            store.projectFiles.closeWindow = { [weak window, weak store] in
+                guard let store else { return }
+                DocumentScene.close(window?.windowScene, store: store)
+            }
             contentScaleFactor = window.screen.scale
             if displayLink == nil {
                 let link = CADisplayLink(target: self, selector: #selector(tick(_:)))

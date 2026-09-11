@@ -102,8 +102,10 @@ Team IDs, keys and provisioning profiles are not stored in this repository.
 Settings and committed workspace layouts now persist in private Application
 Support files. Settings propagate across live owners; each restored scene keeps
 its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
-failure/retry behavior and fast tests. Native New/Open/Save/Save As now use the
-shared project format; automatic artwork recovery remains pending.
+failure/retry behavior and fast tests. Native New/Open/Save/Save As use the shared
+project format. Both targets support custom canvas dimensions and PNG export. GPU export
+readback and PNG encoding run on the file worker; automatic artwork recovery
+remains pending.
 
 Launch a local Mac build with:
 

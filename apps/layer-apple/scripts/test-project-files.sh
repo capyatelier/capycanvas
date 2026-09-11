@@ -12,7 +12,7 @@ xcrun swiftc -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
   "$CAPY_BRIDGE/FrameTrace.swift" "$CAPY_BRIDGE/ObservedMetalLayer.swift" \
   "$CAPY_BRIDGE/LayerImageImport.swift" "$CAPY_BRIDGE/LayerThumbnails.swift" \
   "$CAPY_BRIDGE/ProjectFileIO.swift" "$CAPY_BRIDGE/NativeOwner.swift" "$CAPY_BRIDGE/EditorStore.swift" \
-  "$CAPY_APP/Shared/Editor/ProjectFiles.swift" "$CAPY_APP/tests/project-files.swift" \
+  "$CAPY_APP/Shared/Editor/NewDrawingForm.swift" "$CAPY_APP/Shared/Editor/ProjectFiles.swift" "$CAPY_APP/tests/project-files.swift" \
   -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lc++ \
   -framework Metal -framework QuartzCore -framework Security -framework AppKit -framework SwiftUI \
   -o "$CAPY_CHECK_DIR/check"

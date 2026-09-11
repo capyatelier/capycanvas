@@ -7610,7 +7610,7 @@ mod tests {
     #[test]
     fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Web] {
+        for platform in [Platform::Web, Platform::Mac, Platform::Ios] {
             let mut app = session();
             app.set_platform(platform);
             let panel = Panel::Sizes;
@@ -7719,33 +7719,35 @@ mod tests {
 
     #[test]
     fn configure_from_collapsed_column_reveals_the_ordinary_panel() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
-        let viewport = [1200., 900.];
-        s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+        for platform in [Platform::Gtk, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let viewport = [1200., 900.];
+            s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+                .unwrap();
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group: 5,
+                    panel: Panel::Brushes,
+                },
+            })
             .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ToggleColumnDrawer {
-                group: 5,
-                panel: Panel::Brushes,
-            },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ShowAllControls {
-                panel: Panel::Brushes,
-            },
-        })
-        .unwrap();
-        assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
-        assert!(s.state.customization.column_drawers.is_empty());
-        assert!(s.state.workspace.layout.collapsed.is_empty());
-        assert!(
-            s.layout(viewport)
-                .groups
-                .iter()
-                .any(|g| g.active == Panel::Brushes)
-        );
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ShowAllControls {
+                    panel: Panel::Brushes,
+                },
+            })
+            .unwrap();
+            assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
+            assert!(s.state.customization.column_drawers.is_empty());
+            assert!(s.state.workspace.layout.collapsed.is_empty());
+            assert!(
+                s.layout(viewport)
+                    .groups
+                    .iter()
+                    .any(|g| g.active == Panel::Brushes)
+            );
+        }
     }
 
     #[test]

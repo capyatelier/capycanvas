@@ -3,6 +3,14 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testNewDrawingAndExportCancellation() throws {
+        let app = editorTestApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"new_document"}]"#
+        app.launch()
+        checkNewDrawingAndExportCancellation(in: app)
+    }
+
     @MainActor func testSettingsAndWorkspaceRestart() throws {
         let app = editorTestApplication()
         XCUIDevice.shared.orientation = .landscapeLeft

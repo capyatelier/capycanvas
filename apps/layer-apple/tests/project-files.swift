@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import QuartzCore
+import ImageIO
 
 @main struct ProjectFileChecks {
     @MainActor static func wait(_ description: String, _ condition: () -> Bool) async throws {
@@ -41,10 +42,15 @@ import QuartzCore
             var saveLocation: URL? = target
             var openLocation: URL? = target
             var choices = 0
+            var creationExtent: [UInt32]? = [63, 47]
             var beforeOpen: (() -> Void)?
             store.projectFiles = ProjectFiles(store: store, dialogs: .init(
                 open: { choices += 1; beforeOpen?(); $0(openLocation) },
-                save: { _, callback in choices += 1; callback(saveLocation) },
+                save: { _, _, callback in choices += 1; callback(saveLocation) },
+                create: { spec, callback in
+                    precondition(spec["extent"][0].uint == 2048 && spec["maximum"].uint == 8192)
+                    callback(creationExtent)
+                },
                 export: platform == 0 ? { staging, callback in
                     choices += 1
                     if let url = saveLocation {
@@ -101,6 +107,24 @@ import QuartzCore
             try await wait("New drawing failed") { !store.projectFiles.busy }
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             precondition(store.state["layers"].array.count == 2 && store.state["document_file"]["epoch"].uint == epoch + 1)
+            let createdEpoch = store.state["document_file"]["epoch"].uint
+            creationExtent = nil
+            try await invoke("new_document")
+            precondition(store.state["document_file"]["epoch"].uint == createdEpoch, "Cancelled size choice must keep the drawing")
+            let png = root.appendingPathComponent("export-\(platform).png")
+            saveLocation = png
+            let projectLocation = store.state["document_file"]["location"].raw
+            try await invoke("export_document")
+            precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
+            let source = CGImageSourceCreateWithURL(png as CFURL, nil)!
+            let image = CGImageSourceCreateImageAtIndex(source, 0, nil)!
+            precondition(image.width == 63 && image.height == 47)
+            precondition(!store.state["document_file"]["modified"].bool)
+            precondition(store.state["document_file"]["location"].isNull && projectLocation is NSNull)
+            let exported = try Data(contentsOf: png)
+            saveLocation = nil
+            try await invoke("export_document")
+            precondition((try? Data(contentsOf: png)) == exported, "Cancelled PNG destination must preserve the existing file")
             openLocation = invalid
             try await invoke("open_document")
             precondition(store.projectFiles.error != nil)
@@ -131,7 +155,7 @@ import QuartzCore
             store.projectFiles.choose("save")
             try await wait("Save on close did not finish") { closed != nil }
             precondition(closed == true && !store.state["document_file"]["modified"].bool)
-            precondition(choices == 5, "Each user request must present at most one location choice")
+            precondition(choices == 7, "Each user request must present at most one location choice")
             withExtendedLifetime(layer) {}
             print("Project files pass for Apple platform \(platform)")
         }

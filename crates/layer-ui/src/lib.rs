@@ -225,6 +225,7 @@ pub struct UiCatalog {
     pub toolbar: &'static [ToolbarControl],
     pub menus: &'static [MenuSpec],
     pub file_menu: MenuSpec,
+    pub new_document: session::NewDocumentSpec,
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
     pub brush_sizes: &'static [f32],
@@ -344,6 +345,7 @@ pub fn ui_catalog() -> UiCatalog {
         toolbar: TOOLBAR_CONTROLS,
         menus: MENUS,
         file_menu: FILE_MENU,
+        new_document: session::new_document_spec(),
         layer_commands: &CommandId::LAYERS,
         brush_categories: brush_categories().collect(),
         brush_sizes: BRUSH_SIZES,
@@ -433,10 +435,13 @@ impl CommandId {
                     Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
                 )
             }
-            Self::CloseDocument => {
-                matches!(platform, Platform::Gtk | Platform::Mac | Platform::Android)
+            Self::CloseDocument | Self::ExportDocument => {
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                )
             }
-            Self::ExportDocument | Self::Website | Self::SourceCode => {
+            Self::Website | Self::SourceCode => {
                 matches!(platform, Platform::Gtk | Platform::Android)
             }
             Self::NewWindow => platform.native_windows(),

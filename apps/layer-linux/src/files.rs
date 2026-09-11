@@ -344,20 +344,7 @@ pub(crate) async fn export_pixels(
 }
 
 fn write_png(output: &mut dyn Write, image: layer_render::ReadbackImage) -> Result<(), String> {
-    if image.stride != image.width * 4
-        || image.bytes.len() != image.stride as usize * image.height as usize
-    {
-        return Err("Invalid canvas export".into());
-    }
-    let mut encoder = png::Encoder::new(output, image.width, image.height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    writer
-        .write_image_data(&image.bytes)
-        .map_err(|e| e.to_string())?;
-    writer.finish().map_err(|e| e.to_string())
+    image.write_png(output)
 }
 
 /// Local atomic streaming write: the original survives validation, encoding or

@@ -847,6 +847,7 @@ dependencies = [
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
+ "png",
  "pollster",
  "serde_json",
  "wgpu",
@@ -930,6 +931,7 @@ name = "layer-render"
 version = "0.1.0"
 dependencies = [
  "layer-core",
+ "png",
 ]
 
 [[package]]

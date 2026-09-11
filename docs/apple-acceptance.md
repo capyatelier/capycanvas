@@ -502,3 +502,46 @@ normally on the attached device, and the Mac app launches. The Swift staged-expo
 and destination-first save checks pass, as do the settings/workspace regression
 checks and WebAssembly compilation. These are launch and direct-effect results;
 no new full-editor visual or sustained hardware acceptance is claimed.
+
+
+## Canvas creation and PNG export
+
+Both Apple targets now expose a native New drawing size form from the shared
+catalog, with a 2048×1536 default and 1…8192 pixels per dimension. Validation runs
+again in Rust before candidate allocation. PNG export uses the existing document
+composite and shared RGBA8/sRGB encoder, also used by GTK. It excludes viewport
+inspection aids and preserves the editable document's location and save checkpoint.
+
+The owner submits a GPU snapshot, then transfers a ticket to the file worker.
+Shader preparation, GPU waits, row packing and PNG encoding occur off the input
+owner. The Metal check proves captured pixels remain exact after subsequent
+painting and destruction of the original renderer. It also verifies non-aligned
+row widths, dimensions and sRGB metadata. This scheduling removes synchronous
+export waits from input dispatch; it does not establish the hardware frame budget
+or large-document memory/latency acceptance.
+
+A startup race found by the Mac UI check is fixed: file capture waits asynchronously
+for bundled filter preparation. Bundled loading updates the filter library without
+migrating embedded document definitions or changing the saved checkpoint. The
+regression check exercises that preservation on both Apple configurations.
+
+The shared regression suites pass 319 tests (41 core, 32 engine, 4 render,
+215 UI, 11 host and 16 Apple). Standalone Swift document checks pass both platform
+configurations, including sized creation, cancellation, PNG decoding, durable
+writes and checkpoint preservation. The iPad Simulator workflow passes native
+size entry, export cancellation and closing the last clean drawing. iPad's
+floating number pad consumes an initial outside tap; the test dismisses it before
+activating Create. The equivalent native Mac creation/export cancellation check also passes, using
+shortcuts and Escape without system-menu coordinate automation.
+
+The latest Android drawers/Navigator and GTK shared menu policy are integrated.
+Mac workspace commands now appear in the native Window menu. The old unsupported
+column test is updated for Android's new support, with a positive Android drawer
+check and continued coverage of the Apple behavior awaiting column projection.
+Both signed builds and WebAssembly compilation pass. The iPad build installs and
+launches on the attached physical device; the final Mac build launches normally.
+
+Artwork autosave/recovery, complete file-provider delivery and conflict handling,
+physical lifecycle coverage, full editor pixels, the remaining feature inventory
+and sustained 120 Hz workloads remain open. These file-workflow results do not
+close those acceptance gates.

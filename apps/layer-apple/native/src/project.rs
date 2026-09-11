@@ -33,6 +33,10 @@ enum Payload {
         environment: Option<Environment>,
         candidate: Option<Box<UiSession<Renderer>>>,
     },
+    Export {
+        readback: Option<layer_render_wgpu::ExportReadback>,
+        image: Option<layer_render::ReadbackImage>,
+    },
     Retired {
         _session: Box<UiSession<Renderer>>,
     },
@@ -183,8 +187,14 @@ pub unsafe extern "C" fn capy_apple_project_ready(app: *mut CapyApple) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
-    app.perform(|app| app.host.session.require_document_idle())
-        .map_or(-1, |_| 0)
+    app.perform(|app| {
+        if app.host.session.state().filter_load.pending {
+            return Ok(1);
+        }
+        app.host.session.require_document_idle()?;
+        Ok(0)
+    })
+    .unwrap_or(-1)
 }
 /// # Safety
 /// The task must remain alive. Compare the UI's approved document with the
@@ -230,17 +240,32 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
         if fd < 0 {
             return Err("Missing project output".into());
         }
-        let Payload::Save { snapshot, project } = payload else {
-            return Err("Not a save task".into());
-        };
-        if let Some(snapshot) = snapshot.take() {
-            *project = Some(snapshot.pruned()?);
-        }
-        let project = project.as_ref().ok_or("Missing project snapshot")?;
-        project.write(Stream {
+        let stream = Stream {
             file: ManuallyDrop::new(unsafe { File::from_raw_fd(fd) }),
             task,
-        })
+        };
+        match payload {
+            Payload::Save { snapshot, project } => {
+                if let Some(snapshot) = snapshot.take() {
+                    *project = Some(snapshot.pruned()?);
+                }
+                project
+                    .as_ref()
+                    .ok_or("Missing project snapshot")?
+                    .write(stream)
+            }
+            Payload::Export { readback, image } => {
+                if let Some(readback) = readback.take() {
+                    *image = Some(readback.finish().map_err(|e| e.to_string())?);
+                }
+                task.check_cancelled()?;
+                image
+                    .as_ref()
+                    .ok_or("Missing export pixels")?
+                    .write_png(stream)
+            }
+            _ => Err("Not a write task".into()),
+        }
     })
 }
 
@@ -249,6 +274,19 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
 /// fd == -1 prepares a new blank drawing. Other fds remain caller-owned.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32) -> i32 {
+    unsafe { prepare_project(task, fd, layer_ui::DEFAULT_DOCUMENT_EXTENT) }
+}
+/// # Safety
+/// Worker only; the task must be an unused open task. Dimensions follow shared policy.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_new(
+    task: *const CapyProjectTask,
+    width: u32,
+    height: u32,
+) -> i32 {
+    unsafe { prepare_project(task, -1, [width, height]) }
+}
+unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32, extent: [u32; 2]) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else {
         return -1;
     };
@@ -270,10 +308,7 @@ pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32
             ..Default::default()
         };
         let project = if fd == -1 {
-            Project {
-                document: layer_core::Document::new("untitled", 2048, 1536),
-                assets: Default::default(),
-            }
+            layer_ui::new_drawing(extent[0], extent[1])?
         } else if fd < -1 {
             return Err("Missing project input".into());
         } else {
@@ -542,4 +577,64 @@ pub unsafe extern "C" fn capy_apple_document_close(
         Ok(())
     })
     .map_or(-1, |_| 0)
+}
+
+/// # Safety
+/// Owner only. Returns 0 while shaders/document replay prepare, 1 with a job,
+/// or -1 on failure. The job contains only an independently owned GPU snapshot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_export_task(
+    app: *mut CapyApple,
+    id: u32,
+    now: u64,
+    output: *mut *mut CapyProjectTask,
+) -> i32 {
+    let (Some(app), Some(output)) = (unsafe { app.as_mut() }, unsafe { output.as_mut() }) else {
+        return -1;
+    };
+    *output = std::ptr::null_mut();
+    app.perform(|app| {
+        app.host.session.require_document_idle()?;
+        if !app.host.session.state().requests.iter().any(|r| {
+            r.id == id
+                && matches!(
+                    r.kind,
+                    HostRequestKind::Document {
+                        request: DocumentRequest::Export { .. }
+                    }
+                )
+        }) {
+            return Err("No PNG export request is pending".into());
+        }
+        app.host.prepare_canvas_frame(now, now, true)?;
+        if !app.host.startup.canvas_ready || app.host.session.engine().has_pending_document_edits()
+        {
+            return Ok(0);
+        }
+        let session = &mut app.host.session;
+        let epoch = session.state().document_file.epoch;
+        let revision = session.engine().document().revision;
+        let gpu = session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .ok_or("Canvas is unavailable")?;
+        if !gpu.export_ready() {
+            return Ok(0);
+        }
+        let readback = gpu
+            .begin_export_readback(id as u64)
+            .map_err(|e| e.to_string())?;
+        *output = CapyProjectTask::new(
+            Payload::Export {
+                readback: Some(readback),
+                image: None,
+            },
+            epoch,
+            revision,
+            None,
+        );
+        Ok(1)
+    })
+    .unwrap_or(-1)
 }

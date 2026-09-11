@@ -83,6 +83,7 @@ struct EditorView<Canvas: View>: View {
         ZStack {
             let tab = store.state["tabs"][0]
             Text(verbatim: "\(tab["title"].string) · \(Int(tab["width"].number)) × \(Int(tab["height"].number))")
+                .accessibilityIdentifier("document-title")
                 .fontWeight(.semibold).padding(.horizontal, 8).frame(height: 36)
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             HStack(spacing: 6) {
@@ -94,7 +95,7 @@ struct EditorView<Canvas: View>: View {
                         Menu { CatalogMenuItems(store: store, label: menu["label"].string) } label: {
                             Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
                                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                        }.buttonStyle(.plain)
+                        }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
                     }
                 }
                 Spacer()

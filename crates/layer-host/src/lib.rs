@@ -526,6 +526,8 @@ impl NativeHost {
                 manifest: String,
                 modules: std::collections::BTreeMap<String, std::sync::Arc<str>>,
                 mode: layer_core::EffectInstallMode,
+                #[serde(default)]
+                library: bool,
             },
             Catalog,
             ApplicationMenu {
@@ -599,20 +601,20 @@ impl NativeHost {
                 manifest,
                 modules,
                 mode,
+                library,
             } => {
-                self.dirty |= self
-                    .session
-                    .load_effect_package(
-                        &manifest,
-                        |name| {
-                            modules
-                                .get(name)
-                                .cloned()
-                                .ok_or_else(|| format!("Missing filter module: {name}"))
-                        },
-                        mode,
-                    )?
-                    .canvas_wake;
+                let read = |name: &str| {
+                    modules
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("Missing filter module: {name}"))
+                };
+                let change = if library {
+                    self.session.load_effect_library(&manifest, read, mode)
+                } else {
+                    self.session.load_effect_package(&manifest, read, mode)
+                }?;
+                self.dirty |= change.canvas_wake;
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),

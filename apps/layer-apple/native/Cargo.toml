@@ -11,9 +11,12 @@ crate-type = ["staticlib", "rlib"]
 layer-host = { path = "../../../crates/layer-host" }
 layer-core = { path = "../../../crates/layer-core" }
 layer-engine = { path = "../../../crates/layer-engine" }
-layer-render = { path = "../../../crates/layer-render" }
+layer-render = { path = "../../../crates/layer-render", features = ["png"] }
 layer-render-wgpu = { path = "../../../crates/layer-render-wgpu" }
 layer-ui = { path = "../../../crates/layer-ui" }
 serde_json = "1"
 pollster = "0.4"
 wgpu = "30.0.1"
+
+[dev-dependencies]
+png = "0.17.16"

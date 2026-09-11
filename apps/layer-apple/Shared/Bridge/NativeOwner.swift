@@ -179,7 +179,15 @@ final class NativeOwner: @unchecked Sendable {
     }
     func projectTask(opening: Bool, expected: (UInt64, UInt64)? = nil,
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
-        queue.async { [self] in
+        let deadline = DispatchTime.now() + .seconds(30)
+        @Sendable func poll() {
+            let ready = capy_apple_project_ready(handle)
+            if ready == 1 {
+                if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
+                else { completion(nil, "Document preparation timed out") }
+                return
+            }
+            if ready < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable"); return }
             guard let pointer = capy_apple_project_task(handle, opening ? 1 : 0) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable")
                 return
@@ -189,6 +197,22 @@ final class NativeOwner: @unchecked Sendable {
                 completion(nil, "The document changed; review those changes before opening another drawing")
             } else { completion(task, nil) }
         }
+        queue.async(execute: poll)
+    }
+    /// Poll only while document/export shaders prepare. GPU synchronization and
+    /// pixel packing happen later on the file worker through the returned job.
+    func exportTask(id: UInt64, completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+        let deadline = DispatchTime.now() + .seconds(30)
+        @Sendable func poll() {
+            var pointer: OpaquePointer?
+            let ready = capy_apple_project_ready(handle)
+            let result = ready == 1 ? 0 : capy_apple_export_task(handle, UInt32(id), FrameTrace.now(), &pointer)
+            if result < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Export failed") }
+            else if let pointer { completion(NativeProjectTask(pointer), nil) }
+            else if DispatchTime.now() >= deadline { completion(nil, "The canvas is not ready to export") }
+            else { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
+        }
+        queue.async(execute: poll)
     }
     func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?,
         completion: @escaping @Sendable (String?) -> Void) {
@@ -283,7 +307,7 @@ final class NativeOwner: @unchecked Sendable {
             for name in names {
                 modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
             }
-            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge"]))
+            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge", "library": true]))
         }
         try check(capy_apple_finish_startup_cache(handle))
         bundledFiltersLoaded = true

@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 layer-core = { path = "../../crates/layer-core" }
-layer-render = { path = "../../crates/layer-render" }
+layer-render = { path = "../../crates/layer-render", features = ["png"] }
 layer-engine = { path = "../../crates/layer-engine" }
 layer-ui = { path = "../../crates/layer-ui" }
 layer-render-wgpu = { path = "../../crates/layer-render-wgpu" }

@@ -26,8 +26,8 @@ struct MacEditorCommands: Commands {
         CommandGroup(after: .toolbar) {
             if let store { CatalogMenuItems(store: store, label: "View") }
         }
-        CommandMenu("Workspace") {
-            if let store { CatalogMenuItems(store: store, label: "Workspace") }
+        CommandGroup(after: .windowArrangement) {
+            if let store { CatalogMenuItems(store: store, label: "Window") }
         }
     }
 }
