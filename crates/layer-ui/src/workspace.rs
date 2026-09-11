@@ -23,6 +23,13 @@ impl Default for WorkspaceState {
 }
 
 impl WorkspaceState {
+    pub fn for_platform(platform: crate::Platform) -> Self {
+        Self {
+            layout: DockLayout::for_platform(platform),
+            ..Self::default()
+        }
+    }
+
     /// Validate before replacing live state. Storage/transport belongs to the
     /// host; accepted topology and versioning never do.
     pub fn validate(&self) -> Result<(), String> {

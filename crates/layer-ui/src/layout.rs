@@ -348,6 +348,7 @@ pub struct DropHint {
 #[serde(try_from = "String", into = "String")]
 pub enum Panel {
     Toolbar,
+    Commands,
     Brushes,
     ToolSettings,
     Color,
@@ -365,6 +366,7 @@ impl From<Panel> for String {
     fn from(panel: Panel) -> Self {
         match panel {
             Panel::Toolbar => "toolbar".into(),
+            Panel::Commands => "commands".into(),
             Panel::Brushes => "brushes".into(),
             Panel::ToolSettings => "tool_settings".into(),
             Panel::Color => "color".into(),
@@ -383,6 +385,7 @@ impl TryFrom<String> for Panel {
     fn try_from(value: String) -> Result<Self, String> {
         Ok(match value.as_str() {
             "toolbar" => Self::Toolbar,
+            "commands" => Self::Commands,
             "brushes" => Self::Brushes,
             "tool_settings" => Self::ToolSettings,
             "color" => Self::Color,
@@ -417,7 +420,9 @@ pub enum PanelKind {
 impl Panel {
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator) && platform == crate::Platform::Android {
+        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
+            && platform == crate::Platform::Android
+        {
             return true;
         }
         if matches!(self, Self::ToolSettings | Self::Color)
@@ -425,18 +430,24 @@ impl Panel {
         {
             return true;
         }
-        !matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
-            || matches!(platform, crate::Platform::Gtk | crate::Platform::Generic)
+        !matches!(
+            self,
+            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
+        ) || matches!(platform, crate::Platform::Gtk | crate::Platform::Generic)
     }
     pub fn kind(self) -> PanelKind {
-        if matches!(self, Self::Toolbar | Self::CustomToolbar(_)) {
+        if matches!(
+            self,
+            Self::Toolbar | Self::Commands | Self::CustomToolbar(_)
+        ) {
             PanelKind::Tiles
         } else {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Toolbar,
+        Self::Commands,
         Self::Brushes,
         Self::ToolSettings,
         Self::Color,
@@ -450,6 +461,7 @@ impl Panel {
     pub fn label(self) -> &'static str {
         match self {
             Self::Toolbar => "Tools",
+            Self::Commands => "Commands",
             Self::Brushes => "Tool Set",
             Self::ToolSettings => "Tool Settings",
             Self::Color => "Color",
@@ -464,7 +476,7 @@ impl Panel {
     }
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Toolbar | Self::CustomToolbar(_) => "menu",
+            Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => "menu",
             Self::Brushes => "brush",
             Self::ToolSettings => "settings",
             Self::Color => "color",
@@ -990,6 +1002,152 @@ pub const PANEL_CONFIGURATION_WIDTH: f32 = 380.0;
 pub const PANEL_EXPANSION_MS: u32 = 200;
 
 impl DockLayout {
+    /// The complete editor preset is enabled as hosts finish their native UI.
+    /// This selects initial/reset geometry, never migrates a saved workspace.
+    pub fn for_platform(platform: crate::Platform) -> Self {
+        if platform == crate::Platform::Gtk {
+            Self::editor_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    pub fn editor_default() -> Self {
+        use crate::CommandId::*;
+        use ToolbarControl::{Color, Divider};
+        let command = |command| ToolbarControl::Command { command };
+        let tools = [
+            command(Pen),
+            command(Pencil),
+            command(Brush),
+            command(Eraser),
+            command(Airbrush),
+            command(Decoration),
+            command(Blend),
+            command(Liquify),
+            Divider,
+            command(Lasso),
+            command(AutoSelect),
+            command(Fill),
+            command(Gradient),
+            Divider,
+            command(Move),
+            command(Figure),
+            command(Ruler),
+            command(Hand),
+            command(Eyedropper),
+            Color,
+        ];
+        let commands = [
+            command(NewDocument),
+            command(OpenDocument),
+            command(SaveDocument),
+            Divider,
+            command(Undo),
+            command(Redo),
+            Divider,
+            command(ClearLayer),
+            command(FillSelection),
+            command(ScaleRotate),
+            Divider,
+            command(FlipHorizontal),
+        ];
+        let tabs = |id, panels: &[Panel]| DockNode::Tabs {
+            id,
+            panels: panels.to_vec(),
+            active: panels[0],
+            tab_style: crate::TabStyle::default(),
+        };
+        let stack = |id, fraction, first, second| DockNode::Split {
+            id,
+            axis: Axis::Vertical,
+            fraction,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        let mut layout = Self {
+            next_tile_id: 1,
+            ..Self::default()
+        };
+        for (id, controls) in [
+            (Panel::Toolbar, tools.as_slice()),
+            (Panel::Commands, commands.as_slice()),
+        ] {
+            let tiles = controls
+                .iter()
+                .map(|&control| {
+                    let id = layout.next_tile_id;
+                    layout.next_tile_id += 1;
+                    ToolbarTile { id, control }
+                })
+                .collect();
+            let config = PanelConfig {
+                id,
+                hide_tab: false,
+                tile_style: TileStyle::Small,
+                content: PanelContent::Toolbar {
+                    name: id.label().into(),
+                    tiles,
+                },
+            };
+            if let Some(existing) = layout.panels.iter_mut().find(|p| p.id == id) {
+                *existing = config;
+            } else {
+                layout.panels.push(config);
+            }
+        }
+        // Earlier bands own corners: side columns extend to the bottom while
+        // the Commands ribbon occupies only the work area between them.
+        layout.bands = vec![
+            DockBand {
+                id: 1,
+                edge: Edge::Left,
+                extent: TILE_SIZE + WORKSPACE_SPACING,
+                root: tabs(2, &[Panel::Toolbar]),
+            },
+            DockBand {
+                id: 3,
+                edge: Edge::Left,
+                extent: 248.,
+                root: stack(
+                    4,
+                    0.44,
+                    stack(
+                        5,
+                        0.56,
+                        tabs(6, &[Panel::Brushes]),
+                        tabs(7, &[Panel::ToolSettings]),
+                    ),
+                    stack(8, 0.38, tabs(9, &[Panel::Sizes]), tabs(10, &[Panel::Color])),
+                ),
+            },
+            DockBand {
+                id: 11,
+                edge: Edge::Right,
+                extent: 260.,
+                root: stack(
+                    12,
+                    0.5,
+                    stack(
+                        13,
+                        0.4,
+                        tabs(14, &[Panel::Navigator, Panel::Stats]),
+                        tabs(15, &[Panel::Properties, Panel::Adjustments]),
+                    ),
+                    tabs(16, &[Panel::Layers]),
+                ),
+            },
+            DockBand {
+                id: 17,
+                edge: Edge::Top,
+                extent: TILE_SIZE + WORKSPACE_SPACING,
+                root: tabs(18, &[Panel::Commands]),
+            },
+        ];
+        layout.next_id = 19;
+        layout
+    }
+
     pub fn panel_group(&self, panel: Panel) -> Option<u32> {
         self.bands
             .iter()
@@ -1626,9 +1784,9 @@ impl DockLayout {
     }
 
     /// Restore docking defaults without throwing away customized panels/tools.
-    pub fn reset_docking(&mut self) -> Result<(), String> {
+    pub fn reset_docking(&mut self, platform: crate::Platform) -> Result<(), String> {
         let mut next = self.clone();
-        let defaults = Self::default();
+        let defaults = Self::for_platform(platform);
         next.bands = defaults.bands;
         next.floating.clear();
         next.collapsed.clear();
@@ -1640,8 +1798,36 @@ impl DockLayout {
             .filter(|p| p.id.kind() == PanelKind::Tiles)
             .map(|p| p.id)
             .collect();
-        if !tools.contains(&Panel::Toolbar) {
-            next.bands.retain(|b| b.id != 1);
+        // A user may have deleted either built-in toolbar. Reset positions, not
+        // the registry, names, tile contents or visibility of deleted toolbars.
+        let missing: Vec<_> = Panel::ALL
+            .into_iter()
+            .filter(|p| p.kind() == PanelKind::Tiles && !tools.contains(p))
+            .collect();
+        next.detach(&missing);
+        // Saved/custom toolbar IDs share the docking allocator. Allocate fresh
+        // topology IDs instead of colliding with IDs from an older preset.
+        fn reidentify(node: &mut DockNode, next: &mut u32) -> Result<(), String> {
+            let id = match node {
+                DockNode::Tabs { id, .. } | DockNode::Split { id, .. } => id,
+            };
+            *id = *next;
+            *next = next
+                .checked_add(1)
+                .ok_or("Workspace identity limit reached")?;
+            if let DockNode::Split { first, second, .. } = node {
+                reidentify(first, next)?;
+                reidentify(second, next)?;
+            }
+            Ok(())
+        }
+        for band in &mut next.bands {
+            band.id = next.next_id;
+            next.next_id = next
+                .next_id
+                .checked_add(1)
+                .ok_or("Workspace identity limit reached")?;
+            reidentify(&mut band.root, &mut next.next_id)?;
         }
         for panel in tools {
             next.set_panel_visible(panel, true)?;
@@ -2430,7 +2616,10 @@ impl DockLayout {
             } else {
                 0.
             };
-            let limit = (available - reserved_width - 64.0)
+            // A narrow center must still fit several command tiles per row;
+            // otherwise a wrapped top ribbon can consume the entire canvas.
+            let canvas_min = if axis == Axis::Vertical { 128.0 } else { 64.0 };
+            let limit = (available - reserved_width - canvas_min)
                 .max(minimum)
                 .min(available)
                 .max(0.0);
@@ -3585,6 +3774,154 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_default_has_complete_tools_and_independent_command_ribbon() {
+        use crate::CommandId::*;
+        let layout = DockLayout::editor_default();
+        layout.validate().unwrap();
+        assert_eq!(
+            serde_json::from_str::<DockLayout>(&serde_json::to_string(&layout).unwrap()).unwrap(),
+            layout
+        );
+        let commands = |panel| {
+            layout
+                .panel(panel)
+                .unwrap()
+                .tiles()
+                .iter()
+                .filter_map(|t| {
+                    if let ToolbarControl::Command { command } = t.control {
+                        Some(command)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            commands(Panel::Toolbar),
+            [
+                Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend, Liquify, Lasso,
+                AutoSelect, Fill, Gradient, Move, Figure, Ruler, Hand, Eyedropper
+            ]
+        );
+        assert_eq!(
+            commands(Panel::Commands),
+            [
+                NewDocument,
+                OpenDocument,
+                SaveDocument,
+                Undo,
+                Redo,
+                ClearLayer,
+                FillSelection,
+                ScaleRotate,
+                FlipHorizontal
+            ]
+        );
+        let tools = layout.panel(Panel::Toolbar).unwrap().tiles();
+        assert_eq!(tools[8].control, ToolbarControl::Divider);
+        assert_eq!(tools[13].control, ToolbarControl::Divider);
+        assert_eq!(tools.last().unwrap().control, ToolbarControl::Color);
+        for viewport in [[1600., 1200.], [1200., 900.], [900., 640.], [640., 480.]] {
+            let r = layout.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            );
+            assert!(
+                r.work_area.width > 0. && r.work_area.height > 0.,
+                "{viewport:?}: {r:?}"
+            );
+            let toolbar = group(&r, Panel::Toolbar);
+            let brushes = group(&r, Panel::Brushes);
+            let settings = group(&r, Panel::ToolSettings);
+            let sizes = group(&r, Panel::Sizes);
+            let color = group(&r, Panel::Color);
+            let nav = group(&r, Panel::Navigator);
+            let properties = group(&r, Panel::Properties);
+            let layers = group(&r, Panel::Layers);
+            let command = group(&r, Panel::Commands);
+            assert!(toolbar.x + toolbar.width < brushes.x);
+            assert_eq!(brushes.x, settings.x);
+            assert_eq!(settings.x, sizes.x);
+            assert_eq!(sizes.x, color.x);
+            assert!(brushes.y + brushes.height < settings.y);
+            assert!(settings.y + settings.height < sizes.y);
+            assert!(sizes.y + sizes.height < color.y);
+            assert!(nav.y + nav.height < properties.y);
+            assert!(properties.y + properties.height < layers.y);
+            assert_eq!(group(&r, Panel::Stats), nav);
+            assert_eq!(group(&r, Panel::Adjustments), properties);
+            assert!(command.x > brushes.x + brushes.width);
+            assert!(command.x + command.width < nav.x);
+            assert!(brushes.width >= TOOL_PANEL_MIN_WIDTH && layers.width >= LAYERS_MIN_WIDTH);
+            for panel in [Panel::Toolbar, Panel::Commands] {
+                let g = r.groups.iter().find(|g| g.active == panel).unwrap();
+                assert!(!g.tabs_visible);
+                let t = toolbar_tile_layout(
+                    g.bounds.width,
+                    g.bounds.height,
+                    g.axis,
+                    layout.panel(panel).unwrap().tiles(),
+                    true,
+                    TileStyle::Small,
+                );
+                for b in t.tiles {
+                    assert!(
+                        b.x >= 0.
+                            && b.y >= 0.
+                            && b.x + b.width <= g.bounds.width + 0.01
+                            && b.y + b.height <= g.bounds.height + 0.01,
+                        "{viewport:?} {panel:?} {b:?} {:?}",
+                        g.bounds
+                    );
+                    assert!(b.intersection(t.grip.unwrap()).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn editor_reset_preserves_customization_and_avoids_old_allocator_collisions() {
+        for initial in [DockLayout::default(), DockLayout::editor_default()] {
+            for delete in [None, Some(Panel::Toolbar), Some(Panel::Commands)] {
+                let mut layout = initial.clone();
+                let custom = layout
+                    .add_toolbar(None, "My commands", &[ToolbarControl::Color])
+                    .unwrap();
+                layout
+                    .set_tile_style(custom, TileStyle::Large, [1200., 900.])
+                    .unwrap();
+                if let Some(panel) = delete.filter(|p| layout.panel(*p).is_ok()) {
+                    layout.delete_toolbar(panel).unwrap();
+                }
+                let configs = layout.panels.clone();
+                layout.reset_docking(crate::Platform::Gtk).unwrap();
+                layout.validate().unwrap();
+                assert_eq!(layout.panels, configs);
+                assert!(layout.panel_group(custom).is_some());
+                let properties = layout.panel_group(Panel::Properties).unwrap();
+                assert_eq!(
+                    layout.group_panels(properties).unwrap(),
+                    [Panel::Properties, Panel::Adjustments]
+                );
+                assert_eq!(
+                    layout
+                        .group_panels(layout.panel_group(Panel::Layers).unwrap())
+                        .unwrap(),
+                    [Panel::Layers]
+                );
+                assert!(layout.next_id > initial.next_id);
+                let json = serde_json::to_string(&layout).unwrap();
+                assert_eq!(serde_json::from_str::<DockLayout>(&json).unwrap(), layout);
+                layout.add_toolbar(None, "After reset", &[]).unwrap();
+                layout.validate().unwrap();
+            }
+        }
+    }
 
     #[test]
     fn compact_dividers_share_wrap_geometry_and_stable_drop_slots() {

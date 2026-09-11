@@ -1398,8 +1398,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
                 let layout = &mut self.state.workspace.layout;
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                    && layout.column_for_group(group).is_some()
+                if matches!(
+                    self.state.platform,
+                    Platform::Gtk | Platform::Generic | Platform::Android
+                ) && layout.column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
                 } else {
@@ -1456,8 +1458,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .find(|t| t.id == tile)
                     .is_some_and(|t| t.choice.selected && t.enabled);
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                    && control.drawer_columns().is_some()
+                if matches!(
+                    self.state.platform,
+                    Platform::Gtk | Platform::Generic | Platform::Android
+                ) && control.drawer_columns().is_some()
                     && (!control.selectable()
                         || selected
                         || self
@@ -1746,15 +1750,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .ok_or("Divider drag is not active")?;
                         if !drag.collapsed {
                             let point = drag.position(position);
-                            let root =
-                                matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                                    .then(|| {
-                                        self.state
-                                            .workspace
-                                            .layout
-                                            .collapse_at_divider(id, point, viewport)
-                                    })
-                                    .flatten();
+                            let root = matches!(
+                                self.state.platform,
+                                Platform::Gtk | Platform::Generic | Platform::Android
+                            )
+                            .then(|| {
+                                self.state
+                                    .workspace
+                                    .layout
+                                    .collapse_at_divider(id, point, viewport)
+                            })
+                            .flatten();
                             if let Some(root) = root {
                                 let original_width =
                                     self.workspace_history.gesture_start().and_then(|s| {
@@ -2498,7 +2504,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((SETTINGS, true))
             }
             CommandId::ResetLayout => {
-                self.state.workspace.layout.reset_docking()?;
+                self.state
+                    .workspace
+                    .layout
+                    .reset_docking(self.state.platform)?;
                 Ok((LAYOUT, false))
             }
             CommandId::UndoWorkspace | CommandId::RedoWorkspace => {

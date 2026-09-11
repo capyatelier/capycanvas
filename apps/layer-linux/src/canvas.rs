@@ -41,6 +41,9 @@ impl GpuCanvas {
             UiSession::blank(renderer, extent(area))?
         };
         session.set_platform(layer_ui::Platform::Gtk);
+        session.dispatch(layer_ui::UiAction::RestoreWorkspace {
+            workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Gtk),
+        })?;
         // Prefer installed/development resources. The same runtime loader can
         // replace these files without recompiling the executable.
         let filters = std::env::var_os("CAPY_FILTERS_DIR")

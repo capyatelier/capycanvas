@@ -138,6 +138,8 @@ fn tool_label(item: &ToolSetItem) -> gtk::Box {
     label.set_hexpand(true);
     label.set_xalign(0.0);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_max_width_chars(1);
+    label.set_tooltip_text(Some(item.label));
     row.append(&label);
     row
 }
@@ -384,14 +386,18 @@ mod wheel {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             if orientation == gtk::Orientation::Vertical {
                 let size = if for_size < 0 { 196 } else { for_size };
-                (size, size, -1, -1)
+                // Compress the wheel before scrolling the swatches/component
+                // editors out of a short dock. Drawers retain its natural size.
+                (64, size.max(64), -1, -1)
             } else {
                 (64, 196, -1, -1)
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let size = self.obj().width().min(self.obj().height()) as f32;
+            let (size, [x, y]) = self.obj().drawing_bounds();
             if let Some(geometry) = ColorWheelGeometry::new(size) {
+                snapshot.save();
+                snapshot.translate(&gtk::graphene::Point::new(x, y));
                 let bounds = gtk::graphene::Rect::new(0.0, 0.0, size, size);
                 let center = gtk::graphene::Point::new(geometry.center[0], geometry.center[1]);
                 let ring = gtk::gsk::PathBuilder::new();
@@ -410,6 +416,7 @@ mod wheel {
                 snapshot.pop();
                 let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(0.0, 0.0, size, size));
                 draw_wheel(&cr, &self.color.borrow(), &geometry);
+                snapshot.restore();
             }
         }
     }
@@ -417,6 +424,18 @@ mod wheel {
 glib::wrapper! {
     pub struct ColorWheel(ObjectSubclass<wheel::Wheel>) @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+impl ColorWheel {
+    fn drawing_bounds(&self) -> (f32, [f32; 2]) {
+        let size = self.width().min(self.height()) as f32;
+        (
+            size,
+            [
+                (self.width() as f32 - size) * 0.5,
+                (self.height() as f32 - size) * 0.5,
+            ],
+        )
+    }
 }
 
 pub struct ColorPanel {
@@ -434,6 +453,7 @@ impl ColorPanel {
         let root = body();
         let wheel: ColorWheel = glib::Object::new();
         wheel.set_hexpand(true);
+        wheel.set_vexpand(true);
         wheel.set_widget_name("color-wheel");
         root.append(&wheel);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
@@ -603,18 +623,15 @@ impl ColorPanel {
             #[strong]
             part,
             move |gesture, x, y| {
-                let size = wheel.width().min(wheel.height()) as f32;
+                let (size, [ox, oy]) = wheel.drawing_bounds();
+                let point = [x as f32 - ox, y as f32 - oy];
                 let hit = ColorWheelGeometry::new(size)
-                    .and_then(|g| g.hit([x as f32, y as f32], wheel.imp().color.borrow().space));
+                    .and_then(|g| g.hit(point, wheel.imp().color.borrow().space));
                 part.set(hit);
                 if let Some(part) = hit {
                     gesture.set_state(gtk::EventSequenceState::Claimed);
                     workspace.dispatch(UiAction::Color {
-                        action: ColorAction::Pick {
-                            part,
-                            point: [x as f32, y as f32],
-                            size,
-                        },
+                        action: ColorAction::Pick { part, point, size },
                     });
                 }
             }
@@ -630,11 +647,12 @@ impl ColorPanel {
                 if let Some(part) = part.get()
                     && let Some((x, y)) = gesture.start_point()
                 {
+                    let (size, [ox, oy]) = wheel.drawing_bounds();
                     workspace.dispatch(UiAction::Color {
                         action: ColorAction::Pick {
                             part,
-                            point: [(x + dx) as f32, (y + dy) as f32],
-                            size: wheel.width().min(wheel.height()) as f32,
+                            point: [(x + dx) as f32 - ox, (y + dy) as f32 - oy],
+                            size,
                         },
                     });
                 }

@@ -19,7 +19,7 @@ for (const path of process.argv.slice(2)) {
         if (!groups.has(name)) groups.set(name, {runs: [], samples: {}});
         const group = groups.get(name);
         const add = (key, samples) => (group.samples[key] ??= []).push(...samples);
-        for (const key of ['input_cpu', 'input_handler_cpu', 'frame_handler_cpu', 'wake_lateness'])
+        for (const key of ['input_cpu', 'input_handler_cpu', 'frame_handler_cpu', 'gtk_paint_cpu', 'main_dispatch_cpu', 'wake_lateness'])
             add(`${key}_ms`, r[key] ?? []);
         add('gpu_ms', r.worker_gpu.map(v => v[1]));
         add('worker_cpu_ms', r.worker_cpu.map(v => v[3]));

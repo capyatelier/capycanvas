@@ -1563,3 +1563,104 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   validation. Prepared/retired sessions are boxed on the file worker so adoption
   returns a small ownership handle, including on failure, without moving a large
   session through the error value or destroying GPU resources on the input queue.
+
+### Default editor workspace and command ribbon
+
+- GTK now starts with the full shared editor preset: the left-edge Tools ribbon;
+  Tool Set, Tool Settings, Brush size and Color in the next column; the Commands
+  ribbon between the sidebars; and Navigator/Diagnostics, Properties/Filters and
+  Layers stacked on the right. All 17 selectable tools, the Color drawer tile,
+  nine command tiles and their compact dividers use existing toolbar behavior.
+  Text, Comic and Correct line remain excluded. Commands is a stable named toolbar,
+  not a special renderer or a reserved user-toolbar number.
+- The preset and platform rollout policy live in Rust. Other hosts retain their
+  existing initial layout until their presentation is ready. Restoring a saved
+  workspace never replaces its topology or toolbar contents. Reset layout uses
+  the host's preset positions but retains configured/renamed/custom toolbars and
+  does not resurrect deleted ones. New topology IDs cannot collide with custom
+  toolbar IDs from older workspaces.
+- Native visual review caught and fixed allocation issues not detectable from
+  control-state checks alone: Tool Set groups now fit their fixed three-tile
+  widths instead of long natural label widths forcing an extra row; Color's
+  centered wheel compresses before its controls scroll; Navigator's preview
+  shrinks before its buttons clip. Centered color hit testing uses the same
+  origin as rendering. Long lists and settings remain scrollable.
+- Header menu buttons now receive the same six-pixel horizontal padding as
+  other header controls; the document title ellipsizes before overlapping them.
+  The Color tile displays both foreground/background swatches through one new,
+  locally authored shared SVG. Normal, Zen and drawer projections share its
+  palette update function. No new canvas passes or readbacks are introduced.
+- A narrow work area retains at least 128 logical pixels when panel minimums
+  permit, so a wrapping command ribbon does not occupy the entire canvas height.
+  Geometry tests cover 1600×1200 through 640×480, both ribbons, group order,
+  minimum widths, tile/grip bounds, saved-state round trips and customized resets.
+- Validation: 217 shared UI tests, strict UI/GTK Clippy, workspace/all-targets and
+  WebAssembly checks pass. The merged Android column implementation required
+  removing Android from an outdated test of pre-collapse double-click behavior;
+  production behavior is unchanged. Native tests pass for the actual default
+  workspace (all tools and their connected drawers, actual GPU strokes, color
+  input and compact Navigator hit targets), existing color controls, workspace
+  restore, stacked dividers, customization and all application menus.
+  Existing gesture fixtures explicitly restore a representative customized layout
+  rather than implicitly depending on the shipped preset. Startup/pacing tests
+  continue to use the real default.
+- Dark/light captures at 1200×900 and 900×640 are under ignored
+  `artifacts/familiar-workspace/default/`. Generated captures, projects, raw
+  timing reports and machine identifiers are not committed. No new dependency
+  or third-party artwork was added.
+- Remaining for the goal: region gap closing/expansion/antialiasing, watercolor's
+  visible selection boundary, the historical filter-reference mismatch, final
+  integrated tool/render validation and human GTK approval. This milestone does
+  not claim the full goal or cross-platform presentation rollout is complete.
+
+### Full-workspace pacing investigation (gate remains open)
+
+- An old/new workspace comparison on the same release binary reproduced a
+  regression: the old fixture delivered 119.96–120.01Hz, while the complete
+  default delivered 116.62–117.77Hz across the paired drawing runs. Both used
+  real GPU strokes and actual child-surface presentation feedback. This is
+  synthetic input on a private Wayland compositor, not physical tablet latency.
+- The retained benchmark now records native GTK paint and whole-main-context
+  dispatch intervals, in addition to canvas-worker/input timings. These are
+  elapsed intervals (including driver waits), not CPU-utilization measurements.
+  It records the actual GTK renderer and number of live overview updates, waits
+  for startup completion, and can compare `LAYER_PACING_WORKSPACE=fixture` with
+  `default`. No new timers run in production.
+- GTK painting produced a 34ms main-loop stall while G-Pen GPU p99 remained
+  0.38ms. A corrected Navigator exclusion restored 119.96Hz with no discarded
+  frames. The exclusion uses zero opacity and asserts that preview updates stay
+  inactive: simply hiding the widget was invalid because control refresh later
+  restored its configured visibility. Waiting for shader compilation, disabling
+  the canvas cursor, and explicitly requesting GTK Vulkan did not fix the issue.
+- A temporary, local-only Vulkan trace located repeated slow memory allocations
+  and frees inside GTK on its main thread, including 1MiB backing allocations.
+  The default Navigator scale also made GTK create an extra mipmapped image for
+  each incoming 256×192 overview. The trace is not an application dependency or
+  a library override shipped with the app.
+- Navigator now uses GTK's explicit
+  [linear texture sampling](https://docs.gtk.org/gtk4/method.Snapshot.append_scaled_texture.html).
+  The source still uses the existing GPU downsampling and live update rate;
+  only GTK's additional mipmap generation is removed. No CPU canvas raster,
+  mutable-texture trick, new graphics backend or hidden Navigator is used.
+  The native Navigator test passes; its dark/light output was visually checked.
+
+  Latest complete six-second runs with the full workspace and live overview
+  (times in milliseconds, median / p95 / p99):
+
+  | Workload | Worker CPU | Canvas GPU | GTK paint elapsed | Presented Hz | Overview updates |
+  | --- | --- | --- | --- | ---: | ---: |
+  | G-Pen | .297 / .578 / .730 | .125 / .297 / .432 | .005 / .615 / 2.095 | 118.79 | 87 |
+  | Watercolor | 1.088 / 1.986 / 2.404 | 1.244 / 2.289 / 2.842 | .005 / .665 / 2.391 | 116.04 | 88 |
+  | Pan | .223 / .400 / .485 | .064 / .126 / .199 | .270 / .509 / .587 | 119.34 | 0 |
+
+- Earlier linear-sampling runs reached 119.45/118.73Hz for G-Pen/watercolor.
+  GTK paint p99 improved from roughly 7–9ms to 2–4ms, but allocation stalls and
+  missed presentations remain: the latest G-Pen GTK maximum was 23.14ms, and an
+  earlier watercolor maximum was 32.92ms. The smaller typical cost is useful,
+  but **does not close the consistent-120Hz drawing gate**. Further work must
+  address the live-preview texture lifecycle/presentation scheduling without
+  suppressing the overview or changing brush algorithms to hide the issue.
+- The updated benchmark asserts at least twenty live overview updates during
+  drawing; panning correctly reuses the unchanged overview. Raw reports and
+  traces remain local and untracked. Region refinements, the historical filter
+  comparison, final integrated validation and user approval remain outstanding.

@@ -1128,7 +1128,10 @@ mod tests {
             geometry(&state.layout).collapsed[0].groups[0].active,
             Panel::Adjustments
         );
-        state.layout.reset_docking().unwrap();
+        state
+            .layout
+            .reset_docking(crate::Platform::Generic)
+            .unwrap();
         assert!(state.layout.collapsed.is_empty());
         state.validate().unwrap();
     }

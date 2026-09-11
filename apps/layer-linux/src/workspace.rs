@@ -710,7 +710,7 @@ pub struct Workspace {
     drop_hint: RefCell<Option<DropHint>>,
     toolbar: TileStrip,
     zen: zen::Zen,
-    panels: [(Panel, gtk::Widget); Panel::ALL.len()],
+    panels: Vec<(Panel, gtk::Widget)>,
     groups: RefCell<Vec<GroupView>>,
     commands: RefCell<Vec<(CommandId, gtk::Button)>>,
     tool_set: crate::tool_panels::ToolSet,
@@ -797,6 +797,8 @@ impl Workspace {
         surface.set_vexpand(true);
         let tab = gtk::Label::new(Some(APP_NAME));
         tab.add_css_class("document-title");
+        tab.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        tab.set_width_chars(1);
         let header = adw::HeaderBar::new();
         header.add_css_class("workspace-header");
         header.set_title_widget(Some(&tab));
@@ -859,7 +861,7 @@ impl Workspace {
             toolbar: toolbar.clone(),
             zen: zen::Zen::default(),
             groups: RefCell::new(Vec::new()),
-            panels: [
+            panels: vec![
                 (Panel::Toolbar, toolbar.clone().upcast()),
                 (Panel::Brushes, scroll(&brushes)),
                 (Panel::ToolSettings, scroll(&tool_settings.root)),

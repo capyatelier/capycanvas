@@ -9,6 +9,8 @@ pub struct Images {
     texture: RefCell<Option<gdk::Texture>>,
     views: RefCell<Vec<glib::WeakRef<Overview>>>,
     update_clock: RefCell<Option<gdk::FrameClock>>,
+    #[cfg(test)]
+    updates: std::cell::Cell<u64>,
 }
 impl Drop for Images {
     fn drop(&mut self) {
@@ -18,6 +20,10 @@ impl Drop for Images {
     }
 }
 impl Images {
+    #[cfg(test)]
+    pub fn updates(&self) -> u64 {
+        self.updates.get()
+    }
     #[cfg(test)]
     pub fn updating(&self) -> bool {
         self.update_clock.borrow().is_some()
@@ -75,6 +81,8 @@ impl Images {
                     .flatten()
             });
             if let Some(image) = image {
+                #[cfg(test)]
+                images.updates.set(images.updates.get() + 1);
                 let bytes = glib::Bytes::from_owned(image.bytes);
                 *images.texture.borrow_mut() = Some(
                     gdk::MemoryTexture::new(
@@ -113,7 +121,9 @@ mod imp {
         fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
             match orientation {
                 gtk::Orientation::Horizontal => (0, 220, -1, -1),
-                _ => (100, 164, -1, -1),
+                // Keep the controls reachable when the default stacked dock
+                // becomes short; the GPU overview scales into the remaining area.
+                _ => (0, 164, -1, -1),
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -130,7 +140,9 @@ mod imp {
             if let Some(images) = self.images.borrow().as_ref()
                 && let Some(texture) = images.texture.borrow().as_ref()
             {
-                snapshot.append_texture(texture, &bounds);
+                // The overview is already downsampled on the canvas GPU. Do not
+                // generate a new mipmapped GTK image for every live thumbnail.
+                snapshot.append_scaled_texture(texture, gtk::gsk::ScalingFilter::Linear, &bounds);
             }
             // Eight tiny GPU scene rectangles, not a new Cairo bitmap per pan.
             snapshot.push_clip(&bounds);

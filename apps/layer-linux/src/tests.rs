@@ -21,6 +21,283 @@ fn state(w: &Workspace) -> UiState {
     w.gpu.borrow().as_ref().unwrap().session.state().clone()
 }
 
+// Dock/gesture regressions exercise a stable, deliberately customized workspace
+// (including its tab IDs and eight-tile ribbon), not the evolving shipped preset.
+// The default-workspace integration test uses the actual startup path.
+fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
+    let w = Workspace::new(app);
+    w.area.connect_realize(glib::clone!(
+        #[weak]
+        w,
+        move |_| w.dispatch(UiAction::RestoreWorkspace {
+            workspace: layer_ui::WorkspaceState::default(),
+        })
+    ));
+    w
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU: shipped editor preset"]
+fn native_default_workspace() {
+    let app = native_test_app("art.capycanvas.DefaultWorkspace");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(1600);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .backend()
+        .startup
+        .brush_ready
+    {
+        assert!(Instant::now() < deadline, "active brush startup");
+        pump(30);
+    }
+    for (row, color) in [
+        [0.12, 0.38, 0.58, 1.],
+        [0.8, 0.4, 0.22, 1.],
+        [0.2, 0.6, 0.43, 1.],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        w.dispatch(UiAction::SetColor { rgba: color });
+        w.dispatch(UiAction::SetBrushSize {
+            value: 42. + row as f32 * 12.,
+        });
+        let points: Vec<_> = (0..24)
+            .map(|i| {
+                let t = i as f32 / 23.;
+                [
+                    350. + 1320. * t,
+                    510. + row as f32 * 230. - (t * std::f32::consts::PI * 2.).sin() * 90.,
+                ]
+            })
+            .collect();
+        native_pen_path(&w, &points);
+    }
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .strokes()
+            .count(),
+        3
+    );
+    let output = "../../artifacts/familiar-workspace/default";
+    std::fs::create_dir_all(output).unwrap();
+    let initial = state(&w).workspace.layout;
+    assert_eq!(initial.bands, DockLayout::editor_default().bands);
+    assert_eq!(initial.panels, DockLayout::editor_default().panels);
+    let verify = || {
+        let state = state(&w);
+        let layout = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .layout([w.surface.width() as f32, w.surface.height() as f32]);
+        assert!(layout.work_area.width >= 64. && layout.work_area.height > 0.);
+        for g in &layout.groups {
+            let native = w
+                .groups
+                .borrow()
+                .iter()
+                .find(|view| view.id == g.id)
+                .unwrap()
+                .stack
+                .parent()
+                .unwrap();
+            let b = native.compute_bounds(&w.surface).unwrap();
+            for (actual, expected) in [
+                (b.x(), g.bounds.x),
+                (b.y(), g.bounds.y),
+                (b.width(), g.bounds.width),
+                (b.height(), g.bounds.height),
+            ] {
+                assert!(
+                    (actual - expected).abs() < 1.1,
+                    "{:?}: {b:?} {:?}",
+                    g.active,
+                    g.bounds
+                );
+            }
+            if let Some(tiles) = &g.tiles {
+                let widget = w.panel_widget(g.active);
+                for (tile, bounds) in state
+                    .workspace
+                    .layout
+                    .panel(g.active)
+                    .unwrap()
+                    .tiles()
+                    .iter()
+                    .zip(&tiles.tiles)
+                {
+                    let button = find_named(&widget, &format!("tile-{}", tile.id)).unwrap();
+                    let b = button.compute_bounds(&widget).unwrap();
+                    assert!((b.x() - bounds.x).abs() < 1.1 && (b.y() - bounds.y).abs() < 1.1);
+                    assert!(
+                        (b.width() - bounds.width).abs() < 1.1
+                            && (b.height() - bounds.height).abs() < 1.1
+                    );
+                    assert!(b.x() + b.width() <= widget.width() as f32 + 1.);
+                    assert!(b.y() + b.height() <= widget.height() as f32 + 1.);
+                    if tile.control != ToolbarControl::Divider {
+                        assert!(button.tooltip_text().is_some());
+                    }
+                }
+            }
+        }
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    };
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        // The resized wheel is centered; native contacts must use that same
+        // origin, and all color controls remain visible at the default height.
+        pump(100);
+        let wheel = find_named(&w.panel_widget(Panel::Color), "color-wheel").unwrap();
+        let size = wheel.width().min(wheel.height()) as f32;
+        assert!(size >= 128.);
+        let origin = [
+            (wheel.width() as f32 - size) * 0.5,
+            (wheel.height() as f32 - size) * 0.5,
+        ];
+        let point = layer_ui::ColorWheelGeometry::new(size)
+            .unwrap()
+            .hue_marker(210.);
+        let controllers = wheel.observe_controllers();
+        let drag = (0..controllers.n_items())
+            .find_map(|i| controllers.item(i).and_downcast::<gtk::GestureDrag>())
+            .unwrap();
+        drag.emit_by_name::<()>(
+            "drag-begin",
+            &[
+                &((point[0] + origin[0]) as f64),
+                &((point[1] + origin[1]) as f64),
+            ],
+        );
+        assert!((state(&w).colors.components()[0] - 210.).abs() < 0.01);
+        let viewport = w.panel_widget(Panel::Color);
+        let component = find_named(&viewport, "color-component-2")
+            .unwrap()
+            .compute_bounds(&viewport)
+            .unwrap();
+        assert!(component.y() + component.height() <= viewport.height() as f32);
+        for id in initial
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .iter()
+            .filter_map(|tile| {
+                if let ToolbarControl::Command { command } = tile.control {
+                    Some(command)
+                } else {
+                    None
+                }
+            })
+        {
+            click(&command(&w, id));
+            if state(&w).customization.drawer.is_some() {
+                w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::CloseExpanded,
+                });
+            }
+            pump(230);
+            assert!(
+                w.gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .command(id)
+                    .selected,
+                "{id:?}"
+            );
+            verify();
+            capture_reference(&w, &format!("{output}/{id:?}-{theme:?}.png"), 1.);
+            click(&command(&w, id));
+            pump(250);
+            assert!(state(&w).customization.drawer.is_some(), "{id:?} controls");
+            assert_drawer_connected(&w);
+            click(&command(&w, id));
+            pump(250);
+            assert!(state(&w).customization.drawer.is_none());
+        }
+        let commands = w.panel_widget(Panel::Commands);
+        for id in [
+            CommandId::NewDocument,
+            CommandId::OpenDocument,
+            CommandId::SaveDocument,
+            CommandId::Undo,
+            CommandId::Redo,
+            CommandId::ClearLayer,
+            CommandId::FillSelection,
+            CommandId::ScaleRotate,
+            CommandId::FlipHorizontal,
+        ] {
+            let tile = state(&w)
+                .workspace
+                .layout
+                .panel(Panel::Commands)
+                .unwrap()
+                .tiles()
+                .iter()
+                .find(|t| t.control == (ToolbarControl::Command { command: id }))
+                .unwrap()
+                .id;
+            let button = find_named(&commands, &format!("tile-{tile}")).unwrap();
+            assert_eq!(
+                button.is_sensitive(),
+                w.gpu.borrow().as_ref().unwrap().session.command(id).enabled
+            );
+        }
+        let flipped = state(&w).camera;
+        click(&command(&w, CommandId::FlipHorizontal));
+        pump(100);
+        assert_ne!(state(&w).camera, flipped);
+        click(&command(&w, CommandId::FlipHorizontal));
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Brush,
+        });
+        w.window.unmaximize();
+        pump(200);
+        w.window.set_default_size(900, 640);
+        pump(500);
+        verify();
+        for id in [CommandId::ZoomIn, CommandId::FlipVertical] {
+            let button =
+                find_named(w.navigator.root.upcast_ref(), &format!("navigator-{id:?}")).unwrap();
+            let b = button.compute_bounds(&w.navigator.root).unwrap();
+            assert!(b.y() >= 0. && b.y() + b.height() <= w.navigator.root.height() as f32);
+            let bounds = button.compute_bounds(&w.surface).unwrap();
+            let picked = w
+                .surface
+                .pick(
+                    (bounds.x() + bounds.width() * 0.5) as f64,
+                    (bounds.y() + bounds.height() * 0.5) as f64,
+                    gtk::PickFlags::DEFAULT,
+                )
+                .unwrap();
+            assert!(picked == button || picked.is_ancestor(&button));
+        }
+        capture_reference(&w, &format!("{output}/compact-{theme:?}.png"), 1.);
+        w.window.set_default_size(1200, 900);
+        pump(400);
+    }
+    w.window.destroy();
+    pump(80);
+}
+
 #[test]
 #[ignore = "native file workflow: private Wayland display and GPU"]
 #[allow(deprecated)] // Inspect GtkFileDialog's fallback widget, not a production API.
@@ -465,7 +742,7 @@ fn assert_drawer_connected(w: &Workspace) {
 #[ignore = "private Wayland display and GPU"]
 fn native_nested_tool_drawers() {
     let app = native_test_app("art.capycanvas.NestedDrawers");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
     let original = state(&w).workspace;
@@ -685,7 +962,7 @@ fn native_nested_tool_drawers() {
 #[ignore = "private Wayland display and GPU"]
 fn native_collapsed_drop_and_resize() {
     let app = native_test_app("art.capycanvas.ColumnGestures");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
     let original = state(&w).workspace;
@@ -905,7 +1182,7 @@ fn native_collapsed_drop_and_resize() {
 #[ignore = "private Wayland display and GPU"]
 fn native_collapsed_columns() {
     let app = native_test_app("art.capycanvas.CollapsedColumns");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
     let original_workspace = state(&w).workspace.clone();
@@ -1108,7 +1385,7 @@ fn native_collapsed_columns() {
 #[ignore = "private Wayland display and GPU"]
 fn native_tool_drawers() {
     let app = native_test_app("art.capycanvas.ToolDrawers");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(800);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
@@ -1411,7 +1688,7 @@ fn native_pen_path(w: &Rc<Workspace>, points: &[[f32; 2]]) {
 fn native_selected_brushes() {
     use layer_core::DefaultBrushPreset;
     let app = native_test_app("art.capycanvas.SelectedBrushes");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     w.dispatch(UiAction::Invoke {
@@ -1519,7 +1796,7 @@ fn native_selected_brushes() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_connected_tools() {
     let app = native_test_app("art.capycanvas.ConnectedTools");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let mut workspace = state(&w).workspace;
@@ -1682,7 +1959,7 @@ fn native_connected_tools() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_ruler_tools() {
     let app = native_test_app("art.capycanvas.RulerTools");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let mut workspace = state(&w).workspace;
@@ -1862,7 +2139,7 @@ fn native_ruler_tools() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_operation_tool() {
     let app = native_test_app("art.capycanvas.OperationTool");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let mut workspace = state(&w).workspace;
@@ -2169,7 +2446,7 @@ fn native_operation_tool() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_figure_tools() {
     let app = native_test_app("art.capycanvas.FigureTools");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let mut workspace = state(&w).workspace;
@@ -2356,7 +2633,7 @@ fn native_figure_tools() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_gradient_tool() {
     let app = native_test_app("art.capycanvas.GradientTool");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let mut workspace = state(&w).workspace;
@@ -2511,7 +2788,7 @@ fn native_gradient_tool() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_navigation_tools() {
     let app = native_test_app("art.capycanvas.NavigationTools");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let mut workspace = state(&w).workspace;
@@ -2654,7 +2931,7 @@ fn native_navigation_tools() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_navigator() {
     let app = native_test_app("art.capycanvas.NavigatorReview");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(800);
     w.dispatch(UiAction::Customize {
@@ -2880,7 +3157,7 @@ fn native_navigator() {
 #[ignore = "private Wayland display and GPU"]
 fn native_tool_families() {
     let app = native_test_app("art.capycanvas.ToolFamilies");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(800);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
@@ -3003,7 +3280,7 @@ fn native_tool_families() {
 #[ignore = "private Wayland display and GPU"]
 fn native_tool_and_color_panels() {
     let app = native_test_app("art.capycanvas.ToolPanels");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(800);
     let mut workspace = state(&w).workspace;
@@ -3177,7 +3454,7 @@ fn native_tool_and_color_panels() {
 #[ignore = "private Wayland display and GPU"]
 fn native_runtime_filter_packages() {
     let app = native_test_app("art.capycanvas.RuntimeFilters");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(900);
     let load = |path: &str, mode| {
@@ -3286,7 +3563,7 @@ fn native_adjustment_panels_review() {
     use layer_core::EffectValue;
     use layer_ui::EffectAction;
     let app = native_test_app("art.capycanvas.AdjustmentReview");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(900);
     w.dispatch(UiAction::SetTheme {
@@ -3591,7 +3868,7 @@ fn native_layer_panel_review() {
         assert!(!w.status.is_visible(), "{}", w.status.text());
     }
     let app = native_test_app("art.capycanvas.LayerPanelReview");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let delete = find_named(w.layer_panel.root.upcast_ref(), "delete-selected-layers")
@@ -4392,7 +4669,7 @@ fn begin_workspace_drag(
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_toolbar_sizing() {
     let app = native_test_app("dev.layer.ToolbarSizingTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
@@ -4676,7 +4953,7 @@ fn native_toolbar_sizing() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_icons() {
     let app = native_test_app("dev.layer.ZenIconsTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let dir = "../../artifacts/ui/zen-icons";
@@ -4790,7 +5067,7 @@ fn native_zen_icons() {
 #[ignore = "group tab presentation: requires private Wayland and GPU"]
 fn native_group_tab_styles() {
     let app = native_test_app("art.capycanvas.GroupTabStylesTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(500);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
@@ -4945,7 +5222,7 @@ fn native_settings_typography() {
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(false);
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
     let dir = "../../artifacts/ui/settings-audit";
@@ -5021,7 +5298,7 @@ fn native_settings_typography() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_behaviors() {
     let app = native_test_app("art.capycanvas.ZenSectionsTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let dir = "../../artifacts/familiar-workspace";
@@ -5338,7 +5615,7 @@ fn native_zen_behaviors() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_zen_floating_targets() {
     let app = native_test_app("dev.layer.ZenFloatingTargetsTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     w.dispatch(UiAction::Preferences {
@@ -5444,7 +5721,7 @@ fn native_zen_floating_targets() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_same_slot_drop() {
     let app = native_test_app("art.capycanvas.SameSlotDrop");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     for tearoff in [false, true] {
@@ -5509,7 +5786,7 @@ fn native_same_slot_drop() {
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_floating_gestures() {
     let app = native_test_app("dev.layer.FloatingGesturesTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     w.dispatch(UiAction::Preferences {
@@ -5957,7 +6234,7 @@ fn native_workspace_management() {
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(false);
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
     let dir = "../../artifacts/ui/workspace-management/gtk";
@@ -6431,7 +6708,7 @@ fn native_panel_customization() {
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(false);
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
     let dir = "../../artifacts/ui/customization";
@@ -6915,7 +7192,7 @@ fn native_toolbar_manager() {
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(false);
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(500);
     let initial = state(&w).workspace;
@@ -7049,7 +7326,7 @@ fn native_toolbar_manager() {
 #[ignore = "native menu sections: requires a Wayland/Vulkan display"]
 fn native_menu_sections() {
     let app = native_test_app("dev.layer.MenuTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(500);
     let dir = "../../artifacts/ui/menus";
@@ -7224,7 +7501,7 @@ fn native_panel_expansion() {
     gtk::Settings::default()
         .unwrap()
         .set_gtk_enable_animations(false);
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
     let initial = state(&w).workspace;
@@ -7429,7 +7706,7 @@ fn native_web_parity_reference() {
             adw::StyleManager::default().set_color_scheme(scheme);
             adw::StyleManager::for_display(&gdk::Display::default().unwrap())
                 .set_color_scheme(adw::ColorScheme::Default);
-            let w = Workspace::new(&app);
+            let w = fixture_workspace(&app);
             w.window.present();
             assert!(w.gpu.borrow().is_some());
             if modal {
@@ -7473,7 +7750,7 @@ fn native_web_parity_reference() {
 #[ignore = "recursive column collapse: requires a private Wayland/Vulkan display"]
 fn native_column_removal() {
     let app = native_test_app("art.capycanvas.ColumnRemovalTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let initial = state(&w).workspace;
@@ -7572,7 +7849,7 @@ fn native_column_removal() {
 #[ignore = "docked handle double-click: requires a Wayland/Vulkan display"]
 fn native_docked_handles() {
     let app = native_test_app("art.capycanvas.DockedHandleTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let panel = Panel::Sizes;
@@ -7715,7 +7992,7 @@ fn native_docked_handles() {
 #[ignore = "tab visibility and bottom grips: requires a private Wayland/Vulkan display"]
 fn native_hidden_tabs() {
     let app = native_test_app("art.capycanvas.HiddenTabsTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(700);
     let initial = state(&w).workspace;
@@ -7931,7 +8208,7 @@ fn native_hidden_tabs() {
 #[ignore = "native divider hit testing: requires a Wayland display"]
 fn native_stacked_divider() {
     let app = native_test_app("art.capycanvas.DividerTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(800);
     let divider = w
@@ -8697,7 +8974,7 @@ fn native_slider_feedback() {
     }
     // Exercise the real session/refresh path, including fractional f32 echoes,
     // in both directions while allowing GTK's event loop to advance.
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(600);
     let spec = NumericControl::brush_size();
@@ -8939,7 +9216,7 @@ fn native_number_controls() {
 #[ignore = "cursor vectors: requires a Wayland/Vulkan display"]
 fn native_cursor_vectors() {
     let app = native_test_app("dev.layer.CursorTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
     let theme = gtk::IconTheme::for_display(&w.area.display());
@@ -9061,7 +9338,7 @@ fn native_cursor_vectors() {
 #[ignore = "workspace restore integration: requires a Wayland display"]
 fn native_workspace_restore() {
     let app = native_test_app("dev.layer.RestoreTest");
-    let source = Workspace::new(&app);
+    let source = fixture_workspace(&app);
     source.window.present();
     pump(1000);
     source.dispatch(UiAction::MovePanel {
@@ -9145,7 +9422,11 @@ fn native_workspace_restore() {
 fn native_frame_pacing() {
     use layer_core::DefaultBrushPreset;
     let app = native_test_app("dev.layer.FramePacingTest");
-    let w = Workspace::new(&app);
+    let w = match std::env::var("LAYER_PACING_WORKSPACE").as_deref() {
+        Ok("fixture") => fixture_workspace(&app),
+        Ok("default") | Err(_) => Workspace::new(&app),
+        Ok(_) => panic!("Unknown pacing workspace"),
+    };
     w.window.present();
     pump(1500);
     let rulers = std::env::var("LAYER_PACING_RULER").unwrap_or_default();
@@ -9242,6 +9523,12 @@ fn native_frame_pacing() {
         });
         pump(300);
         assert!(w.navigator_images.texture().is_some());
+    }
+    if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("0") {
+        // Isolate live-thumbnail work without changing the saved dock geometry.
+        // Control refresh restores visibility from shared configuration; opacity
+        // keeps the test exclusion intact and is honored by preview scheduling.
+        w.navigator.root.set_opacity(0.);
     }
     if let Ok(mode) = std::env::var("LAYER_PACING_ZEN") {
         assert!(matches!(mode.as_str(), "normal" | "partial"));
@@ -9405,6 +9692,53 @@ fn native_frame_pacing() {
                 pump(5);
             }
         }
+        // This benchmark measures steady-state presentation. Cold/background
+        // compilation is covered separately by native_startup_latency.
+        let startup_wait = Instant::now();
+        while !w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .backend()
+            .startup
+            .complete
+        {
+            assert!(
+                startup_wait.elapsed() < Duration::from_secs(20),
+                "startup did not complete"
+            );
+            pump(5);
+        }
+        let startup_wait_ms = startup_wait.elapsed().as_secs_f64() * 1000.;
+        let navigator_visible = w.navigator.root.is_mapped()
+            && w.navigator.root.opacity() > 0.
+            && !w.header.has_css_class("zen-hidden");
+        let previews_before = w.navigator_images.updates();
+        let clock = w.area.frame_clock().unwrap();
+        let paint_start = Rc::new(Cell::new(None::<Instant>));
+        let paint_cpu = Rc::new(RefCell::new(Vec::with_capacity(800)));
+        let before_paint = clock.connect_before_paint(glib::clone!(
+            #[strong]
+            paint_start,
+            move |_| paint_start.set(Some(Instant::now()))
+        ));
+        let after_paint = clock.connect_after_paint(glib::clone!(
+            #[strong]
+            paint_start,
+            #[strong]
+            paint_cpu,
+            move |_| {
+                if let Some(start) = paint_start.take() {
+                    paint_cpu
+                        .borrow_mut()
+                        .push(start.elapsed().as_secs_f64() * 1000.);
+                }
+            }
+        ));
+        let mut dispatch_cpu = Vec::with_capacity(4096);
         let strokes_before = w
             .gpu
             .borrow()
@@ -9476,7 +9810,32 @@ fn native_frame_pacing() {
             }
             first = false;
             last_event = Some(event);
-            pump(2);
+            // Observe all native dispatch, including GTK painting and preview
+            // callbacks, not just our input/frame handlers. Never block waiting
+            // for an event: the sleep is the same synthetic input cadence as pump.
+            let until = Instant::now() + Duration::from_millis(2);
+            let context = glib::MainContext::default();
+            while Instant::now() < until {
+                while context.pending() && Instant::now() < until {
+                    let dispatch_start = Instant::now();
+                    context.iteration(false);
+                    dispatch_cpu.push(dispatch_start.elapsed().as_secs_f64() * 1000.);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        clock.disconnect(before_paint);
+        clock.disconnect(after_paint);
+        let preview_updates = w.navigator_images.updates() - previews_before;
+        if navigator_visible && preset.is_some() {
+            assert!(
+                preview_updates >= 20,
+                "benchmark must keep the overview live"
+            );
+        }
+        if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("0") {
+            assert_eq!(w.navigator.root.opacity(), 0.);
+            assert!(!w.navigator_images.updating());
         }
         if preset.is_some() || name == "Transform" {
             if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
@@ -9552,13 +9911,19 @@ fn native_frame_pacing() {
         );
         let report = serde_json::json!({
             "brush": name, "viewport": camera.viewport, "brush_size": 384, "stroke_seconds": 6,
+            "startup_wait_ms": startup_wait_ms,
+            "workspace": std::env::var("LAYER_PACING_WORKSPACE").unwrap_or_else(|_| "default".into()),
+            "gtk_renderer": w.window.renderer().unwrap().type_().name(),
             "path": "app-owned Wayland Vulkan subsurface",
             "cursor": std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0"),
-            "navigator": std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1"),
+            "navigator": navigator_visible,
+            "navigator_updates": preview_updates,
             "transform_mask": std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default(),
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,
             "frame_handler_cpu": stats.frame_handler_cpu,
+            "gtk_paint_cpu": *paint_cpu.borrow(),
+            "main_dispatch_cpu": dispatch_cpu,
             "wake_lateness": stats.wake_lateness,
             "worker_cpu": stats.cpu, "worker_gpu": stats.gpu, "canvas_presentation": stats.presented,
         });
@@ -9589,7 +9954,7 @@ fn native_frame_pacing() {
 fn native_floating_click_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("dev.layer.FloatingClickInputTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
     pump(1200);
@@ -9690,7 +10055,7 @@ fn native_floating_click_input() {
 fn native_toolbar_drag_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("dev.layer.ToolbarDragInputTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.maximize();
     w.window.present();
     pump(1200);
@@ -9790,7 +10155,7 @@ fn native_compositor_input() {
             .expect("run with apps/layer-linux/bench/native-input.js in isolated Mutter"),
     );
     let app = native_test_app("dev.layer.NativeInputTest");
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(1500);
     assert!(w.gpu.borrow().is_some());
@@ -9889,7 +10254,7 @@ fn native_workspace_controls_docking_and_ink() {
         .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    let w = Workspace::new(&app);
+    let w = fixture_workspace(&app);
     w.window.present();
     pump(3000);
     assert!(w.gpu.borrow().is_some());
