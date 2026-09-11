@@ -15,6 +15,7 @@ final class NativeOwner: @unchecked Sendable {
     private var layer: CAMetalLayer?
     private var lastSnapshotTime: UInt64 = 0
     private var bundledFiltersLoaded = false
+    private var canvasReady = false
     let receive: @Sendable (JSON?, String?) -> Void
 
     init(platform: UInt32, receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
@@ -46,7 +47,10 @@ final class NativeOwner: @unchecked Sendable {
         return try JSON.decode(String(cString: result))
     }
     private func publish() throws {
-        if let snapshot = try request(3) { receive(snapshot, nil) }
+        if let snapshot = try request(3) {
+            if !snapshot["canvas_ready"].isNull { canvasReady = snapshot["canvas_ready"].bool }
+            receive(snapshot, nil)
+        }
     }
     private func perform(_ work: @escaping @Sendable () throws -> Void) {
         queue.async { [self] in
@@ -64,21 +68,30 @@ final class NativeOwner: @unchecked Sendable {
         let lease = MetalLayerLease(layer)
         perform { [self] in
             let layer = lease.value
-            try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale))
-            self.layer = layer
-            // Packages use the same manifest and WGSL as every other host.
-            if !bundledFiltersLoaded, let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "filters") {
-                let manifest = try String(contentsOf: url, encoding: .utf8)
-                let names = try request(2, JSON(["type": "filter_package_modules", "manifest": manifest]))?.array ?? []
-                var modules: [String: String] = [:]
-                for name in names {
-                    modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
-                }
-                _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "replace"]))
-                bundledFiltersLoaded = true
+            let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("art.capycanvas.apple.shader-pipelines", isDirectory: true)
+            try cache.path.withCString {
+                try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale, $0))
             }
+            self.layer = layer
             try publish()
         }
+    }
+    private func loadBundledFilters() throws {
+        // Submit the optional catalog after paper/document readiness, allowing
+        // priority document and brush shaders to enter the compiler queue first.
+        if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "filters") {
+            let manifest = try String(contentsOf: url, encoding: .utf8)
+            let names = try request(2, JSON(["type": "filter_package_modules", "manifest": manifest]))?.array ?? []
+            var modules: [String: String] = [:]
+            for name in names {
+                modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
+            }
+            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge"]))
+        }
+        try check(capy_apple_finish_startup_cache(handle))
+        bundledFiltersLoaded = true
+        try publish()
     }
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
@@ -120,6 +133,7 @@ final class NativeOwner: @unchecked Sendable {
                 if result == 0 || now >= lastSnapshotTime + 33_000_000 {
                     try publish(); lastSnapshotTime = now
                 }
+                if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
                 completion(result == 1, capy_apple_camera_revision(handle), costs)
             } catch {
                 receive(nil, error.localizedDescription)

@@ -82,6 +82,75 @@ impl NativeHost {
         self.dirty = true;
         Ok(())
     }
+    /// Shared staged GPU lifecycle. Presenters submit the first paper frame
+    /// before passing `has_presented = true`; it must not consume document replay.
+    pub fn prepare_canvas_frame(
+        &mut self,
+        now: u64,
+        presentation: u64,
+        has_presented: bool,
+    ) -> Result<(), String> {
+        if has_presented || self.startup.complete {
+            let engine = self.session.engine();
+            let gpu = engine
+                .backend()
+                .0
+                .as_ref()
+                .ok_or("Missing native renderer")?;
+            if gpu.startup_needs_update(engine.document(), engine.brush()) {
+                let (document, brush) = (engine.document().clone(), engine.brush().clone());
+                self.session
+                    .renderer_mut()
+                    .0
+                    .as_mut()
+                    .unwrap()
+                    .prepare_startup(&document, &brush)
+                    .map_err(|e| e.to_string())?;
+            }
+            self.startup = self
+                .session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .unwrap()
+                .poll_startup()
+                .map_err(|e| e.to_string())?;
+            if self.startup.canvas_ready {
+                let previous = self.session.state().revision;
+                let change = self.session.frame(now, presentation)?;
+                self.dirty = change.canvas_wake;
+                self.apply_change(previous, change);
+            }
+        } else {
+            let view = self.session.state().camera.view();
+            let document = self.session.engine().document();
+            let extent = [document.width, document.height];
+            let layers: Vec<_> = document
+                .layers
+                .iter()
+                .filter(|l| l.kind == layer_core::LayerKind::Background)
+                .cloned()
+                .collect();
+            self.session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .ok_or("Missing native renderer")?
+                .submit(layer_render::FramePacket {
+                    time_seconds: 0.,
+                    view,
+                    document_extent: extent,
+                    layers: &layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: true,
+                    composite_all: true,
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        self.dirty |= !self.startup.complete;
+        Ok(())
+    }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
         let previous = self.session.state().revision;
         let change = self.session.dispatch(action)?;

@@ -46,6 +46,53 @@ impl App {
             .unwrap();
         app.host.apply_change(previous, change);
     }
+    fn stroke(&self) {
+        let revision = unsafe { capy_apple_camera_revision(self.0) };
+        let records = [
+            500.,
+            400.,
+            1.,
+            0.,
+            0.,
+            0.,
+            0.,
+            1_000_000_000.,
+            1.,
+            600.,
+            500.,
+            1.,
+            0.,
+            0.,
+            0.,
+            0.,
+            1_010_000_000.,
+            2.,
+            650.,
+            520.,
+            1.,
+            0.,
+            0.,
+            0.,
+            0.,
+            1_020_000_000.,
+            3.,
+        ];
+        assert_eq!(
+            unsafe {
+                capy_apple_pointer(
+                    self.0,
+                    1,
+                    1,
+                    0,
+                    records.as_ptr(),
+                    records.len(),
+                    0,
+                    revision,
+                )
+            },
+            0
+        );
+    }
     fn pixels(&self) -> Vec<u8> {
         let renderer = unsafe { &mut *self.0 }
             .host
@@ -112,42 +159,7 @@ fn apple_paint_undo_redo_restores_exact_document_pixels() {
         app.action(json!({"type": "set_brush_size", "value": 32}));
         app.draw_frame();
         let initial = app.pixels();
-        let revision = unsafe { capy_apple_camera_revision(app.0) };
-        let records = [
-            500.,
-            400.,
-            1.,
-            0.,
-            0.,
-            0.,
-            0.,
-            1_000_000_000.,
-            1.,
-            600.,
-            500.,
-            1.,
-            0.,
-            0.,
-            0.,
-            0.,
-            1_010_000_000.,
-            2.,
-            650.,
-            520.,
-            1.,
-            0.,
-            0.,
-            0.,
-            0.,
-            1_020_000_000.,
-            3.,
-        ];
-        assert_eq!(
-            unsafe {
-                capy_apple_pointer(app.0, 1, 1, 0, records.as_ptr(), records.len(), 0, revision)
-            },
-            0
-        );
+        app.stroke();
         app.draw_frame();
         let painted = app.pixels();
         assert!(painted != initial, "Pen-up must leave real document pixels");
@@ -162,6 +174,62 @@ fn apple_paint_undo_redo_restores_exact_document_pixels() {
         assert!(
             app.pixels() == painted,
             "Redo must reproduce the committed stroke exactly"
+        );
+    }
+}
+
+#[test]
+fn staged_paper_preserves_pending_ink_and_reaches_brush_readiness() {
+    use layer_render_wgpu::WgpuRasterizer;
+    use std::time::{Duration, Instant};
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let reference = WgpuRasterizer::new_headless().expect("Hardware GPU required");
+        let staged = WgpuRasterizer::from_wgpu_staged(
+            reference.adapter().clone(),
+            reference.device().clone(),
+            reference.queue().clone(),
+        )
+        .unwrap();
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(reference);
+        app.action(json!({"type": "set_color", "rgba": [0,0,0,1]}));
+        // Accepted engine work must survive the first paper-only submission.
+        app.stroke();
+        {
+            let host = &mut unsafe { &mut *app.0 }.host;
+            host.session.renderer_mut().0 = Some(staged);
+            host.startup = Default::default();
+            host.prepare_canvas_frame(2_000_000_000, 2_000_000_000, false)
+                .unwrap();
+            assert!(!host.startup.canvas_ready);
+            assert!(host.dirty, "Startup must keep the frame driver awake");
+        }
+        let paper = app.pixels();
+        app.action(json!({"type": "set_brush_opacity", "value": 0.4}));
+        assert!((app.state()["brush"]["opacity"].as_f64().unwrap() - 0.4).abs() < 0.00001);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let host = &mut unsafe { &mut *app.0 }.host;
+            host.prepare_canvas_frame(2_100_000_000, 2_100_000_000, true)
+                .unwrap();
+            if host.startup.brush_ready {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Staged brush readiness timed out"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            app.pixels() != paper,
+            "The initial paper frame must retain pending stroke work"
+        );
+        app.invoke("undo");
+        app.draw_frame();
+        assert!(
+            app.pixels() == paper,
+            "Replayed ink remains exactly undoable"
         );
     }
 }

@@ -116,17 +116,27 @@ milestone includes implementations and relevant evidence for both targets.
 
 The shared host extraction and navigation bridge have eight passing host tests and an Android ARM64
 compile check. The incoming figure/ruler/affine-transform and staged GPU startup
-changes have been integrated. The Apple shell currently uses eager GPU startup;
-startup responsiveness still needs validation on both Apple platforms.
+changes have been integrated. Apple and Android now share staged frame preparation:
+paper is submitted before consuming pending document replay; document and current
+brush dependencies precede remaining shaders. Apple uses private disposable shader
+caches and submits bundled filters after document readiness. Cold/warm startup
+responsiveness still needs hardware measurement on both Apple platforms.
 
-Two direct Apple bridge tests pass for both iPad and Mac configurations: session
+Three direct Apple bridge tests pass for both iPad and Mac configurations: session
 isolation through brush/zoom/settings actions, and real GPU document pixels after
-painting, pen-up, undo and redo. These exercise the same C ABI used by the editor.
+painting, pen-up, undo and redo, plus preservation of pending ink through staged
+paper/document/brush readiness. These exercise the same C ABI used by the editor
+and the shared staged frame preparation. Standalone checks of the actual Swift
+frame driver cover one queued frame, wakes during pending work, detached views
+staying asleep, and old completions not revealing replacement surfaces.
 They do not prove physical pen input or drawable presentation. Both native targets
 build; Mac ad-hoc and development signing work, and the updated iPad app is signed
 and installed. The native mouse-input test has passed; unsuccessful OS-menu click
 automation was removed because it targeted the wrong menu and added no useful
 editor coverage.
+The staged-startup iPad simulator launch/geometry check also passes and retains
+an unobstructed full-editor capture. Physical startup checks on both platforms
+remain open; build and headless GPU results do not close that gate.
 
 The inventory example (`cargo run -p layer-host --example inventory`) emits the
 current catalog, command list, initial workspace and settings views. Extend it
