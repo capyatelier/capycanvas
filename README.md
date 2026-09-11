@@ -112,6 +112,10 @@ floated, grouped in tabs or collapsed. Artists can choose toolbar contents and
 adjust control visibility and sizing. Tool Settings follows the active tool,
 and Properties shows the selected filter's parameters.
 
+To clear controls from the canvas without rearranging the workspace, we added
+Zen mode. It temporarily hides controls while keeping the canvas size and position
+fixed, so entering or leaving the mode does not shift the artwork under the pen.
+
 We keep this behavior in Rust. When a client receives a button press or a layout
 change, it sends a typed `UiAction` to `UiSession`, which owns the editor session.
 The session applies the action and reports which parts of the UI changed. Clients
@@ -120,8 +124,7 @@ edit. Buttons, menus and shortcuts use the same command definitions, so they
 agree on what a command does and when it is available.
 
 Workspace changes have their own undo history so moving a toolbar does not become
-another step in the painting history. Zen mode hides controls without resizing
-the canvas, keeping the drawing in place when the interface disappears.
+another step in the painting history.
 
 The [workspace guide](docs/ui/README.md) explains how the layout model and shared
 actions connect to native widgets.
