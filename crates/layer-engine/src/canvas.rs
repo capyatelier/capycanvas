@@ -88,6 +88,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     input: InputConsumer<PenEvent>,
     view: ViewState,
     transforms: VecDeque<ViewTransform>,
+    document_view_revision: u64,
     pressure: PressureCurve,
     brush: BrushSnapshot,
     tool: StrokeTool,
@@ -158,6 +159,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             rebuild_all: true,
             composite_all: true,
             animation_origin_ns: None,
+            document_view_revision: 0,
             metrics: EngineMetrics::default(),
         })
     }
@@ -533,6 +535,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         // canvas composition is document-space and remains reusable.
     }
 
+    /// Publish a prepared document into an existing editor. Preparation uses
+    /// its own clock/view; neither may leak into the interactive session.
+    pub fn start_document_view(&mut self, view: ViewState, input_transform: ViewTransform) {
+        self.transforms.clear();
+        self.document_view_revision = input_transform.revision;
+        self.animation_origin_ns = None;
+        self.set_view(view, input_transform);
+    }
+
     pub fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), B::Error> {
         self.view.width_px = width;
         self.view.height_px = height;
@@ -752,6 +763,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn process_event(&mut self, event: PenEvent) -> Result<(), EngineError<B::Error>> {
+        if event.view_revision < self.document_view_revision {
+            return Ok(());
+        }
         self.metrics.input_events = self.metrics.input_events.saturating_add(1);
         let mut transform = self
             .transforms
@@ -1586,6 +1600,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingRenderer {
+        time_seconds: f32,
         size: [u32; 2],
         persistent_dabs: usize,
         persistent: Vec<Dab>,
@@ -1623,6 +1638,7 @@ mod tests {
         fn release_asset(&mut self, _asset: &AssetId) {}
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+            self.time_seconds = packet.time_seconds;
             if self.size != [packet.view.width_px, packet.view.height_px] {
                 return Err(BackendError("surface size mismatch"));
             }
@@ -1667,6 +1683,37 @@ mod tests {
         fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
             None
         }
+    }
+
+    #[test]
+    fn document_adoption_restarts_animation_and_rejects_previous_view_input() {
+        let (mut input, consumer) = input_queue(32);
+        let mut canvas = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("adoption", 128, 128),
+            consumer,
+            view(128, 128),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        canvas.render_frame_at(0).unwrap();
+        canvas.start_document_view(
+            view(128, 128),
+            ViewTransform {
+                revision: 9,
+                ..ViewTransform::IDENTITY
+            },
+        );
+        input.push(event(1, PenPhase::Down, 20.)).unwrap();
+        input.push(event(2, PenPhase::Up, 40.)).unwrap();
+        canvas.render_frame_at(900_000_000_000).unwrap();
+        assert_eq!(canvas.backend().time_seconds, 0.);
+        assert_eq!(canvas.document().strokes().count(), 0);
+        canvas.render_frame_at(901_000_000_000).unwrap();
+        assert_eq!(canvas.backend().time_seconds, 1.);
     }
 
     #[test]

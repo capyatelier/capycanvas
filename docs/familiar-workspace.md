@@ -1556,3 +1556,10 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   visual/performance/user-approval gate still remain. The new eight-menu GTK
   presentation is not yet rolled out to the other hosts; shared Rust/Wasm builds
   remain compatible with their existing menu presentation.
+- Incoming Apple document-workflow changes are merged. Post-merge checks pass
+  41 core, 32 engine, 215 shared UI and 10 host tests, workspace/Wasm compilation,
+  strict UI/GTK Clippy and the native GTK document workflow. The two Apple Rust
+  bridge project-job tests also pass on Linux/Vulkan; this is not macOS/iPad UI
+  validation. Prepared/retired sessions are boxed on the file worker so adoption
+  returns a small ownership handle, including on failure, without moving a large
+  session through the error value or destroying GPU resources on the input queue.

@@ -18,6 +18,7 @@ final class MacCanvasView: NSView {
     private lazy var input = MacInput(view: self, store: store)
     private var tracking: NSTrackingArea?
     private var windowObservers: [NSObjectProtocol] = []
+    private lazy var documentDelegate = DocumentWindowDelegate(store: store)
     private var extent = CGSize.zero
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -43,6 +44,7 @@ final class MacCanvasView: NSView {
     required init?(coder: NSCoder) { fatalError("Use init(store:)") }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        documentDelegate.attach(window)
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
         if let window {

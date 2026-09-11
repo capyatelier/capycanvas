@@ -103,7 +103,7 @@ build is only build evidence.
 | 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. Physical Pencil, undo/redo and lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
 | 3. Complete input contract and bounded transport | Coalesced/predicted input foundation exists; corrections, sensors, palm/navigation, interruption and real Pencil evidence remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
-| 5. Document/settings/workspace persistence and lifecycle | Atomic settings and per-scene workspace persistence implemented; Simulator restart passes. Artwork save/reopen/recovery and full physical lifecycle matrix remain. | Same persistence; native restart and owner isolation pass. Artwork save/reopen/recovery and full window/display/sleep/memory-pressure matrix remain. |
+| 5. Document/settings/workspace persistence and lifecycle | Atomic settings and per-scene workspace persistence implemented; Simulator restart passes. Manual Save/Open and shared checkpoint policy pass direct checks; recovery, picker delivery and full physical lifecycle matrix remain. | Same persistence; native restart and owner isolation pass. Manual Save/Open and unsaved close pass direct checks; recovery and full window/display/sleep/memory-pressure matrix remain. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
 | 7. Hardware performance, sustained sessions and delivery | Shared opt-in CPU/GPU/actual-presentation trace and local analyzer implemented; physical startup/idle instrumentation checked. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. | Same shared instrumentation and startup/idle check; display maximum is 90 Hz. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. |
 
@@ -469,3 +469,36 @@ validation/compression scheduling and physical lifecycle/performance evidence
 remain open. In particular, retaining imported source bytes increases resident
 memory by four bytes per image pixel; archive snapshots share those bytes, but
 large-image memory peaks and storage latency still need measured acceptance.
+
+
+## Native file transport integration
+
+Apple now uses the document requests and undo-aware saved checkpoints introduced
+by the GTK port. Both targets implement manual New/Open/Save/Save As through the
+same Rust policy and shared Swift coordinator. Apple replaces the current editor
+after shared unsaved-change confirmation; native Mac close/quit uses the same
+Save/Discard/Cancel flow. Private atomic writes, cancellation boundaries, background
+validation/GPU preparation, stale-result rejection and previous-document input
+invalidation protect the live drawing. iPad Save As stages the archive before
+asking the native export picker for its destination. Multiple iPad scenes are
+enabled; their complete lifecycle behavior remains unverified.
+
+The consolidated shared regression run passes 311 tests: 41 core, 32 engine,
+214 UI, 10 host and 14 Apple. Actual Metal reopen pixels remain exact on both
+Apple platform configurations. New checks cover saved-state branches, replacement
+confirmation, animation clock reset, delayed input, cancellation, malformed input
+and preservation of edits made while a file task runs. The standalone Swift file
+checks cover real owner/coordinator effects with deterministic dialog choices;
+native picker interaction and provider delivery remain separate evidence.
+
+This is progress on persistence, not completion of that gate. Artwork autosave,
+recovery, canvas-size creation UI, Apple PNG export, provider conflicts and
+physical lifecycle/storage performance remain open. The existing full-image
+visual failures, complete feature inventory and sustained hardware targets are
+unchanged acceptance requirements. See [Apple persistence](../apps/layer-apple/PERSISTENCE.md).
+
+Both integrated signed builds pass. The merged iPad app installs and launches
+normally on the attached device, and the Mac app launches. The Swift staged-export
+and destination-first save checks pass, as do the settings/workspace regression
+checks and WebAssembly compilation. These are launch and direct-effect results;
+no new full-editor visual or sustained hardware acceptance is claimed.

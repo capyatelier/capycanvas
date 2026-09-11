@@ -4,6 +4,282 @@ use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
+struct ProjectJob(*mut CapyProjectTask);
+impl Drop for ProjectJob {
+    fn drop(&mut self) {
+        unsafe { capy_project_free(self.0) }
+    }
+}
+impl ProjectJob {
+    fn new(app: &App, opening: bool) -> Self {
+        if !opening {
+            let pending: Vec<_> = unsafe { &*app.0 }
+                .host
+                .session
+                .state()
+                .requests
+                .iter()
+                .filter(|r| matches!(r.kind, layer_ui::HostRequestKind::Document { .. }))
+                .map(|r| r.id)
+                .collect();
+            for id in pending {
+                assert_eq!(unsafe { capy_apple_document_complete(app.0, id, 0) }, 0);
+            }
+            app.invoke("save_document");
+        }
+        let task = unsafe { capy_apple_project_task(app.0, u32::from(opening)) };
+        assert!(!task.is_null());
+        Self(task)
+    }
+    fn error(&self) -> Option<String> {
+        let value = unsafe { capy_project_error(self.0) };
+        if value.is_null() {
+            None
+        } else {
+            let result = unsafe { CStr::from_ptr(value) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { capy_apple_string_free(value) };
+            Some(result)
+        }
+    }
+}
+
+#[test]
+fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
+    use std::io::{Read, Seek};
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    fn sendable<T: Send + Sync>() {}
+    sendable::<CapyProjectTask>();
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!(
+            "capy-project-{}-{}.capy",
+            std::process::id(),
+            platform
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let original_pixels = app.pixels();
+        let original = unsafe { &*app.0 }.host.session.engine().document().clone();
+        let save = ProjectJob::new(&app, false);
+        app.action(json!({"type":"set_layer_opacity","opacity":0.25}));
+        app.draw_frame();
+        let pointer = save.0 as usize;
+        let fd = file.as_raw_fd();
+        assert_eq!(
+            std::thread::spawn(move || unsafe {
+                capy_project_write(pointer as *const CapyProjectTask, fd)
+            })
+            .join()
+            .unwrap(),
+            0,
+            "{:?}",
+            save.error()
+        );
+        assert_eq!(unsafe { capy_project_begin_commit(save.0) }, 0);
+        let title = CString::new("Saved.capy").unwrap();
+        assert_eq!(
+            unsafe {
+                capy_apple_project_saved(
+                    app.0,
+                    save.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
+            0
+        );
+        assert_eq!(
+            app.state()["document_file"]["modified"],
+            true,
+            "A late save must not mark newer edits clean"
+        );
+        file.rewind().unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        let saved = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
+        assert_eq!(saved.document, original);
+        let stale = ProjectJob::new(&app, true);
+        file.rewind().unwrap();
+        let pointer = stale.0 as usize;
+        assert_eq!(
+            std::thread::spawn(move || unsafe {
+                capy_project_read(pointer as *const CapyProjectTask, fd)
+            })
+            .join()
+            .unwrap(),
+            0,
+            "{:?}",
+            stale.error()
+        );
+        app.action(json!({"type":"set_layer_opacity","opacity":0.5}));
+        app.draw_frame();
+        let changed = app.pixels();
+        assert_eq!(
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    stale.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
+            -1
+        );
+        app.draw_frame();
+        assert!(
+            app.pixels() == changed,
+            "Late open must preserve intervening edits"
+        );
+        let open = ProjectJob::new(&app, true);
+        file.rewind().unwrap();
+        let pointer = open.0 as usize;
+        assert_eq!(
+            std::thread::spawn(move || unsafe {
+                capy_project_read(pointer as *const CapyProjectTask, fd)
+            })
+            .join()
+            .unwrap(),
+            0,
+            "{:?}",
+            open.error()
+        );
+        let workspace = app.state()["workspace"].clone();
+        let old_view = unsafe { capy_apple_camera_revision(app.0) };
+        assert_eq!(
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    open.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
+            0
+        );
+        assert!(unsafe { capy_apple_camera_revision(app.0) } > old_view);
+        app.stroke_at(old_view);
+        app.draw_frame();
+        assert!(app.pixels() == original_pixels);
+        assert_eq!(app.state()["workspace"], workspace);
+        assert_eq!(app.state()["document_file"]["modified"], false);
+        assert_eq!(
+            app.state()["document_file"]["location"]["name"],
+            "Saved.capy"
+        );
+        assert_eq!(
+            unsafe {
+                capy_apple_project_saved(
+                    app.0,
+                    save.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
+            -1,
+            "Old save cannot name a replacement document"
+        );
+        let new = ProjectJob::new(&app, true);
+        assert_eq!(unsafe { capy_project_read(new.0, -1) }, 0);
+        let blank = CString::new("Untitled").unwrap();
+        assert_eq!(
+            unsafe { capy_apple_project_adopt(app.0, new.0, blank.as_ptr(), c"".as_ptr()) },
+            0
+        );
+        app.draw_frame();
+        assert!(app.pixels() != original_pixels);
+        assert_eq!(app.state()["document_file"]["modified"], false);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn project_cancellation_and_invalid_input_preserve_live_artwork() {
+    use std::io::{Seek, Write};
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    for platform in [0, 1] {
+        let path = std::env::temp_dir().join(format!(
+            "capy-project-failure-{}-{}.capy",
+            std::process::id(),
+            platform
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let before = app.pixels();
+        let save = ProjectJob::new(&app, false);
+        unsafe { capy_project_cancel(save.0) };
+        assert_eq!(unsafe { capy_project_write(save.0, file.as_raw_fd()) }, -1);
+        assert_eq!(file.metadata().unwrap().len(), 0);
+        assert_eq!(unsafe { capy_project_begin_commit(save.0) }, -1);
+        file.write_all(b"not a project").unwrap();
+        file.rewind().unwrap();
+        let open = ProjectJob::new(&app, true);
+        assert_eq!(unsafe { capy_project_read(open.0, file.as_raw_fd()) }, -1);
+        let title = CString::new("Broken.capy").unwrap();
+        assert_eq!(
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    open.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
+            -1
+        );
+        let cancelled = ProjectJob::new(&app, true);
+        assert_eq!(unsafe { capy_project_read(cancelled.0, -1) }, 0);
+        unsafe { capy_project_cancel(cancelled.0) };
+        assert_eq!(
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    cancelled.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
+            -1
+        );
+        app.draw_frame();
+        assert!(app.pixels() == before);
+        let committed = ProjectJob::new(&app, false);
+        assert_eq!(unsafe { capy_project_begin_commit(committed.0) }, 0);
+        unsafe { capy_project_cancel(committed.0) };
+        assert_eq!(
+            unsafe { capy_project_begin_commit(committed.0) },
+            0,
+            "Cancellation cannot retract publication"
+        );
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+}
 impl App {
     fn new(platform: u32) -> Self {
         let app = Self(capy_apple_create(platform));
@@ -56,6 +332,9 @@ impl App {
     }
     fn stroke(&self) {
         let revision = unsafe { capy_apple_camera_revision(self.0) };
+        self.stroke_at(revision);
+    }
+    fn stroke_at(&self, revision: u64) {
         let records = [
             500.,
             400.,
