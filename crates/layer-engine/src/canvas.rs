@@ -486,7 +486,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             reset_layers: rebuilt,
             composite_all: self.composite_all,
         };
-        let result = self.backend.submit(packet).map_err(EngineError::Backend);
+        let result = self
+            .backend
+            .set_selection_outline(self.editor.document().selection.as_ref())
+            .and_then(|_| self.backend.submit(packet))
+            .map_err(EngineError::Backend);
 
         self.dabs.clear();
         self.batches.clear();

@@ -33,7 +33,7 @@ mod settings;
 mod shortcuts;
 mod theme;
 mod workspace;
-pub use session::{LayerAction, LayerCanvasTool, LayersView};
+pub use session::{LayerAction, LayerCanvasTool, LayersView, RegionSource};
 mod stats;
 pub use session::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterLoadState, FilterPickerAction,
@@ -255,6 +255,8 @@ pub fn ui_catalog() -> UiCatalog {
             "hand",
             "eyedropper",
             "gradient",
+            "auto-select",
+            "fill",
             "rotate-left",
             "rotate-right",
             "flip-horizontal",
@@ -326,6 +328,8 @@ pub enum CommandId {
     Hand,
     Eyedropper,
     Gradient,
+    AutoSelect,
+    Fill,
     Undo,
     Redo,
     UndoWorkspace,
@@ -382,6 +386,8 @@ impl CommandId {
             Self::Hand => "hand",
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
+            Self::AutoSelect => "auto-select",
+            Self::Fill => "fill",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
             Self::FitCanvas => "fit",
@@ -400,7 +406,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 39] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -414,6 +420,8 @@ impl CommandId {
         Self::Hand,
         Self::Eyedropper,
         Self::Gradient,
+        Self::AutoSelect,
+        Self::Fill,
         Self::Undo,
         Self::Redo,
         Self::UndoWorkspace,
@@ -460,6 +468,8 @@ impl CommandId {
             Self::Hand => "Hand",
             Self::Eyedropper => "Eyedropper",
             Self::Gradient => "Gradient",
+            Self::AutoSelect => "Auto select",
+            Self::Fill => "Fill",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::UndoWorkspace => "Undo Workspace Change",

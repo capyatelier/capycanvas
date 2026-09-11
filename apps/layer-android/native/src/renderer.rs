@@ -12,6 +12,21 @@ impl Renderer {
     }
 }
 impl CanvasRenderer for Renderer {
+    fn request_region(
+        &mut self,
+        request: layer_render::RegionRequest,
+    ) -> Result<bool, Self::Error> {
+        self.gpu()?.request_region(request)
+    }
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+        self.0.as_mut()?.take_region()
+    }
+    fn set_selection_outline(
+        &mut self,
+        selection: Option<&layer_core::Selection>,
+    ) -> Result<(), Self::Error> {
+        self.gpu()?.set_selection_outline(selection)
+    }
     fn request_effect_validation(
         &mut self,
         request: layer_render::EffectValidationRequest,

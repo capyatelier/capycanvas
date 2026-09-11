@@ -24,12 +24,12 @@ mod canvas_preview;
 mod color_sample;
 mod effect_validation;
 mod effects;
-#[cfg(test)]
 mod flood;
 mod layer_masks;
 #[cfg(test)]
 mod layer_tests;
 mod present;
+mod region_requests;
 mod scene;
 mod selection_clip;
 mod telemetry;
@@ -568,6 +568,8 @@ pub struct WgpuRasterizer {
     paint_layers: Vec<PaintLayer>,
     layer_masks: layer_masks::MaskRenderer,
     selection_clip: selection_clip::SelectionClip,
+    display_selection: Option<(layer_core::Selection, wgpu::Buffer)>,
+    regions: Option<region_requests::RegionRequests>,
     unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
     thumbnails: thumbnails::Thumbnails,
@@ -578,6 +580,7 @@ pub struct WgpuRasterizer {
     effect_validation: Option<effect_validation::Pending>,
     validated_effects: Option<effects::Effects>,
     last_style_base: usize,
+    last_time_seconds: f32,
     filter_source_epoch: u64,
     images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
     composite_texture: Option<wgpu::Texture>,
@@ -809,12 +812,15 @@ impl WgpuRasterizer {
             document_extent: [0, 0],
             layer_masks,
             selection_clip,
+            display_selection: None,
+            regions: None,
             unclipped,
             scene: None,
             filter_previews: None,
             effect_validation: None,
             validated_effects: None,
             last_style_base: 0,
+            last_time_seconds: 0.,
             filter_source_epoch: 0,
             canvas_preview: canvas_preview::CanvasOverview::new(),
             color_sampler: color_sample::ColorSampler::new(),
@@ -1735,7 +1741,8 @@ impl WgpuRasterizer {
             .saturating_mul(SCALAR_PAGE_BYTES * 2)
             .saturating_add(material_surface_pages.saturating_mul(SCALAR_PAGE_BYTES))
             .saturating_add(RESERVOIR_BYTES)
-            .saturating_add(self.selection_clip.bytes);
+            .saturating_add(self.selection_clip.storage_bytes())
+            .saturating_add(self.regions.as_ref().map_or(0, |r| r.storage_bytes()));
         self.metrics.composite_storage_bytes =
             self.document_extent[0] as u64 * self.document_extent[1] as u64 * 4;
     }
@@ -2054,14 +2061,16 @@ impl WgpuRasterizer {
         style: &layer_render::DabStyle,
     ) -> Result<(), GpuRasterError> {
         if let Some(geometry) = &style.selection {
-            self.selection_clip.prepare(
-                &self.device,
-                encoder,
-                &self.target_layout,
-                &self.target_buffer,
-                self.document_extent,
-                geometry,
-            )?;
+            self.selection_clip
+                .prepare(&self.device, encoder, self.document_extent, geometry)?;
+            if self.selection_clip.binding.is_none() {
+                self.selection_clip.binding = Some(create_target_bind_group(
+                    &self.device,
+                    &self.target_layout,
+                    &self.target_buffer,
+                    self.selection_clip.buffer.as_ref().unwrap(),
+                ));
+            }
         }
         Ok(())
     }
@@ -3549,6 +3558,40 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn request_region(
+        &mut self,
+        request: layer_render::RegionRequest,
+    ) -> Result<bool, Self::Error> {
+        self.start_region(request)
+    }
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+        self.poll_region()
+    }
+    fn set_selection_outline(
+        &mut self,
+        selection: Option<&layer_core::Selection>,
+    ) -> Result<(), Self::Error> {
+        if let Some(selection) = selection
+            && let layer_core::SelectionShape::Pixels(pixels) = &selection.shape
+        {
+            if self
+                .display_selection
+                .as_ref()
+                .is_none_or(|(old, _)| old != selection)
+            {
+                if 32 + pixels.words().len() as u64 * 4
+                    > self.device.limits().max_storage_buffer_binding_size
+                {
+                    return Err(GpuRasterError::SizeOverflow);
+                }
+                let buffer = self.selection_clip.pixel_buffer(&self.device, pixels);
+                self.display_selection = Some((selection.clone(), buffer));
+            }
+        } else {
+            self.display_selection = None;
+        }
+        Ok(())
+    }
     fn set_telemetry_enabled(&mut self, enabled: bool) {
         self.telemetry.enabled = enabled;
     }
@@ -3692,6 +3735,7 @@ impl CanvasRenderer for WgpuRasterizer {
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
         self.last_style_base = packet.dab_batches.len();
+        self.last_time_seconds = packet.time_seconds;
         if packet.reset_layers
             || !packet.dabs.is_empty()
             || packet
@@ -3933,11 +3977,11 @@ impl CanvasRenderer for WgpuRasterizer {
         self.layer_masks.prepare(
             &self.device,
             &mut encoder,
-            packet.layers,
-            original_batches,
+            (packet.layers, original_batches),
             packet.document_extent,
             reset,
-        );
+            &mut self.selection_clip,
+        )?;
         for layer in packet.layers {
             let Some(index) = self.paint_layers.iter().position(|l| l.id == layer.id) else {
                 continue;

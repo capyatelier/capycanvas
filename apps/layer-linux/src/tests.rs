@@ -496,6 +496,169 @@ fn native_selected_brushes() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_connected_tools() {
+    let app = native_test_app("art.capycanvas.ConnectedTools");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .insert_tools(
+            Panel::Toolbar,
+            None,
+            &[
+                ToolbarControl::Command {
+                    command: CommandId::AutoSelect,
+                },
+                ToolbarControl::Command {
+                    command: CommandId::Fill,
+                },
+            ],
+        )
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    w.dispatch(UiAction::SelectBrush {
+        id: layer_core::DefaultBrushPreset::GPen as u32,
+    });
+    w.dispatch(UiAction::SetBrushSize { value: 18. });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.15, 0.15, 0.15, 1.],
+    });
+    native_pen_path(
+        &w,
+        &[
+            [750., 470.],
+            [1290., 470.],
+            [1290., 1060.],
+            [750., 1060.],
+            [750., 470.],
+        ],
+    );
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::AutoSelect,
+    });
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::ReferenceSelection,
+    });
+    let reference_source = state(&w).tool_set.subtools[2].action.clone();
+    w.dispatch(reference_source);
+    pump(100);
+    let tolerance = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-setting-tolerance",
+    )
+    .unwrap()
+    .downcast::<crate::number_control::NumberControl>()
+    .unwrap();
+    edit_number(&tolerance, "15");
+    native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
+    pump(350);
+    let selection = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .selection
+        .clone()
+        .expect("connected selection");
+    let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
+        panic!("raster selection")
+    };
+    let [x0, y0, x1, y1] = pixels.bounds();
+    assert!(
+        x0 > 750 && y0 > 470 && x1 < 1290 && y1 < 1060,
+        "{:?}",
+        pixels.bounds()
+    );
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(120);
+        capture_reference(&w, &format!("{dir}/region-selection-{theme:?}.png"), 1.);
+    }
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::AddLayer,
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::LowerLayer,
+    });
+    w.dispatch(UiAction::SetColor {
+        rgba: [0.1, 0.6, 0.8, 1.],
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Fill,
+    });
+    let reference_source = state(&w).tool_set.subtools[2].action.clone();
+    w.dispatch(reference_source);
+    native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
+    pump(250);
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .layers
+            .iter()
+            .map(|l| l.operations.len())
+            .sum::<usize>(),
+        1
+    );
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(120);
+        capture_reference(&w, &format!("{dir}/region-fill-{theme:?}.png"), 1.);
+    }
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    pump(100);
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .layers
+            .iter()
+            .map(|l| l.operations.len())
+            .sum::<usize>(),
+        0
+    );
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Redo,
+    });
+    pump(100);
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::Tool {
+            tool: LayerCanvasTool::PickLayer,
+        },
+    });
+    native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
+    assert!(
+        state(&w).colors.foreground[0] < 0.2 && state(&w).colors.foreground[2] > 0.75,
+        "{:?}",
+        state(&w).colors.foreground
+    );
+    w.window.close();
+    pump(50);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_gradient_tool() {
     let app = native_test_app("art.capycanvas.GradientTool");
     let w = Workspace::new(&app);
@@ -7177,7 +7340,8 @@ fn native_frame_pacing() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1500);
-    if std::env::var("LAYER_PACING_SELECTION").as_deref() == Ok("1") {
+    let selection = std::env::var("LAYER_PACING_SELECTION").unwrap_or_default();
+    if selection == "1" || selection == "pixels" {
         let points: Vec<_> = (0..=256)
             .map(|i| {
                 let a = i as f32 / 256. * std::f32::consts::TAU;
@@ -7188,6 +7352,37 @@ fn native_frame_pacing() {
             command: CommandId::Lasso,
         });
         native_pen_path(&w, &points);
+        if selection == "pixels" {
+            // Turn a painted enclosure into a real GPU-produced raster region.
+            // This includes the live presentation-outline path in pacing tests.
+            w.dispatch(UiAction::Layer {
+                action: LayerAction::Deselect,
+            });
+            w.dispatch(UiAction::SelectBrush {
+                id: DefaultBrushPreset::GPen as u32,
+            });
+            w.dispatch(UiAction::SetBrushSize { value: 12. });
+            native_pen_path(&w, &points);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::AutoSelect,
+            });
+            native_pen_path(&w, &[[1024., 768.], [1024., 768.]]);
+            pump(300);
+            assert!(matches!(
+                w.gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .engine()
+                    .document()
+                    .selection
+                    .as_ref()
+                    .unwrap()
+                    .shape,
+                layer_core::SelectionShape::Pixels(_)
+            ));
+        }
     }
     if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
         w.dispatch(UiAction::Customize {

@@ -80,6 +80,359 @@ fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
         .unwrap()
 }
 
+#[test]
+fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
+    use layer_render::{RegionRequest, RegionSource};
+    let receive = |r: &mut WgpuRasterizer| {
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            if let Some(result) = r.take_region() {
+                break result.unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "region callback timed out"
+            );
+            std::thread::yield_now();
+        }
+    };
+    let mut r = WgpuRasterizer::new().unwrap();
+    let asset = AssetId::from("test:closed-line");
+    let pixels: Vec<_> = (0..128 * 128)
+        .flat_map(|i| {
+            let (x, y) = (i % 128, i / 128);
+            if ((x == 16 || x == 112) && (16..=112).contains(&y))
+                || ((y == 16 || y == 112) && (16..=112).contains(&x))
+            {
+                [0, 0, 0, 255]
+            } else {
+                [0; 4]
+            }
+        })
+        .collect();
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: 128,
+            height: 128,
+            stride: 512,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &pixels,
+        },
+    )
+    .unwrap();
+    let mut line = Layer::paint(LayerId(1), "Line");
+    line.asset = Some(asset);
+    let mut fill = Layer::paint(LayerId(2), "Fill");
+    submit(&mut r, &[line.clone(), fill.clone()], &[], &[], true);
+    let request = RegionRequest {
+        request_id: 7,
+        source: RegionSource::Layer(line.id),
+        position: [64, 64],
+        tolerance: 0.,
+        limit: None,
+    };
+    assert!(r.request_region(request.clone()).unwrap());
+    assert!(!r.request_region(request).unwrap(), "single flight");
+    r.wait_idle().unwrap();
+    let result = receive(&mut r);
+    assert_eq!(result.request_id, 7);
+    assert_eq!(result.pixels.bounds(), [17, 17, 112, 112]);
+    assert!(!r.region_pending());
+    let selection = Selection::pixels(result.pixels.clone());
+    let original_buffer = r.selection_clip.pixel_buffer(&r.device, &result.pixels);
+    r.set_selection_outline(Some(&selection)).unwrap();
+    assert_eq!(
+        r.display_selection.as_ref().unwrap().1,
+        original_buffer,
+        "outline uses retained GPU output"
+    );
+    for inverse in [false, true] {
+        let mut selected = selection.translated(Point { x: -8., y: 4. });
+        selected.inverted = inverse;
+        let mut mask = LayerMask::reveal_all(LayerId(8), Point::default());
+        mask.default_coverage = f32::from(inverse);
+        mask.initial = Some(selected.clone());
+        fill.operations = vec![LayerOperation {
+            after_stroke: 0,
+            coverage: mask.clone(),
+            kind: LayerOperationKind::Fill {
+                color: [0., 0., 1., 1.],
+                alpha_locked: false,
+            },
+        }];
+        let operation = DabBatch {
+            kind: DabBatchKind::LayerOperation(0),
+            dab_count: 0,
+            ..batch(2)
+        };
+        submit(&mut r, &[fill.clone()], &[], &[operation], true);
+        let expected = r.readback_srgb_rgba8().unwrap();
+        for (x, y, inside) in [
+            (64, 64, true),
+            (9, 21, true),
+            (8, 20, false),
+            (103, 115, true),
+            (104, 116, false),
+        ] {
+            assert_eq!(
+                pixel(&mut r, x, y),
+                if inside != inverse {
+                    [0, 0, 255, 255]
+                } else {
+                    [0; 4]
+                },
+                "{x},{y}, inverse={inverse}"
+            );
+        }
+        // The same region clips a large brush and initializes a layer mask.
+        fill.operations.clear();
+        let mut brush = batch(2);
+        brush.style.selection = Some(std::sync::Arc::new(selected));
+        let mut d = dab([0., 0., 1., 1.]);
+        d.radii = [300.; 2];
+        submit(&mut r, &[fill.clone()], &[d], &[brush], true);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), expected);
+        fill.mask = Some(mask);
+        submit(&mut r, &[fill.clone()], &[d], &[batch(2)], true);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), expected);
+        fill.mask = None;
+    }
+    // Detection is constrained by an existing selection, including an empty
+    // answer when the seed lies outside its coverage.
+    submit(&mut r, &[line], &[], &[], true);
+    for (seed, bounds) in [([32, 64], [17, 17, 64, 112]), ([80, 64], [0; 4])] {
+        assert!(
+            r.request_region(RegionRequest {
+                request_id: 8,
+                source: RegionSource::Composite,
+                position: seed,
+                tolerance: 0.,
+                limit: left_mask(9).initial.map(std::sync::Arc::new)
+            })
+            .unwrap()
+        );
+        r.wait_idle().unwrap();
+        assert_eq!(receive(&mut r).pixels.bounds(), bounds);
+    }
+    assert_eq!(
+        result.pixels.bounds(),
+        [17, 17, 112, 112],
+        "later detection never rewrites history"
+    );
+}
+
+#[test]
+fn reference_regions_match_isolated_composition_without_changing_visible_canvas() {
+    use layer_core::{Document, EffectInstance};
+    use layer_render::{RegionRequest, RegionSource};
+    use std::sync::Arc;
+    let mut r = WgpuRasterizer::new().unwrap();
+    let receive = |r: &mut WgpuRasterizer| {
+        let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+        loop {
+            if let Some(result) = r.take_region() {
+                break result.unwrap();
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
+    let mut doc = Document::new("reference test", 128, 128);
+    let mut group = Layer::paint(LayerId(10), "Group");
+    group.kind = LayerKind::Group;
+    group.properties.offset = Point { x: 8., y: 4. };
+    let mut line = Layer::paint(LayerId(11), "Reference");
+    line.properties.parent = Some(group.id);
+    line.mask = Some(left_mask(20));
+    let mut filter = Layer::paint(LayerId(12), "Blur");
+    filter.kind = LayerKind::Effect;
+    filter.properties.parent = Some(group.id);
+    filter.properties.clipped = true;
+    filter.effect = Some(Arc::new(EffectInstance::new(
+        crate::tests::fixture("gaussian_blur").program(),
+    )));
+    let unrelated = Layer::paint(LayerId(13), "Unrelated");
+    let mut dabs = [dab([0.4, 0.1, 0.8, 1.]), dab([0., 1., 0., 1.])];
+    dabs[1].radii = [300.; 2];
+    let batches = [
+        batch(11),
+        DabBatch {
+            first_dab: 1,
+            ..batch(13)
+        },
+    ];
+    doc.layers = vec![group, filter, line, unrelated];
+    doc.reference_layers.insert(LayerId(11));
+    for filtered in [false, true] {
+        doc.layers[1].visible = filtered;
+        let refs = doc.reference_snapshot();
+        // Oracle: normal canvas composition of exactly the reference snapshot.
+        submit(&mut r, &refs, &dabs, &batches, true);
+        assert!(
+            r.request_region(RegionRequest {
+                request_id: 1,
+                source: RegionSource::Composite,
+                position: [40, 64],
+                tolerance: 0.1,
+                limit: None
+            })
+            .unwrap()
+        );
+        let expected = receive(&mut r);
+        assert!(
+            expected.pixels.bounds()[2] <= 80,
+            "reference mask constrains coverage"
+        );
+        // A different visible scene has independent cached input boundaries.
+        submit(&mut r, &doc.layers, &dabs, &batches, true);
+        let before = r.readback_srgb_rgba8().unwrap();
+        assert!(
+            r.request_region(RegionRequest {
+                request_id: 2,
+                source: RegionSource::Layers(refs),
+                position: [40, 64],
+                tolerance: 0.1,
+                limit: None
+            })
+            .unwrap()
+        );
+        let actual = receive(&mut r);
+        assert_eq!(actual.pixels, expected.pixels, "filtered={filtered}");
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            before,
+            "capture never replaces live composition"
+        );
+    }
+}
+
+#[test]
+#[ignore = "hardware GPU complete region request benchmark; release, serial"]
+fn region_request_latency() {
+    use layer_render::{RegionRequest, RegionSource, TimingSamples};
+    let mut r = WgpuRasterizer::new().unwrap();
+    let extent = [2048, 1536];
+    let asset = AssetId::from("test:region-benchmark");
+    let pixels: Vec<_> = (0..extent[0] * extent[1])
+        .flat_map(|i| {
+            let (x, y) = (i % extent[0], i / extent[0]);
+            if x % 200 == 100 || y % 150 == 75 {
+                [0, 0, 0, 255]
+            } else {
+                [0; 4]
+            }
+        })
+        .collect();
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: extent[0],
+            height: extent[1],
+            stride: extent[0] * 4,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &pixels,
+        },
+    )
+    .unwrap();
+    let mut line = Layer::paint(LayerId(1), "Line");
+    line.asset = Some(asset);
+    let layers = [line];
+    let view = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    r.resize_surface(extent[0], extent[1]).unwrap();
+    r.submit(FramePacket {
+        view,
+        document_extent: extent,
+        layers: &layers,
+        dabs: &[],
+        dab_batches: &[],
+        time_seconds: 0.,
+        reset_layers: true,
+        composite_all: true,
+    })
+    .unwrap();
+    r.wait_idle().unwrap();
+    for (name, source) in [
+        ("visible", RegionSource::Composite),
+        ("raw layer", RegionSource::Layer(LayerId(1))),
+        (
+            "references",
+            RegionSource::Layers(layers.iter().map(Layer::composite_snapshot).collect()),
+        ),
+    ] {
+        let mut cpu = TimingSamples::default();
+        let mut complete = TimingSamples::default();
+        for i in 0..150 {
+            let start = std::time::Instant::now();
+            assert!(
+                r.request_region(RegionRequest {
+                    request_id: i,
+                    source: source.clone(),
+                    position: [48, 48],
+                    tolerance: 0.1,
+                    limit: None
+                })
+                .unwrap()
+            );
+            cpu.push(start.elapsed().as_secs_f32() * 1000.);
+            r.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(READBACK_TIMEOUT),
+                })
+                .unwrap();
+            loop {
+                if let Some(result) = r.take_region() {
+                    assert_eq!(result.unwrap().pixels.bounds(), [0, 0, 100, 75]);
+                    break;
+                }
+                assert!(start.elapsed() < READBACK_TIMEOUT);
+                std::thread::yield_now();
+            }
+            complete.push(start.elapsed().as_secs_f32() * 1000.);
+            if i == 0 {
+                eprintln!(
+                    "{name} cold complete {:.3}ms",
+                    start.elapsed().as_secs_f32() * 1000.
+                );
+                let mut t = telemetry::Telemetry::new(&r.device, &r.queue);
+                t.enabled = true;
+                r.regions.as_mut().unwrap().timing = Some(t);
+            }
+        }
+        let gpu = r
+            .regions
+            .as_ref()
+            .unwrap()
+            .timing
+            .as_ref()
+            .unwrap()
+            .snapshot()
+            .gpu;
+        for (label, samples) in [
+            ("CPU", cpu),
+            ("GPU", gpu),
+            ("Completed incl. history", complete),
+        ] {
+            let mut values = samples.ordered();
+            values.sort_by(f32::total_cmp);
+            assert_eq!(values.len(), 120);
+            eprintln!(
+                "{name} {label} median/p95/p99 {:.3}/{:.3}/{:.3}ms",
+                values[59], values[113], values[118]
+            );
+        }
+        eprintln!(
+            "{name} resident query buffers {} bytes",
+            r.regions.as_ref().unwrap().storage_bytes()
+        );
+    }
+}
+
 // Inspect persistent pigment/wetness independently of layer-level effects.
 // This is test-only readback, never a drawing or selection raster path.
 fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
@@ -461,7 +814,9 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
         Point { x: 1910., y: 10. },
     ])
     .unwrap();
-    outside.contours = vec![outside.contours[0].clone(), hole.contours[0].clone()].into();
+    outside.shape = layer_core::SelectionShape::Contours(
+        vec![outside.contours()[0].clone(), hole.contours()[0].clone()].into(),
+    );
     let render = |r: &mut WgpuRasterizer, layer: &Layer, brush: &DabBatch| {
         let mut d = dab([1.; 4]);
         d.center = Point { x: 1024., y: 64. };

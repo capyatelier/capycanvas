@@ -945,6 +945,28 @@ impl Scene {
         Ok(())
     }
 
+    /// Explicit source capture, with independent caches for the caller's
+    /// layer projection. Reuse ordinary groups, masks, effects and tile jobs.
+    pub fn capture(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        packet: FramePacket<'_>,
+        destination: &wgpu::Texture,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<(), GpuRasterError> {
+        self.begin_frame();
+        self.style_base = r.last_style_base;
+        self.effects.retain(packet.layers);
+        self.update_images(r, packet, PixelRect::full(packet.document_extent), encoder)?;
+        self.jobs.clear();
+        self.used.fill(false);
+        for tile in page_coordinates(PixelRect::full(packet.document_extent)) {
+            let output = self.group(r, packet, None, tile)?;
+            self.copy_tile(output, destination, tile, packet.document_extent);
+        }
+        self.encode_jobs(r, encoder)
+    }
+
     pub fn compose(
         &mut self,
         r: &mut WgpuRasterizer,

@@ -5,6 +5,49 @@ use super::*;
 mod organization_tests {
     use super::*;
     #[test]
+    fn references_preserve_objects_and_ancestors_not_unrelated_siblings() {
+        let mut doc = Document::new("references", 128, 128);
+        let mut group = Layer::paint(LayerId(10), "Group");
+        group.kind = LayerKind::Group;
+        group.properties.offset = Point { x: 5., y: 8. };
+        let mut line = Layer::paint(LayerId(11), "Line");
+        line.properties.parent = Some(group.id);
+        let mut clip = line.clone();
+        clip.id = LayerId(12);
+        clip.properties.clipped = true;
+        let mut unrelated = line.clone();
+        unrelated.id = LayerId(13);
+        doc.layers.splice(0..0, [group, clip, line, unrelated]);
+        let visible = |doc: &Document| {
+            doc.reference_snapshot()
+                .iter()
+                .filter(|l| l.visible)
+                .map(|l| l.id.0)
+                .collect::<Vec<_>>()
+        };
+        assert!(visible(&doc).is_empty());
+        for id in [11, 12] {
+            doc.reference_layers = [LayerId(id)].into();
+            assert_eq!(visible(&doc), [10, 12, 11]);
+            let snapshot = doc.reference_snapshot();
+            assert_eq!(snapshot[0].properties, doc.layers[0].properties);
+            assert!(
+                snapshot
+                    .iter()
+                    .map(|l| l.id)
+                    .eq(doc.layers.iter().map(|l| l.id))
+            );
+        }
+        doc.reference_layers = [LayerId(10)].into();
+        assert_eq!(visible(&doc), [10, 12, 11, 13]);
+        doc.layers[0].visible = false;
+        assert!(
+            !doc.reference_snapshot()[0].visible,
+            "hidden ancestors remain hidden"
+        );
+    }
+
+    #[test]
     fn clipping_stack_top_respects_siblings_and_hidden_members() {
         let mut doc = Document::new("stack", 100, 100);
         let mut group = Layer::paint(LayerId(7), "Group");
@@ -177,11 +220,63 @@ pub struct LayerProperties {
     pub blend: LayerBlend,
 }
 
-/// Polygon selection: even/odd interiors support holes and disjoint islands.
-/// Coordinates remain geometry; rasterization and antialiasing are GPU work.
+/// Immutable coverage survives subsequent edits, undo and renderer recreation.
+/// Each row contains ceil(width / 8) words, with eight 0..4 coverage nibbles.
+/// Pixels are produced by the GPU; this type validates and retains their data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionPixels {
+    extent: [u32; 2],
+    bounds: [u32; 4],
+    words: Arc<[u32]>,
+}
+impl SelectionPixels {
+    pub fn new(
+        extent: [u32; 2],
+        bounds: [u32; 4],
+        words: impl Into<Arc<[u32]>>,
+    ) -> Result<Self, DocumentError> {
+        let words = words.into();
+        let [w, h] = extent;
+        let [x0, y0, x1, y1] = bounds;
+        if w == 0 || h == 0 || x0 > x1 || y0 > y1 || x1 > w || y1 > h
+            || u64::from(w.div_ceil(8)) * u64::from(h) != words.len() as u64
+            // Reject values >4 with eight parallel nibble comparisons.
+            || words.iter().any(|v| v & 0x88888888 != 0 || ((v >> 2) & (v | (v >> 1)) & 0x11111111) != 0)
+        {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Invalid selection coverage",
+            ));
+        }
+        Ok(Self {
+            extent,
+            bounds,
+            words,
+        })
+    }
+    pub fn extent(&self) -> [u32; 2] {
+        self.extent
+    }
+    pub fn bounds(&self) -> [u32; 4] {
+        self.bounds
+    }
+    pub fn words(&self) -> &[u32] {
+        &self.words
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SelectionShape {
+    /// Even/odd interiors support holes and disjoint islands.
+    Contours(Arc<[Arc<[Point]>]>),
+    Pixels(Arc<SelectionPixels>),
+}
+
+/// Geometry or immutable GPU-produced coverage. Translation and inversion are
+/// metadata, so layer-local stroke snapshots never duplicate a selection image.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
-    pub contours: Arc<[Arc<[Point]>]>,
+    pub shape: SelectionShape,
+    pub offset: Point,
     pub inverted: bool,
 }
 impl Selection {
@@ -192,31 +287,129 @@ impl Selection {
             ));
         }
         Ok(Self {
-            contours: vec![points.into()].into(),
+            shape: SelectionShape::Contours(vec![points.into()].into()),
+            offset: Point::default(),
             inverted: false,
         })
     }
-    pub fn translated(&self, delta: Point) -> Self {
-        if delta == Point::default() {
-            return self.clone();
-        }
+    pub fn pixels(pixels: Arc<SelectionPixels>) -> Self {
         Self {
-            contours: self
-                .contours
-                .iter()
-                .map(|path| {
-                    path.iter()
-                        .map(|p| Point {
-                            x: p.x + delta.x,
-                            y: p.y + delta.y,
-                        })
-                        .collect::<Vec<_>>()
-                        .into()
-                })
-                .collect::<Vec<_>>()
-                .into(),
+            shape: SelectionShape::Pixels(pixels),
+            offset: Point::default(),
+            inverted: false,
+        }
+    }
+    pub fn contours(&self) -> &[Arc<[Point]>] {
+        match &self.shape {
+            SelectionShape::Contours(paths) => paths,
+            SelectionShape::Pixels(_) => &[],
+        }
+    }
+    /// Conservative local bounds, including one pixel for boundary sampling.
+    pub fn bounds(&self) -> Rect {
+        let mut bounds = Rect::EMPTY;
+        match &self.shape {
+            SelectionShape::Contours(paths) => {
+                for p in paths.iter().flat_map(|c| c.iter()) {
+                    bounds.include_circle(*p, 1.);
+                }
+            }
+            SelectionShape::Pixels(pixels) => {
+                let [x0, y0, x1, y1] = pixels.bounds;
+                if x0 != x1 && y0 != y1 {
+                    bounds.include_circle(
+                        Point {
+                            x: x0 as f32,
+                            y: y0 as f32,
+                        },
+                        1.,
+                    );
+                    bounds.include_circle(
+                        Point {
+                            x: x1 as f32,
+                            y: y1 as f32,
+                        },
+                        1.,
+                    );
+                }
+            }
+        }
+        bounds.min.x += self.offset.x;
+        bounds.min.y += self.offset.y;
+        bounds.max.x += self.offset.x;
+        bounds.max.y += self.offset.y;
+        bounds
+    }
+    pub fn translated(&self, delta: Point) -> Self {
+        Self {
+            shape: self.shape.clone(),
+            offset: Point {
+                x: self.offset.x + delta.x,
+                y: self.offset.y + delta.y,
+            },
             inverted: self.inverted,
         }
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    #[test]
+    fn packed_coverage_validation_checks_all_nibbles_and_dimensions() {
+        for value in 0..16 {
+            for shift in (0..32).step_by(4) {
+                assert_eq!(
+                    SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![value << shift]).is_ok(),
+                    value <= 4
+                );
+            }
+        }
+        for (extent, bounds, words) in [
+            ([0, 1], [0, 0, 0, 1], vec![]),
+            ([9, 1], [0, 0, 9, 1], vec![0]),
+            ([1, 1], [0, 0, 2, 1], vec![0]),
+            ([1, 1], [1, 0, 0, 1], vec![0]),
+            ([u32::MAX, u32::MAX], [0, 0, 1, 1], vec![0]),
+        ] {
+            assert!(SelectionPixels::new(extent, bounds, words).is_err());
+        }
+    }
+    #[test]
+    fn translating_and_inverting_share_immutable_selection_storage() {
+        let pixels = Arc::new(SelectionPixels::new([8, 1], [2, 0, 4, 1], vec![0x4400]).unwrap());
+        let original = Selection::pixels(pixels.clone());
+        let mut moved = original.translated(Point { x: -2., y: 7.5 });
+        moved.inverted = true;
+        let SelectionShape::Pixels(shared) = &moved.shape else {
+            panic!("pixels")
+        };
+        assert!(Arc::ptr_eq(shared, &pixels));
+        assert!(!original.inverted);
+        assert_eq!(original.offset, Point::default());
+        assert_eq!(
+            moved.bounds(),
+            Rect {
+                min: Point { x: -1., y: 6.5 },
+                max: Point { x: 3., y: 9.5 }
+            }
+        );
+
+        let polygon = Selection::polygon(vec![
+            Point { x: 1., y: 1. },
+            Point { x: 5., y: 1. },
+            Point { x: 5., y: 5. },
+        ])
+        .unwrap();
+        let moved = polygon.translated(Point { x: 10., y: -4. });
+        assert!(Arc::ptr_eq(&polygon.contours()[0], &moved.contours()[0]));
+        assert_eq!(
+            moved.bounds(),
+            Rect {
+                min: Point { x: 10., y: -4. },
+                max: Point { x: 16., y: 2. }
+            }
+        );
     }
 }
 
@@ -269,17 +462,7 @@ impl LayerOperation {
             && let Some(selection) = &self.coverage.initial
             && !selection.inverted
         {
-            let mut bounds = Rect::EMPTY;
-            for p in selection.contours.iter().flat_map(|c| c.iter()) {
-                bounds.include_circle(
-                    Point {
-                        x: p.x + self.coverage.offset.x,
-                        y: p.y + self.coverage.offset.y,
-                    },
-                    1.0,
-                );
-            }
-            return bounds;
+            return selection.translated(self.coverage.offset).bounds();
         }
         Rect {
             min: Point::default(),
@@ -334,6 +517,69 @@ impl LayerMask {
 }
 
 impl Document {
+    /// Compose reference objects without unrelated artwork. A clipping stack
+    /// is one object; a referenced adjustment also needs its input siblings.
+    /// Keep original indices for renderer style records, and ancestor groups
+    /// for their transforms/masks without including their unrelated children.
+    pub fn reference_snapshot(&self) -> Vec<Layer> {
+        let mut members = self.reference_layers.clone();
+        loop {
+            let before = members.len();
+            members = self.layer_subtrees(&members.iter().copied().collect::<Vec<_>>());
+            for (i, layer) in self.layers.iter().enumerate() {
+                if !members.contains(&layer.id) {
+                    continue;
+                }
+                let base = if layer.properties.clipped {
+                    self.clipping_base(layer.id).unwrap_or(layer.id)
+                } else {
+                    layer.id
+                };
+                members.insert(base);
+                let base_index = self.layers.iter().position(|l| l.id == base).unwrap();
+                members.extend(
+                    self.layers[..base_index]
+                        .iter()
+                        .rev()
+                        .filter(|l| l.properties.parent == layer.properties.parent)
+                        .take_while(|l| l.properties.clipped)
+                        .map(|l| l.id),
+                );
+                if layer
+                    .effect
+                    .as_ref()
+                    .is_some_and(|e| e.program.kind == EffectKind::Adjustment)
+                    && !layer.properties.clipped
+                {
+                    members.extend(
+                        self.layers[i + 1..]
+                            .iter()
+                            .filter(|l| l.properties.parent == layer.properties.parent)
+                            .map(|l| l.id),
+                    );
+                }
+            }
+            if members.len() == before {
+                break;
+            }
+        }
+        for id in members.iter().copied().collect::<Vec<_>>() {
+            let mut parent = self.layer(id).and_then(|l| l.properties.parent);
+            while let Some(id) = parent {
+                members.insert(id);
+                parent = self.layer(id).and_then(|l| l.properties.parent);
+            }
+        }
+        self.layers
+            .iter()
+            .map(|layer| {
+                let mut snapshot = layer.composite_snapshot();
+                snapshot.visible &= members.contains(&layer.id);
+                snapshot
+            })
+            .collect()
+    }
+
     /// Normalize selection so a selected parent owns its descendants once.
     pub fn layer_roots(&self, selected: &std::collections::BTreeSet<LayerId>) -> Vec<LayerId> {
         self.ordered_layers()

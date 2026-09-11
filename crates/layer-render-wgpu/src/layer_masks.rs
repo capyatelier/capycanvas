@@ -12,6 +12,7 @@ pub(super) struct MaskRenderer {
     brush: [wgpu::RenderPipeline; 4],
     initialize: wgpu::RenderPipeline,
     init_layout: wgpu::BindGroupLayout,
+    empty_selection: wgpu::Buffer,
 }
 impl MaskRenderer {
     pub fn new(
@@ -93,7 +94,7 @@ impl MaskRenderer {
             label: Some("polygon selection coverage"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                 include_str!("selection.wgsl"),
-                include_str!("selection_geometry.wgsl"),
+                &include_str!("selection_clip.wgsl").replace("@group(1)", "@group(0)"),
             ])),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -116,6 +117,12 @@ impl MaskRenderer {
             brush,
             initialize,
             init_layout,
+            empty_selection: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("empty mask selection"),
+                size: 48,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }),
         }
     }
     pub fn is_mask(layers: &[Layer], id: LayerId) -> bool {
@@ -132,11 +139,12 @@ impl MaskRenderer {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        layers: &[Layer],
-        batches: &[DabBatch],
+        inputs: (&[Layer], &[DabBatch]),
         extent: [u32; 2],
         reset: bool,
-    ) {
+        selections: &mut selection_clip::SelectionClip,
+    ) -> Result<(), GpuRasterError> {
+        let (layers, batches) = inputs;
         if reset {
             self.pages.clear();
         }
@@ -157,16 +165,13 @@ impl MaskRenderer {
         }) {
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
-                let mut bounds = layer_core::Rect::EMPTY;
-                for p in selection.contours.iter().flat_map(|p| p.iter()) {
-                    bounds.include_circle(*p, 1.0);
-                }
-                needed.extend(page_coordinates(pixel_rect(bounds, extent)));
+                needed.extend(page_coordinates(pixel_rect(selection.bounds(), extent)));
             }
             for batch in batches.iter().filter(|b| b.layer_id == mask.id) {
                 needed.extend(page_coordinates(batch_pixel_rect(batch, extent)));
             }
-            // Geometry is uploaded once for a mask initialization, not on each dab.
+            // Initialize only missing pages. Polygon and connected-region masks
+            // consume the same packed coverage used by brush clipping.
             let missing: Vec<_> = needed
                 .into_iter()
                 .filter(|c| !self.pages.contains_key(&(mask.id, *c)))
@@ -174,28 +179,19 @@ impl MaskRenderer {
             if missing.is_empty() {
                 continue;
             }
-            let mut edges = Vec::<f32>::new();
             if let Some(selection) = &mask.initial {
-                for path in selection.contours.iter() {
-                    for (a, b) in path
-                        .iter()
-                        .zip(path.iter().cycle().skip(1))
-                        .take(path.len())
-                    {
-                        edges.extend([a.x, a.y, b.x, b.y]);
-                    }
-                }
+                selections.prepare(
+                    device,
+                    encoder,
+                    extent,
+                    &std::sync::Arc::new(selection.clone()),
+                )?;
             }
-            let count = edges.len() / 4;
-            if edges.is_empty() {
-                edges.resize(4, 0.0);
-            }
-            let edge_data: Vec<u8> = edges.iter().flat_map(|v| v.to_ne_bytes()).collect();
-            let edges = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("mask selection edges"),
-                contents: &edge_data,
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+            let coverage = if mask.initial.is_some() {
+                selections.buffer.as_ref().unwrap()
+            } else {
+                &self.empty_selection
+            };
             for coordinate in missing {
                 let texture = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("sparse layer mask R8 page"),
@@ -217,10 +213,8 @@ impl MaskRenderer {
                 let data = [
                     coordinate[0] as f32 * PAGE_SIZE as f32,
                     coordinate[1] as f32 * PAGE_SIZE as f32,
-                    count as f32,
-                    mask.initial
-                        .as_ref()
-                        .map_or(mask.default_coverage, |s| f32::from(s.inverted)),
+                    f32::from(mask.initial.is_some()),
+                    mask.default_coverage,
                 ];
                 let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
                 let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -238,7 +232,7 @@ impl MaskRenderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: edges.as_entire_binding(),
+                            resource: coverage.as_entire_binding(),
                         },
                     ],
                 });
@@ -265,6 +259,7 @@ impl MaskRenderer {
                 self.pages.insert((mask.id, coordinate), MaskPage { view });
             }
         }
+        Ok(())
     }
 }
 

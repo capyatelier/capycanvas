@@ -15,10 +15,22 @@ pub enum LayerCanvasTool {
     Hand,
     PickVisible,
     PickLayer,
+    Region {
+        fill: bool,
+        source: RegionSource,
+    },
     Gradient {
         radial: bool,
         transparent: bool,
     },
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegionSource {
+    #[default]
+    Visible,
+    Editing,
+    Reference,
 }
 impl LayerCanvasTool {
     pub fn picks_color(self) -> bool {
@@ -554,6 +566,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if let LayerCanvasTool::Region { fill, source } = tool {
+                    self.region_tools.source[usize::from(fill)] = source;
+                }
                 if let LayerCanvasTool::Gradient {
                     radial,
                     transparent,
@@ -1444,8 +1459,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
+        let region = self.region_tools.cancellable();
+        self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
-            return Ok(false);
+            return Ok(region);
         }
         if let Some(original) = self.layer_interaction.original.take() {
             self.engine
@@ -1457,21 +1474,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(true)
     }
 
-    fn fill_selection(&mut self, selection: Selection) -> Result<(), String> {
+    pub(super) fn fill_selection(&mut self, selection: Selection) -> Result<(), String> {
+        self.paint_operation(Some(selection), self.fill_operation())
+    }
+
+    pub(super) fn fill_operation(&self) -> layer_core::LayerOperationKind {
         let brush = self.engine.brush();
         let mut color = brush.color_rgba_linear;
         color[3] *= brush.opacity;
-        self.paint_operation(
-            Some(selection),
-            layer_core::LayerOperationKind::Fill {
-                color,
-                alpha_locked: self
-                    .engine
-                    .document()
-                    .layer(self.engine.document().active_layer)
-                    .is_some_and(|l| l.properties.alpha_locked),
-            },
-        )
+        layer_core::LayerOperationKind::Fill {
+            color,
+            alpha_locked: self
+                .engine
+                .document()
+                .layer(self.engine.document().active_layer)
+                .is_some_and(|l| l.properties.alpha_locked),
+        }
     }
 
     fn gradient_fill(
@@ -1517,7 +1535,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.paint_operation(doc.selection.clone(), kind)
     }
 
-    fn paint_operation(
+    pub(super) fn paint_operation(
         &mut self,
         selection: Option<Selection>,
         kind: layer_core::LayerOperationKind,
@@ -1561,7 +1579,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (matrix[1] * p.x + matrix[3] * p.y + matrix[5]) / scale,
             ]
         };
-        let mut path = |points: &[Point], closed: bool| {
+        let mut path = |points: &[Point], closed: bool, offset: Point| {
             let mut distance = 0.;
             for (a, b) in points
                 .iter()
@@ -1572,8 +1590,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     points.len().saturating_sub(1)
                 })
             {
-                let from = transform(*a);
-                let to = transform(*b);
+                let from = transform(Point {
+                    x: a.x + offset.x,
+                    y: a.y + offset.y,
+                });
+                let to = transform(Point {
+                    x: b.x + offset.x,
+                    y: b.y + offset.y,
+                });
                 segments.push(layer_render::CursorSegment {
                     from,
                     to,
@@ -1585,15 +1609,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(selection) = &self.engine.document().selection {
-            for contour in selection.contours.iter() {
-                path(contour, true);
+            for contour in selection.contours() {
+                path(contour, true, selection.offset);
             }
         }
         if matches!(
             self.layer_interaction.tool,
             LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }
         ) {
-            path(&self.layer_interaction.path, false);
+            path(&self.layer_interaction.path, false, Point::default());
         }
     }
 }

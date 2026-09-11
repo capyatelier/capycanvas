@@ -1,18 +1,23 @@
 //! One reusable, GPU-generated selection. Four coverage samples fit in a nibble;
 //! the buffer uses half a byte per pixel without consuming a brush texture slot.
 use super::*;
-use std::sync::Arc;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+};
 use wgpu::util::DeviceExt;
 
 pub(super) struct SelectionClip {
     crossings: wgpu::ComputePipeline,
     fill: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
-    buffer: Option<wgpu::Buffer>,
+    pub buffer: Option<wgpu::Buffer>,
     pub binding: Option<wgpu::BindGroup>,
     geometry: Option<Arc<layer_core::Selection>>,
     pub generations: u64,
     pub bytes: u64,
+    pixels: BTreeMap<usize, (Weak<layer_core::SelectionPixels>, wgpu::Buffer)>,
+    pixels_bytes: u64,
 }
 impl SelectionClip {
     pub fn new(device: &wgpu::Device) -> Self {
@@ -55,6 +60,8 @@ impl SelectionClip {
             geometry: None,
             generations: 0,
             bytes: 0,
+            pixels: BTreeMap::new(),
+            pixels_bytes: 0,
         }
     }
     pub fn reset(&mut self) {
@@ -62,32 +69,79 @@ impl SelectionClip {
         self.binding = None;
         self.geometry = None;
         self.bytes = 0;
+        self.prune_pixels();
+    }
+    pub fn storage_bytes(&self) -> u64 {
+        self.bytes + self.pixels_bytes
+    }
+    fn prune_pixels(&mut self) {
+        self.pixels
+            .retain(|_, (owner, _)| owner.strong_count() != 0);
+        self.pixels_bytes = self.pixels.values().map(|(_, b)| b.size()).sum();
+    }
+    /// Retain GPU-produced coverage across history and consumers. Only replay
+    /// after renderer recreation needs an upload from the durable core copy.
+    pub fn remember_pixels(
+        &mut self,
+        pixels: &Arc<layer_core::SelectionPixels>,
+        buffer: wgpu::Buffer,
+    ) {
+        self.pixels
+            .retain(|_, (owner, _)| owner.strong_count() != 0);
+        self.pixels.insert(
+            Arc::as_ptr(pixels) as usize,
+            (Arc::downgrade(pixels), buffer),
+        );
+        self.pixels_bytes = self.pixels.values().map(|(_, b)| b.size()).sum();
+    }
+    pub fn pixel_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        pixels: &Arc<layer_core::SelectionPixels>,
+    ) -> wgpu::Buffer {
+        if let Some((_, buffer)) = self.pixels.get(&(Arc::as_ptr(pixels) as usize)) {
+            return buffer.clone();
+        }
+        let [w, h] = pixels.extent();
+        let mut bytes: Vec<_> = [0, 0, w, h, 0, 1, 0, 0]
+            .into_iter()
+            .chain(pixels.words().iter().copied())
+            .flat_map(u32::to_ne_bytes)
+            .collect();
+        bytes.resize(bytes.len().next_multiple_of(16), 0);
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("restored selection pixels"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+        self.remember_pixels(pixels, buffer.clone());
+        buffer
     }
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        target_layout: &wgpu::BindGroupLayout,
-        target: &wgpu::Buffer,
         extent: [u32; 2],
         geometry: &Arc<layer_core::Selection>,
     ) -> Result<(), GpuRasterError> {
         if self.geometry.as_ref().is_some_and(|old| old == geometry) {
             return Ok(());
         }
-        let mut bounds = layer_core::Rect::EMPTY;
         let mut edges = Vec::<f32>::new();
-        for contour in geometry.contours.iter() {
+        for contour in geometry.contours() {
             for (a, b) in contour
                 .iter()
                 .zip(contour.iter().cycle().skip(1))
                 .take(contour.len())
             {
-                bounds.include_circle(*a, 1.);
-                edges.extend([a.x, a.y, b.x, b.y]);
+                let o = geometry.offset;
+                edges.extend([a.x + o.x, a.y + o.y, b.x + o.x, b.y + o.y]);
             }
         }
-        let bounds = pixel_rect(bounds, extent);
+        let bounds = match &geometry.shape {
+            layer_core::SelectionShape::Contours(_) => pixel_rect(geometry.bounds(), extent),
+            layer_core::SelectionShape::Pixels(pixels) => PixelRect::full(pixels.extent()),
+        };
         let words = (u64::from(bounds.width().div_ceil(8)) * u64::from(bounds.height())).max(1);
         let bytes = (32 + words * 4).next_multiple_of(16);
         if bytes.max(edges.len() as u64 * 4) > device.limits().max_storage_buffer_binding_size
@@ -102,15 +156,14 @@ impl SelectionClip {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            self.binding = Some(create_target_bind_group(
-                device,
-                target_layout,
-                target,
-                &buffer,
-            ));
+            self.binding = None;
             self.buffer = Some(buffer);
             self.bytes = bytes;
         }
+        let offset = match geometry.shape {
+            layer_core::SelectionShape::Pixels(_) => geometry.offset,
+            _ => layer_core::Point::default(),
+        };
         let header = [
             bounds.min_x,
             bounds.min_y,
@@ -118,8 +171,8 @@ impl SelectionClip {
             bounds.height(),
             u32::from(geometry.inverted),
             1,
-            edges.len() as u32 / 4,
-            words as u32,
+            offset.x.to_bits(),
+            offset.y.to_bits(),
         ];
         let header_bytes: Vec<_> = header.iter().flat_map(|v| v.to_ne_bytes()).collect();
         let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -127,6 +180,16 @@ impl SelectionClip {
             contents: &header_bytes,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
         });
+        if let layer_core::SelectionShape::Pixels(pixels) = &geometry.shape {
+            let source = self.pixel_buffer(device, pixels);
+            let buffer = self.buffer.as_ref().unwrap();
+            encoder.copy_buffer_to_buffer(&source, 32, buffer, 32, words * 4);
+            encoder.copy_buffer_to_buffer(&params, 0, buffer, 0, 32);
+            self.geometry = Some(geometry.clone());
+            self.generations += 1;
+            return Ok(());
+        }
+        let edge_count = edges.len() as u32 / 4;
         if edges.is_empty() {
             edges.resize(4, 0.);
         }
@@ -165,7 +228,7 @@ impl SelectionClip {
         });
         pass.set_bind_group(0, &binding, &[]);
         pass.set_pipeline(&self.crossings);
-        pass.dispatch_workgroups(header[6], 1, 1);
+        pass.dispatch_workgroups(edge_count, 1, 1);
         pass.set_pipeline(&self.fill);
         pass.dispatch_workgroups(bounds.height(), 1, 1);
         self.geometry = Some(geometry.clone());

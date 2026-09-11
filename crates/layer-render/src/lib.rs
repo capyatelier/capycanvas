@@ -221,6 +221,30 @@ pub struct ColorSample {
     pub rgba: [f32; 4],
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum RegionSource {
+    Composite,
+    /// Raw paint, in layer-local coordinates.
+    Layer(LayerId),
+    /// Composition snapshot with original indices and selected visibility.
+    Layers(Vec<Layer>),
+}
+#[derive(Clone, Debug)]
+pub struct RegionRequest {
+    pub request_id: u64,
+    pub source: RegionSource,
+    pub position: [u32; 2],
+    pub tolerance: f32,
+    /// Optional limit, expressed in the source's coordinates.
+    pub limit: Option<std::sync::Arc<layer_core::Selection>>,
+}
+#[derive(Clone, Debug)]
+pub struct RegionResult {
+    pub request_id: u64,
+    /// Immutable, GPU-generated mask in the source's coordinates.
+    pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -229,6 +253,13 @@ pub struct ColorSample {
 /// resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Display-only selection. It never changes paint, export or sampling input.
+    fn set_selection_outline(
+        &mut self,
+        _selection: Option<&layer_core::Selection>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn set_telemetry_enabled(&mut self, _enabled: bool) {}
     fn telemetry(&self) -> RendererTelemetry {
         RendererTelemetry::default()
@@ -276,6 +307,14 @@ pub trait CanvasRenderer {
         Ok(false)
     }
     fn take_color_sample(&mut self) -> Option<Result<ColorSample, Self::Error>> {
+        None
+    }
+    /// Single-flight connected region. GPU work is asynchronous; the result is
+    /// retained once in host memory for history/recovery, not rasterized there.
+    fn request_region(&mut self, _request: RegionRequest) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    fn take_region(&mut self) -> Option<Result<RegionResult, Self::Error>> {
         None
     }
     fn request_filter_previews(

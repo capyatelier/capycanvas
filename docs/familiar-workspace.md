@@ -208,12 +208,14 @@ all drawer variants consume the same per-panel width metadata.
 
 Use drawing-oriented CSP key families: P for Pen/Pencil, B for Brush/Airbrush/
 Decoration, E for Eraser, J for Blend/Liquify, M for Selection, W for Auto select,
-G for Fill/Gradient, O for Operation, U for Figure/Ruler, H for Hand and I for
+G for Gradient, F for Fill, O for Operation, U for Figure/Ruler, H for Hand and I for
 Eyedropper. Repeated family keys cycle its tools in toolbar order; direct custom
 bindings remain possible. Keep Space temporary pan and Tab zen. New/Open/Save
 use the platform command modifier with N/O/S; standard undo/redo stay unchanged.
 This follows [CSP's tool shortcut table](https://help.clip-studio.com/en-us/manual_en/780_shortcuts/Tool_Shortcuts.htm),
-not a claim that all drawing applications use identical keys.
+not a claim that all drawing applications use identical keys. Fill uses F as in
+[Krita](https://scripting.krita.org/action-dictionary); Fit canvas moves to
+Ctrl/Cmd+0, preserving explicit custom bindings rather than stealing them.
 
 Tool Set shows only groups belonging to the active tool. Group buttons have an
 icon and name, three tiles wide and one tall, with exactly one selected. The list
@@ -578,9 +580,9 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   (actual WebGPU drawing and replay) and `--gpu-compatibility` (strict non-null
   layouts plus startup-failure recovery). No physical Android/iPad selection
   validation is claimed; new tool UI rollout still awaits GTK review.
-- Auto Select / bucket Fill: the GPU connected-region primitive is validated
-  but **not connected to production tools yet**. It is currently test-only
-  (`flood.rs` / `flood.wgsl`), so it adds no startup or drawing work. Three
+- Auto Select / bucket Fill now use the GPU connected-region primitive
+  (`flood.rs` / `flood.wgsl`) through shared input/settings and GTK. Its pipelines
+  and scratch allocate on the first request, not at application startup. Three
   dispatches classify and join pixels within 16×16 blocks, merge connections
   across block boundaries, then pack the seed component and reduce its bounds.
   This is original WGSL, informed by [GPU connected-component labeling research](https://federicobolelli.it/media/publications/pdfs/2024tpds.pdf).
@@ -600,7 +602,8 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   12 MiB scratch plus approximately 1.5 MiB per retained result. Encoding has no
   pixel readback or wait. The benchmark allocates a result and bindings per
   **request**, not per drawing frame; the parent buffer is reused. This does not
-  yet account for source composition, history persistence or selection display.
+  account for source composition, history persistence or selection display;
+  complete-request costs are measured separately below.
 - Isolated release benchmark, 2048×1536, last 120 of 150 samples on the test
   workstation; each triplet is median/p95/p99 milliseconds. Completion includes
   an explicit **test-only** queue wait. Pipeline creation and source preparation
@@ -616,14 +619,75 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   First Solid completion was 5.139ms, versus 0.35–0.45ms for the subsequent
   fixtures. No claim of cold-start or tablet latency is implied. Repeat with
   `cargo test -p layer-render-wgpu --release connected_region_latency --lib -- --ignored --nocapture --test-threads=1`.
-- Region integration remaining: immutable selection coverage shared with strokes,
-  masks and operations; asynchronous durable history without rerunning against
-  changed artwork; a GPU selection outline; source selection for editing layer,
-  visible artwork and reference layers; shared settings/input and GTK review.
+- Region integration uses immutable packed coverage shared with brush clipping,
+  mask initialization, fill/gradient operations and a GPU selection outline in
+  the existing presentation pass. Translation shares the coverage allocation;
+  no CPU polygon tracing or flood rasterizer is involved. Explicit region clicks
+  asynchronously retain one packed CPU history copy; normal drawing/panning
+  never downloads it. Undo/replay use that fixed result, not changed source art.
+  Live GPU buffers are reused across consumers; device recreation uploads the
+  saved coverage once. Masks no longer have a separate per-pixel contour search.
+- Auto Select and Fill expose Visible artwork, Editing layer and Reference
+  layers, plus shared tolerance (Fill also exposes opacity). References use a
+  separate instance of the ordinary GPU scene compositor, not a different blend
+  algorithm or the visible scene's cached checkpoints. Original indices and
+  ancestor transforms/masks are preserved; marked groups include descendants.
+  A clipping stack is treated as one reference object; referenced adjustments
+  include the underlying siblings they adjust. Unrelated artwork is excluded.
+  Marking only a child does not include its unrelated siblings. Hidden objects
+  remain hidden. With no marked references, a concise message explains how to
+  mark one instead of silently filling the whole canvas.
   [CSP's reference-layer workflow](https://help.clip-studio.com/en-us/manual_en/180_layers/Reference_layers.htm)
   motivates separating the line-art source from the layer receiving color.
+  Source-layer offsets are converted exactly once; pending operations snapshot
+  paint parameters. Generation/document checks discard stale replies after tool
+  changes, edits or cancellation. Replies schedule the frame displaying the edit.
+  Empty fills do not add undo entries. Fill on locked, Paper or mask targets is
+  rejected; mask painting remains supported by the ordinary brushes.
+- Complete request benchmark, 2048×1536 line-art cells, last 120 of 150 samples:
+
+  | Source | CPU median/p95/p99 ms | GPU median/p95/p99 ms | Complete, including history ms |
+  | --- | --- | --- | --- |
+  | Visible artwork | 0.022 / 0.043 / 0.179 | 0.200 / 0.203 / 0.206 | 0.558 / 0.661 / 0.794 |
+  | Raw editing layer | 0.076 / 0.118 / 0.123 | 0.352 / 0.356 / 0.356 | 0.762 / 0.981 / 1.022 |
+  | References | 0.323 / 0.451 / 0.882 | 0.518 / 0.522 / 0.523 | 1.235 / 1.445 / 1.796 |
+
+  First requests were 6.350/1.044/2.969ms respectively; only the first includes
+  detector pipeline creation, so these are not three independent cold starts.
+  GPU timing includes source capture and copies; completion adds asynchronous
+  mapping and history validation. These are workstation results, not tablet
+  measurements. Repeat with the ignored release `region_request_latency` test.
+  Reusable query storage is 13.5MiB for visible sampling and approximately
+  25.8MiB after allocating the reference source/composition scratch. Each retained
+  2048×1536 region costs 1.5MiB GPU plus 1.5MiB CPU history, with up to another
+  1.5MiB reusable brush-coverage buffer. Diagnostics accounts for these resources.
+- Real GTK input/reference/fill/undo/redo tests pass in both themes. Captures
+  `region-{selection,fill}-{Dark,Light}.png` in the ignored
+  `artifacts/familiar-workspace/` directory were visually inspected. GPU tests
+  verify shared coverage across painting/masks/fill, inversion/translation,
+  frozen history, selection limits, reference group masks and clipped multipass
+  filters, and unchanged visible composition after sampling. Shared UI tests
+  cover all three host profiles; native browser/Android interaction awaits rollout.
+- Paired six-second 384px G-Pen runs on private Wayland: no selection 119.97Hz,
+  raster selection 119.90Hz (one discarded presentation). Selected worker CPU
+  median/p95/p99 was 0.248/0.553/0.699ms; GPU 0.161/0.277/1.000ms; GTK handler
+  0.007/0.035/0.048ms. No-selection GPU was 0.128/0.265/0.413ms: the outline is
+  not free, but the measured drawing path remains within the 8.33ms target.
+  Reports: `/tmp/capy-region-{baseline-pacing,pacing}.json`.
+  Use `LAYER_PACING_SELECTION=pixels` with `native_frame_pacing` to repeat.
+  This is synthetic input with actual presentation feedback, not physical input
+  latency. Workspace and Wasm compilation also pass.
+- The exact staged milestone, isolated from concurrent startup changes, passes
+  24 core, 25 engine, 181 shared UI and 75 GPU correctness tests (11 separate
+  hardware benchmarks ignored). Strict all-target Clippy passes for the core,
+  engine, UI, renderer and GTK. No native Android/browser region-input validation
+  is claimed from shared-schema compilation alone.
+- Region follow-ups before the final complete tool review:
   Gap closing, edge expansion and antialiasing need explicit follow-up rather
-  than being silently conflated with color tolerance.
+  than being silently conflated with color tolerance. Fractional raster-selection
+  translations currently use nearest sampling; general transforms need an
+  explicit resampling policy. Watercolor's display-only outer edge still needs
+  its final selection-boundary policy, as noted above.
 - Still to implement: the new default layout, missing canvas tools/commands,
   collapsible columns, the full application menus, rulers, remaining shortcuts
   and full functional/performance validation.

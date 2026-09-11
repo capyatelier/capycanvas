@@ -62,6 +62,21 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn request_region(
+        &mut self,
+        request: layer_render::RegionRequest,
+    ) -> Result<bool, Self::Error> {
+        self.renderer()?.request_region(request)
+    }
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+        self.0.as_mut()?.renderer.take_region()
+    }
+    fn set_selection_outline(
+        &mut self,
+        selection: Option<&layer_core::Selection>,
+    ) -> Result<(), Self::Error> {
+        self.renderer()?.set_selection_outline(selection)
+    }
     fn request_effect_validation(
         &mut self,
         request: layer_render::EffectValidationRequest,

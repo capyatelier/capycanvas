@@ -289,6 +289,44 @@ pub struct ToolSetView {
     pub subtools: Vec<ToolSetItem>,
 }
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
+    if let LayerCanvasTool::Region { fill, source } = canvas_tool {
+        let command = if fill {
+            CommandId::Fill
+        } else {
+            CommandId::AutoSelect
+        };
+        let icon = command.icon().unwrap();
+        return ToolSetView {
+            groups: vec![ToolSetItem {
+                label: command.label(),
+                icon,
+                action: UiAction::Invoke { command },
+                selected: true,
+                preview: None,
+            }],
+            subtools: [
+                ("Visible artwork", RegionSource::Visible),
+                ("Editing layer", RegionSource::Editing),
+                ("Reference layers", RegionSource::Reference),
+            ]
+            .into_iter()
+            .map(|(label, item_source)| ToolSetItem {
+                label,
+                icon,
+                action: UiAction::Layer {
+                    action: LayerAction::Tool {
+                        tool: LayerCanvasTool::Region {
+                            fill,
+                            source: item_source,
+                        },
+                    },
+                },
+                selected: source == item_source,
+                preview: None,
+            })
+            .collect(),
+        };
+    }
     if let LayerCanvasTool::Gradient { .. } = canvas_tool {
         return ToolSetView {
             groups: vec![ToolSetItem {
@@ -361,6 +399,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
             LayerCanvasTool::Hand => ("Hand", "hand"),
             LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
             LayerCanvasTool::Gradient { .. } => unreachable!(),
+            LayerCanvasTool::Region { .. } => unreachable!(),
             LayerCanvasTool::Paint => unreachable!(),
         };
         let item = ToolSetItem {

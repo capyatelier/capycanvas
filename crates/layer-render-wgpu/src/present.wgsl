@@ -3,10 +3,24 @@ struct Camera {
     offset_document: vec4<f32>,
     viewport: vec4<f32>,
     surround: vec4<f32>,
+    selection: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var canvas: texture_2d<f32>;
 @group(0) @binding(2) var canvas_sampler: sampler;
+struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
+@group(0) @binding(3) var<storage, read> selection: Selection;
+
+fn selected(p: vec2<f32>) -> bool {
+    if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return false; }
+    let q = vec2<i32>(floor(p - camera.selection.xy)) - vec2<i32>(selection.rect.xy);
+    var covered = false;
+    if all(q >= vec2<i32>(0)) && all(q < vec2<i32>(selection.rect.zw)) {
+        let word = u32(q.y) * ((selection.rect.z+7u)/8u) + u32(q.x)/8u;
+        covered = ((selection.values[word] >> ((u32(q.x)%8u)*4u)) & 15u) >= 2u;
+    }
+    return covered != (camera.selection.w > .5);
+}
 
 struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32> };
 @vertex fn vs_main(@builtin(vertex_index) index: u32) -> Vertex {
@@ -26,6 +40,15 @@ fn display_color(rgb: vec3<f32>) -> vec3<f32> {
     var rgb = paint.rgb + vec3<f32>(checker) * (1.0 - paint.a);
     if any(p < vec2<f32>(0.0)) || any(p >= extent) {rgb = camera.surround.rgb;}
     if camera.viewport.z > 0.5 {rgb = display_color(rgb);}
+    // Raster-selection outlines are sampled at display resolution, never
+    // traced/tessellated on the CPU or baked into the document composition.
+    if camera.selection.z > .5 {
+        let dx = camera.inverse.xy * .6;
+        let dy = camera.inverse.zw * .6;
+        if selected(p-dx) != selected(p+dx) || selected(p-dy) != selected(p+dy) {
+            rgb = vec3<f32>(select(0., 1., (surface.x+surface.y) % 6. < 3.));
+        }
+    }
     // Signed distance to the full-window rounded rectangle; no inset/cropping.
     let radius = camera.viewport.w;
     let q = abs(surface - camera.viewport.xy * 0.5) - camera.viewport.xy * 0.5 + radius;

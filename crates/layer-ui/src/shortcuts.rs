@@ -217,7 +217,9 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         "command.Hand" => key("h", false, false),
         "command.Eyedropper" => key("i", false, false),
         "command.Gradient" => key("g", false, false),
-        "command.FitCanvas" => key("f", false, false),
+        "command.AutoSelect" => key("w", false, false),
+        "command.Fill" => key("f", false, false),
+        "command.FitCanvas" => key("0", true, false),
         "command.ZoomIn" => key("=", true, false),
         "command.ZoomOut" => key("-", true, false),
         "command.ZenMode" => key("tab", false, false),
@@ -325,6 +327,18 @@ impl Settings {
         fn canonical(action: &UiAction) -> UiAction {
             use LayerAction as L;
             match action {
+                UiAction::Layer {
+                    action:
+                        L::Tool {
+                            tool: LayerCanvasTool::Region { fill, .. },
+                        },
+                } => UiAction::Invoke {
+                    command: if *fill {
+                        CommandId::Fill
+                    } else {
+                        CommandId::AutoSelect
+                    },
+                },
                 UiAction::Layer {
                     action:
                         L::Tool {

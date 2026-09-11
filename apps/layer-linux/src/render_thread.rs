@@ -51,6 +51,8 @@ impl Frame {
     }
 }
 enum Command {
+    Selection(Option<layer_core::Selection>),
+    Region(layer_render::RegionRequest),
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
@@ -65,6 +67,7 @@ enum Command {
     Stop,
 }
 enum Reply {
+    Region(Result<layer_render::RegionResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
     CanvasPreview(Result<layer_render::CanvasPreview, String>),
@@ -77,6 +80,9 @@ enum Reply {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    selection: Option<layer_core::Selection>,
+    region: Option<Result<layer_render::RegionResult, String>>,
+    region_pending: bool,
     pub(super) clock: Arc<crate::wayland::FrameClock>,
     telemetry: Arc<std::sync::Mutex<layer_render::RendererTelemetry>>,
     telemetry_enabled: bool,
@@ -168,6 +174,11 @@ impl RenderWorker {
                                 .send(Reply::ColorSample(color.map_err(error)))
                                 .map_err(error)?;
                         }
+                        if let Some(region) = worker.renderer.take_region() {
+                            reply
+                                .send(Reply::Region(region.map_err(error)))
+                                .map_err(error)?;
+                        }
                         while let Some(image) = worker.renderer.take_filter_previews() {
                             reply
                                 .send(Reply::FilterPreviews(image.map_err(error)))
@@ -183,6 +194,7 @@ impl RenderWorker {
                             || worker.renderer.thumbnails_pending()
                             || worker.renderer.canvas_preview_pending()
                             || worker.renderer.color_sample_pending()
+                            || worker.renderer.region_pending()
                             || worker.child.feedback_pending()
                         {
                             receiver.recv_timeout(Duration::from_millis(8))
@@ -208,6 +220,17 @@ impl RenderWorker {
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
                         match command {
+                            Command::Region(request) => {
+                                let result = worker.renderer.request_region(request);
+                                if !matches!(result, Ok(true)) {
+                                    reply
+                                        .send(Reply::Region(Err(result
+                                            .err()
+                                            .map(error)
+                                            .unwrap_or_else(|| "Region detector is busy".into()))))
+                                        .map_err(error)?;
+                                }
+                            }
                             Command::EffectValidation(request) => {
                                 let request_id = request.request_id;
                                 let result = worker.renderer.request_effect_validation(request);
@@ -297,6 +320,10 @@ impl RenderWorker {
                                     )
                                     .map_err(error)?;
                             }
+                            Command::Selection(selection) => worker
+                                .renderer
+                                .set_selection_outline(selection.as_ref())
+                                .map_err(error)?,
                             Command::Release(id) => worker.renderer.release_asset(&id),
                             Command::Readback(id) => {
                                 worker.renderer.request_readback(id).map_err(error)?
@@ -324,6 +351,9 @@ impl RenderWorker {
             }
         };
         Ok(Self {
+            selection: None,
+            region: None,
+            region_pending: false,
             clock,
             telemetry,
             telemetry_enabled: false,
@@ -357,6 +387,10 @@ impl RenderWorker {
     pub(super) fn ready(&mut self) -> Result<bool, String> {
         while let Ok(reply) = self.replies.try_recv() {
             match reply {
+                Reply::Region(result) => {
+                    self.region_pending = false;
+                    self.region = Some(result);
+                }
                 Reply::EffectValidation(result) => {
                     self.effect_validation_pending = false;
                     self.effect_validation = Some(result);
@@ -394,6 +428,33 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn request_region(
+        &mut self,
+        request: layer_render::RegionRequest,
+    ) -> Result<bool, Self::Error> {
+        if self.region_pending {
+            return Ok(false);
+        }
+        self.send(Command::Region(request))?;
+        self.region_pending = true;
+        Ok(true)
+    }
+    fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+        self.ready().ok()?;
+        self.region
+            .take()
+            .map(|result| result.map_err(|_| BackendError("Region detection failed")))
+    }
+    fn set_selection_outline(
+        &mut self,
+        selection: Option<&layer_core::Selection>,
+    ) -> Result<(), Self::Error> {
+        if self.selection.as_ref() != selection {
+            self.send(Command::Selection(selection.cloned()))?;
+            self.selection = selection.cloned();
+        }
+        Ok(())
+    }
     fn request_effect_validation(
         &mut self,
         request: layer_render::EffectValidationRequest,

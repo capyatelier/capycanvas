@@ -8,6 +8,7 @@ pub struct ViewportPresenter {
     layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
+    selection_buffer: Option<wgpu::Buffer>,
     document_extent: [u32; 2],
     encode_srgb: bool,
     corner_radius: f32,
@@ -15,7 +16,7 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 16]>,
+    camera_data: Option<[f32; 20]>,
 }
 
 impl ViewportPresenter {
@@ -47,6 +48,16 @@ impl ViewportPresenter {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -122,7 +133,7 @@ impl ViewportPresenter {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport camera"),
-            size: 64,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -131,6 +142,7 @@ impl ViewportPresenter {
             layout,
             uniform,
             bind_group: None,
+            selection_buffer: None,
             document_extent: [0; 2],
             encode_srgb: !format.is_srgb(),
             corner_radius: 0.0,
@@ -204,7 +216,12 @@ impl ViewportPresenter {
             return;
         };
         let device = &renderer.device;
-        if self.bind_group.is_none() || self.document_extent != renderer.document_extent {
+        let selection = renderer.display_selection.as_ref();
+        let coverage = selection.map_or(&renderer.unclipped, |(_, buffer)| buffer);
+        if self.bind_group.is_none()
+            || self.document_extent != renderer.document_extent
+            || self.selection_buffer.as_ref() != Some(coverage)
+        {
             self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("viewport composite"),
                 layout: &self.layout,
@@ -221,16 +238,21 @@ impl ViewportPresenter {
                         binding: 2,
                         resource: wgpu::BindingResource::Sampler(&renderer.sampler),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: coverage.as_entire_binding(),
+                    },
                 ],
             }));
             self.document_extent = renderer.document_extent;
+            self.selection_buffer = Some(coverage.clone());
         }
         let [a, b, c, d, tx, ty] = view.document_to_surface;
         let det = a * d - b * c;
         if !det.is_finite() || det.abs() < 1.0e-12 {
             return;
         }
-        let data: [f32; 16] = [
+        let data: [f32; 20] = [
             d / det,
             -b / det,
             -c / det,
@@ -247,6 +269,10 @@ impl ViewportPresenter {
             surround_linear[1],
             surround_linear[2],
             surround_linear[3],
+            selection.map_or(0., |(s, _)| s.offset.x),
+            selection.map_or(0., |(s, _)| s.offset.y),
+            f32::from(selection.is_some()),
+            selection.map_or(0., |(s, _)| f32::from(s.inverted)),
         ];
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {

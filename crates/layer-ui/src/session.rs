@@ -6,7 +6,9 @@ use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurv
 use layer_render::CanvasRenderer;
 #[path = "art_layers.rs"]
 mod art_layers;
-pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView};
+#[path = "region_tools.rs"]
+mod region_tools;
+pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
 #[path = "effects.rs"]
 mod effects;
 #[path = "filter_loading.rs"]
@@ -50,6 +52,7 @@ pub struct UiSession<R: CanvasRenderer> {
     navigator_drag: Option<[f32; 2]>,
     navigator_preview: crate::navigator::Preview,
     eyedropper: crate::eyedropper::Eyedropper,
+    region_tools: region_tools::RegionTools,
     system_theme: Theme,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -93,6 +96,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             navigator_drag: None,
             navigator_preview: Default::default(),
             eyedropper: Default::default(),
+            region_tools: Default::default(),
             system_theme: Theme::Light,
             logical_viewport: None,
             initial_fit: true,
@@ -1007,6 +1011,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Hand
             | CommandId::Eyedropper
             | CommandId::Gradient
+            | CommandId::AutoSelect
+            | CommandId::Fill
             | CommandId::RotateLeft
             | CommandId::RotateRight
             | CommandId::FlipHorizontal
@@ -1023,6 +1029,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | (CommandId::Move, LayerCanvasTool::Move)
                     | (CommandId::Hand, LayerCanvasTool::Hand)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
+                    | (
+                        CommandId::AutoSelect,
+                        LayerCanvasTool::Region { fill: false, .. }
+                    )
+                    | (CommandId::Fill, LayerCanvasTool::Region { fill: true, .. })
                     | (
                         CommandId::Eyedropper,
                         LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer
@@ -1384,6 +1395,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
+                if id == "tolerance" {
+                    NumericControl::percent().validate(value, "Tolerance")?;
+                    self.region_tools.tolerance = value;
+                    self.region_tools.cancel();
+                    self.refresh_tools();
+                    return Ok(self.changed(BRUSH, false));
+                }
                 let brush = tool_settings::edit(self.engine.configured_brush(), &id, value)?;
                 self.state.brush.diameter = brush.diameter;
                 self.state.brush.opacity = brush.opacity;
@@ -1653,6 +1671,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || tool_before != (self.state.brush.tool, self.layer_interaction.tool)
         {
             self.eyedropper.cancel();
+            self.region_tools.cancel();
         }
         if changed & LAYOUT != 0 {
             let layout = &self.state.workspace.layout;
@@ -1703,6 +1722,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) {
+            self.region_pen(event);
+            return Ok(());
+        }
         if self.layer_interaction.tool == LayerCanvasTool::Hand {
             // Hand input is routed through UiInput::Pointer's pan gesture.
             return Ok(());
@@ -1923,6 +1946,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.wants_continuous_frames()
             || self.pending_filters.is_some()
             || self.eyedropper.busy()
+            || self.region_tools.busy()
     }
     pub fn frame(&mut self, now_ns: u64, presentation_ns: u64) -> Result<UiChange, String> {
         let mut changed = self.poll_filter_installation();
@@ -1931,6 +1955,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         self.input_pending = false;
+        self.poll_region_tool()?;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut())? {
             self.state.colors.set_rgba(color)?;
             self.state.brush.color = self.state.colors.rgba();
@@ -1945,12 +1970,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= regions::COMMANDS;
         }
-        Ok(self.changed(changed, self.wants_continuous_frames()))
+        Ok(self.changed(
+            changed,
+            self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
+        ))
     }
 
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::AutoSelect | CommandId::Fill => {
+                let fill = command == CommandId::Fill;
+                self.layer_action(LayerAction::Tool {
+                    tool: LayerCanvasTool::Region {
+                        fill,
+                        source: self.region_tools.source[usize::from(fill)],
+                    },
+                })?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::Gradient => {
                 let [radial, transparent] = self.layer_interaction.gradient;
                 self.layer_action(LayerAction::Tool {
@@ -2217,6 +2255,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
         self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
+        } else if let LayerCanvasTool::Region { fill, .. } = self.layer_interaction.tool {
+            let mut controls = vec![tool_settings::ToolSetting {
+                id: "tolerance",
+                label: "Tolerance",
+                group: "",
+                numeric: NumericControl::percent(),
+                value: self.region_tools.tolerance,
+            }];
+            if fill {
+                controls.extend(
+                    tool_settings::controls(self.engine.configured_brush())
+                        .into_iter()
+                        .filter(|c| c.id == "opacity"),
+                );
+            }
+            controls
         } else if matches!(
             self.layer_interaction.tool,
             LayerCanvasTool::Gradient { .. }
@@ -2460,9 +2514,21 @@ mod tests {
         preview_reply: Option<layer_render::CanvasPreview>,
         sample_requests: Vec<layer_render::ColorSampleRequest>,
         sample_reply: Option<layer_render::ColorSample>,
+        region_requests: Vec<layer_render::RegionRequest>,
+        region_reply: Option<layer_render::RegionResult>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn request_region(
+            &mut self,
+            request: layer_render::RegionRequest,
+        ) -> Result<bool, Self::Error> {
+            self.region_requests.push(request);
+            Ok(true)
+        }
+        fn take_region(&mut self) -> Option<Result<layer_render::RegionResult, Self::Error>> {
+            self.region_reply.take().map(Ok)
+        }
         fn request_color_sample(
             &mut self,
             request: layer_render::ColorSampleRequest,
@@ -2607,6 +2673,189 @@ mod tests {
     }
 
     #[test]
+    fn connected_tools_share_sources_history_and_stale_reply_policy() {
+        use layer_core::{Edit, Selection, SelectionPixels};
+        use layer_render::{RegionResult, RegionSource};
+        use std::sync::Arc;
+        let coverage =
+            Arc::new(SelectionPixels::new([8, 1], [0, 0, 8, 1], vec![0x44444444]).unwrap());
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let send = |s: &mut UiSession<Recorder>, phase| {
+                let mut e = event(s, 10, phase, 1.);
+                let m = s.state.camera.document_to_surface();
+                e.surface_position = Point {
+                    x: m[0] * 48. + m[2] * 72. + m[4],
+                    y: m[1] * 48. + m[3] * 72. + m[5],
+                };
+                s.pen(e).unwrap();
+            };
+            invoke(&mut s, CommandId::AutoSelect);
+            assert_eq!(s.state.tool_set.subtools.len(), 3);
+            assert_eq!(s.state.tool_settings[0].id, "tolerance");
+            send(&mut s, PenPhase::Down);
+            send(&mut s, PenPhase::Up);
+            assert!(s.wants_continuous_frames());
+            s.frame(1, 1).unwrap();
+            let request = s.renderer_mut().region_requests[0].clone();
+            assert_eq!(request.position, [48, 72]);
+            assert_eq!(request.source, RegionSource::Composite);
+            assert!(request.limit.is_none());
+            s.renderer_mut().region_reply = Some(RegionResult {
+                request_id: request.request_id,
+                pixels: coverage.clone(),
+            });
+            assert!(
+                s.frame(2, 2).unwrap().canvas_wake,
+                "reply schedules the frame that displays the selection"
+            );
+            assert_eq!(
+                s.engine.document().selection,
+                Some(Selection::pixels(coverage.clone()))
+            );
+            s.frame(3, 3).unwrap();
+            invoke(&mut s, CommandId::Undo);
+            assert!(s.engine.document().selection.is_none());
+            invoke(&mut s, CommandId::Redo);
+            assert!(s.engine.document().selection.is_some());
+
+            let id = s.engine.document().active_layer;
+            let mut layer = s.engine.document().layer(id).unwrap().clone();
+            layer.properties.offset = Point { x: 8., y: 12. };
+            s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+            s.frame(4, 4).unwrap();
+            invoke(&mut s, CommandId::Fill);
+            let source = s.state.tool_set.subtools[1].action.clone();
+            s.dispatch(source).unwrap();
+            s.dispatch(UiAction::SetToolSetting {
+                id: "tolerance".into(),
+                value: 0.2,
+            })
+            .unwrap();
+            send(&mut s, PenPhase::Down);
+            send(&mut s, PenPhase::Up);
+            s.frame(5, 5).unwrap();
+            let request = s.renderer_mut().region_requests.last().unwrap().clone();
+            assert_eq!(request.position, [40, 60]);
+            assert_eq!(request.source, RegionSource::Layer(id));
+            assert_eq!(request.tolerance, 0.2);
+            assert_eq!(
+                request.limit.as_ref().unwrap().offset,
+                Point { x: -8., y: -12. }
+            );
+            s.renderer_mut().region_reply = Some(RegionResult {
+                request_id: request.request_id,
+                pixels: coverage.clone(),
+            });
+            assert!(s.frame(6, 6).unwrap().canvas_wake);
+            let operation = &s.engine.document().layer(id).unwrap().operations[0];
+            assert_eq!(
+                operation.coverage.initial,
+                Some(Selection::pixels(coverage.clone())),
+                "raw-layer result is converted to document then layer coordinates once"
+            );
+            s.frame(7, 7).unwrap();
+            invoke(&mut s, CommandId::Undo);
+            assert!(s.engine.document().layer(id).unwrap().operations.is_empty());
+
+            // Esc cancels the gesture/request; changing tools also rejects an
+            // already submitted reply. Neither creates an empty history entry.
+            invoke(&mut s, CommandId::AutoSelect);
+            send(&mut s, PenPhase::Down);
+            assert!(s.cancel_layer_gesture().unwrap());
+            send(&mut s, PenPhase::Up);
+            s.frame(8, 8).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(), 2);
+            send(&mut s, PenPhase::Down);
+            send(&mut s, PenPhase::Up);
+            s.frame(9, 9).unwrap();
+            let request = s.renderer_mut().region_requests.last().unwrap().clone();
+            let before = s.engine.document().selection.clone();
+            invoke(&mut s, CommandId::Hand);
+            s.renderer_mut().region_reply = Some(RegionResult {
+                request_id: request.request_id,
+                pixels: coverage.clone(),
+            });
+            s.frame(10, 10).unwrap();
+            assert_eq!(s.engine.document().selection, before);
+            assert!(!s.region_tools.busy());
+
+            invoke(&mut s, CommandId::AutoSelect);
+            s.dispatch(s.state.tool_set.subtools[2].action.clone())
+                .unwrap();
+            send(&mut s, PenPhase::Down);
+            send(&mut s, PenPhase::Up);
+            assert!(s.frame(11, 11).unwrap_err().contains("reference layer"));
+            s.layer_edit(Edit::SetReferences([id].into())).unwrap();
+            send(&mut s, PenPhase::Down);
+            send(&mut s, PenPhase::Up);
+            s.frame(12, 12).unwrap();
+            let request = s.renderer_mut().region_requests.last().unwrap().clone();
+            assert_eq!(
+                request.position,
+                [48, 72],
+                "reference composition uses document coordinates"
+            );
+            let RegionSource::Layers(layers) = request.source else {
+                panic!("reference snapshot")
+            };
+            assert_eq!(
+                layers
+                    .iter()
+                    .filter(|l| l.visible)
+                    .map(|l| l.id)
+                    .collect::<Vec<_>>(),
+                [id]
+            );
+            s.renderer_mut().region_reply = Some(RegionResult {
+                request_id: request.request_id,
+                pixels: coverage.clone(),
+            });
+            s.frame(13, 13).unwrap();
+            assert_eq!(
+                s.engine.document().selection.as_ref().unwrap().offset,
+                Point::default()
+            );
+
+            // Parameter edits during async detection apply only to the next fill.
+            invoke(&mut s, CommandId::Fill);
+            s.dispatch(UiAction::SetToolSetting {
+                id: "opacity".into(),
+                value: 0.25,
+            })
+            .unwrap();
+            send(&mut s, PenPhase::Down);
+            send(&mut s, PenPhase::Up);
+            s.frame(14, 14).unwrap();
+            let request = s.renderer_mut().region_requests.last().unwrap().clone();
+            s.dispatch(UiAction::SetToolSetting {
+                id: "opacity".into(),
+                value: 0.75,
+            })
+            .unwrap();
+            s.renderer_mut().region_reply = Some(RegionResult {
+                request_id: request.request_id,
+                pixels: coverage.clone(),
+            });
+            s.frame(15, 15).unwrap();
+            let layer_core::LayerOperationKind::Fill { color, .. } = s
+                .engine
+                .document()
+                .layer(id)
+                .unwrap()
+                .operations
+                .last()
+                .unwrap()
+                .kind
+            else {
+                panic!("fill")
+            };
+            assert_eq!(color[3], 0.25);
+        }
+    }
+
+    #[test]
     fn gradient_tools_commit_once_with_local_selection_and_cancel_cleanly() {
         use layer_core::{Edit, LayerOperationKind, Selection};
         let mut s = session();
@@ -2691,8 +2940,13 @@ mod tests {
         assert!((end.x - 120.0).abs() < 0.001 && (end.y - 120.0).abs() < 0.001);
         assert!(radial && alpha_locked);
         assert_eq!(colors, [[1.0, 0.0, 0.0, 0.4], [1.0, 0.0, 0.0, 0.0]]);
+        let selection = operations[0].coverage.initial.as_ref().unwrap();
+        let first = selection.contours()[0][0];
         assert_eq!(
-            operations[0].coverage.initial.as_ref().unwrap().contours[0][0],
+            Point {
+                x: first.x + selection.offset.x,
+                y: first.y + selection.offset.y
+            },
             Point::default()
         );
         assert!(s.layer_interaction.path.is_empty());

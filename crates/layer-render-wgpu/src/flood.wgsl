@@ -59,7 +59,7 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>,
     if inside {
         let seed = comparison_color(textureLoad(source, vec2<i32>(params.extent_seed.zw), 0));
         let color = comparison_color(textureLoad(source, vec2<i32>(id.xy), 0));
-        eligible = all(abs(color-seed) <= vec4<f32>(params.options.x));
+        eligible = all(abs(color-seed) <= vec4<f32>(params.options.x)) && brush_selection_at(vec2<f32>(id.xy)+.5) > 0.;
     }
     atomicStore(&local_parent[lane], select(NONE, lane, eligible));
     if all(id.xy == vec2<u32>(0)) {
@@ -154,7 +154,7 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
     if y < extent.y {
         for (var i = 0u; i < 8u && x+i < extent.x; i++) {
             if selected != NONE && root(y*extent.x+x+i) == selected {
-                packed |= 4u << (i*4u);
+                packed |= u32(round(brush_selection_at(vec2<f32>(f32(x+i)+.5, f32(y)+.5))*4.)) << (i*4u);
                 low = min(low, vec2<u32>(x+i,y));
                 high = max(high, vec2<u32>(x+i+1u,y+1u));
                 count++;
