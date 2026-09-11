@@ -1,5 +1,27 @@
 import assert from "node:assert/strict";
 
+async function checkHeaderSpacing(evaluate) {
+  const spacing = await evaluate(`(()=>{
+    const el=id=>document.querySelector(id), r=id=>el(id).getBoundingClientRect();
+    const tile=r("#system-battery-tile"), icon=r("#system-battery"), clock=r("#system-clock"), button=r("#fullscreen");
+    const gap=parseFloat(getComputedStyle(el("#header-start")).gap);
+    const textPadding=getComputedStyle(el(".header-menu > summary")).paddingLeft;
+    return {tile:[tile.width,tile.height],button:[button.width,button.height],
+      gaps:[tile.left-clock.right,button.left-tile.right],gap,
+      centered:Math.abs(icon.x+icon.width/2-tile.x-tile.width/2)<.1 && Math.abs(icon.y+icon.height/2-tile.y-tile.height/2)<.1,
+      textPadding,clockPadding:getComputedStyle(el("#system-clock")).paddingLeft,
+      titlePadding:getComputedStyle(el("#document-title")).paddingRight,
+      titleGap:el("#document-title").getClientRects().length ? clock.left-r("#document-title").right : null};
+  })()`);
+  assert.deepEqual(spacing.tile, spacing.button);
+  assert.deepEqual(spacing.tile, [36,36]);
+  for(const gap of spacing.gaps) assert.ok(Math.abs(gap-spacing.gap)<.1,JSON.stringify(spacing));
+  if(spacing.titleGap!==null) assert.ok(Math.abs(spacing.titleGap-spacing.gap)<.1,JSON.stringify(spacing));
+  assert.ok(spacing.centered);
+  assert.equal(spacing.clockPadding,spacing.textPadding);
+  assert.equal(spacing.titlePadding,spacing.textPadding);
+}
+
 export async function checkDeviceFullscreen({call,evaluate,settle}) {
   const tap = async () => {
     const [x,y] = await evaluate('(()=>{const r=document.querySelector("#fullscreen").getBoundingClientRect();return[r.x+r.width/2,r.y+r.height/2]})()');
@@ -10,6 +32,7 @@ export async function checkDeviceFullscreen({call,evaluate,settle}) {
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(document.fullscreenElement && layerApp.state().fullscreen && !document.querySelector("#system-status").hidden)resolve(true);else if(performance.now()-start>10000)reject(Error("Tablet fullscreen failed"));else setTimeout(check,50);}check();})');
   const battery = await evaluate('(async()=>{const b=await navigator.getBattery();return{percent:Math.round(b.level*100),charging:b.charging}})()');
   await settle();
+  await checkHeaderSpacing(evaluate);
   const label = await evaluate('document.querySelector("#system-battery").getAttribute("aria-label")');
   assert.ok(label.startsWith(`Battery ${battery.percent}%`));
   assert.equal(label.includes("charging"),battery.charging);
@@ -55,6 +78,7 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
       await evaluate('new Intl.DateTimeFormat(navigator.languages,{hour:"numeric",minute:"2-digit"}).format(new Date())'));
   }
   assert.ok(await evaluate('(()=>{const r=id=>document.querySelector(id).getBoundingClientRect();return r("#document-title").right<=r("#system-status").left && r("#system-status").right<=r("#fullscreen").left})()'));
+  await checkHeaderSpacing(evaluate);
   if (process.env.LAYER_TEST_ARTIFACTS) {
     const {writeFile} = await import("node:fs/promises");
     const shot = await call("Page.captureScreenshot",{format:"png"});
@@ -81,12 +105,18 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
   await clockPreference(1);
   assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),false);
   assert.equal(await evaluate('document.querySelector("#system-status").hidden'),false);
-  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),true);
+  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),false);
+  await call("Browser.setWindowBounds",{windowId,bounds:{width:800,height:700}},null);
+  await settle();
+  await checkHeaderSpacing(evaluate);
+  await call("Browser.setWindowBounds",{windowId,bounds:{width:1440,height:1000}},null);
+  await settle();
   await click('#fullscreen');
   await wait('!!document.fullscreenElement');
   await clockPreference(2);
   assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),true);
-  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),false);
+  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),true);
+  assert.equal(await evaluate('document.querySelector("#system-battery-tile").hidden'),true);
   await click('#fullscreen');
   await wait('!document.fullscreenElement && document.querySelector("#system-status").hidden');
   await clockPreference(0);
@@ -97,6 +127,7 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
     await click('#fullscreen');
     await wait('!!document.fullscreenElement && !document.querySelector("#system-status").hidden');
     assert.equal(await evaluate('document.querySelector("#system-battery").hidden'), true);
+    assert.equal(await evaluate('document.querySelector("#system-battery-tile").hidden'), true);
     assert.ok(await evaluate('document.querySelector("#system-clock").textContent.length>0'));
     await click('#fullscreen');
     await wait('!document.fullscreenElement');

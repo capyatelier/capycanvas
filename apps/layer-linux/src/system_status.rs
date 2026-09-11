@@ -1,6 +1,8 @@
 //! Native clock preferences and UPower observation, independent of GPU startup.
 use adw::prelude::*;
 use gtk::{gio, glib};
+#[path = "battery_font.rs"]
+mod battery_font;
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -37,23 +39,32 @@ fn twelve_hour(preference: Option<&str>, locale_format: &str) -> bool {
 }
 impl SystemStatus {
     pub fn new() -> Rc<Self> {
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         root.set_widget_name("system-status");
         root.add_css_class("system-status");
         root.set_visible(false);
         let clock = gtk::Label::new(None);
         clock.set_widget_name("system-clock");
+        clock.add_css_class("header-clock");
         let battery = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         battery.set_widget_name("system-battery");
         battery.add_css_class("system-battery");
+        battery.set_size_request(layer_ui::TILE_SIZE as i32, layer_ui::TILE_SIZE as i32);
+        battery.set_hexpand(false);
+        battery.set_valign(gtk::Align::Center);
         battery.set_visible(false);
         let overlay = gtk::Overlay::new();
+        overlay.set_hexpand(true);
+        overlay.set_halign(gtk::Align::Center);
+        overlay.set_valign(gtk::Align::Center);
         let drawing = gtk::DrawingArea::new();
         drawing.set_content_width(26);
         drawing.set_content_height(14);
         drawing.set_valign(gtk::Align::Center);
         let percent = gtk::Label::new(None);
         percent.add_css_class("battery-percent");
+        battery_font::load(&percent.pango_context());
+        percent.pango_context().set_round_glyph_positions(false);
         percent.set_margin_end(4);
         overlay.set_child(Some(&drawing));
         overlay.add_overlay(&percent);
@@ -122,7 +133,10 @@ impl SystemStatus {
                 let _ = cr.fill();
                 let _ = cr.restore();
                 color(track);
-                cr.rectangle(23., 4., 2., 6.);
+                cr.new_sub_path();
+                cr.arc(24., 5., 1., std::f64::consts::PI, 2. * std::f64::consts::PI);
+                cr.arc(24., 9., 1., 0., std::f64::consts::PI);
+                cr.close_path();
                 let _ = cr.fill();
                 if battery.charging {
                     cr.move_to(23., 2.);
@@ -134,7 +148,8 @@ impl SystemStatus {
                     cr.line_to(24.1, 2.);
                     cr.close_path();
                     cr.set_line_width(1.75);
-                    cr.set_line_join(gtk::cairo::LineJoin::Round);
+                    cr.set_line_join(gtk::cairo::LineJoin::Miter);
+                    cr.set_miter_limit(4.);
                     let _ = cr.stroke_preserve();
                     color(ink);
                     let _ = cr.fill();
@@ -235,7 +250,7 @@ impl SystemStatus {
     }
     fn update_visibility(&self) {
         let clock = self.show_clock.get().visible(self.fullscreen.get());
-        let battery = self.fullscreen.get() && self.value.get().is_some();
+        let battery = clock && self.value.get().is_some();
         self.clock.set_visible(clock);
         self.battery.set_visible(battery);
         self.root.set_visible(clock || battery);

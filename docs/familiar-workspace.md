@@ -204,9 +204,11 @@ contents and expanded column width. Rust owns state, geometry, thresholds,
 drop eligibility and drawer selection; GTK only renders and forwards input.
 
 - **Collapse column** is available from any panel-group context menu in the
-  column. Drag-resizing the column closed also collapses it; start with the
-  collapsed strip width as the threshold. Avoid threshold oscillation during
-  a resize gesture. Expansion restores the remembered ordinary width.
+  column. Drag-resizing collapses it when the requested width falls below 75%
+  of the column's minimum width, or reaches the collapsed strip width (36
+  logical pixels), whichever happens first. Exactly 25% into the minimum does
+  not trigger the percentage rule. Collapse stays latched during the resize
+  gesture. Expansion restores the remembered ordinary width.
 - Double-clicking the **non-tab area of any docked panel group's tab bar** also
   collapses its containing column, whether the group has one tab or several.
   This replaces the existing docked single-panel header double-click toggle

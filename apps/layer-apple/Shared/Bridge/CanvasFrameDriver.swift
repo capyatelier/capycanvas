@@ -52,8 +52,8 @@ import QuartzCore
                 guard self.active else { return }
                 if submittedSurface == self.surfaceGeneration {
                     self.store?.cameraRevision = revision
-                    if costs[2] > 0 {
-                        if self.store?.canvasSubmitted != true { self.store?.canvasSubmitted = true }
+                    if costs[2] > 0 && self.store?.canvasSubmitted != true {
+                        self.store?.canvasSubmitted = true
                         self.submittedViewport()
                     }
                 }

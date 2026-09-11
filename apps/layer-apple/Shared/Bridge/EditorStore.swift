@@ -21,6 +21,7 @@ import SwiftUI
     var wake: (() -> Void)?
     var interruptInput: (() -> Void)?
     private(set) var native: NativeOwner?
+    private var drawingWorkload: DrawingWorkload?
     lazy var layerThumbnails = LayerThumbnails(store: self)
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var rendererStats = RendererStats(store: self)
@@ -34,7 +35,14 @@ import SwiftUI
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared) {
         do {
-            native = try NativeOwner(platform: platform, scene: scene, persistence: persistence) { [weak self] snapshot, failure in
+            let workload = try DrawingWorkloadPlan.configured()
+            // Performance runs never read or replace the artist's preferences
+            // or recovery copies. Keep ordinary persistence costs in the run.
+            let storage = workload == nil ? persistence : EditorPersistence(root:
+                FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
+            native = try NativeOwner(platform: platform, scene: scene, persistence: storage,
+                traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
@@ -47,6 +55,7 @@ import SwiftUI
                 for action in try JSON.decode(source).array { native?.submit(0, action) }
             }
             #endif
+            if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
         } catch { failure = error.localizedDescription }
         Self.instances.add(self)
     }

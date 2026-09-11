@@ -841,7 +841,7 @@ impl Workspace {
         header.add_css_class("workspace-header");
         header.set_title_widget(Some(&tab));
         let system_status = crate::system_status::SystemStatus::new();
-        let header_status = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let header_status = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         header_status.set_widget_name("header-status");
         header_status.append(&system_status.root);
         let view_info = gtk::Label::new(Some("100% · 0°"));

@@ -21,7 +21,8 @@ window, label, text { font-size: var(--ui-text-size); }
 button.workspace-zen { min-width: 28px; min-height: 28px; padding: 4px; border-radius: 6px; background: var(--window-bg-color); }
 button.workspace-zen:hover, button.workspace-zen.selected-tool:not(.zen-button-neutral) { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
 button.workspace-zen:active { background: mix(var(--window-bg-color), var(--window-fg-color), .16); }
-.document-title { font-weight: 600; padding: 4px 8px; }
+.document-title { font-weight: 600; min-height: 24px; padding: 6px; }
+.header-clock { min-height: 36px; padding: 0 6px; }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
@@ -157,7 +158,7 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .color-swatch { min-width: 18px; min-height: 20px; padding: 3px; }
 
 .system-status { font-feature-settings: "tnum"; }
-.battery-percent { font-size: 11px; font-weight: bold; color: #202226; }
+.battery-percent { font-family: "Capy Battery Numerals"; font-size: 11px; font-weight: bold; color: #202226; transform: translate(.5px, .5px); }
 .system-status.light .battery-percent { color: #fff; }
 .system-status .system-battery.charging .battery-percent { color: #13251a; }
 

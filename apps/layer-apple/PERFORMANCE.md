@@ -8,11 +8,161 @@ presentation. A display-link tick or completed Rust call is not a presentation.
 The iOS Simulator SDK does not expose drawable IDs or presentation callbacks;
 simulator runs omit these events and cannot establish presentation acceptance.
 
-This is instrumentation, not hardware performance acceptance. The workload
-matrix, physical input-to-pixel evidence, calibrated instrumentation overhead
-and ten-minute sustained sessions remain required on both platforms. The
-currently attached Mac display advertises 90 Hz; it cannot establish 120 Hz
-presentation. Keep failing workloads and unsupported measurements visible.
+One ten-minute 4K watercolor session is recorded on each physical platform below.
+Complete workload-matrix results, physical input-to-pixel evidence and calibrated
+instrumentation overhead remain required on both platforms. The current Mac
+display configuration advertises 90 Hz; this configuration cannot establish
+120 Hz presentation. Keep failing workloads and unsupported measurements visible.
+
+## Repeatable native drawing workloads
+
+Set `CAPY_WORKLOAD` to run a synthetic fixture through the same serial input
+owner, display link, Rust renderer, editor panels, history and recovery writer
+as ordinary drawing. Use a separate benchmark bundle identifier for device
+installs, and a separate DerivedData directory. The opt-in workload additionally
+uses a new private persistence root under `Caches/CapyPerformanceSessions` for
+every editor instance. It never reads or replaces the artist's normal settings,
+workspace or recovery copies. Ordinary launches have no workload timer.
+
+| Profile | Document | Paint layers, excluding paper | Brush / diameter | Synthetic prediction |
+| --- | --- | --- | --- | --- |
+| `ink` | 2048×2048 | 1 | G-Pen / 24 px | Off |
+| `ink-predicted` | 2048×2048 | 1 | G-Pen / 24 px | On |
+| `wet-watercolor` | 2048×2048 | 1 | Wet Watercolor / 320 px | On |
+| `layered-4k` | 4096×4096 | 8 | G-Pen / 24 px | On |
+| `wet-watercolor-4k` | 4096×4096 | 8 | Wet Watercolor / 320 px | On |
+
+The 4K cases retain seven translucent full-document underpaint layers and the
+active paint layer. Setup creates the document through the shared project job
+and uses ordinary UI actions for layers, fills, brush selection and size. The
+editor stays in its full default workspace. No brush quality settings are
+reduced. Ten seconds of drawing warm up the fixture before measurement.
+
+The versioned trajectory is in `DrawingWorkloadPlan.swift`: deterministic curves
+inside the document, pressure varying from 0.25 to 1, 240 samples/second, 1.5-second
+strokes and 0.1-second lift gaps. A main-run-loop producer delivers coalesced
+batches at 120 callbacks/second independently of render admission. Predicted
+points use the same native prediction path and remain visual-only. A delayed
+producer catches up; a backlog of one second aborts the run instead of silently
+dropping samples or lowering the input rate. Interval maxima expose producer
+lateness, which is synthetic scheduling delay, not a physical Pencil metric.
+
+`CAPY_WORKLOAD_SECONDS` is the measured duration after warm-up (default 600;
+allowed 1–1800). The run records separate setup, warm-up, measured, end and
+postlude markers. A ten-second postlude observes pen-up, deferred GPU work,
+recovery and idle transitions; its end does not prove that rendering drained.
+Trace recording defaults to the requested measurement plus a 140-second allowance
+for setup/warm-up/postlude, but normally finishes at the postlude. An explicit
+`CAPY_TRACE_SECONDS` overrides that limit, and can therefore truncate a run.
+
+Launch the built, isolated Mac app through Launch Services to foreground it;
+an occluded window cannot supply presentation evidence:
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+python3 apps/layer-apple/scripts/prepare.py
+python3 apps/layer-apple/scripts/project.py
+xcodebuild -quiet -project apps/layer-apple/CapyCanvas.xcodeproj \
+  -scheme CapyCanvas-Mac -configuration Release -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath apps/layer-apple/DerivedData/PerformanceMac \
+  PRODUCT_BUNDLE_IDENTIFIER=art.capycanvas.apple.mac.performance \
+  CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES build
+open -n --env CAPY_WORKLOAD=ink --env CAPY_WORKLOAD_SECONDS=600 \
+  --env CAPY_TRACE_DIRECTORY="$PWD/artifacts/performance/mac-ink" \
+  apps/layer-apple/DerivedData/PerformanceMac/Build/Products/Release/CapyCanvas-Mac.app \
+  --args -ApplePersistenceIgnoreState YES
+```
+
+For an installed iPad benchmark bundle:
+
+```sh
+xcodebuild -quiet -project apps/layer-apple/CapyCanvas.xcodeproj \
+  -scheme CapyCanvas-iPad -configuration Release -destination 'generic/platform=iOS' \
+  -derivedDataPath apps/layer-apple/DerivedData/PerformanceDevice \
+  PRODUCT_BUNDLE_IDENTIFIER=art.capycanvas.apple.ipad.performance \
+  DEVELOPMENT_TEAM="$CAPY_APPLE_TEAM" 'CODE_SIGN_IDENTITY=Apple Development' \
+  -allowProvisioningUpdates build
+xcrun devicectl device install app --device DEVICE_ID \
+  apps/layer-apple/DerivedData/PerformanceDevice/Build/Products/Release-iphoneos/CapyCanvas-iPad.app
+xcrun devicectl device process launch --device DEVICE_ID --terminate-existing \
+  --environment-variables '{"CAPY_WORKLOAD":"ink","CAPY_WORKLOAD_SECONDS":"600"}' \
+  art.capycanvas.apple.ipad.performance
+```
+
+Keep the benchmark window visible and leave its editor untouched. Only one
+benchmark window should run on each device. Copy traces from the benchmark's
+container using its bundle identifier. Trace metadata labels input as synthetic
+and records the fixture specification; reports separate the measured interval
+from startup and postlude. `measurement_completed` means a complete, non-aborted
+interval was recorded. It does not imply performance acceptance, pixel inclusion,
+physical input latency, or successful coverage of the other profiles. Review
+rejected input, frame errors, missing presentations, readiness and all warnings.
+The report retains the first and last presentation's distance from the measured
+interval boundaries, denied display-link admissions, frames without viewport
+submission and missing/zero-time completions. A completed input producer cannot
+establish continuous rendering if its window becomes occluded.
+
+## Physical ten-minute baseline: 2026-09-11
+
+Both Release apps completed version 1 of `wet-watercolor-4k`: 4096×4096, eight
+paint layers plus paper, Wet Watercolor at 320 px, synthetic pressure and
+prediction. Each ran ten measured minutes after ten seconds of drawing warm-up,
+followed by the ten-second postlude. The shared renderer and UI include incoming
+changes through `d8a130b`. No other build or GPU test ran during measurement.
+The iPad viewport was 2752×2064 physical pixels; Mac was 2400×1740 after window
+layout settled. Separate benchmark bundles and private persistence roots were used.
+
+| Measured interval | Physical iPad | Native Mac |
+| --- | ---: | ---: |
+| Duration, seconds | 600.000 | 600.009 |
+| Display maximum, Hz | 120 | 90 |
+| Nonpredicted samples delivered | 135,001 | 135,003 |
+| Actual presentations | 65,407 | 49,266 |
+| CPU owner service p50 / p95 / p99 / max, ms | 2.180 / 3.643 / 9.120 / 17.779 | 3.312 / 4.927 / 6.083 / 13.038 |
+| CPU service over 8.33 ms | 1,092 | 28 |
+| GPU queue span p50 / p95 / p99 / max, ms | 5.500 / 8.279 / 9.423 / 19.037 | 8.228 / 10.367 / 11.632 / 23.255 |
+| Missing GPU samples | 204 | 221 |
+| Presentation interval p50 / p95 / p99 / max, ms | 8.333 / 8.334 / 33.332 / 125.003 | 11.111 / 11.111 / 66.667 / 111.112 |
+| Positive display-link target lateness p50 / p95 / p99 / max, ms | 8.338 / 8.352 / 16.670 / 28.032 | 22.297 / 33.411 / 33.419 / 66.741 |
+| Display-link ticks denied admission / total | 1,132 / 66,914 | 241 / 49,882 |
+| Producer interval-maximum lateness p50 / p95 / p99 / max, ms | 26.783 / 36.283 / 39.233 / 44.115 | 47.481 / 55.118 / 56.533 / 57.713 |
+| Peak physical footprint, MiB | 1,798.05 | 1,910.91 |
+| First-to-last measured footprint growth, MiB | +0.17 | +148.83 |
+| Observed thermal states | Nominal | Nominal |
+
+Presentation distributions retain the deliberate pen-up gaps; their high
+percentiles must not all be called missed drawing frames. Every measured
+presentation exceeded its display-link target by more than 1 ms. Neither target
+lateness nor producer scheduling delay is physical input-to-pixel latency. GPU
+queue spans include CPU submission gaps and the uncalibrated profiler; skipped
+readbacks may bias their tails. They do not isolate GPU execution time.
+
+Both measured intervals have zero rejected input batches, missing presentation
+callbacks and zero-time presentations. The full traces have zero renderer errors
+and recorder overflow. Each interval includes 375 admitted frames without a
+viewport submission. The first/last actual presentations lie within 8 ms of
+both interval boundaries on both hosts. The Mac's completed canvas was captured
+after export and visibly contains the synthetic paint; no per-frame pixel oracle
+or physical input latency assertion is inferred from that capture. Memory
+includes document/history, ordinary recovery work and recorder storage; the Mac
+growth remains to be characterized. Nominal thermal samples do not establish
+the absence of clock-frequency changes.
+
+These results leave the 8.33 ms tail budget and complete performance acceptance
+open. The other four profiles still need ten-minute runs on both platforms,
+along with physical input, overhead calibration and Mac 120 Hz presentation
+evidence on a suitable display configuration. Artifacts stay local under
+`artifacts/performance/{ipad,mac}-workload-sustained`.
+
+A preceding twenty-second ink experiment reduced the Metal drawable count from
+three to two. On iPad it increased median owner service from 1.113 to 9.482 ms,
+with median drawable acquisition at 8.305 ms and median presentation intervals
+at 16.667 ms. The Mac's median target lateness improved, but CPU budget
+exceedances increased. The experiment was reverted on both targets; these final
+runs retain three drawables. The retained scheduling change publishes native
+canvas-readiness accessibility updates once per attached surface instead of
+every submitted frame. The synthetic producer also leaves lift gaps asleep.
+The pilot changed multiple factors, so it does not isolate this change's benefit.
 
 ## Capture locally
 
@@ -126,6 +276,15 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | 8 GPU status | observation time, support (0 uninitialized, 1 supported, 2 unavailable), requested/skipped/invalid/pending counts, poll-error flag |
 | 9 state | observation time, frame ID, flags (1 canvas ready, 2 catalog loaded, 4 another frame needed, 8 shaders ready), frame-error flag |
 | 10 activity | observation time, display-link awake flag |
+| 11 workload | observation time, phase, profile ID, phase-dependent counters |
+
+Workload phases: 0 configuration, 1 warm-up begins, 2 measurement begins,
+3 measurement ends, 4 postlude ends, 5 failure, 6 producer sample. Phase 0's
+remaining fields are width, height, paint-layer count, brush ID, diameter ×1000
+and prediction flag. Phases 2/3/6 record cumulative nonpredicted sample and batch
+counts, followed by the maximum producer lateness since its previous sample.
+The metadata `workload` object includes the profile version, expected duration
+and sample rate. These additions retain schema 1; older traces omit them.
 
 ## Fast checks
 
@@ -136,6 +295,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
   apps/layer-apple/Shared/Bridge/FrameTrace.swift \
   apps/layer-apple/tests/frame-trace.swift -o /tmp/capy-frame-trace-tests
 /tmp/capy-frame-trace-tests
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/DrawingWorkloadPlan.swift \
+  apps/layer-apple/tests/drawing-workload-plan.swift -o /tmp/capy-workload-plan-tests
+/tmp/capy-workload-plan-tests
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/CanvasFrameDriver.swift \
+  apps/layer-apple/tests/frame-driver.swift -o /tmp/capy-frame-driver-tests
+/tmp/capy-frame-driver-tests
 ```
 
 The GPU test requires timestamp-capable hardware and checks frame identity,
@@ -144,3 +311,6 @@ concurrent capacity, overflow, freeze and late presentation records. The Python
 tests preserve active missed frames while excluding idle gaps, prevent missing
 or invalid timings becoming zeros, deduplicate input receipt associations and
 exclude shader startup from the ready subset. These tests use no UI automation.
+Workload checks cover contact termination, lift gaps, pressure, coordinates and
+invalid configuration. Report checks retain incomplete/failed measurements and
+missing render observations even when the input producer completes.

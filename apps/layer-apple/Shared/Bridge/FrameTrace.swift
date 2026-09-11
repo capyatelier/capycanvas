@@ -5,7 +5,7 @@ import Darwin
 /// Opt-in local observations. Fixed-size records and a hard cap bound memory;
 /// no document names, pixels, coordinates or hardware/account IDs are collected.
 struct FrameTraceEvent {
-    enum Kind: UInt8 { case tick, frame, input, drawable, presented, memory, display, gpu, gpuStatus, state, activity }
+    enum Kind: UInt8 { case tick, frame, input, drawable, presented, memory, display, gpu, gpuStatus, state, activity, workload }
     let kind: Kind
     var a: UInt64 = 0, b: UInt64 = 0, c: UInt64 = 0, d: UInt64 = 0, e: UInt64 = 0
     var f: UInt64 = 0, g: UInt64 = 0, h: UInt64 = 0, i: UInt64 = 0, j: UInt64 = 0
@@ -28,20 +28,21 @@ final class FrameTrace: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private let output: URL?
     private let platform: UInt32
+    private let workload: [String: Any]?
 
-    init(duration: TimeInterval, capacity: Int, platform: UInt32, output: URL? = nil, started: UInt64 = FrameTrace.now()) {
+    init(duration: TimeInterval, capacity: Int, platform: UInt32, output: URL? = nil, started: UInt64 = FrameTrace.now(), workload: [String: Any]? = nil) {
         self.duration = duration; self.capacity = max(1, capacity)
-        self.platform = platform; self.output = output; self.started = started
+        self.platform = platform; self.output = output; self.started = started; self.workload = workload
         events.reserveCapacity(self.capacity)
     }
-    static func configured(platform: UInt32) -> FrameTrace? {
+    static func configured(platform: UInt32, defaultDuration: TimeInterval? = nil, workload: [String: Any]? = nil) -> FrameTrace? {
         let environment = ProcessInfo.processInfo.environment
-        guard let text = environment["CAPY_TRACE_SECONDS"], let seconds = Double(text),
+        guard let text = environment["CAPY_TRACE_SECONDS"] ?? defaultDuration.map(String.init(describing:)), let seconds = Double(text),
             seconds.isFinite, seconds > 0, seconds <= 3600 else { return nil }
         let directory = environment["CAPY_TRACE_DIRECTORY"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Performance", isDirectory: true)
         let trace = FrameTrace(duration: seconds, capacity: min(1_000_000, max(2048, Int(ceil(seconds * 1200)))),
-            platform: platform, output: directory.appendingPathComponent("frames-\(UUID().uuidString).jsonl"))
+            platform: platform, output: directory.appendingPathComponent("frames-\(UUID().uuidString).jsonl"), workload: workload)
         trace.startTimer()
         return trace
     }
@@ -114,6 +115,7 @@ final class FrameTrace: @unchecked Sendable {
             let header: [String: Any] = ["schema": 1, "clock": "CACurrentMediaTime nanoseconds", "platform": platform,
                 "configuration": configuration, "duration_seconds": duration, "started_ns": started,
                 "capacity": capacity, "dropped_records": snapshot.dropped, "record_stride_bytes": MemoryLayout<FrameTraceEvent>.stride,
+                "input_source": workload == nil ? "platform" : "synthetic", "workload": workload as Any? ?? NSNull(),
                 "input_association": "received by owner before frame; pixel inclusion is not established"]
             // Freeze once, then stream JSONL outside both UI and render queues.
             // There is no full-trace JSON allocation or copy on the hot path.

@@ -499,18 +499,30 @@ impl DockLayout {
             .find(|d| d.id == id && d.axis == Axis::Horizontal)?;
         let left = position[0] - divider.parent.x - WORKSPACE_SPACING * 0.5;
         let right = divider.parent.x + divider.parent.width - position[0] - WORKSPACE_SPACING * 0.5;
+        let should_collapse = |node: &DockNode, width: f32| {
+            let minimum = tab_min_width(node, self).max(ribbon_cross_min(
+                node,
+                Axis::Vertical,
+                divider.parent.height,
+                self,
+            ));
+            // Use the unclamped drag width: collapse more than 25% into the
+            // allocation minimum, or at the existing icon-strip threshold.
+            width < minimum * 0.75 || width <= TILE_SIZE
+        };
         let root = if divider.band {
-            if (if divider.reversed { right } else { left }) > TILE_SIZE {
+            let node = &self.bands.iter().find(|b| b.id == id)?.root;
+            if !should_collapse(node, if divider.reversed { right } else { left }) {
                 return None;
             }
-            self.bands.iter().find(|b| b.id == id)?.root.id()
+            node.id()
         } else {
             let DockNode::Split { first, second, .. } = self.node(id)? else {
                 return None;
             };
-            if left <= TILE_SIZE {
+            if should_collapse(first, left) {
                 first.id()
-            } else if right <= TILE_SIZE {
+            } else if should_collapse(second, right) {
                 second.id()
             } else {
                 return None;
@@ -725,6 +737,107 @@ mod tests {
     fn geometry(layout: &DockLayout) -> ResolvedLayout {
         layout.workspace(VIEW[0], VIEW[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
     }
+
+    fn assert_collapse_threshold(
+        layout: &DockLayout,
+        divider: u32,
+        root: u32,
+        right: bool,
+        threshold: f32,
+        inclusive: bool,
+    ) {
+        let resolved = geometry(layout);
+        let d = resolved.dividers.iter().find(|d| d.id == divider).unwrap();
+        for (width, expected) in [
+            (threshold + 0.5, None),
+            (threshold, inclusive.then_some(root)),
+            (threshold - 0.5, Some(root)),
+        ] {
+            let x = if right {
+                d.parent.x + d.parent.width - width - WORKSPACE_SPACING * 0.5
+            } else {
+                d.parent.x + width + WORKSPACE_SPACING * 0.5
+            };
+            assert_eq!(
+                layout.collapse_at_divider(divider, [x, d.bounds.y + 20.], VIEW),
+                expected,
+                "divider {divider}, root {root}, requested width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn resize_collapse_uses_minimum_width_on_both_edges() {
+        for layout in [DockLayout::default(), DockLayout::editor_default()] {
+            for (panel, minimum) in [
+                (Panel::Brushes, TOOL_PANEL_MIN_WIDTH),
+                (Panel::Layers, LAYERS_MIN_WIDTH),
+            ] {
+                let band = layout
+                    .bands
+                    .iter()
+                    .find(|b| b.root.group_for(panel).is_some())
+                    .unwrap();
+                assert_collapse_threshold(
+                    &layout,
+                    band.id,
+                    band.root.id(),
+                    band.edge == Edge::Right,
+                    minimum * 0.75,
+                    false,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resize_collapse_uses_each_nested_column_and_preserves_old_threshold() {
+        let mut layout = DockLayout::default();
+        let DockNode::Split { axis, .. } = &mut layout.bands[0].root else {
+            unreachable!();
+        };
+        *axis = Axis::Horizontal;
+        assert_collapse_threshold(&layout, 4, 5, false, TOOL_PANEL_MIN_WIDTH * 0.75, false);
+        // Brush size has no content minimum: the existing icon-width trigger
+        // still wins for this narrow column.
+        assert_collapse_threshold(&layout, 4, 6, true, TILE_SIZE, true);
+
+        // The outer divider uses the combined minimum of its two columns.
+        assert_collapse_threshold(
+            &layout,
+            3,
+            4,
+            false,
+            (TOOL_PANEL_MIN_WIDTH + WORKSPACE_SPACING) * 0.75,
+            false,
+        );
+    }
+
+    #[test]
+    fn resize_collapse_follows_measured_minimum_and_ignores_row_dividers() {
+        let mut layout = DockLayout::default();
+        layout.fit_tab_groups.push(5);
+        layout.measurements.push(PanelMeasurement {
+            panel: Panel::Brushes,
+            tab_width: 300.,
+            content_height: 0.,
+        });
+        assert_collapse_threshold(&layout, 3, 4, false, 320. * 0.75, false);
+        assert_eq!(layout.collapse_at_divider(4, [0., 0.], VIEW), None);
+
+        // Standalone tool ribbons retain their existing resize behavior.
+        layout.bands[2].edge = Edge::Left;
+        let d = geometry(&layout)
+            .dividers
+            .into_iter()
+            .find(|d| d.id == 1)
+            .unwrap();
+        assert_eq!(
+            layout.collapse_at_divider(1, [d.parent.x, d.bounds.y + 20.], VIEW),
+            None
+        );
+    }
+
     #[test]
     fn collapsed_parent_owns_drawers_until_it_reveals_its_collapsed_child() {
         let mut layout = DockLayout::default();

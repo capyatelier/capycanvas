@@ -178,6 +178,37 @@ fn native_fullscreen_header_clock_and_battery() {
     }));
     let battery = named(native.root.upcast_ref(), "system-battery").unwrap();
     assert!(battery.is_visible() && battery.has_css_class("low"));
+    let percent = battery
+        .first_child()
+        .unwrap()
+        .last_child()
+        .unwrap()
+        .downcast::<gtk::Label>()
+        .unwrap();
+    until(|| percent.is_mapped() && battery.width() > 0);
+    // The embedded face must resolve in the real GTK font map; otherwise
+    // desktop font substitutions silently change the compact icon's numerals.
+    assert_eq!(
+        percent
+            .layout()
+            .iter()
+            .run_readonly()
+            .unwrap()
+            .item()
+            .analysis()
+            .font()
+            .describe()
+            .family()
+            .as_deref(),
+        Some("Capy Battery Numerals")
+    );
+    assert_eq!(battery.width(), layer_ui::TILE_SIZE as i32);
+    assert_eq!(battery.height(), layer_ui::TILE_SIZE as i32);
+    native.set_visibility(false, layer_ui::ClockVisibility::Always);
+    assert!(battery.is_visible());
+    native.set_visibility(true, layer_ui::ClockVisibility::Never);
+    assert!(!battery.is_visible() && !native.root.is_visible());
+    native.set_visibility(true, layer_ui::ClockVisibility::Fullscreen);
     native.show_battery(Some(crate::system_status::Battery {
         percent: 8,
         charging: true,

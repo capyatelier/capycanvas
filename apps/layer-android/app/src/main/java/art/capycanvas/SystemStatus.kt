@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -53,7 +54,7 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
 }
 
 /** Native broadcasts/settings drive this small UI island, independently of the render owner. */
-@Composable internal fun SystemStatus(showClock: Boolean = true) {
+@Composable internal fun SystemStatus() {
     val context = LocalContext.current
     var time by remember(context) { mutableStateOf(DateFormat.getTimeFormat(context).format(Date())) }
     var battery by remember(context) { mutableStateOf<DeviceBattery?>(null) }
@@ -84,10 +85,16 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
             context.contentResolver.unregisterContentObserver(observer)
         }
     }
-    Row(Modifier.testTag("system-status").padding(horizontal = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (showClock) Text(time, Modifier.testTag("system-clock"), maxLines = 1, fontWeight = FontWeight.Medium)
-        battery?.let { BatteryIndicator(it) }
+    Row(Modifier.testTag("system-status"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.height(36.dp).testTag("system-clock").semantics(mergeDescendants = true) {}.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+            Text(time, maxLines = 1, fontWeight = FontWeight.Medium)
+        }
+        battery?.let {
+            Box(Modifier.size(36.dp).testTag("system-battery-tile"), contentAlignment = Alignment.Center) {
+                BatteryIndicator(it)
+            }
+        }
     }
 }
 

@@ -52,6 +52,7 @@ final class NativeOwner: @unchecked Sendable {
     var persistenceRoot: URL? { persistence.root }
 
     init(platform: UInt32, scene: String, persistence: EditorPersistence = .shared,
+        traceDuration: TimeInterval? = nil, workload: [String: Any]? = nil,
         receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
         let queue = DispatchQueue(label: "art.capycanvas.render", qos: .userInteractive)
         guard let handle = queue.sync(execute: { capy_apple_create(platform) }) else {
@@ -59,7 +60,7 @@ final class NativeOwner: @unchecked Sendable {
         }
         self.queue = queue; self.handle = handle; self.receive = receive
         self.persistence = persistence; self.scene = scene
-        trace = FrameTrace.configured(platform: platform)
+        trace = FrameTrace.configured(platform: platform, defaultDuration: traceDuration, workload: workload)
         // Reserve the first owner operation before exposing this instance.
         // Disk reads run on the I/O queue; no input or surface task can overtake
         // restoration, and the UI thread never waits for the filesystem.
@@ -411,6 +412,10 @@ final class NativeOwner: @unchecked Sendable {
     func observeTick(now: UInt64, target: UInt64, admitted: Bool) {
         if let trace, trace.isRecording { trace.record(FrameTraceEvent(kind: .tick, a: now, b: target, c: admitted ? 1 : 0)) }
     }
+    func observeWorkload(_ event: FrameTraceEvent) {
+        if let trace, trace.isRecording { trace.record(event) }
+    }
+    func finishTrace() { perform { [self] in trace?.finish() } }
     func observeActivity(active: Bool) {
         if let trace, trace.isRecording { trace.record(FrameTraceEvent(kind: .activity, a: FrameTrace.now(), b: active ? 1 : 0)) }
     }

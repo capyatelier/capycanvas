@@ -8092,10 +8092,17 @@ mod tests {
                     divider.bounds.x + divider.bounds.width * 0.5,
                     divider.bounds.y + 20.,
                 ];
-                let collapse_x = if divider.reversed {
-                    divider.parent.x + divider.parent.width - TILE_SIZE * 0.5
+                let minimum = if group == 5 {
+                    crate::TOOL_PANEL_MIN_WIDTH
                 } else {
-                    divider.parent.x + TILE_SIZE * 0.5
+                    crate::LAYERS_MIN_WIDTH
+                };
+                let x_for_width = |width| {
+                    if divider.reversed {
+                        divider.parent.x + divider.parent.width - width - WORKSPACE_SPACING * 0.5
+                    } else {
+                        divider.parent.x + width + WORKSPACE_SPACING * 0.5
+                    }
                 };
                 let drag = |s: &mut UiSession<Recorder>, phase, x| {
                     s.dispatch(UiAction::DragDivider {
@@ -8107,8 +8114,15 @@ mod tests {
                     .unwrap();
                 };
                 drag(&mut s, ContactPhase::Down, start[0]);
-                drag(&mut s, ContactPhase::Move, (start[0] + collapse_x) * 0.5);
-                drag(&mut s, ContactPhase::Move, collapse_x);
+                for width in [minimum, minimum * 0.75] {
+                    drag(&mut s, ContactPhase::Move, x_for_width(width));
+                    assert!(!s.state.workspace.layout.is_collapsed(root));
+                }
+                drag(
+                    &mut s,
+                    ContactPhase::Move,
+                    x_for_width(minimum * 0.75 - 0.5),
+                );
                 assert!(s.state.workspace.layout.is_collapsed(root));
                 let collapsed = s.state.workspace.clone();
                 drag(&mut s, ContactPhase::Move, start[0]);
