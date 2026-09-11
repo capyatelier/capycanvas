@@ -1,7 +1,7 @@
 //! Local project transport. Only fully flushed sibling files replace a drawing.
 use layer_ui::DocumentLocation;
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{BufWriter, Read, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
@@ -107,12 +107,39 @@ pub(crate) fn atomic_write(
     // Close before replacement on Windows, including all error and unwind paths.
     drop(stream);
     check_cancelled(cancel)?;
-    crate::settings::replace(&temporary.0, &destination).map_err(|e| io_error("replace saved", e))
+    replace_when_available(&temporary.0, &destination, cancel)
 }
 
+fn replace_when_available(
+    source: &Path,
+    destination: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    // Windows can briefly deny rename after a picker creates its placeholder,
+    // or while a scanner opens the new file. Retry only on the file worker,
+    // keeping the flushed sibling intact; never fall back to truncation.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        check_cancelled(cancel)?;
+        match crate::settings::replace(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if !cfg!(target_os = "windows")
+                    || !matches!(error.raw_os_error(), Some(5 | 32 | 33))
+                    || remaining.is_zero()
+                {
+                    return Err(io_error("replace saved", error));
+                }
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(20)));
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     pub(super) fn directory() -> PathBuf {
         let directory = std::env::temp_dir().join(format!(
             "capy-document-test-{}-{}",
@@ -180,6 +207,71 @@ mod tests {
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
         fs::remove_dir(destination).unwrap();
         fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn temporary_destination_lock_retries_on_worker_and_cancellation_preserves_file() {
+        use std::{
+            os::windows::fs::OpenOptionsExt,
+            sync::{Arc, mpsc},
+            time::Duration,
+        };
+        for cancelled in [false, true] {
+            let directory = directory();
+            let path = directory.join("drawing.capy");
+            let project = layer_ui::new_drawing(32, 24).unwrap();
+            std::fs::write(&path, b"previous destination").unwrap();
+            let mut locked = Some(
+                OpenOptions::new()
+                    .read(true)
+                    .share_mode(0)
+                    .open(&path)
+                    .unwrap(),
+            );
+            let cancel = Arc::new(AtomicBool::new(false));
+            let state = cancel.clone();
+            let output = path.clone();
+            let (ready, started) = mpsc::channel();
+            let (done, completion) = mpsc::channel();
+            let expected = project.clone();
+            let worker = std::thread::spawn(move || {
+                let result = atomic_write(&output, &state, |file| {
+                    project.write(file)?;
+                    ready.send(()).unwrap();
+                    Ok(())
+                });
+                done.send(result).unwrap();
+            });
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                matches!(completion.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "Temporary destination contention must not immediately fail a durable write"
+            );
+            if cancelled {
+                cancel.store(true, Ordering::Release);
+            } else {
+                drop(locked.take());
+            }
+            let result = completion.recv_timeout(Duration::from_secs(2)).unwrap();
+            worker.join().unwrap();
+            drop(locked.take());
+            if cancelled {
+                assert_eq!(result.unwrap_err(), "Document operation cancelled");
+                assert_eq!(fs::read(&path).unwrap(), b"previous destination");
+            } else {
+                result.unwrap();
+                assert_eq!(
+                    layer_core::Project::read(File::open(&path).unwrap(), Default::default())
+                        .unwrap(),
+                    expected
+                );
+            }
+            assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+            fs::remove_file(&path).unwrap();
+            fs::remove_dir(&directory).unwrap();
+        }
     }
     #[test]
     fn location_rejects_relative_paths_and_invalid_names() {

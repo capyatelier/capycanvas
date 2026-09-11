@@ -274,7 +274,7 @@ transform cancellation. It leaves Tool Settings visible, allowing the Color
 fixture to additionally test a narrow fractional-width allocation. These checks
 do not establish physical input, full-editor parity or presentation acceptance.
 
-## Document transport checkpoint
+## Native document workflows
 
 The Windows host has a bounded document worker for source-project saving and
 background New/Open preparation. The worker writes a flushed sibling temporary
@@ -283,7 +283,7 @@ separate renderer on the same D3D12 device, and retires replaced GPU resources
 off the canvas owner. Shared checkpoints and document generations protect newer
 edits during save, open and close decisions.
 
-The native File menu now provides New, Open, Save, Save As and Close. New drawing
+The native File menu provides New, Open, Save, Save As, Export PNG and Close. New drawing
 uses shared size limits and numeric expressions. Open and Save use the Windows
 App SDK desktop pickers; disk work and GPU preparation remain on the document
 worker. A modified drawing presents Save, Discard Changes and Cancel before
@@ -295,9 +295,18 @@ waits for document authorization and outstanding dialog callbacks, and releases
 retained XAML controls before closing their window context. The opt-in UI trace
 also writes local lifecycle.log stage timings.
 
-PNG export and multiple native windows remain pending; their menu commands stay
-disabled until connected. Full workspace, physical input, device recovery,
-presentation and release acceptance remain open.
+Export PNG captures the full document in sRGB with transparency, independently
+of viewport zoom, rotation and native chrome. The canvas owner submits a GPU
+snapshot after presentation; GPU waiting, row packing, PNG encoding and atomic
+replacement run on the document worker. Export preserves the project destination
+and unsaved state. Edits made before a deferred capture is ready require retry;
+edits after capture cannot change the exported snapshot. File replacement retries
+brief Windows access or sharing failures on the worker for up to one second,
+with cancellation checks; persistent failure preserves the prior file.
+
+Additional native windows remain pending, with New Window disabled. Full
+workspace, physical input, device recovery, presentation and release acceptance
+remain open.
 
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-documents.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
@@ -305,7 +314,7 @@ presentation and release acceptance remain open.
 
 This fixture uses isolated profiles and synthetic projects. It drives actual
 WinUI controls and native pickers, verifies Unicode paths, save checkpoints,
-corrupt-file recovery and saved/untitled close decisions, and requires exit code
+corrupt-file recovery, PNG export and saved/untitled close decisions, and requires exit code
 zero within the original five-second close limit. Standard picker HWND controls
 are used where Windows exposes no UI Automation pattern. This is controlled
 automation, not evidence of physical pen delivery.

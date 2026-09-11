@@ -152,6 +152,23 @@ File-Command 'save_document';Picker 'Save As';Choose-Path $first;Idle
 Wait-Until {(Test-Path -LiteralPath $first) -and (Model).state.document_file.location.uri -eq $first} 'Save did not write the chosen Unicode path'
 $hash=(Get-FileHash -LiteralPath $first).Hash
 Draw
+$exported=Join-Path $run 'Export 日本語.png'
+File-Command 'export_document';Picker 'Save As';Picker-Button '2';Idle
+if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){
+    throw 'Cancelled export changed the project checkpoint'
+}
+File-Command 'export_document';Picker 'Save As';Choose-Path $exported;Idle
+Wait-Until {Test-Path -LiteralPath $exported} 'Export did not create the chosen PNG'
+$png=[IO.File]::ReadAllBytes($exported)
+if($png.Length -lt 45 -or [Convert]::ToHexString($png[0..7]) -ne '89504E470D0A1A0A' -or
+    [Convert]::ToHexString($png[12..23]) -ne '494844520000008000000060' -or
+    [Convert]::ToHexString($png[($png.Length-8)..($png.Length-1)]) -ne '49454E44AE426082'){
+    throw 'Export must be a complete PNG of the 128 by 96 document'
+}
+if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){
+    throw 'PNG export incorrectly acknowledged a project save'
+}
+
 File-Command 'save_document';Idle
 Wait-Until {$current=Model;$current -and !$current.state.document_file.modified} 'Save to existing location did not clear the captured checkpoint'
 if((Get-FileHash -LiteralPath $first).Hash -eq $hash){throw 'Save did not update the source project'}
@@ -208,6 +225,7 @@ if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reporte
 [PSCustomObject]@{
     shared_new_size_and_validation='passed'
     save_cancel_and_unicode_path='passed'
+    png_export_cancel_dimensions_and_checkpoint='passed'
     save_existing_and_save_as='passed'
     corrupt_open_preserves_live_document='passed'
     replacement_cancel_and_save_before_open='passed'

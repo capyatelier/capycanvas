@@ -83,10 +83,11 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         {L"width",N((*extent)[0])},{L"height",N((*extent)[1])}});
                 if(type==L"confirm_close")response.Insert(L"decision",S(choice==ContentDialogResult::Primary?L"save":
                     choice==ContentDialogResult::Secondary?L"discard":L"cancel"));
-            } else if(type==L"save"||type==L"open") {
+            } else if(type==L"save"||type==L"open"||type==L"export") {
                 auto path=str(object(request,L"location"),L"uri");
                 if(path.empty()) {
-                    auto extension=L"."+str(options,L"extension");
+                    bool exporting=type==L"export";
+                    auto extension=L"."+str(options,exporting?L"export_extension":L"extension");
                     if(type==L"open") {
                         Pickers::FileOpenPicker open(window.AppWindow().Id());
                         open.CommitButtonText(str(options,L"open_label"));
@@ -94,9 +95,9 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                         picker=open.PickSingleFileAsync();
                     } else {
                         Pickers::FileSavePicker save(window.AppWindow().Id());
-                        save.CommitButtonText(str(options,L"save_label"));
+                        save.CommitButtonText(str(options,exporting?L"export_label":L"save_label"));
                         save.DefaultFileExtension(extension);save.SuggestedFileName(str(request,L"name"));
-                        save.FileTypeChoices().Insert(str(options,L"filter_label"),single_threaded_vector<hstring>({extension}));
+                        save.FileTypeChoices().Insert(str(options,exporting?L"export_filter_label":L"filter_label"),single_threaded_vector<hstring>({extension}));
                         picker=save.PickSaveFileAsync();
                     }
                     auto selected=co_await picker;

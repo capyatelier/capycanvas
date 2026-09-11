@@ -453,7 +453,7 @@ impl CommandId {
             Self::ExportDocument => {
                 matches!(
                     platform,
-                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android | Platform::Windows
                 )
             }
             Self::Website | Self::SourceCode => {

@@ -992,6 +992,7 @@ dependencies = [
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
+ "png",
  "pollster",
  "serde",
  "serde_json",

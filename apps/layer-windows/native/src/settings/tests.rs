@@ -31,10 +31,11 @@ impl Directory {
 impl Drop for Directory {
     fn drop(&mut self) {
         // Resolve and verify the owned test directory before recursive cleanup.
-        if let Ok(path) = fs::canonicalize(&self.path) {
-            if path.parent() == Some(self.base.as_path()) && path == self.path {
-                let _ = fs::remove_dir_all(path);
-            }
+        if let Ok(path) = fs::canonicalize(&self.path)
+            && path.parent() == Some(self.base.as_path())
+            && path == self.path
+        {
+            let _ = fs::remove_dir_all(path);
         }
     }
 }

@@ -175,9 +175,16 @@ impl CapyHost {
         gpu.queue().present(target);
         self.blank_presented = true;
         gpu.device().poll(wgpu::PollType::Poll).map_err(err)?;
+        if let Some(service) = self.documents.as_mut() {
+            service.after_frame(&mut self.native)?;
+        }
         Ok(i32::from(self.native.dirty))
     }
 }
+/// # Safety
+/// Call on the panel's XAML thread. `panel` must point to a live
+/// ISwapChainPanelNative interface. Keep the panel alive until the swap chain
+/// is detached on that thread and the returned host is destroyed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_create(
     panel: *mut c_void,
@@ -199,6 +206,10 @@ pub unsafe extern "C" fn capy_create(
         }
     }
 }
+/// # Safety
+/// `host` must be null or the uniquely owned pointer from `capy_create`, freed
+/// exactly once. Stop input/render callers and finish service callbacks first;
+/// detach the swap chain on the panel's XAML thread before destroying the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_destroy(host: *mut CapyHost) {
     if !host.is_null() {
@@ -209,6 +220,10 @@ pub unsafe extern "C" fn capy_destroy(host: *mut CapyHost) {
 pub extern "C" fn capy_error() -> *const c_char {
     ERROR.with(|v| v.borrow().as_ptr())
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// `wake` and its `context` must stay valid until `capy_finish_services` returns.
+/// The callback must tolerate concurrent worker calls and must not unwind.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_start_services(
     host: *mut CapyHost,
@@ -238,6 +253,8 @@ pub unsafe extern "C" fn capy_start_services(
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_poll_services(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
@@ -245,6 +262,9 @@ pub unsafe extern "C" fn capy_poll_services(host: *mut CapyHost) -> i32 {
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// Keep service callback code and context alive until this function returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
     let Some(host) = (unsafe { host.as_mut() }) else {
@@ -282,6 +302,9 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         }
     }
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// Call from the canvas owner, before acquiring surface images.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_prepare_gpu(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
@@ -289,6 +312,10 @@ pub unsafe extern "C" fn capy_prepare_gpu(host: *mut CapyHost) -> i32 {
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// Call on the panel's XAML thread with the canvas owner paused and no acquired
+/// image; surface configuration attaches the swap chain to that panel.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_resize(
     host: *mut CapyHost,
@@ -322,6 +349,10 @@ pub unsafe extern "C" fn capy_resize(
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// For nonzero `count`, `records` must point to that many initialized, aligned
+/// CapyPointer values, readable and unchanged throughout the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_pointer(
     host: *mut CapyHost,
@@ -355,6 +386,10 @@ unsafe fn read_json<'a>(json: *const c_char) -> Result<&'a str, String> {
     }
     unsafe { CStr::from_ptr(json) }.to_str().map_err(err)
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// `json` must be null or a readable NUL-terminated buffer that remains unchanged
+/// for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
@@ -367,6 +402,10 @@ pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// `json` must be null or a readable NUL-terminated buffer that remains unchanged
+/// for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
@@ -384,6 +423,10 @@ pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const 
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// `json` must be null or a readable NUL-terminated buffer that remains unchanged
+/// for the duration of this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
@@ -393,6 +436,8 @@ pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) ->
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_scroll(
     host: *mut CapyHost,
@@ -410,6 +455,8 @@ pub unsafe extern "C" fn capy_scroll(
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_chrome(
     host: *mut CapyHost,
@@ -441,6 +488,8 @@ pub unsafe extern "C" fn capy_chrome(
         Ok(i32::from(reply.handled) | (i32::from(reply.dismiss_popups) << 1))
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
@@ -466,10 +515,15 @@ pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
         Ok(1)
     })
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation: u64) -> i32 {
     guard(host, |host| host.frame(now, presentation))
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// A nonnull result belongs to the caller and must be freed with `capy_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
@@ -488,6 +542,11 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     });
     result
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// `json` must be null or a readable NUL-terminated buffer that remains unchanged
+/// for the duration of this call.
+/// A nonnull result belongs to the caller and must be freed with `capy_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_query(host: *mut CapyHost, json: *const c_char) -> *mut c_char {
     let mut result = std::ptr::null_mut();
@@ -502,6 +561,9 @@ pub unsafe extern "C" fn capy_query(host: *mut CapyHost, json: *const c_char) ->
 }
 /// Diagnostic identity for app-only ETW correlation. Never treat submission
 /// metadata or this steady-content probe as physical input/display timing.
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
+/// A nonnull result belongs to the caller and must be freed with `capy_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_surface_info(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
@@ -535,6 +597,9 @@ pub unsafe extern "C" fn capy_surface_info(host: *mut CapyHost) -> *mut c_char {
     result
 }
 /// Stateless shared numeric policy; safe on the UI thread without a host.
+/// # Safety
+/// `json` must be null or a readable NUL-terminated buffer that remains unchanged
+/// for the duration of this call. Free a nonnull result with `capy_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_number(json: *const c_char) -> *mut c_char {
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<CString, String> {
@@ -554,12 +619,18 @@ pub unsafe extern "C" fn capy_number(json: *const c_char) -> *mut c_char {
         }
     }
 }
+/// # Safety
+/// `value` must be null or an unmodified, still-owned string returned by
+/// `capy_snapshot`, `capy_query`, `capy_surface_info` or `capy_number`, freed once.
+/// Never pass the borrowed pointer returned by `capy_error`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_string_free(value: *mut c_char) {
     if !value.is_null() {
         unsafe { drop(CString::from_raw(value)) }
     }
 }
+/// # Safety
+/// `host` must be null or a live host exclusively accessed by this caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_suspend(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
@@ -567,6 +638,8 @@ pub unsafe extern "C" fn capy_suspend(host: *mut CapyHost) -> i32 {
         Ok(0)
     })
 }
+/// # Safety
+/// `host` must be null or a valid host with no concurrent mutation or destruction.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_view_revision(host: *const CapyHost) -> u64 {
     unsafe { host.as_ref() }.map_or(0, |h| h.native.session.state().camera.revision)

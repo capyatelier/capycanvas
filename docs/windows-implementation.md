@@ -655,3 +655,56 @@ five isolated settings-storage launches, and the combined header/Preferences
 and workspace review. All eight owned review launches exit with code zero
 within the unchanged shutdown bound. These checks do not add physical-input,
 visual workspace parity or 120 Hz presentation acceptance.
+
+### Windows PNG export milestone
+
+The native File menu now enables Export PNG with the shared filename, action
+label and PNG file filter. Picker cancellation leaves the drawing, its dirty
+state and its project destination intact. Export completion never acknowledges
+a project save.
+
+The canvas owner defers capture until staged shaders and document edits are ready,
+then submits an independently owned GPU snapshot after presentation. GPU waiting,
+row packing, shared sRGB PNG encoding and atomic destination replacement run on
+the existing document worker. A document changed before deferred capture is
+rejected with a retry message; edits after capture cannot change the snapshot.
+No viewport zoom, rotation, cursor or native chrome enters the exported image.
+
+Validation includes three adapter cases for cancellation/invalid destinations,
+mismatched responses and stale deferred capture. The hardware D3D12 fixture
+decodes a 63 by 47 RGBA PNG byte-for-byte, including transparency and the sRGB
+tag, while the viewport is smaller and rotated. It verifies later edits,
+preserved project checkpoints, a locked destination preserving its previous
+bytes, retry, temporary-file cleanup, and a detached ticket completing on a
+worker after the live renderer is destroyed.
+
+The native document fixture also drives Export PNG through the real Windows
+picker, cancels and accepts Unicode paths, checks the full document dimensions,
+and confirms that unsaved status and the project destination survive export.
+The surrounding New/Open/Save/Save As and close decisions continue to pass.
+
+This adds PNG export to the existing single-window document workflow. Additional windows, full
+workspace parity, physical input, broader lifecycle/DPI/device recovery and
+release packaging remain open. The strict v4 filter reference difference and
+deferred presentation/input-latency gates are unchanged.
+
+A final native regression caught a transient access denial replacing a newly
+picked project's empty placeholder. The live drawing was preserved and the
+destination allowed exclusive access when inspected afterward; the process
+holding it during failure was not identified. Windows App SDK placeholder
+creation is also reported [upstream](https://github.com/microsoft/WindowsAppSDK/issues/5976).
+The file worker now retries Windows access/sharing/lock errors for at most one
+second between attempts, checking cancellation each time. It keeps the flushed
+temporary file and never falls back to truncating the destination. An actual
+Windows file-lock test verifies release/retry, cancellation and cleanup, while
+the GPU test retains its persistent-lock failure assertion.
+
+FFI safety documentation now records host ownership, the resize handoff, service
+callback lifetime and returned-string ownership. Strict Windows adapter Clippy
+passes without suppressed warnings.
+
+Final validation passes all 336 core/engine/UI/host/Windows unit checks, both
+hardware D3D12 document tests, strict Windows Clippy and the native WinUI build.
+Two consecutive native document/export fixture runs pass all nine checks each;
+their four owned launches exit with code zero within the existing shutdown
+bound. The full renderer suite and presentation probes were not repeated.

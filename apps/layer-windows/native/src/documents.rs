@@ -4,7 +4,7 @@ use crate::document_io::{Stream, atomic_write, check_cancelled, io_error, locati
 use layer_core::{Project, ProjectLimits};
 use layer_host::{NativeHost, Renderer};
 use layer_render::{CanvasRenderer, EffectValidationRequest};
-use layer_render_wgpu::WgpuRasterizer;
+use layer_render_wgpu::{ExportReadback, WgpuRasterizer};
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use serde::Deserialize;
 use std::{
@@ -54,6 +54,10 @@ pub(crate) enum DocumentAction {
         id: u32,
         path: String,
     },
+    Export {
+        id: u32,
+        path: String,
+    },
 }
 struct Environment {
     adapter: wgpu::Adapter,
@@ -83,6 +87,10 @@ enum Source {
     Open(PathBuf),
 }
 enum Job {
+    Export {
+        readback: ExportReadback,
+        path: PathBuf,
+    },
     Save {
         project: Project,
         path: PathBuf,
@@ -94,6 +102,7 @@ enum Job {
 }
 enum Completed {
     Saved,
+    Exported,
     Prepared(Box<UiSession<Renderer>>),
 }
 #[derive(Default)]
@@ -197,6 +206,13 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
+        Job::Export { readback, path } => {
+            // The ticket owns its GPU buffer; the live renderer stays on its owner.
+            let image = readback.finish().map_err(|e| e.to_string())?;
+            check_cancelled(cancel)?;
+            atomic_write(&path, cancel, |file| image.write_png(file))?;
+            Ok(Completed::Exported)
+        }
         Job::Save { project, path } => {
             let project = project.pruned()?;
             atomic_write(&path, cancel, |file| project.write(file))?;
@@ -294,12 +310,14 @@ struct Active {
 pub(crate) struct DocumentService {
     worker: Worker,
     active: Option<Active>,
+    export: Option<PathBuf>,
 }
 impl DocumentService {
     pub(crate) fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
         Ok(Self {
             worker: Worker::start(wake)?,
             active: None,
+            export: None,
         })
     }
     fn request(host: &NativeHost, id: u32) -> Result<DocumentRequest, String> {
@@ -384,7 +402,8 @@ impl DocumentService {
             | DocumentAction::Failure { id, .. }
             | DocumentAction::New { id, .. }
             | DocumentAction::Open { id, .. }
-            | DocumentAction::Save { id, .. } => *id,
+            | DocumentAction::Save { id, .. }
+            | DocumentAction::Export { id, .. } => *id,
             _ => unreachable!(),
         };
         let request = Self::request(host, id)?;
@@ -392,6 +411,28 @@ impl DocumentService {
             return Err("Respond to the unsaved changes dialog".into());
         }
         host.error = None;
+        if let DocumentAction::Export { path, .. } = &action {
+            let checked = (|| {
+                if !matches!(request, DocumentRequest::Export { .. }) {
+                    return Err("The file dialog no longer matches this document operation".into());
+                }
+                host.session.require_document_idle()?;
+                location(path)?;
+                Ok(())
+            })();
+            if let Err(error) = checked {
+                return Self::complete(host, id, Err(error));
+            }
+            self.active = Some(Active {
+                id,
+                epoch: host.session.state().document_file.epoch,
+                revision: host.session.engine().document().revision,
+                location: None,
+            });
+            self.export = Some(PathBuf::from(path));
+            host.dirty = true;
+            return Ok(());
+        }
         let started = (|| {
             let (job, location) = match action {
                 DocumentAction::Cancel { .. } => {
@@ -471,18 +512,65 @@ impl DocumentService {
             Err(error) => Self::complete(host, id, Err(error)),
         }
     }
+    /// After the shared frame has applied pending document edits. No GPU wait,
+    /// row packing or file I/O runs on the canvas owner.
+    pub(crate) fn after_frame(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        if self.export.is_none() {
+            return Ok(());
+        }
+        let active = self.active.as_ref().ok_or("Missing export request")?;
+        let captured = (|| {
+            // A delayed shader/replay must not silently export intervening edits.
+            host.session.require_document_idle()?;
+            if active.epoch != host.session.state().document_file.epoch
+                || active.revision != host.session.engine().document().revision
+            {
+                return Err(
+                    "The drawing changed before its PNG snapshot was ready. Export again.".into(),
+                );
+            }
+            if !host.startup.canvas_ready || host.session.engine().has_pending_document_edits() {
+                return Ok(None);
+            }
+            let gpu = host
+                .session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .ok_or("Canvas is unavailable")?;
+            if !gpu.export_ready() {
+                return Ok(None);
+            }
+            gpu.begin_export_readback(u64::from(active.id))
+                .map(Some)
+                .map_err(|e| e.to_string())
+        })();
+        match captured {
+            Ok(Some(readback)) => {
+                let path = self.export.take().unwrap();
+                self.worker.submit(Job::Export { readback, path });
+            }
+            Ok(None) => host.dirty = true,
+            Err(error) => {
+                self.export = None;
+                let active = self.active.take().unwrap();
+                Self::complete(host, active.id, Err(error))?;
+            }
+        }
+        Ok(())
+    }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         let Some(completed) = self.worker.take() else {
             return Ok(());
         };
         let active = self.active.take().ok_or("Unexpected document completion")?;
         let result = match completed {
-            Ok(Completed::Saved) => {
-                // Source checkpoint was captured before the worker ran; later edits stay dirty.
+            Ok(Completed::Saved | Completed::Exported) => {
+                // Only Save reserves a checkpoint. Export completion never clears dirty state.
                 if active.epoch == host.session.state().document_file.epoch {
                     Ok(true)
                 } else {
-                    Err("The saved document is no longer open".into())
+                    Err("The completed file belongs to a document that is no longer open".into())
                 }
             }
             Ok(Completed::Prepared(candidate)) => {
@@ -582,6 +670,90 @@ mod tests {
             }
             std::fs::remove_dir(&self.directory).unwrap();
         }
+    }
+
+    #[test]
+    fn export_cancel_and_invalid_destination_preserve_the_drawing() {
+        let mut f = Fixture::new();
+        f.host.session.set_platform(Platform::Windows);
+        f.invoke(CommandId::AddLayer);
+        let document = f.host.session.engine().document().clone();
+        f.invoke(CommandId::ExportDocument);
+        f.act(DocumentAction::Cancel { id: f.request() });
+        assert!(f.host.session.state().document_file.modified);
+        assert!(f.host.session.state().document_file.location.is_none());
+        f.invoke(CommandId::ExportDocument);
+        f.act(DocumentAction::Export {
+            id: f.request(),
+            path: "relative.png".into(),
+        });
+        assert!(f.host.session.state().host_error.is_some());
+        assert!(!f.host.session.state().document_file.busy);
+        assert!(f.service.active.is_none());
+        assert!(f.service.export.is_none());
+        assert_eq!(f.host.session.engine().document(), &document);
+        assert_eq!(std::fs::read_dir(&f.directory).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn deferred_export_rejects_intervening_edits_without_touching_the_destination() {
+        let mut f = Fixture::new();
+        let path = f.path("existing.png");
+        std::fs::write(&path, b"previous file").unwrap();
+        f.invoke(CommandId::ExportDocument);
+        f.act(DocumentAction::Export {
+            id: f.request(),
+            path: path.clone(),
+        });
+        f.host.startup.canvas_ready = false;
+        f.host.dirty = false;
+        f.service.after_frame(&mut f.host).unwrap();
+        assert!(
+            f.host.dirty,
+            "An unready export must schedule another canvas frame"
+        );
+        assert!(f.service.export.is_some());
+        assert!(
+            f.service
+                .worker
+                .shared
+                .mailbox
+                .lock()
+                .unwrap()
+                .pending
+                .is_none()
+        );
+        f.invoke(CommandId::AddLayer);
+        f.service.after_frame(&mut f.host).unwrap();
+        assert!(f.service.active.is_none() && f.service.export.is_none());
+        assert!(!f.host.session.state().document_file.busy);
+        assert!(
+            f.host
+                .session
+                .state()
+                .host_error
+                .as_ref()
+                .unwrap()
+                .contains("changed")
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous file");
+        assert!(f.host.session.state().document_file.modified);
+    }
+
+    #[test]
+    fn export_response_cannot_consume_a_save_request() {
+        let mut f = Fixture::new();
+        f.invoke(CommandId::AddLayer);
+        f.invoke(CommandId::SaveDocument);
+        f.act(DocumentAction::Export {
+            id: f.request(),
+            path: f.path("wrong.png"),
+        });
+        assert!(f.service.active.is_none());
+        assert!(f.host.session.state().host_error.is_some());
+        assert!(f.host.session.state().document_file.modified);
+        assert!(f.host.session.state().document_file.location.is_none());
+        assert_eq!(std::fs::read_dir(&f.directory).unwrap().count(), 0);
     }
     #[test]
     fn saving_an_older_checkpoint_retains_new_edits_and_close_rechecks_them() {
@@ -806,6 +978,224 @@ mod gpu_tests {
         renderer.request_readback(1).unwrap();
         renderer.take_readback().unwrap().unwrap()
     }
+
+    fn png_pixels(path: &std::path::Path) -> layer_render::ReadbackImage {
+        let mut reader = png::Decoder::new(File::open(path).unwrap())
+            .read_info()
+            .unwrap();
+        assert_eq!(
+            reader.info().srgb,
+            Some(png::SrgbRenderingIntent::Perceptual)
+        );
+        let mut bytes = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgba);
+        assert_eq!(info.bit_depth, png::BitDepth::Eight);
+        layer_render::ReadbackImage {
+            request_id: 0,
+            width: info.width,
+            height: info.height,
+            stride: info.width * 4,
+            bytes,
+        }
+    }
+    fn capture_export(
+        service: &mut DocumentService,
+        host: &mut NativeHost,
+        path: &std::path::Path,
+    ) {
+        invoke(host, CommandId::ExportDocument);
+        let (id, _, _) = request(host);
+        service
+            .dispatch(
+                host,
+                DocumentAction::Export {
+                    id,
+                    path: path.to_str().unwrap().into(),
+                },
+            )
+            .unwrap();
+        host.prepare_canvas_frame(0, 0, true).unwrap();
+        service.after_frame(host).unwrap();
+        assert!(
+            service.export.is_none(),
+            "Prepared export must issue a worker ticket"
+        );
+    }
+    #[test]
+    #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
+    fn d3d12_png_snapshot_preserves_alpha_checkpoint_and_atomic_destination() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let gpu = WgpuRasterizer::new_headless().unwrap();
+        assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
+        assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        let mut project = layer_ui::new_drawing(63, 47).unwrap();
+        for layer in &mut project.document.layers {
+            if layer.kind == layer_core::LayerKind::Background {
+                layer.visible = false;
+            }
+        }
+        let mut host = NativeHost::new(Platform::Windows).unwrap();
+        host.session =
+            UiSession::from_project(Renderer(Some(gpu)), project, None, [31, 29]).unwrap();
+        host.session.set_platform(Platform::Windows);
+        host.session.set_document_replacement(true);
+        host.resize(31, 29, 1.).unwrap();
+        host.import_layer_image(
+            "Synthetic alpha",
+            layer_render::HostImage {
+                width: 4,
+                height: 3,
+                stride: 16,
+                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+                bytes: &[210, 45, 83, 180].repeat(12),
+            },
+        )
+        .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "capy-export-gpu-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let destination = directory.join("透明 café.png");
+        let source = directory.join("source.capy");
+        let (wake, done) = mpsc::channel();
+        let mut service = DocumentService::open(move || {
+            let _ = wake.send(());
+        })
+        .unwrap();
+        invoke(&mut host, CommandId::SaveDocument);
+        let (id, _, _) = request(&host);
+        service
+            .dispatch(
+                &mut host,
+                DocumentAction::Save {
+                    id,
+                    path: source.to_str().unwrap().into(),
+                },
+            )
+            .unwrap();
+        finish(&mut service, &mut host, &done);
+        assert!(!host.session.state().document_file.modified);
+        let saved = std::fs::read(&source).unwrap();
+        host.dispatch(UiAction::SetLayerOpacity {
+            id: None,
+            opacity: 0.75,
+        })
+        .unwrap();
+        let expected = image(&mut host);
+        assert!(expected.bytes.as_chunks::<4>().0.iter().any(|p| p[3] == 0));
+        assert!(
+            expected
+                .bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[3] > 0 && p[3] < 255)
+        );
+        invoke(&mut host, CommandId::ZoomIn);
+        invoke(&mut host, CommandId::RotateRight);
+        capture_export(&mut service, &mut host, &destination);
+        // New GPU work runs while the independently owned ticket completes.
+        host.dispatch(UiAction::SetLayerOpacity {
+            id: None,
+            opacity: 0.25,
+        })
+        .unwrap();
+        let later = image(&mut host);
+        assert_ne!(later.bytes, expected.bytes);
+        finish(&mut service, &mut host, &done);
+        assert!(host.session.state().host_error.is_none());
+        let exported = png_pixels(&destination);
+        assert_eq!(
+            [exported.width, exported.height, exported.stride],
+            [63, 47, 252]
+        );
+        assert_eq!(
+            exported.bytes, expected.bytes,
+            "Export excludes viewport rotation, zoom and later edits"
+        );
+        assert!(host.session.state().document_file.modified);
+        assert_eq!(
+            host.session
+                .state()
+                .document_file
+                .location
+                .as_ref()
+                .unwrap()
+                .uri,
+            source.to_str().unwrap()
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), saved);
+        let previous = std::fs::read(&destination).unwrap();
+        let locked = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&destination)
+            .unwrap();
+        capture_export(&mut service, &mut host, &destination);
+        finish(&mut service, &mut host, &done);
+        assert!(host.session.state().host_error.is_some());
+        assert!(host.session.state().document_file.modified);
+        drop(locked);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            previous,
+            "Failed replacement preserves the previous PNG"
+        );
+        capture_export(&mut service, &mut host, &destination);
+        finish(&mut service, &mut host, &done);
+        assert!(host.session.state().host_error.is_none());
+        assert_eq!(png_pixels(&destination).bytes, later.bytes);
+        assert!(host.session.state().document_file.modified);
+        assert_eq!(
+            std::fs::read_dir(&directory).unwrap().count(),
+            2,
+            "Temporary files are cleaned after failure and retry"
+        );
+        service.stop_worker().unwrap();
+        let detached = directory.join("detached.png");
+        let readback = host
+            .session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .begin_export_readback(900)
+            .unwrap();
+        // Deliberately hold this ticket until after later GPU work and renderer
+        // destruction. Its worker must need neither the live canvas nor its owner.
+        host.dispatch(UiAction::SetLayerOpacity {
+            id: None,
+            opacity: 0.1,
+        })
+        .unwrap();
+        assert_ne!(image(&mut host).bytes, later.bytes);
+        drop(host);
+        let output = detached.clone();
+        let completed = std::thread::spawn(move || {
+            execute(
+                Job::Export {
+                    readback,
+                    path: output,
+                },
+                &AtomicBool::new(false),
+            )
+        })
+        .join()
+        .unwrap()
+        .unwrap();
+        assert!(matches!(completed, Completed::Exported));
+        assert_eq!(png_pixels(&detached).bytes, later.bytes);
+        std::fs::remove_file(detached).unwrap();
+        std::fs::remove_file(destination).unwrap();
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
     #[test]
     #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
     fn d3d12_background_save_open_new_and_stale_adoption() {
@@ -835,7 +1225,7 @@ mod gpu_tests {
         )
         .unwrap();
         let expected = image(&mut host);
-        assert!(expected.bytes.chunks_exact(4).any(|p| p[3] != 0));
+        assert!(expected.bytes.as_chunks::<4>().0.iter().any(|p| p[3] != 0));
         let directory =
             std::env::temp_dir().join(format!("capy-document-gpu-test-{}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
