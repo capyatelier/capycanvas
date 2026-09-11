@@ -60,6 +60,7 @@ glib::wrapper! {
 }
 
 enum Body {
+    Toolbar(ToolbarBody),
     Tools(ToolSet),
     Settings(ToolSettings),
     Color(ColorPanel),
@@ -68,9 +69,66 @@ enum Body {
     Effects(Panel, Rc<EffectPanels>),
     Navigator(crate::navigator::Navigator),
 }
+struct ToolbarBody {
+    panel: Panel,
+    strip: TileStrip,
+    key: RefCell<Option<PanelConfig>>,
+    buttons: RefCell<Vec<gtk::Button>>,
+    palette: gtk::CssProvider,
+}
+impl ToolbarBody {
+    fn new(panel: Panel) -> Self {
+        let strip = TileStrip::new();
+        strip.add_css_class("toolbar-controls");
+        strip.configure(Axis::Vertical, false);
+        Self {
+            panel,
+            strip,
+            key: RefCell::default(),
+            buttons: RefCell::default(),
+            palette: gtk::CssProvider::new(),
+        }
+    }
+    fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
+        let config = state.workspace.layout.panel(self.panel).unwrap();
+        if self.key.borrow().as_ref() != Some(config) {
+            self.strip.clear();
+            self.strip.set_tiles(config.tiles());
+            self.strip.set_style(config.tile_style);
+            let buttons: Vec<_> = config
+                .tiles()
+                .iter()
+                .map(|t| {
+                    let b = customization::tile_button(w, config, t, &self.palette);
+                    self.strip.append(&b);
+                    b
+                })
+                .collect();
+            *self.buttons.borrow_mut() = buttons;
+            *self.key.borrow_mut() = Some(config.clone());
+        }
+        if let Some(view) = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .and_then(|g| g.session.panel_view(self.panel).ok())
+        {
+            for (button, tile) in self.buttons.borrow().iter().zip(view.tiles) {
+                selected(button, tile.choice.selected);
+                button.set_sensitive(tile.enabled);
+                button.set_tooltip_text(Some(&tile.tooltip));
+            }
+        }
+        self.palette.load_from_string(&format!(
+            ".brush-color {{ -gtk-icon-palette: success {}; }}",
+            w.color.rgba()
+        ));
+    }
+}
 impl Body {
     fn widget(&self) -> gtk::Widget {
         match self {
+            Self::Toolbar(v) => v.strip.clone().upcast(),
             Self::Tools(v) => v.root.clone().upcast(),
             Self::Settings(v) => v.root.clone().upcast(),
             Self::Color(v) => v.root.clone().upcast(),
@@ -86,6 +144,7 @@ impl Body {
     }
     fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) -> bool {
         let inputs = match self {
+            Self::Toolbar(_) => regions::LAYOUT | regions::BRUSH | regions::COMMANDS,
             Self::Tools(_) => regions::BRUSH | regions::SETTINGS | regions::DOCUMENT,
             Self::Settings(_) => regions::BRUSH | regions::DOCUMENT | regions::COMMANDS,
             Self::Color(_) | Self::Sizes(_) => regions::BRUSH,
@@ -98,6 +157,7 @@ impl Body {
             return false;
         }
         match self {
+            Self::Toolbar(v) => v.refresh(w, state),
             Self::Tools(v) => v.refresh(w, &state.tool_set, state.theme),
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.colors),
@@ -114,6 +174,7 @@ struct View {
     connection: gtk::DrawingArea,
     connection_geometry: Rc<Cell<Option<DrawerConnection>>>,
     columns: Vec<gtk::Box>,
+    clips: Vec<gtk::Widget>,
     bodies: Vec<Body>,
 }
 impl View {
@@ -142,17 +203,24 @@ impl View {
             let _ = cr.fill();
         });
         let root: Columns = glib::Object::new();
-        root.set_widget_name("tool-drawer");
+        root.set_widget_name(&match drawer.anchor {
+            DrawerAnchor::Tile { .. } => "tool-drawer".into(),
+            DrawerAnchor::Column { column, .. } => format!("column-drawer-{column}"),
+        });
         root.add_css_class("dock-panel");
         root.add_css_class("content-drawer");
         root.set_overflow(gtk::Overflow::Hidden);
         let mut columns = Vec::new();
+        let mut clips = Vec::new();
         let mut bodies = Vec::new();
         let mut effects = None;
         for panels in &drawer.columns {
             let column = gtk::Box::new(gtk::Orientation::Vertical, WORKSPACE_SPACING as i32);
             for panel in panels {
                 let body = match panel {
+                    Panel::Toolbar | Panel::CustomToolbar(_) => {
+                        Body::Toolbar(ToolbarBody::new(*panel))
+                    }
                     Panel::Brushes => {
                         let v = ToolSet::new();
                         margins(&v.root, PANEL_CONTENT_INSET as i32);
@@ -185,16 +253,80 @@ impl View {
                         }
                         Body::Effects(*panel, v)
                     }
-                    _ => unreachable!("content drawer panels are validated by layer-ui"),
                 };
                 let widget = body.widget();
                 widget.set_widget_name(&format!("drawer-panel-{panel:?}"));
                 column.append(&widget);
                 bodies.push(body);
             }
-            let scroller = scroll(&column);
-            scroller.set_parent(&root);
-            root.imp().children.borrow_mut().push(scroller);
+            // A toolbar body may wrap beyond the available height. Preserve
+            // its natural height inside the viewport instead of clipping it
+            // to the one-tile minimum used for ordinary dock constraints.
+            let viewport = gtk::Viewport::builder()
+                .vscroll_policy(gtk::ScrollablePolicy::Natural)
+                .child(&column)
+                .build();
+            let scroller = scroll(&viewport);
+            clips.push(scroller.clone());
+            scroller
+                .downcast_ref::<gtk::ScrolledWindow>()
+                .unwrap()
+                .vadjustment()
+                .connect_value_changed(glib::clone!(
+                    #[weak]
+                    w,
+                    move |_| w.surface.queue_allocate()
+                ));
+            let child = if let Some(tabs) = &drawer.tabs {
+                let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                header.add_css_class("dock-tabs");
+                header.set_height_request(TAB_BAR_HEIGHT as i32);
+                let layout = w.surface.imp().layout.borrow();
+                for panel in &tabs.panels {
+                    let config = layout.panel(*panel).unwrap();
+                    let presentation = layout.tab_presentation(*panel);
+                    let button = w.action_button(
+                        config.title(),
+                        UiAction::SelectPanelTab {
+                            group: tabs.group,
+                            panel: *panel,
+                        },
+                    );
+                    button.add_css_class("flat");
+                    button.set_widget_name(&format!("column-drawer-tab-{panel:?}"));
+                    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                    if presentation.show_icon {
+                        content.append(&gtk::Image::from_icon_name(&format!(
+                            "layer-{}-symbolic",
+                            config.icon()
+                        )));
+                    }
+                    if presentation.show_name {
+                        let label = gtk::Label::new(Some(config.title()));
+                        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        content.append(&label);
+                    } else {
+                        button.add_css_class("icon-only-tab");
+                    }
+                    button.set_child(Some(&content));
+                    selected(&button, tabs.active == *panel);
+                    header.append(&button);
+                }
+                let header_clip = gtk::ScrolledWindow::builder()
+                    .hscrollbar_policy(gtk::PolicyType::External)
+                    .vscrollbar_policy(gtk::PolicyType::Never)
+                    .child(&header)
+                    .build();
+                container.append(&header_clip);
+                scroller.set_vexpand(true);
+                container.append(&scroller);
+                container.upcast::<gtk::Widget>()
+            } else {
+                scroller
+            };
+            child.set_parent(&root);
+            root.imp().children.borrow_mut().push(child);
             columns.push(column);
         }
         Self {
@@ -202,12 +334,14 @@ impl View {
             connection,
             connection_geometry,
             columns,
+            clips,
             bodies,
         }
     }
 }
 
 pub(crate) struct Drawer {
+    pub id: u32,
     state: RefCell<Option<ContentDrawer>>,
     view: RefCell<Option<Rc<View>>>,
     presented: RefCell<Option<DrawerPlacement>>,
@@ -217,8 +351,9 @@ pub(crate) struct Drawer {
     animation: RefCell<Option<adw::TimedAnimation>>,
 }
 impl Drawer {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(id: u32) -> Rc<Self> {
+        Rc::new(Self {
+            id,
             state: RefCell::default(),
             view: RefCell::default(),
             presented: RefCell::default(),
@@ -226,7 +361,7 @@ impl Drawer {
             progress: Cell::new(1.0),
             closing: Cell::new(false),
             animation: RefCell::default(),
-        }
+        })
     }
     pub fn layers(&self) -> Option<Rc<LayerPanel>> {
         self.view.borrow().as_ref()?.bodies.iter().find_map(|b| {
@@ -249,15 +384,122 @@ impl Drawer {
     pub fn placement(&self) -> Option<DrawerPlacement> {
         self.presented.borrow().clone()
     }
+    pub fn tile_measurements(&self, w: &Workspace, out: &mut Vec<DrawerTileMeasurement>) {
+        if self.closing.get() {
+            return;
+        }
+        let view = self.view.borrow();
+        let Some(view) = view.as_ref() else { return };
+        let Some(placement) = self.placement() else {
+            return;
+        };
+        for body in &view.bodies {
+            let Body::Toolbar(bar) = body else { continue };
+            let Some(clip) = view.clips.iter().find(|c| bar.strip.is_ancestor(*c)) else {
+                continue;
+            };
+            let Some(clip) = clip.compute_bounds(&w.surface) else {
+                continue;
+            };
+            let clip = Bounds {
+                x: clip.x(),
+                y: clip.y(),
+                width: clip.width(),
+                height: clip.height(),
+            };
+            let Some(clip) = clip.intersection(placement.bounds) else {
+                continue;
+            };
+            let key = bar.key.borrow();
+            let Some(config) = key.as_ref() else { continue };
+            for (tile, button) in config.tiles().iter().zip(bar.buttons.borrow().iter()) {
+                if !button.is_mapped() {
+                    continue;
+                }
+                let Some(b) = button.compute_bounds(&w.surface) else {
+                    continue;
+                };
+                let Some(bounds) = (Bounds {
+                    x: b.x(),
+                    y: b.y(),
+                    width: b.width(),
+                    height: b.height(),
+                })
+                .intersection(clip) else {
+                    continue;
+                };
+                out.push(DrawerTileMeasurement {
+                    column: self.id,
+                    anchor: TileAnchor {
+                        panel: bar.panel,
+                        tile: tile.id,
+                    },
+                    bounds,
+                });
+            }
+        }
+    }
+    pub fn tile_button(&self, anchor: TileAnchor) -> Option<gtk::Button> {
+        let view = self.view.borrow();
+        view.as_ref()?.bodies.iter().find_map(|body| {
+            let Body::Toolbar(bar) = body else {
+                return None;
+            };
+            if bar.panel != anchor.panel {
+                return None;
+            }
+            let key = bar.key.borrow();
+            let index = key
+                .as_ref()?
+                .tiles()
+                .iter()
+                .position(|t| t.id == anchor.tile)?;
+            bar.buttons.borrow().get(index).cloned()
+        })
+    }
+    pub fn mark_tile_origin(&self, origin: Option<(TileAnchor, Edge)>) {
+        let view = self.view.borrow();
+        let Some(view) = view.as_ref() else { return };
+        for body in &view.bodies {
+            let Body::Toolbar(bar) = body else { continue };
+            if origin.is_some_and(|(a, _)| a.panel == bar.panel) {
+                bar.strip.add_css_class("drawer-source");
+            } else {
+                bar.strip.remove_css_class("drawer-source");
+            }
+            let key = bar.key.borrow();
+            let Some(config) = key.as_ref() else { continue };
+            for (tile, button) in config.tiles().iter().zip(bar.buttons.borrow().iter()) {
+                customization::drawer_origin(
+                    button,
+                    origin
+                        .filter(|(a, _)| a.panel == bar.panel && a.tile == tile.id)
+                        .map(|(_, edge)| edge),
+                );
+            }
+        }
+    }
+    pub fn is_closed(&self) -> bool {
+        self.state.borrow().is_none()
+    }
     pub fn snapshot_origin(&self, w: &Workspace, snapshot: &gtk::Snapshot) {
         let Some(anchor) = self.state.borrow().as_ref().map(|s| s.anchor) else {
             return;
         };
-        let Some(button) = w
-            .zen
-            .drawer_button(anchor)
-            .or_else(|| w.customization.drawer_button(anchor))
-        else {
+        let Some(button) = (match anchor {
+            DrawerAnchor::Tile { panel, tile } => w
+                .zen
+                .drawer_button(TileAnchor { panel, tile })
+                .or_else(|| {
+                    w.columns
+                        .drawers
+                        .borrow()
+                        .iter()
+                        .find_map(|d| d.tile_button(TileAnchor { panel, tile }))
+                })
+                .or_else(|| w.customization.drawer_button(TileAnchor { panel, tile })),
+            DrawerAnchor::Column { column, origin, .. } => w.columns.button(column, origin),
+        }) else {
             return;
         };
         let Some(parent) = button.parent() else {
@@ -281,22 +523,37 @@ impl Drawer {
         let view = view.as_ref()?;
         let layout = w.surface.imp().layout.borrow();
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-        let partial = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .is_some_and(|g| g.session.state().partial_zen());
-        let sizing = state.placement(&layout, viewport, &vec![0.0; view.columns.len()], partial)?;
+        let place = |heights: &[f32]| {
+            let gpu = w.gpu.borrow();
+            let ui = gpu.as_ref()?.session.state();
+            ui.customization
+                .drawer_placement(state, &layout, viewport, heights, ui.partial_zen())
+        };
+        let sizing = place(&vec![0.0; view.columns.len()])?;
         let heights: Vec<_> = view
             .columns
             .iter()
             .zip(&sizing.columns)
-            .map(|(body, b)| body.measure(gtk::Orientation::Vertical, b.width as i32).1 as f32)
+            .map(|(body, b)| {
+                body.measure(gtk::Orientation::Vertical, b.width as i32).1 as f32
+                    + if state.tabs.is_some() {
+                        TAB_BAR_HEIGHT
+                    } else {
+                        0.
+                    }
+            })
             .collect();
-        state.placement(&layout, viewport, &heights, partial)
+        place(&heights)
     }
     pub fn geometry(&self, w: &Workspace) -> Option<DrawerPlacement> {
-        let target = self.target(w)?;
+        let Some(target) = self
+            .target(w)
+            .or_else(|| self.closing.get().then(|| self.placement()).flatten())
+        else {
+            // A scrolled-out origin has no visible child or chrome hit region.
+            self.presented.borrow_mut().take();
+            return None;
+        };
         let end = if self.closing.get() {
             target.closed()
         } else {
@@ -326,14 +583,19 @@ impl Drawer {
             .state
             .borrow()
             .as_ref()
-            .map(|s| (s.anchor, result.direction));
-        w.customization.mark_drawer_origin(origin);
-        w.zen
-            .mark_drawer_origin(origin.map(|(anchor, _)| (anchor, &result)));
+            .and_then(|s| s.anchor.tile().map(|a| (a, result.direction)));
+        if self.id == 0 {
+            w.customization.mark_drawer_origin(origin);
+            for parent in w.columns.drawers.borrow().iter() {
+                parent.mark_tile_origin(origin);
+            }
+            w.zen
+                .mark_drawer_origin(origin.map(|(anchor, _)| (anchor, &result)));
+        }
         *self.presented.borrow_mut() = Some(result.clone());
         Some(result)
     }
-    fn animate(&self, w: &Rc<Workspace>, closing: bool) {
+    fn animate(self: &Rc<Self>, w: &Rc<Workspace>, closing: bool) {
         if let Some(animation) = self.animation.take() {
             animation.pause();
         }
@@ -345,8 +607,10 @@ impl Drawer {
         let target = adw::CallbackAnimationTarget::new(glib::clone!(
             #[weak]
             w,
+            #[weak(rename_to=drawer)]
+            self,
             move |v| {
-                w.drawer.progress.set(v as f32);
+                drawer.progress.set(v as f32);
                 w.surface.queue_allocate();
             }
         ));
@@ -355,16 +619,23 @@ impl Drawer {
         animation.connect_done(glib::clone!(
             #[weak]
             w,
+            #[weak(rename_to=drawer)]
+            self,
             move |_| {
-                w.drawer.from.borrow_mut().take();
-                if w.drawer.closing.get() {
+                drawer.from.borrow_mut().take();
+                if drawer.closing.get() {
                     w.surface
-                        .remove_slots(|slot| matches!(slot, Slot::Drawer | Slot::DrawerConnection));
-                    w.customization.mark_drawer_origin(None);
-                    w.zen.mark_drawer_origin(None);
-                    w.drawer.view.borrow_mut().take();
-                    w.drawer.state.borrow_mut().take();
-                    w.drawer.presented.borrow_mut().take();
+                        .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) if id == drawer.id));
+                    if drawer.id == 0 {
+                        w.customization.mark_drawer_origin(None);
+                        w.zen.mark_drawer_origin(None);
+                        for parent in w.columns.drawers.borrow().iter() {
+                            parent.mark_tile_origin(None);
+                        }
+                    }
+                    drawer.view.borrow_mut().take();
+                    drawer.state.borrow_mut().take();
+                    drawer.presented.borrow_mut().take();
                 }
                 w.surface.queue_allocate();
             }
@@ -372,8 +643,13 @@ impl Drawer {
         *self.animation.borrow_mut() = Some(animation.clone());
         animation.play();
     }
-    pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) {
-        let next = state.customization.drawer.as_ref();
+    pub fn refresh(
+        self: &Rc<Self>,
+        w: &Rc<Workspace>,
+        state: &UiState,
+        regions: u32,
+        next: Option<&ContentDrawer>,
+    ) {
         let Some(next) = next else {
             if self.state.borrow().is_some() && !self.closing.get() {
                 self.animate(w, true);
@@ -385,13 +661,14 @@ impl Drawer {
             .state
             .borrow()
             .as_ref()
-            .is_none_or(|old| old.columns != next.columns);
+            .is_none_or(|old| old.columns != next.columns || old.tabs != next.tabs);
         if rebuild {
             w.surface
-                .remove_slots(|slot| matches!(slot, Slot::Drawer | Slot::DrawerConnection));
+                .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) if id == self.id));
             let view = Rc::new(View::new(w, next));
-            w.surface.add(Slot::Drawer, &view.root);
-            w.surface.add(Slot::DrawerConnection, &view.connection);
+            w.surface.add(Slot::Drawer(self.id), &view.root);
+            w.surface
+                .add(Slot::DrawerConnection(self.id), &view.connection);
             *self.view.borrow_mut() = Some(view);
         }
         *self.state.borrow_mut() = Some(next.clone());
@@ -412,7 +689,7 @@ impl Drawer {
         if changed || resized {
             self.animate(w, false);
         }
-        w.surface.raise_drawer();
+        w.surface.raise_drawer(self.id);
         w.surface.queue_allocate();
     }
 }

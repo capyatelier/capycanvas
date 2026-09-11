@@ -32,12 +32,33 @@ mod imp {
         }
     }
     impl WidgetImpl for TileStrip {
-        fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            if self.tabbed.get() && self.vertical.get() {
+                gtk::SizeRequestMode::HeightForWidth
+            } else {
+                gtk::SizeRequestMode::ConstantSize
+            }
+        }
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let size = self.style.get().size()
                 [usize::from(orientation == gtk::Orientation::Vertical)]
                 as i32
                 + if self.tabbed.get() { 8 } else { 0 };
-            (size, size, -1, -1)
+            let natural = if self.tabbed.get()
+                && self.vertical.get()
+                && orientation == gtk::Orientation::Vertical
+                && for_size > 0
+            {
+                layer_ui::toolbar_content_height(
+                    for_size as f32,
+                    &self.tiles.borrow(),
+                    self.style.get(),
+                )
+                .ceil() as i32
+            } else {
+                size
+            };
+            (size, natural, -1, -1)
         }
         fn size_allocate(&self, width: i32, height: i32, _: i32) {
             let axis = if self.vertical.get() {

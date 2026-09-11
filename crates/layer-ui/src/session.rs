@@ -390,8 +390,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !facts
                         .drawer_connection
                         .is_some_and(|b| b.contains(position[0], position[1]))
-                    && !drawer
-                        .placement(
+                    && !self
+                        .state
+                        .customization
+                        .drawer_placement(
+                            drawer,
                             &self.state.workspace.layout,
                             viewport,
                             &vec![0.0; drawer.columns.len()],
@@ -414,6 +417,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         self.layout(viewport)
                             .tile_at(&self.state.workspace.layout, position)
+                            .or_else(|| self.state.customization.drawer_tile_at(position))
                             .is_none()
                     };
                 }
@@ -763,12 +767,34 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.interaction.zen_entry_guard = false;
         if phase == ContactPhase::Down {
             let layout = self.layout(viewport);
+            if let DockItem::Column { column } = item {
+                let source = layout
+                    .collapsed
+                    .iter()
+                    .find(|c| c.id == column)
+                    .ok_or("Unknown collapsed column")?;
+                self.workspace_history.begin(&self.state.workspace);
+                self.workspace_drag = Some(WorkspaceDrag {
+                    original: item,
+                    item,
+                    panel: source.groups[0].active,
+                    source: source.bounds,
+                    floating: None,
+                    offset: [0.; 2],
+                    press: position,
+                    chrome_revealed: true,
+                    moved: false,
+                });
+                self.state.customization = CustomizationState::default();
+                return Ok(());
+            }
             let source = match item {
                 DockItem::Group { group } => layout.groups.iter().find(|g| g.id == group),
                 DockItem::Panel { panel } => {
                     layout.groups.iter().find(|g| g.panels.contains(&panel))
                 }
                 DockItem::Tile { .. } => return Err("Tools use tile reordering".into()),
+                DockItem::Column { .. } => unreachable!(),
             }
             .ok_or("Unknown drag source")?;
             let normalized = if source.panels.len() == 1 {
@@ -811,6 +837,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         drag.chrome_revealed |= self.layout(viewport).near_chrome(position, viewport, true);
         drag.moved |= position != drag.press;
         if drag.floating.is_none()
+            && !matches!(drag.item, DockItem::Column { .. })
             && drag.source.distance_to(position) > crate::layout::WORKSPACE_PROXIMITY
         {
             self.state.workspace.layout.move_item(
@@ -961,7 +988,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let hint = if matches!(item, DockItem::Tile { .. }) {
+        let hint = if let DockItem::Column { column } = item {
+            if docks_hidden {
+                return None;
+            }
+            self.state
+                .workspace
+                .layout
+                .column_drop_hint(&resolved, column, position)?
+        } else if matches!(item, DockItem::Tile { .. }) {
             resolved.tile_drop_hint(position, &self.state.workspace.layout)?
         } else {
             resolved.drop_hint(position[0], position[1], tabs, !docks_hidden)?
@@ -1118,6 +1153,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::Customize { .. }
                 | UiAction::MovePanel { .. }
                 | UiAction::MoveGroup { .. }
+                | UiAction::MoveColumn { .. }
                 | UiAction::MoveTile { .. }
                 | UiAction::SelectPanelTab { .. }
                 | UiAction::ResizeDock { .. }
@@ -1137,6 +1173,37 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::MeasureDrawerTiles { measurements } => {
+                self.state
+                    .customization
+                    .measure_drawer_tiles(&self.state.workspace.layout, measurements)?;
+                // Allocation facts do not change workspace history or rebuild
+                // widgets. The host can position the child in this same frame.
+                return Ok(UiChange::default());
+            }
+            UiAction::MeasureColumnScroll { column, offset } => {
+                if !offset.is_finite()
+                    || offset < 0.
+                    || !self.state.workspace.layout.is_collapsed(column)
+                {
+                    return Err("Invalid column scroll".into());
+                }
+                let scroll = &mut self.state.workspace.layout.column_scroll;
+                if scroll
+                    .iter()
+                    .find(|(id, _)| *id == column)
+                    .map_or(0., |(_, v)| *v)
+                    == offset
+                {
+                    return Ok(self.changed(0, false));
+                }
+                if let Some((_, v)) = scroll.iter_mut().find(|(id, _)| *id == column) {
+                    *v = offset;
+                } else {
+                    scroll.push((column, offset));
+                }
+                (LAYOUT, false)
+            }
             UiAction::Navigator {
                 phase,
                 position,
@@ -1288,10 +1355,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
-                self.state
-                    .workspace
-                    .layout
-                    .double_click_panel_handle(group, viewport)?;
+                let layout = &mut self.state.workspace.layout;
+                if matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                    && layout.column_for_group(group).is_some()
+                {
+                    layout.set_column_collapsed(group, true, viewport)?;
+                } else {
+                    layout.double_click_panel_handle(group, viewport)?;
+                }
                 (LAYOUT, false)
             }
             UiAction::Customize { action } => {
@@ -1352,7 +1423,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .customization
                             .drawer
                             .as_ref()
-                            .is_some_and(|d| d.anchor == (TileAnchor { panel, tile })))
+                            .is_some_and(|d| d.anchor.tile() == Some(TileAnchor { panel, tile })))
                 {
                     return self.dispatch(UiAction::Customize {
                         action: CustomizationAction::ToggleToolDrawer {
@@ -1536,9 +1607,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                 )?;
                 (LAYOUT, false)
             }
+            UiAction::MoveColumn {
+                column,
+                target,
+                viewport,
+            } => {
+                self.state.workspace.layout.move_item(
+                    viewport,
+                    DockItem::Column { column },
+                    target,
+                )?;
+                (LAYOUT, false)
+            }
             UiAction::SelectPanelTab { group, panel } => {
                 let changed = self.state.workspace.layout.select_tab(group, panel)?;
-                if !changed {
+                if !changed
+                    && self
+                        .state
+                        .workspace
+                        .layout
+                        .collapsed_column_for_group(group)
+                        .is_none()
+                {
                     let action = if self.state.customization.expanded == Some(panel) {
                         CustomizationAction::CloseExpanded
                     } else {
@@ -1608,15 +1698,50 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.divider_drag = Some((id, ResizeDrag::new(position, divider.bounds)));
                         (0, false)
                     } else {
-                        let (_, drag) = self
+                        let (_, mut drag) = self
                             .divider_drag
                             .filter(|(active, _)| *active == id)
                             .ok_or("Divider drag is not active")?;
-                        self.state.workspace.layout.resize_workspace(
-                            id,
-                            drag.position(position),
-                            viewport,
-                        )?;
+                        if !drag.collapsed {
+                            let point = drag.position(position);
+                            let root =
+                                matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                                    .then(|| {
+                                        self.state
+                                            .workspace
+                                            .layout
+                                            .collapse_at_divider(id, point, viewport)
+                                    })
+                                    .flatten();
+                            if let Some(root) = root {
+                                let original_width =
+                                    self.workspace_history.gesture_start().and_then(|s| {
+                                        s.layout.column_width_before_resize(root, viewport)
+                                    });
+                                self.state
+                                    .workspace
+                                    .layout
+                                    .set_column_collapsed(root, true, viewport)?;
+                                if let Some(width) = original_width
+                                    && let Some(c) = self
+                                        .state
+                                        .workspace
+                                        .layout
+                                        .collapsed
+                                        .iter_mut()
+                                        .find(|c| c.root == root)
+                                {
+                                    c.expanded_width = width;
+                                }
+                                drag.collapsed = true;
+                                self.divider_drag = Some((id, drag));
+                            } else {
+                                self.state
+                                    .workspace
+                                    .layout
+                                    .resize_workspace(id, point, viewport)?;
+                            }
+                        }
                         if phase == ContactPhase::Up {
                             self.divider_drag = None;
                             self.workspace_history.finish(&self.state.workspace);
@@ -1750,11 +1875,50 @@ impl<R: CanvasRenderer> UiSession<R> {
                 || (changed & LAYOUT != 0
                     && self.state.customization.drawer.as_ref().is_some_and(|d| {
                         let layout = &self.state.workspace.layout;
-                        layout.active_panel(d.anchor.panel) != Some(d.anchor.panel)
-                            || layout
-                                .panel(d.anchor.panel)
-                                .map_or(true, |p| !p.tiles().iter().any(|t| t.id == d.anchor.tile))
+                        d.anchor.tile().is_none_or(|a| {
+                            layout.active_panel(a.panel) != Some(a.panel)
+                                || layout
+                                    .panel(a.panel)
+                                    .map_or(true, |p| !p.tiles().iter().any(|t| t.id == a.tile))
+                        })
                     })))
+        {
+            self.state.customization.drawer = None;
+            changed |= CUSTOMIZATION;
+        }
+        if changed & LAYOUT != 0 {
+            self.state.customization.column_drawers = self
+                .state
+                .customization
+                .column_drawers
+                .iter()
+                .filter_map(|d| match d.anchor {
+                    DrawerAnchor::Column { group, origin, .. } => {
+                        ContentDrawer::for_column(&self.state.workspace.layout, group, origin).ok()
+                    }
+                    _ => None,
+                })
+                .collect();
+            changed |= CUSTOMIZATION;
+        }
+        if let Some(anchor) = self
+            .state
+            .customization
+            .drawer
+            .as_ref()
+            .and_then(|d| d.anchor.tile())
+            && let Some(group) = self.state.workspace.layout.panel_group(anchor.panel)
+            && self
+                .state
+                .workspace
+                .layout
+                .collapsed_column_for_group(group)
+                .is_some()
+            && !self.state.customization.column_drawers.iter().any(|d| {
+                d.tabs
+                    .as_ref()
+                    .is_some_and(|t| t.group == group && t.active == anchor.panel)
+            })
         {
             self.state.customization.drawer = None;
             changed |= CUSTOMIZATION;
@@ -2268,6 +2432,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.workspace.zen_mode = !self.state.workspace.zen_mode;
                 if self.state.workspace.zen_mode {
                     self.state.customization.drawer = None;
+                    self.state.customization.column_drawers.clear();
                 }
                 self.interaction.zen_entry_guard = self.state.workspace.zen_mode
                     && self.interaction.hover.is_some_and(|[x, y]| {
@@ -2450,13 +2615,26 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
             self.engine.backend_mut().set_telemetry_enabled(
-                self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
+                (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
+                    && self
+                        .state
+                        .workspace
+                        .layout
+                        .panel_group(Panel::Stats)
+                        .is_none_or(|g| {
+                            self.state
+                                .workspace
+                                .layout
+                                .collapsed_column_for_group(g)
+                                .is_none()
+                        }))
                     || self
                         .state
                         .customization
                         .drawer
-                        .as_ref()
-                        .is_some_and(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
+                        .iter()
+                        .chain(self.state.customization.column_drawers.iter())
+                        .any(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
             );
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
@@ -6439,11 +6617,19 @@ mod tests {
 
     #[test]
     fn native_only_panel_controls_are_not_offered_to_other_hosts() {
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+        ] {
             let mut app = session();
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
-                let available = platform == Platform::Gtk;
+                let available = platform == Platform::Gtk
+                    || (panel == Panel::ToolSettings
+                        && matches!(platform, Platform::Ios | Platform::Mac));
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
@@ -6905,9 +7091,9 @@ mod tests {
     }
 
     #[test]
-    fn docked_panel_handle_toggles_tabs_without_resizing_on_every_platform() {
+    fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [Platform::Web, Platform::Android] {
             let mut app = session();
             app.set_platform(platform);
             let panel = Panel::Sizes;
@@ -7011,6 +7197,551 @@ mod tests {
             app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
                 .unwrap();
             assert_eq!(app.state.workspace, before);
+        }
+    }
+
+    #[test]
+    fn configure_from_collapsed_column_reveals_the_ordinary_panel() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let viewport = [1200., 900.];
+        s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+            .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group: 5,
+                panel: Panel::Brushes,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ShowAllControls {
+                panel: Panel::Brushes,
+            },
+        })
+        .unwrap();
+        assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
+        assert!(s.state.customization.column_drawers.is_empty());
+        assert!(s.state.workspace.layout.collapsed.is_empty());
+        assert!(
+            s.layout(viewport)
+                .groups
+                .iter()
+                .any(|g| g.active == Panel::Brushes)
+        );
+    }
+
+    #[test]
+    fn collapsed_drawer_pins_revealed_total_zen_but_explicit_zen_closes_it() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let viewport = [1200., 900.];
+        s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+            .unwrap();
+        let mut settings = s.state.settings.clone();
+        settings.total_zen = true;
+        s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::ZenMode,
+        })
+        .unwrap();
+        let hover = |s: &mut UiSession<Recorder>, position| {
+            s.input(UiInput::Chrome {
+                event: ChromeEvent::Motion { position },
+                facts: ChromeFacts::default(),
+                viewport,
+            })
+            .unwrap()
+        };
+        assert!(!hover(&mut s, [10., 400.]).chrome_hidden);
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group: 5,
+                panel: Panel::Brushes,
+            },
+        })
+        .unwrap();
+        assert!(!hover(&mut s, [600., 500.]).chrome_hidden);
+        assert!(!s.state.customization.blocks_shortcuts());
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group: 5,
+                panel: Panel::Brushes,
+            },
+        })
+        .unwrap();
+        // Closing chrome retains the existing one-contact guard: the next
+        // canvas press may hide it, but cannot also begin a stroke.
+        let reply = s
+            .input(UiInput::Chrome {
+                event: ChromeEvent::Contact {
+                    position: [600., 500.],
+                    canvas: true,
+                },
+                facts: ChromeFacts::default(),
+                viewport,
+            })
+            .unwrap();
+        assert!(reply.chrome_hidden && reply.handled);
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::ZenMode,
+        })
+        .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group: 5,
+                panel: Panel::Brushes,
+            },
+        })
+        .unwrap();
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::ZenMode,
+        })
+        .unwrap();
+        assert!(s.state.customization.column_drawers.is_empty());
+        assert!(hover(&mut s, [600., 500.]).chrome_hidden);
+    }
+
+    #[test]
+    fn incoming_panels_groups_and_toolbars_share_collapsed_drop_targets() {
+        let viewport = [1200., 900.];
+        for item in [
+            DockItem::Panel {
+                panel: Panel::Properties,
+            },
+            DockItem::Group { group: 8 },
+            DockItem::Group { group: 2 },
+        ] {
+            for slot in 0..3 {
+                let mut s = session();
+                s.set_platform(Platform::Gtk);
+                s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+                    .unwrap();
+                let resolved = s.layout(viewport);
+                let c = &resolved.collapsed[0];
+                let point = [
+                    c.bounds.x + TILE_SIZE * 0.5,
+                    match slot {
+                        0 => c.groups[0].bounds.y + 3.,
+                        1 => c.groups[1].bounds.y - 3.,
+                        _ => c.empty.y + 5.,
+                    },
+                ];
+                let hint = s.drop_hint(viewport, point, &[], item, None).unwrap();
+                match (&hint.target, slot) {
+                    (DockTarget::Tab { group: 5, .. }, 0) => {}
+                    (
+                        DockTarget::Split {
+                            group: 6,
+                            edge: Edge::Top,
+                        },
+                        1,
+                    ) => {}
+                    (
+                        DockTarget::Split {
+                            group: 6,
+                            edge: Edge::Bottom,
+                        },
+                        2,
+                    ) => {}
+                    _ => panic!("Wrong collapsed insertion: {:?}", hint.target),
+                }
+                s.dispatch(item.move_action(hint.target, viewport)).unwrap();
+                s.state.workspace.validate().unwrap();
+                assert!(s.state.workspace.layout.floating.is_empty());
+                let c = &s.layout(viewport).collapsed[0];
+                assert_eq!(c.id, 4);
+                assert_eq!(c.groups.len(), if slot == 0 { 2 } else { 3 });
+                let moved = match item {
+                    DockItem::Panel { panel } => panel,
+                    DockItem::Group { group: 8 } => Panel::Layers,
+                    _ => Panel::Toolbar,
+                };
+                assert!(
+                    c.groups
+                        .iter()
+                        .flat_map(|g| &g.icons)
+                        .any(|i| i.panel == moved)
+                );
+                assert!(
+                    !s.layout(viewport)
+                        .groups
+                        .iter()
+                        .any(|g| g.panels.contains(&moved))
+                );
+            }
+        }
+    }
+    #[test]
+    fn collapsed_column_drag_never_tears_off_and_is_one_undo_transaction() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let viewport = [1200., 900.];
+        s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+            .unwrap();
+        let original = s.state.workspace.clone();
+        let grip = s.layout(viewport).collapsed[0].grip;
+        let start = [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5];
+        let item = DockItem::Column { column: 4 };
+        let drag = |s: &mut UiSession<Recorder>, phase, position| {
+            s.dispatch(UiAction::DragWorkspace {
+                item,
+                phase,
+                position,
+                viewport,
+                tabs: vec![],
+            })
+            .unwrap();
+        };
+        drag(&mut s, ContactPhase::Down, start);
+        drag(&mut s, ContactPhase::Move, [600., 400.]);
+        assert_eq!(s.state.workspace, original);
+        assert!(
+            s.drop_hint(viewport, [600., 400.], &[], item, None)
+                .is_none()
+        );
+        drag(&mut s, ContactPhase::Up, [600., 400.]);
+        assert_eq!(s.state.workspace, original);
+        let right = s
+            .layout(viewport)
+            .groups
+            .into_iter()
+            .find(|g| g.id == 8)
+            .unwrap()
+            .bounds;
+        let point = [right.x - 2., right.y + 200.];
+        drag(&mut s, ContactPhase::Down, start);
+        drag(&mut s, ContactPhase::Move, point);
+        assert!(s.drop_hint(viewport, point, &[], item, None).is_some());
+        drag(&mut s, ContactPhase::Up, point);
+        let moved = s.state.workspace.clone();
+        assert!(moved.layout.floating.is_empty());
+        assert_eq!(moved.layout.group_edge(5), Some(Edge::Right));
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        })
+        .unwrap();
+        assert_eq!(s.state.workspace, original);
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::RedoWorkspace,
+        })
+        .unwrap();
+        assert_eq!(s.state.workspace, moved);
+    }
+    #[test]
+    fn resize_collapse_latches_until_release_and_restores_pre_gesture_width() {
+        let viewport = [1200., 900.];
+        for cancel in [false, true] {
+            for group in [5, 8] {
+                let mut s = session();
+                s.set_platform(Platform::Gtk);
+                let original = s.state.workspace.clone();
+                let root = original.layout.column_for_group(group).unwrap();
+                let width = original
+                    .layout
+                    .column_width_before_resize(root, viewport)
+                    .unwrap();
+                let band = original
+                    .layout
+                    .bands
+                    .iter()
+                    .find(|b| b.root.id() == root)
+                    .unwrap();
+                let divider = s
+                    .layout(viewport)
+                    .dividers
+                    .into_iter()
+                    .find(|d| d.id == band.id)
+                    .unwrap();
+                let start = [
+                    divider.bounds.x + divider.bounds.width * 0.5,
+                    divider.bounds.y + 20.,
+                ];
+                let collapse_x = if divider.reversed {
+                    divider.parent.x + divider.parent.width - TILE_SIZE * 0.5
+                } else {
+                    divider.parent.x + TILE_SIZE * 0.5
+                };
+                let drag = |s: &mut UiSession<Recorder>, phase, x| {
+                    s.dispatch(UiAction::DragDivider {
+                        id: band.id,
+                        phase,
+                        position: [x, start[1]],
+                        viewport,
+                    })
+                    .unwrap();
+                };
+                drag(&mut s, ContactPhase::Down, start[0]);
+                drag(&mut s, ContactPhase::Move, (start[0] + collapse_x) * 0.5);
+                drag(&mut s, ContactPhase::Move, collapse_x);
+                assert!(s.state.workspace.layout.is_collapsed(root));
+                let collapsed = s.state.workspace.clone();
+                drag(&mut s, ContactPhase::Move, start[0]);
+                assert_eq!(s.state.workspace, collapsed, "No threshold oscillation");
+                drag(
+                    &mut s,
+                    if cancel {
+                        ContactPhase::Cancel
+                    } else {
+                        ContactPhase::Up
+                    },
+                    start[0],
+                );
+                if cancel {
+                    assert_eq!(s.state.workspace, original);
+                    assert!(!s.command(CommandId::UndoWorkspace).enabled);
+                } else {
+                    assert_eq!(s.state.workspace.layout.collapsed[0].expanded_width, width);
+                    s.dispatch(UiAction::Invoke {
+                        command: CommandId::UndoWorkspace,
+                    })
+                    .unwrap();
+                    assert_eq!(s.state.workspace, original);
+                    s.dispatch(UiAction::Invoke {
+                        command: CommandId::RedoWorkspace,
+                    })
+                    .unwrap();
+                    assert_eq!(s.state.workspace, collapsed);
+                    s.dispatch(UiAction::Customize {
+                        action: CustomizationAction::SetColumnCollapsed {
+                            group: root,
+                            collapsed: false,
+                        },
+                    })
+                    .unwrap();
+                    assert!(
+                        (s.state
+                            .workspace
+                            .layout
+                            .column_width_before_resize(root, viewport)
+                            .unwrap()
+                            - width)
+                            .abs()
+                            < 0.5
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn collapsed_drawers_are_persistent_per_column_and_follow_tab_selection() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let viewport = [1200., 900.];
+        let collapse = |s: &mut UiSession<Recorder>, group| {
+            s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap()
+        };
+        collapse(&mut s, 5);
+        collapse(&mut s, 8);
+        assert_eq!(s.state.workspace.layout.collapsed.len(), 2);
+        let open = |s: &mut UiSession<Recorder>, group, panel| {
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer { group, panel },
+            })
+            .unwrap()
+        };
+        open(&mut s, 8, Panel::Layers);
+        open(&mut s, 5, Panel::Brushes);
+        assert_eq!(s.state.customization.column_drawers.len(), 2);
+        let width = s.state.customization.column_drawers[0].column_widths();
+        assert_eq!(
+            width,
+            vec![
+                Panel::Layers
+                    .drawer_width()
+                    .max(Panel::Properties.drawer_width())
+                    .max(Panel::Adjustments.drawer_width())
+            ]
+        );
+        s.dispatch(UiAction::SelectPanelTab {
+            group: 8,
+            panel: Panel::Properties,
+        })
+        .unwrap();
+        let d = &s.state.customization.column_drawers[0];
+        assert_eq!(d.tabs.as_ref().unwrap().active, Panel::Properties);
+        assert_eq!(d.column_widths(), width);
+        assert_eq!(d.dismissal, DrawerDismissal::Explicit);
+        s.input(UiInput::Chrome {
+            event: ChromeEvent::Contact {
+                position: [600., 500.],
+                canvas: true,
+            },
+            facts: ChromeFacts::default(),
+            viewport,
+        })
+        .unwrap();
+        assert_eq!(s.state.customization.column_drawers.len(), 2);
+        // Re-selecting the active drawer tab never opens configuration.
+        s.dispatch(UiAction::SelectPanelTab {
+            group: 8,
+            panel: Panel::Properties,
+        })
+        .unwrap();
+        assert!(s.state.customization.expanded.is_none());
+        open(&mut s, 8, Panel::Layers);
+        assert_eq!(s.state.customization.column_drawers.len(), 1);
+        open(&mut s, 6, Panel::Sizes);
+        assert_eq!(s.state.customization.column_drawers.len(), 1);
+        assert_eq!(
+            s.state.customization.column_drawers[0].columns,
+            vec![vec![Panel::Sizes]]
+        );
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetColumnCollapsed {
+                group: 4,
+                collapsed: false,
+            },
+        })
+        .unwrap();
+        assert!(s.state.customization.column_drawers.is_empty());
+        assert!(!s.state.workspace.layout.is_collapsed(4));
+    }
+
+    #[test]
+    fn collapsed_toolbar_tiles_use_live_origins_and_keep_the_parent_drawer() {
+        let viewport = [1200., 900.];
+        for group in [5, 8] {
+            let mut s = session();
+            s.set_platform(Platform::Gtk);
+            s.dispatch(UiAction::MovePanel {
+                panel: Panel::Toolbar,
+                target: DockTarget::Tab { group, index: None },
+                viewport,
+            })
+            .unwrap();
+            s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap();
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group,
+                    panel: Panel::Toolbar,
+                },
+            })
+            .unwrap();
+            let DrawerAnchor::Column { column, .. } =
+                s.state.customization.column_drawers[0].anchor
+            else {
+                panic!()
+            };
+            let tile = s
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()[0]
+                .id;
+            let anchor = TileAnchor {
+                panel: Panel::Toolbar,
+                tile,
+            };
+            let activate = UiAction::ActivateTile {
+                panel: anchor.panel,
+                tile,
+            };
+            s.dispatch(activate.clone()).unwrap(); // First press selects Brush.
+            assert!(s.state.customization.drawer.is_none());
+            assert!(s.dispatch(activate.clone()).is_err()); // No visible native origin yet.
+            let before = s.state.workspace.clone();
+            let measure = |s: &mut UiSession<Recorder>, y| {
+                s.dispatch(UiAction::MeasureDrawerTiles {
+                    measurements: vec![DrawerTileMeasurement {
+                        column,
+                        anchor,
+                        bounds: Bounds {
+                            x: if group == 5 { 80. } else { 1000. },
+                            y,
+                            width: 36.,
+                            height: 36.,
+                        },
+                    }],
+                })
+                .unwrap()
+            };
+            measure(&mut s, 200.);
+            assert_eq!(s.state.workspace, before);
+            s.dispatch(activate.clone()).unwrap();
+            let placement = |s: &UiSession<Recorder>| {
+                s.state
+                    .customization
+                    .drawer_placement(
+                        s.state.customization.drawer.as_ref().unwrap(),
+                        &s.state.workspace.layout,
+                        viewport,
+                        &[400., 450.],
+                        false,
+                    )
+                    .unwrap()
+            };
+            let first = placement(&s);
+            assert_eq!(
+                first.direction,
+                if group == 5 { Edge::Right } else { Edge::Left }
+            );
+            assert!(first.connection().is_some());
+            measure(&mut s, 160.); // Scrolling/animation updates the same open drawer.
+            let current = placement(&s);
+            assert_eq!(current.anchor.y, 160.);
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            let reply = s
+                .input(UiInput::Chrome {
+                    event: ChromeEvent::Contact {
+                        position: [current.anchor.x + 4., 164.],
+                        canvas: false,
+                    },
+                    facts: ChromeFacts {
+                        content_drawer: Some(current.bounds),
+                        ..Default::default()
+                    },
+                    viewport,
+                })
+                .unwrap();
+            assert!(!reply.handled);
+            assert!(s.state.customization.drawer.is_some());
+            s.dispatch(activate.clone()).unwrap(); // Original tile closes only its child.
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            s.dispatch(activate.clone()).unwrap();
+            let reply = s
+                .input(UiInput::Chrome {
+                    event: ChromeEvent::Contact {
+                        position: [600., 850.],
+                        canvas: true,
+                    },
+                    facts: ChromeFacts {
+                        content_drawer: Some(placement(&s).bounds),
+                        ..Default::default()
+                    },
+                    viewport,
+                })
+                .unwrap();
+            assert!(reply.handled);
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            s.dispatch(activate.clone()).unwrap();
+            let other = if group == 5 {
+                Panel::Brushes
+            } else {
+                Panel::Layers
+            };
+            s.dispatch(UiAction::SelectPanelTab {
+                group,
+                panel: other,
+            })
+            .unwrap();
+            assert!(s.state.customization.drawer.is_none());
+            // Old bounds from the hidden tab must not create a phantom origin.
+            assert!(
+                s.state
+                    .customization
+                    .drawer_tile_at([current.anchor.x + 4., 164.])
+                    .is_none()
+            );
+            let projected = serde_json::to_value(&s.state.customization).unwrap();
+            assert!(projected.get("drawer_tiles").is_none());
         }
     }
 

@@ -44,6 +44,10 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .panel-context-menu { font-size: var(--ui-text-size); }
 .workspace-menu-item { font-weight: 400; }
 .dock-tabs { background: var(--tabbar-bg); font-size: inherit; }
+.dock-panel.collapsed-column > button { min-height: 24px; min-width: 0; padding: 0; }
+.collapsed-column .tile-button { min-width: 36px; min-height: 36px; padding: 0; }
+.collapsed-column .panel-footer { min-height: 20px; }
+.collapsed-column { border-radius: 6px; }
 .dock-panel .heading { font-size: inherit; }
 .selected-tool { background: alpha(var(--accent-bg-color), .22); box-shadow: none; }
 .dock-panel button { border-radius: 6px; min-height: 1.66em; padding: 4px 12px; }

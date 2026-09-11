@@ -77,10 +77,28 @@
 			"path" = "Shared/Editor/LayerPanel.swift";
 			"sourceTree" = "<group>";
 		};
+		"F909CD84971B89D9D35EA123" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/NumberControl.swift";
+			"sourceTree" = "<group>";
+		};
+		"5372DC1446C1E7F50A762E98" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/NumericEditState.swift";
+			"sourceTree" = "<group>";
+		};
 		"3790B32A02CA8A90B81EBFF9" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "Shared/Editor/PanelControls.swift";
+			"sourceTree" = "<group>";
+		};
+		"EE52DAF1638F8FA1D8E11FAD" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/ToolControls.swift";
 			"sourceTree" = "<group>";
 		};
 		"11A2FD2C356E5A4C26E7FC91" = {
@@ -93,6 +111,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "Shared/Tests/LayerActionChecks.swift";
+			"sourceTree" = "<group>";
+		};
+		"063EF0F2766E43A6014E9176" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Tests/NumericControlChecks.swift";
 			"sourceTree" = "<group>";
 		};
 		"3C91C035833DF3A77367A99A" = {
@@ -117,6 +141,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "iOS/Platform/ContextAction.swift";
+			"sourceTree" = "<group>";
+		};
+		"50310923A19004D5BF8FDCCF" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Platform/NumericTextField.swift";
 			"sourceTree" = "<group>";
 		};
 		"421C829F55D51AEC9446F61C" = {
@@ -153,6 +183,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "macOS/Platform/ContextAction.swift";
+			"sourceTree" = "<group>";
+		};
+		"F91440B57C22D445A5BE2440" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "macOS/Platform/NumericTextField.swift";
 			"sourceTree" = "<group>";
 		};
 		"8CD9B8D9ED5284F2DA37EB4B" = {
@@ -233,9 +269,21 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7B439BEA225CFC855F4334EC";
 		};
+		"6FCE0DBA83A55A1ED5B96522" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F909CD84971B89D9D35EA123";
+		};
+		"F4442CCC3A13B011CED9ADEC" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "5372DC1446C1E7F50A762E98";
+		};
 		"1B860C0FB5B54684B9293622" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "3790B32A02CA8A90B81EBFF9";
+		};
+		"6FF1A37BCC2CD69071E98FB0" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "EE52DAF1638F8FA1D8E11FAD";
 		};
 		"E09BE1327B3D23B442432117" = {
 			"isa" = "PBXBuildFile";
@@ -256,6 +304,10 @@
 		"0AAB755A28F6FEEE1762BD43" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E0041892EC32CC1F566BEEB5";
+		};
+		"7E69E8F237D3F717B7D32EF1" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "50310923A19004D5BF8FDCCF";
 		};
 		"E419FFD16A5C419DBEC65B97" = {
 			"isa" = "PBXBuildFile";
@@ -300,12 +352,16 @@
 				"35A4210E05C7501A6A33623B",
 				"C81BC21CD8E2940A2B4F6A0D",
 				"57157F686EB7774DE9FAC0C7",
+				"6FCE0DBA83A55A1ED5B96522",
+				"F4442CCC3A13B011CED9ADEC",
 				"1B860C0FB5B54684B9293622",
+				"6FF1A37BCC2CD69071E98FB0",
 				"E09BE1327B3D23B442432117",
 				"44CD02BFE807810B559DFD2B",
 				"48F9365B0F0716A906CC42A7",
 				"366842A289338167EED9A499",
 				"0AAB755A28F6FEEE1762BD43",
+				"7E69E8F237D3F717B7D32EF1",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -441,6 +497,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "C85D6F61A333710EA68A0A4D";
 		};
+		"7265F1DDAB4CB0CD29584C7A" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "063EF0F2766E43A6014E9176";
+		};
 		"8C4ED6217549AA38906B85BB" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "421C829F55D51AEC9446F61C";
@@ -450,6 +510,7 @@
 			"buildActionMask" = "2147483647";
 			"files" = (
 				"F888EE0F6A04E12CDB7C9786",
+				"7265F1DDAB4CB0CD29584C7A",
 				"8C4ED6217549AA38906B85BB",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
@@ -589,9 +650,21 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "7B439BEA225CFC855F4334EC";
 		};
+		"AC48A0A3D57A27CAB62AA8B0" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F909CD84971B89D9D35EA123";
+		};
+		"B08ABA8D9AF309C0F8799A43" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "5372DC1446C1E7F50A762E98";
+		};
 		"F5BFC168E3534A8268199BA2" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "3790B32A02CA8A90B81EBFF9";
+		};
+		"4386B6B26AB0963570ADF0A8" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "EE52DAF1638F8FA1D8E11FAD";
 		};
 		"36090694B66DBB82370ADDE0" = {
 			"isa" = "PBXBuildFile";
@@ -616,6 +689,10 @@
 		"2EE5A95F4E8123A9A93D960C" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "C111DBD1BF5E1FFB9D1C6086";
+		};
+		"1181F9ED0788A3DCD693CD1E" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "F91440B57C22D445A5BE2440";
 		};
 		"95DEBB7584B28DACAD448AC8" = {
 			"isa" = "PBXBuildFile";
@@ -660,13 +737,17 @@
 				"CE6BA2A1B9CFDEBC98F72918",
 				"FD3BFD5DB3E2F285B1709A59",
 				"EE5ACC9AC15279956BC75A8C",
+				"AC48A0A3D57A27CAB62AA8B0",
+				"B08ABA8D9AF309C0F8799A43",
 				"F5BFC168E3534A8268199BA2",
+				"4386B6B26AB0963570ADF0A8",
 				"36090694B66DBB82370ADDE0",
 				"29FCB920EEF14C46FBE2BC8E",
 				"1BE778F1848E2AF13BDA5B93",
 				"8857E613DFA7ED917C92FEE7",
 				"1900194C86A1FBADCBB664DE",
 				"2EE5A95F4E8123A9A93D960C",
+				"1181F9ED0788A3DCD693CD1E",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -796,6 +877,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "C85D6F61A333710EA68A0A4D";
 		};
+		"85E38D0AE3590811DF1F040C" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "063EF0F2766E43A6014E9176";
+		};
 		"62EB3167D3EF614906196C40" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "8CD9B8D9ED5284F2DA37EB4B";
@@ -805,6 +890,7 @@
 			"buildActionMask" = "2147483647";
 			"files" = (
 				"3EC8ED07647D6114DF20380B",
+				"85E38D0AE3590811DF1F040C",
 				"62EB3167D3EF614906196C40",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
@@ -914,19 +1000,25 @@
 				"FA3427803906428C68B02A6E",
 				"17ED6F984198C731A0BA5B98",
 				"7B439BEA225CFC855F4334EC",
+				"F909CD84971B89D9D35EA123",
+				"5372DC1446C1E7F50A762E98",
 				"3790B32A02CA8A90B81EBFF9",
+				"EE52DAF1638F8FA1D8E11FAD",
 				"11A2FD2C356E5A4C26E7FC91",
 				"C85D6F61A333710EA68A0A4D",
+				"063EF0F2766E43A6014E9176",
 				"3C91C035833DF3A77367A99A",
 				"111E32BF3BBAC2C3EEA5ECEB",
 				"B9F11ADE897A32410402A510",
 				"E0041892EC32CC1F566BEEB5",
+				"50310923A19004D5BF8FDCCF",
 				"421C829F55D51AEC9446F61C",
 				"38A94B87502172530B078A49",
 				"99431BCB42B98C4E6DD2034B",
 				"18F5C8257E9046A704415C1B",
 				"6FE1AEF0A9C284227E309851",
 				"C111DBD1BF5E1FFB9D1C6086",
+				"F91440B57C22D445A5BE2440",
 				"8CD9B8D9ED5284F2DA37EB4B",
 				"A6D47918270966E6019BC1D8",
 				"27C0622449FF617E92B72BB6",

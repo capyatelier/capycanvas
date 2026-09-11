@@ -1,7 +1,9 @@
 # Native Windows implementation
 
-Status: implementation started. No Windows UI, physical-pen, parity, or 120 Hz
-acceptance has passed yet. The web reference runs in local Windows Chrome.
+Status: native canvas, workspace controls, header and Preferences checkpoints
+pass. Full feature/visual parity, complete physical-input validation and final
+performance acceptance remain open. The web reference runs in local Windows
+Chrome; further 120 Hz benchmarking is deferred until the rest of the app is done.
 
 ## Goal and boundaries
 
@@ -354,3 +356,11 @@ The presentation analyzer reports actual display intervals separately from
 submission intervals and present-to-display latency. Synthetic checks cover
 swap-chain/process filtering, missing display records, percentiles and rejected
 invalid data. Raw captures, pixel differences and device metadata stay local.
+
+The subsequent merge of shared column/drawer interactions and Apple controls
+passes 284 core/engine/UI/host/Windows tests. The full serial D3D12 correctness
+suite now passes 103 tests, skips 16 explicit benchmarks, and retains only the
+strict historical-image failure described above. The rebuilt WinUI app passes
+the header/Preferences and workspace fixtures, and closes with empty stderr.
+Shutdown with shortcut capture open also passes. These checkpoints do not imply
+that Windows has implemented the newly merged shared drawer functionality.

@@ -9,6 +9,52 @@ pub struct TileAnchor {
     pub tile: u32,
 }
 
+/// Visible, clipped tile bounds measured by a host inside a column drawer.
+/// Transient geometry only; the core validates ownership and chooses placement.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DrawerTileMeasurement {
+    pub column: u32,
+    pub anchor: TileAnchor,
+    pub bounds: Bounds,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DrawerAnchor {
+    Tile {
+        panel: Panel,
+        tile: u32,
+    },
+    Column {
+        column: u32,
+        group: u32,
+        origin: Panel,
+    },
+}
+impl DrawerAnchor {
+    pub fn tile(self) -> Option<TileAnchor> {
+        match self {
+            Self::Tile { panel, tile } => Some(TileAnchor { panel, tile }),
+            _ => None,
+        }
+    }
+}
+impl From<TileAnchor> for DrawerAnchor {
+    fn from(a: TileAnchor) -> Self {
+        Self::Tile {
+            panel: a.panel,
+            tile: a.tile,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DrawerTabs {
+    pub group: u32,
+    pub panels: Vec<Panel>,
+    pub active: Panel,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DrawerDismissal {
@@ -18,10 +64,11 @@ pub enum DrawerDismissal {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ContentDrawer {
-    pub anchor: TileAnchor,
+    pub anchor: DrawerAnchor,
     /// Each column contains vertically stacked, undecorated panel bodies.
     pub columns: Vec<Vec<Panel>>,
     pub dismissal: DrawerDismissal,
+    pub tabs: Option<DrawerTabs>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -259,13 +306,51 @@ impl ContentDrawer {
             .ok_or("The tool no longer exists")?
             .control;
         Ok(Self {
-            anchor,
+            anchor: anchor.into(),
             columns: control.drawer_columns().ok_or("This tile has no drawer")?,
             dismissal: DrawerDismissal::OutsideContact,
+            tabs: None,
+        })
+    }
+
+    pub(crate) fn for_column(
+        layout: &DockLayout,
+        group: u32,
+        origin: Panel,
+    ) -> Result<Self, String> {
+        let column = layout
+            .collapsed_column_for_group(group)
+            .ok_or("The column is not collapsed")?;
+        let panels = layout.group_panels(group)?;
+        if !panels.contains(&origin) {
+            return Err("The drawer's opening tab no longer exists".into());
+        }
+        let active = layout.active_panel(origin).unwrap();
+        Ok(Self {
+            anchor: DrawerAnchor::Column {
+                column,
+                group,
+                origin,
+            },
+            columns: vec![vec![active]],
+            tabs: Some(DrawerTabs {
+                group,
+                panels: panels.to_vec(),
+                active,
+            }),
+            dismissal: DrawerDismissal::Explicit,
         })
     }
 
     pub fn column_widths(&self) -> Vec<f32> {
+        if let Some(tabs) = &self.tabs {
+            return vec![
+                tabs.panels
+                    .iter()
+                    .map(|p| p.drawer_width())
+                    .fold(0., f32::max),
+            ];
+        }
         self.columns
             .iter()
             .map(|panels| panels.iter().map(|p| p.drawer_width()).fold(0.0, f32::max))
@@ -279,6 +364,17 @@ impl ContentDrawer {
         heights: &[f32],
         partial_zen: bool,
     ) -> Option<DrawerPlacement> {
+        self.place(layout, viewport, heights, partial_zen, None)
+    }
+
+    fn place(
+        &self,
+        layout: &DockLayout,
+        viewport: [f32; 2],
+        heights: &[f32],
+        partial_zen: bool,
+        measured_tile: Option<Bounds>,
+    ) -> Option<DrawerPlacement> {
         if heights.len() != self.columns.len()
             || self.columns.is_empty()
             || !viewport
@@ -291,36 +387,64 @@ impl ContentDrawer {
             return None;
         }
         let resolved = layout.workspace(viewport[0], viewport[1], HEADER_HEIGHT, STATUS_HEIGHT);
-        let group = resolved
-            .groups
-            .iter()
-            .find(|g| g.active == self.anchor.panel)?;
-        let index = layout
-            .panel(self.anchor.panel)
-            .ok()?
-            .tiles()
-            .iter()
-            .position(|t| t.id == self.anchor.tile)?;
-        let tile = *group.tiles.as_ref()?.tiles.get(index)?;
-        let normal_anchor = Bounds {
-            x: group.bounds.x + tile.x,
-            y: group.bounds.y
-                + tile.y
-                + if group.tabs_visible {
-                    TAB_BAR_HEIGHT
-                } else {
-                    0.0
-                },
-            ..tile
-        }
-        .intersection(group.bounds);
-        let zen_anchor = partial_zen
-            .then(|| layout.zen_toolbars(viewport).anchor(self.anchor))
-            .flatten();
-        let anchor = if partial_zen {
-            zen_anchor?.0
+        let (anchor, edge, axis) = if let DrawerAnchor::Column {
+            column,
+            group,
+            origin,
+        } = self.anchor
+        {
+            if partial_zen {
+                return None;
+            }
+            let column = resolved.collapsed.iter().find(|c| c.id == column)?;
+            let group = column.groups.iter().find(|g| g.group == group)?;
+            let anchor = group
+                .icons
+                .iter()
+                .find(|i| i.panel == origin)?
+                .bounds
+                .intersection(column.content)?;
+            (anchor, layout.group_edge(group.group), Axis::Vertical)
+        } else if let Some(anchor) = measured_tile.filter(|_| !partial_zen) {
+            let group = layout.panel_group(self.anchor.tile()?.panel)?;
+            (anchor, layout.group_edge(group), Axis::Vertical)
         } else {
-            normal_anchor?
+            let tile_anchor = self.anchor.tile()?;
+            let group = resolved
+                .groups
+                .iter()
+                .find(|g| g.active == tile_anchor.panel)?;
+            let index = layout
+                .panel(tile_anchor.panel)
+                .ok()?
+                .tiles()
+                .iter()
+                .position(|t| t.id == tile_anchor.tile)?;
+            let tile = *group.tiles.as_ref()?.tiles.get(index)?;
+            let normal_anchor = Bounds {
+                x: group.bounds.x + tile.x,
+                y: group.bounds.y
+                    + tile.y
+                    + if group.tabs_visible {
+                        TAB_BAR_HEIGHT
+                    } else {
+                        0.0
+                    },
+                ..tile
+            }
+            .intersection(group.bounds);
+            let zen_anchor = partial_zen
+                .then(|| layout.zen_toolbars(viewport).anchor(tile_anchor))
+                .flatten();
+            let anchor = if partial_zen {
+                zen_anchor?.0
+            } else {
+                normal_anchor?
+            };
+            let edge = zen_anchor
+                .map(|a| a.1)
+                .or_else(|| layout.group_edge(group.id));
+            (anchor, edge, group.axis)
         };
         let top = if partial_zen {
             WORKSPACE_SPACING
@@ -333,19 +457,12 @@ impl ContentDrawer {
             width: viewport[0] - WORKSPACE_SPACING * 2.0,
             height: viewport[1] - top - WORKSPACE_SPACING,
         };
-        let edge = zen_anchor.map(|a| a.1).or_else(|| {
-            layout
-                .bands
-                .iter()
-                .find(|b| b.root.group_for(self.anchor.panel).is_some())
-                .map(|b| b.edge)
-        });
         let direction = match edge {
             Some(Edge::Top) => Edge::Bottom,
             Some(Edge::Bottom) => Edge::Top,
             Some(Edge::Left) => Edge::Right,
             Some(Edge::Right) => Edge::Left,
-            None if group.axis == Axis::Horizontal => {
+            None if axis == Axis::Horizontal => {
                 if anchor.y + anchor.height * 0.5 < available.y + available.height * 0.5 {
                     Edge::Bottom
                 } else {
@@ -428,6 +545,76 @@ impl ContentDrawer {
             direction,
             columns,
         })
+    }
+}
+
+impl CustomizationState {
+    fn accepts_drawer_tile(&self, m: &DrawerTileMeasurement) -> bool {
+        self.column_drawers.iter().any(|d| {
+            matches!(d.anchor, DrawerAnchor::Column { column, .. } if column == m.column)
+                && d.tabs.as_ref().is_some_and(|t| t.active == m.anchor.panel)
+        })
+    }
+
+    pub(crate) fn measure_drawer_tiles(
+        &mut self,
+        layout: &DockLayout,
+        measurements: Vec<DrawerTileMeasurement>,
+    ) -> Result<(), String> {
+        let mut accepted = Vec::with_capacity(measurements.len());
+        for m in measurements {
+            if ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
+                .into_iter()
+                .all(f32::is_finite)
+                || m.bounds.width <= 0.
+                || m.bounds.height <= 0.
+            {
+                return Err("Invalid drawer tile bounds".into());
+            }
+            if self.accepts_drawer_tile(&m)
+                && layout
+                    .panel(m.anchor.panel)
+                    .is_ok_and(|p| p.tiles().iter().any(|t| t.id == m.anchor.tile))
+                && !accepted
+                    .iter()
+                    .any(|a: &DrawerTileMeasurement| a.anchor == m.anchor)
+            {
+                accepted.push(m);
+            }
+        }
+        self.drawer_tiles = accepted;
+        Ok(())
+    }
+
+    pub(crate) fn drawer_tile_at(&self, point: [f32; 2]) -> Option<TileAnchor> {
+        self.drawer_tiles.iter().rev().find_map(|m| {
+            (self.accepts_drawer_tile(m) && m.bounds.contains(point[0], point[1]))
+                .then_some(m.anchor)
+        })
+    }
+
+    /// All hosts use this for current drawer geometry, including live projected
+    /// toolbar origins. Normal dock and partial-Zen origins need no measurements.
+    pub fn drawer_placement(
+        &self,
+        drawer: &ContentDrawer,
+        layout: &DockLayout,
+        viewport: [f32; 2],
+        heights: &[f32],
+        partial_zen: bool,
+    ) -> Option<DrawerPlacement> {
+        let measured = drawer.anchor.tile().and_then(|anchor| {
+            self.drawer_tiles
+                .iter()
+                .find(|m| m.anchor == anchor && self.accepts_drawer_tile(m))
+        });
+        drawer.place(
+            layout,
+            viewport,
+            heights,
+            partial_zen,
+            measured.map(|m| m.bounds),
+        )
     }
 }
 

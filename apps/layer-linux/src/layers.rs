@@ -775,8 +775,13 @@ impl LayerPanel {
                     #[upgrade_or]
                     glib::ControlFlow::Break,
                     move || {
-                        w.layer_panel
-                            .update_previews(&w, w.drawer.layers().as_deref());
+                        w.layer_panel.update_previews(
+                            &w,
+                            &w.drawers()
+                                .iter()
+                                .filter_map(|d| d.layers())
+                                .collect::<Vec<_>>(),
+                        );
                         glib::ControlFlow::Continue
                     }
                 ),
@@ -1104,9 +1109,9 @@ impl LayerPanel {
         }
         self.updating.set(false);
     }
-    fn update_previews(&self, w: &Workspace, extra: Option<&Self>) {
+    fn update_previews(&self, w: &Workspace, extra: &[Rc<Self>]) {
         let rows: Vec<_> = std::iter::once(self)
-            .chain(extra)
+            .chain(extra.iter().map(|v| v.as_ref()))
             .filter(|v| v.root.is_mapped())
             .flat_map(|view| {
                 view.rows

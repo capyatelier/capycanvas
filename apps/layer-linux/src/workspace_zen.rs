@@ -231,6 +231,6 @@ impl Zen {
             ".brush-color {{ -gtk-icon-palette: success {}; }}",
             w.color.rgba()
         ));
-        w.surface.raise_drawer();
+        w.surface.raise_drawer(0);
     }
 }

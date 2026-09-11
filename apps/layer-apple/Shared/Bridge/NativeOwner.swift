@@ -79,6 +79,18 @@ final class NativeOwner: @unchecked Sendable {
             }
         }
     }
+    /// Editable controls own validation feedback. Publish the resulting state
+    /// before acknowledging the edit, including when semantic validation fails.
+    func edit(_ action: JSON, completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            var failure: String?
+            do { _ = try request(0, action) }
+            catch { failure = error.localizedDescription }
+            do { try publish() }
+            catch { receive(nil, error.localizedDescription) }
+            completion(failure)
+        }
+    }
     func attach(_ layer: CAMetalLayer, width: UInt32, height: UInt32, scale: Float) {
         let lease = MetalLayerLease(layer)
         perform { [self] in
