@@ -165,6 +165,61 @@ fn native_default_workspace() {
         // The resized wheel is centered; native contacts must use that same
         // origin, and all color controls remain visible at the default height.
         pump(100);
+        for panel in [
+            Panel::Sizes,
+            Panel::ToolSettings,
+            Panel::Stats,
+            Panel::Navigator,
+        ] {
+            let tab = w
+                .groups
+                .borrow()
+                .iter()
+                .flat_map(|g| &g.tabs)
+                .find(|(p, _)| *p == panel)
+                .unwrap()
+                .1
+                .clone();
+            click(&tab);
+            pump(150);
+            assert!(w.panel_widget(panel).is_mapped());
+            let other = match panel {
+                Panel::Sizes => Panel::ToolSettings,
+                Panel::ToolSettings => Panel::Sizes,
+                Panel::Stats => Panel::Navigator,
+                _ => Panel::Stats,
+            };
+            assert!(!w.panel_widget(other).is_mapped());
+            assert!(state(&w).customization.drawer.is_none());
+            verify();
+            if panel == Panel::Sizes {
+                capture_reference(&w, &format!("{output}/brush-size-tab-{theme:?}.png"), 1.);
+            }
+            if panel == Panel::Stats {
+                pump(250);
+                let view = w.gpu.borrow().as_ref().unwrap().session.renderer_stats();
+                let mut expected: Vec<_> = view.rows.iter().map(|row| row.label).collect();
+                expected.insert(view.chart_after_rows, "chart");
+                let mut actual = Vec::new();
+                let mut child = w.effects.stats.first_child();
+                while let Some(widget) = child {
+                    actual.push(if widget.is::<gtk::DrawingArea>() {
+                        "chart".to_string()
+                    } else {
+                        widget
+                            .first_child()
+                            .unwrap()
+                            .downcast::<gtk::Label>()
+                            .unwrap()
+                            .text()
+                            .to_string()
+                    });
+                    child = widget.next_sibling();
+                }
+                assert_eq!(actual, expected);
+                capture_reference(&w, &format!("{output}/diagnostics-tab-{theme:?}.png"), 1.);
+            }
+        }
         let wheel = find_named(&w.panel_widget(Panel::Color), "color-wheel").unwrap();
         let size = wheel.width().min(wheel.height()) as f32;
         assert!(size >= 128.);
@@ -1146,14 +1201,29 @@ fn native_collapsed_drop_and_resize() {
             .clone();
         let b = divider.bounds;
         let drag = begin_workspace_drag(&w, &handle, b.width * 0.5, 20.);
-        let x = if divider.reversed {
-            divider.parent.x + divider.parent.width - TILE_SIZE * 0.5
+        let minimum = if group == 5 {
+            layer_ui::TOOL_PANEL_MIN_WIDTH
         } else {
-            divider.parent.x + TILE_SIZE * 0.5
+            layer_ui::LAYERS_MIN_WIDTH
         };
-        let dx = (x - b.x - b.width * 0.5) as f64;
-        drag.update([dx * 0.5, 0.]);
-        drag.update([dx, 0.]);
+        let delta_for_width = |width| {
+            let x = if divider.reversed {
+                divider.parent.x + divider.parent.width - width - WORKSPACE_SPACING * 0.5
+            } else {
+                divider.parent.x + width + WORKSPACE_SPACING * 0.5
+            };
+            [(x - b.x - b.width * 0.5) as f64, 0.]
+        };
+        for requested in [minimum, minimum * 0.75 + 1.] {
+            drag.update(delta_for_width(requested));
+            pump(80);
+            assert!(!state(&w).workspace.layout.is_collapsed(root));
+            assert!(
+                (width() - minimum).abs() < 1.,
+                "minimum width stays clamped"
+            );
+        }
+        drag.update(delta_for_width(minimum * 0.75 - 1.));
         pump(150);
         assert!(state(&w).workspace.layout.is_collapsed(root));
         let collapsed = state(&w).workspace;

@@ -1,11 +1,11 @@
-# Familiar drawing workspace (GTK review)
+# Familiar drawing workspace (approved GTK design)
 
-This is the active implementation checklist, not a completion claim. The complete
-tool set, panel layout and interactions below must work before the GTK review.
-Web/Android-specific presentation is not part of this approval milestone; shared
-models and behavior must remain portable.
+The GTK design was approved on 2026-09-11, with Navigator made slightly taller
+at Layers' expense. The requirements below remain the shared behavior contract.
+Web/Android-specific presentation is not part of this GTK approval milestone;
+shared models and behavior remain portable.
 
-## Current GTK review checkpoint
+## Approved GTK checkpoint
 
 The integrated feature audit on 2026-09-11 passes the following native scenarios
 from `apps/layer-linux/src/tests.rs`. Older progress/remaining-work entries below
@@ -22,8 +22,9 @@ are historical; this checkpoint and the current requirements take precedence.
 | Connected tool drawers, nested drawers, collapsed-column movement/resize | `native_tool_drawers`, `native_nested_tool_drawers`, `native_collapsed_columns`, `native_collapsed_drop_and_resize` |
 | Partial/total Zen, eight menus, document files, workspace restore, native fullscreen | `native_zen_behaviors`, `native_menu_sections`, `native_document_files`, `native_workspace_restore`, `native_fullscreen_header_clock_and_battery` |
 
-All 20 integrated GTK scenarios pass, plus 298 core/engine/UI unit tests and
-117 hardware renderer tests (17 benchmarks separately ignored). The Navigator
+All 20 integrated GTK scenarios pass. The approval follow-up passes 300
+core/engine/UI unit tests; the renderer suite passes 118 hardware tests
+(17 benchmarks separately ignored). The Navigator
 contrast correction found during visual inspection has its own failing-before,
 passing-after GPU regression. Strict GTK/renderer Clippy, the WebAssembly build
 check and the normal GTK release build pass. Updated dark/light review captures
@@ -31,18 +32,35 @@ are in ignored `artifacts/familiar-workspace/`; default-layout captures are in
 its `default/` subdirectory. Targeted tests also render representative custom
 workspaces, which should not be mistaken for the shipped default.
 
-**Not complete:** human GTK approval, residual transform/presentation stalls,
-and the separately tracked strict Metal/D3D12 filter-pixel parity investigation.
-This audit does not claim physical stylus latency or new native-device testing
-on other platforms. The corrected native event-wait measurements are below.
+The approved height adjustment increases Navigator's default share of the right
+column from approximately 20% to 25%, reduces Layers from 50% to 45%, and retains
+Properties at 30%. This gives Navigator about 40px more space in a 900px-tall
+window. Shared layout tests cover four window sizes, unchanged left panels and
+command ribbon, and the matching reduction in Layers. Existing customized
+workspaces are preserved; Window → Reset layout applies the updated defaults.
+
+The follow-up layout places Brush size as the second tab beside Tool (renamed
+from Tool Settings).
+Tool Set receives the former Brush size panel's height and the removed divider;
+Tool and Color retain their heights apart from subpixel split rounding.
+
+Diagnostics places its live graph below GPU timings and Canvas storage below
+Frames. Rust owns both row order and chart placement; native hosts project that
+ordering rather than assigning a fixed footer position to the chart.
+
+**Separate renderer follow-ups remain open:** residual transform/presentation
+stalls and strict Metal/D3D12 filter-pixel parity. GTK design approval does not
+resolve these or establish physical stylus latency or new device validation on
+other platforms. The corrected native event-wait measurements are below.
 
 ## Required layout
 
 - Left edge: Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend, Liquify;
   divider; Lasso, Auto select, Fill, Gradient; divider; Operation, Figure,
   Ruler, Hand, Eyedropper, foreground/background color selector.
-- Second left column: Tool Set, Tool Settings, Brush size, Color, vertically stacked.
-  **Tool Set and Tool Settings must fit three standard tiles inside their minimum
+- Second left column: Tool Set, Tool (Brush size as its second tab),
+  then Color, vertically stacked. Tool Set uses the freed Brush size space.
+  **Tool Set and Tool must fit three standard tiles inside their minimum
   width**, with normal two-pixel tile gaps and content padding. Group selectors
   wrap; labels truncate instead of forcing wider panels. Layers keeps its
   separate six-tile minimum. Settings controls must remain usable at minimum width.
@@ -104,8 +122,8 @@ independently decide when a tool is selected or a drawer opens.
   the connector geometry and suppresses concave joins near an aligned body
   edge; round only the exposed corners. Apply this to normal and Zen tiles,
   every opening direction, viewport clamping, resizing and animation.
-- Every actual tool/preset gets two columns: Tool Set, then Tool Settings.
-  Color gets one Color panel. Opacity gets Tool Settings, exposing the editable
+- Every actual tool/preset gets two columns: Tool Set, then Tool.
+  Color gets one Color panel. Opacity gets Tool, exposing the editable
   value and its related controls. Size preset tiles remain immediate value
   choices; add a Brush size panel tile for its full controls.
 - New/Open/Save, undo/redo, clear/fill selection, transforms and navigation
@@ -117,7 +135,7 @@ independently decide when a tool is selected or a drawer opens.
   Each built-in panel declares a separate, more relaxed `drawer_width` in Rust,
   wider than its ordinary dock default and respecting its intrinsic minimum.
   Use this width in every drawer type, superseding the earlier three-tile drawer
-  width. Docked Tool Set/Tool Settings still retain their three-tile minimum. Content
+  width. Docked Tool Set/Tool still retain their three-tile minimum. Content
   uses ordinary panel models and shared preview caches; opening a drawer must not
   detach an existing docked widget or duplicate GPU preview generation.
 - Top toolbar: open downward, left-aligned with the tile; shift left only as
@@ -186,9 +204,11 @@ contents and expanded column width. Rust owns state, geometry, thresholds,
 drop eligibility and drawer selection; GTK only renders and forwards input.
 
 - **Collapse column** is available from any panel-group context menu in the
-  column. Drag-resizing the column closed also collapses it; start with the
-  collapsed strip width as the threshold. Avoid threshold oscillation during
-  a resize gesture. Expansion restores the remembered ordinary width.
+  column. Drag-resizing collapses it when the requested width falls below 75%
+  of the column's minimum width, or reaches the collapsed strip width (36
+  logical pixels), whichever happens first. Exactly 25% into the minimum does
+  not trigger the percentage rule. Collapse stays latched during the resize
+  gesture. Expansion restores the remembered ordinary width.
 - Double-clicking the **non-tab area of any docked panel group's tab bar** also
   collapses its containing column, whether the group has one tab or several.
   This replaces the existing docked single-panel header double-click toggle
@@ -251,7 +271,7 @@ Ctrl/Cmd+0, preserving explicit custom bindings rather than stealing them.
 Tool Set shows only groups belonging to the active tool. Group buttons have an
 icon and name, three tiles wide and one tall, with exactly one selected. The list
 below shows that group's subtools and retains useful brush stroke previews.
-Switching tools remembers their last subtool. Tool Settings comes from shared
+Switching tools remembers their last subtool. The Tool panel comes from shared
 metadata and follows the current subtool; no GTK-owned brush or selection policy.
 
 Existing GPU brush presets supply Pen/Marker, Pencil/Pastel, paint/watercolor/oil,
@@ -2445,6 +2465,6 @@ traces are not changed by this correction.
 The complete GPU suite and integrated GTK workflow audit pass. Navigator and
 the complete default-workspace tests were rerun after the shader change.
 Representative default, compact, three-tile, color, gradient, figure, mask-transform,
-Navigator, collapsed-column and Zen captures were inspected across both themes. Human
-design approval and the separate remaining performance/parity gates are still
-required; this is a consolidated review milestone, not final goal completion.
+Navigator, collapsed-column and Zen captures were inspected across both themes.
+The subsequent GTK design approval and final height adjustment are recorded at
+the top of this document; the separate renderer investigations remain open.

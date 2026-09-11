@@ -102,7 +102,7 @@ impl PanelControl {
     pub fn label(self) -> &'static str {
         match self {
             Self::Brushes => "Tool Set",
-            Self::ToolSettings => "Tool Settings",
+            Self::ToolSettings => Panel::ToolSettings.label(),
             Self::ColorWheel => "Color wheel",
             Self::BrushSize => "Brush size",
             Self::SizePresets => "Size presets",

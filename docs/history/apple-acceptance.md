@@ -110,7 +110,7 @@ build is only build evidence.
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
 | 5. Document/settings/workspace persistence and lifecycle | Atomic preferences and private artwork recovery implemented; Simulator settings/workspace and artwork restart checks pass. Manual Save/Open, recovery and checkpoint policy pass direct checks; provider delivery and full physical lifecycle matrix remain. | Same persistence and recovery; native restart and owner isolation pass. Manual Save/Open, recovery and unsaved close pass direct checks; full window/display/sleep/memory-pressure matrix remains. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
-| 7. Hardware performance, sustained sessions and delivery | Shared opt-in CPU/GPU/actual-presentation trace and local analyzer implemented; physical startup/idle instrumentation checked. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. | Same shared instrumentation and startup/idle check; display maximum is 90 Hz. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. |
+| 7. Hardware performance, sustained sessions and delivery | Shared recorder and five synthetic profiles implemented. One physical ten-minute 4K watercolor run completes; CPU p99 is 9.120 ms. Full matrix, frame-budget tails, physical latency and overhead calibration remain. | Same profiles; one native ten-minute 4K watercolor run completes. Current display configuration is 90 Hz. Full matrix, memory growth, physical latency, overhead calibration and 120 Hz evidence remain. |
 
 Start input/performance instrumentation and persistence early, and run visual
 comparisons as components land. The rows are acceptance gates, not a reason to
@@ -1372,3 +1372,61 @@ physical iPad automation setup and sustained hardware performance gates remain
 open. Capture bundles, logs, device/signing data and pixel reports stay in ignored
 local artifacts. Test editors and the temporary web server are closed; the
 original user editor is preserved.
+
+## Repeatable Apple drawing and ten-minute hardware baseline
+
+Both targets now share five opt-in synthetic drawing workloads, with versioned
+240 Hz trajectories, pressure, explicit pen-up gaps and prediction where
+specified. Production input, the serial renderer, editor panels, history and
+recovery stay active. Each run uses isolated persistence and a separate benchmark
+bundle; artist settings and recovery copies are preserved. Wall-clock input
+production is independent of frame admission, and excessive producer backlog
+marks the run failed instead of reducing the input load.
+
+The trace records setup, warm-up, measurement, postlude and failure markers.
+Reports isolate the measured interval and retain rejected input, denied frame
+admissions, missing GPU observations and presentation callbacks, interval-edge
+gaps, memory and thermal state. A complete producer interval is explicitly
+separate from frame-budget or pixel/latency acceptance. Native canvas readiness
+now updates accessibility once per attached surface instead of on every frame.
+
+One ten-minute Release `wet-watercolor-4k` session completed on each physical
+platform with eight paint layers plus paper, a 320 px brush and synthetic
+prediction. Both have zero recorded renderer errors, rejected input batches and
+recorder overflow. The iPad observed 65,407 measured presentations at a median
+8.333 ms interval; CPU owner service p99 was 9.120 ms, with 1,092 frames over
+8.33 ms. Mac observed 49,266 presentations at a median 11.111 ms interval on its
+current 90 Hz configuration; CPU p99 was 6.083 ms, with 28 frames over 8.33 ms.
+Both retain late presentations and missing GPU readbacks in the results.
+Measured footprint growth was +0.17 MiB on iPad and +148.83 MiB on Mac, including
+history, ordinary recovery work and recorder storage. Thermal samples remained
+nominal. Mac memory growth and timing tails require further investigation.
+
+The full distributions, limitations, reproduction commands and rejected
+two-drawable experiment are recorded in
+[`apps/layer-apple/PERFORMANCE.md`](../../apps/layer-apple/PERFORMANCE.md).
+The ten-minute sessions include shared changes through `d8a130b`. Subsequent
+Windows effect controls, the shared Navigator-height adjustment and Ripple
+phase correction through `af33bcd` are integrated before publication. These
+later layout/filter changes are not represented by those earlier hardware
+timings or by the older visual comparison table.
+
+After integration, both normal signed Apple builds pass, as do all 32 Apple
+bridge, 15 host and 223 UI tests (270 total; one existing hardware-only host test
+remains ignored). The incoming spatial-filter linear GPU oracle also passes on
+the local native backend; it supplements the still-open strict PNG-reference
+gate. Direct Swift checks cover the workload's contact/pressure contract,
+frame admission/surface replacement and bounded trace recording. All eight
+Python report checks pass, including failed/truncated producers and missing
+render observations. The integrated normal iPad app is installed and launches;
+this does not add a new physical-input assertion. These checks require no system
+menu automation.
+
+Remaining acceptance includes the other four ten-minute profiles on both
+platforms, calibrated profiler overhead, isolated GPU work, physical input-to-
+pixel latency, complete input/lifecycle workflows, Mac 120 Hz presentation
+evidence and the existing visual/filter-reference failures. Basic Pencil checks
+remain the previously user-confirmed evidence. This checkpoint does not close
+the complete performance or parity goal. The benchmark apps are closed and the
+original Mac editor is preserved. Raw traces, captures, build logs and
+signing/device information stay in ignored local artifacts.

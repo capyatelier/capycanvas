@@ -12,6 +12,12 @@ visual and hardware performance evidence. Shared changes must build on both.
 See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
 for the shared-code boundaries, milestone matrix and remaining work.
 
+[Performance workflows and measurements](PERFORMANCE.md) include five opt-in
+synthetic drawing profiles shared by both targets and a ten-minute physical 4K
+watercolor baseline on each. CPU spikes, missing GPU observations and the Mac's
+current 90 Hz display leave performance acceptance open. Benchmark sessions use
+isolated storage; ordinary launches do not start synthetic input or recording.
+
 ## Build
 
 See the [Apple development guide](../../docs/development/apple.md) for prerequisites,
@@ -22,14 +28,14 @@ or removing Swift files. Edit the generators rather than generated project entri
 ## Shared editor controls
 
 Fresh editors use the shared full editor preset: the Tools and Commands bars,
-Tool Set, Tool Settings, Brush size, Color, Navigator/Diagnostics,
+Tool Set, Tool, Brush size, Color, Navigator/Diagnostics,
 Properties/Filters and Layers. Restoring a saved workspace preserves its layout
 and toolbar contents, including workspaces from earlier Apple builds.
 
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.
-Tool Settings shows the active tool's numeric fields and actions. Numeric
+The Tool panel shows the active tool's numeric fields and actions. Numeric
 expressions, units, ranges, slider mappings and stepping resolve through Rust.
 The shared Apple control
 handles optimistic edits and local validation feedback; small AppKit/UIKit
@@ -46,7 +52,7 @@ contact. Picking a color exits transparent paint using the previous paint slot.
 Channel edits update the current Rust state, preserving other queued changes.
 
 For reproducible Debug editor fixtures, `CAPY_INITIAL_ACTIONS` accepts a JSON
-array of shared actions at launch. For example, this opens Tool Settings without
+array of shared actions at launch. For example, this opens the Tool panel without
 driving the Mac system menu bar:
 
 ```sh

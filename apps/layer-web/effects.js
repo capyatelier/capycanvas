@@ -92,7 +92,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   const statsTimer = setInterval(()=>{
     if(!stats.isConnected||!stats.getClientRects().length||document.hidden)return;
     const view=app.renderer_stats();
-    if(!metricLabels.length){for(const metric of view.rows){const row=element("div","property-row"),value=element("span","numeric");row.title=metric.description;row.append(element("span","",metric.label),value);stats.append(row);metricLabels.push(value);}stats.append(chart);contentChanged("stats");}
+    if(!metricLabels.length){for(const [index,metric] of view.rows.entries()){const row=element("div","property-row"),value=element("span","numeric");row.title=metric.description;row.append(element("span","",metric.label),value);stats.append(row);metricLabels.push(value);if(index+1===Number(view.chart_after_rows))stats.append(chart);}contentChanged("stats");}
     view.rows.forEach((r,i)=>metricLabels[i].textContent=r.value);chart.setAttribute("aria-label",view.chart_label);
     const max=Math.max(view.budget_ms,...view.samples)*1.1,y=ms=>46*(1-ms/max);
     budget.setAttribute("d",`M0 ${y(view.budget_ms)}H200`);

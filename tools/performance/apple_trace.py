@@ -104,8 +104,9 @@ def analyze(header, events):
     warnings.extend(["Input receipt association does not establish physical input-to-pixel latency.",
                      "GPU queue spans include submission gaps and profiler submissions; overhead is not calibrated.",
                      "This trace alone does not establish the required workload matrix or ten-minute acceptance."])
-    return {
+    result = {
         "schema": 1, "platform": "iPadOS" if header["platform"] == 0 else "macOS",
+        "input_source": header.get("input_source", "platform"),
         "configuration": header.get("configuration"), "duration_seconds": header["duration_seconds"],
         "counts": {"events": len(events), "dropped_records": header.get("dropped_records", 0),
                    "real_input_batches": sum(r[6] == 0 for r in inputs.values()),
@@ -142,6 +143,64 @@ def analyze(header, events):
                    "thermal_states": sorted({r[3] for r in memory})},
         "warnings": warnings,
     }
+    if header.get("workload"):
+        markers = sorted(grouped[11], key=lambda r: r[0])
+        begins = [r for r in markers if r[1] == 2]
+        ends = [r for r in markers if r[1] == 3]
+        failed = any(r[1] == 5 for r in markers)
+        complete = len(begins) == len(ends) == 1 and not failed and ends[0][0] > begins[0][0]
+        report = {"specification": header["workload"], "measurement_completed": complete,
+                  "postlude_observed": any(r[1] == 4 for r in markers), "failure_recorded": failed}
+        if complete:
+            begin, end = begins[0], ends[0]
+            admitted = [r for r in frames.values() if begin[0] <= r[0] < end[0]]
+            rows = [r for r in submitted if begin[0] <= r[0] < end[0]]
+            identities = {r[0] for r in rows}
+            shown_rows = sorted((r for r in visible.values() if r[0] in identities), key=lambda r: r[1])
+            acquired = {key for key in drawables if begin[0] <= key[0] < end[0]}
+            observed_times = sorted(r[1] for r in visible.values() if begin[0] <= r[1] <= end[0])
+            measured_ticks = [r for r in ticks if begin[0] <= r[0] < end[0]]
+            memory_rows = [r for r in memory if begin[0] <= r[0] <= end[0]]
+            scheduler = [r[5] for r in markers if r[1] in (3, 6) and begin[0] <= r[0] <= end[0]]
+            report.update({
+                "measured_seconds": (end[0] - begin[0]) / 1e9,
+                "delivered_nonpredicted_samples": end[3] - begin[3],
+                "delivered_nonpredicted_batches": end[4] - begin[4],
+                "rejected_input_batches": sum(not r[9] for r in inputs.values() if begin[0] <= r[0] <= end[0]),
+                "ticks": len(measured_ticks),
+                "ticks_denied_admission": sum(not r[2] for r in measured_ticks),
+                "admitted_frames_without_viewport": len(admitted) - len(rows),
+                "missing_presentation_callbacks": len(acquired - presented.keys()),
+                "zero_time_presentations": sum(key in acquired and not r[1] for key, r in presented.items()),
+                # Include the edges: good cadence among a few early frames must
+                # not conceal a window becoming occluded for the rest of a run.
+                "first_presentation_after_start_ms": (observed_times[0] - begin[0]) / NS_PER_MS if observed_times else None,
+                "last_presentation_before_end_ms": (end[0] - observed_times[-1]) / NS_PER_MS if observed_times else None,
+                "producer_interval_maximum_lateness_ms": distribution(scheduler),
+                "frames": frame_metrics(rows),
+                "gpu_queue_span_ms": distribution(r[1] for key, r in gpu.items() if key in identities and r[2] == 1 and r[1] > 0),
+                "gpu_samples_missing": sum(key not in gpu for key in identities),
+                "actual_presentations": len(shown_rows),
+                # The fixed workload includes explicit pen-up gaps. Preserve
+                # all intervals as well as the display-link-cycle metric above.
+                "presentation_intervals_including_pen_up_ms": distribution(b[1] - a[1] for a, b in zip(shown_rows, shown_rows[1:])),
+                "positive_target_lateness_ms": distribution(max(0, r[1] - frames[r[0]][1]) for r in shown_rows),
+                "targets_exceeded_by_over_1ms": sum(r[1] > frames[r[0]][1] + NS_PER_MS for r in shown_rows),
+                "footprint_bytes": distribution((r[1] for r in memory_rows), divisor=1),
+                "first_to_last_growth_bytes": memory_rows[-1][1] - memory_rows[0][1] if memory_rows else None,
+                "thermal_states": sorted({r[3] for r in memory_rows}),
+            })
+            requested = header["workload"].get("measurement_seconds")
+            if requested is not None and report["measured_seconds"] < requested:
+                warnings.append("Workload measurement is shorter than its declared duration.")
+            if ready_at is None or ready_at > begin[0]:
+                warnings.append("Workload measurement began before recorded full readiness.")
+            if report["rejected_input_batches"] or state_errors or not shown_rows:
+                warnings.append("Workload input/render validation failed or actual presentations are missing.")
+        else:
+            warnings.append("Synthetic workload has no complete measurement interval; do not treat it as a successful run.")
+        result["workload"] = report
+    return result
 
 
 def main():

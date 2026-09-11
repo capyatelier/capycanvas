@@ -47,11 +47,21 @@ class AndroidSystemStatusTest {
             val title = compose.onNodeWithTag("document-title").fetchSemanticsNode().boundsInRoot
             val clock = compose.onNodeWithTag("system-clock").fetchSemanticsNode().boundsInRoot
             val icon = compose.onNodeWithTag("system-battery").fetchSemanticsNode().boundsInRoot
+            val tile = compose.onNodeWithTag("system-battery-tile").fetchSemanticsNode().boundsInRoot
             val settings = compose.onNodeWithTag("header-settings").fetchSemanticsNode().boundsInRoot
             assertTrue(title.right <= clock.left && clock.right <= icon.left && icon.right <= settings.left)
+            val density = compose.activity.resources.displayMetrics.density
+            assertEquals(settings.width, tile.width, 1f)
+            assertEquals(settings.height, tile.height, 1f)
+            assertEquals(6f * density, settings.left - tile.right, 1f)
+            assertEquals(6f * density, tile.left - clock.right, 1f)
+            assertEquals(6f * density, clock.left - title.right, 1f)
+            assertEquals(tile.center.x, icon.center.x, 1f)
+            assertEquals(tile.center.y, icon.center.y, 1f)
             clockPreference(2)
             compose.onNodeWithTag("system-clock").assertDoesNotExist()
-            compose.onNodeWithTag("system-battery").assertIsDisplayed()
+            compose.onNodeWithTag("system-battery").assertDoesNotExist()
+            compose.onNodeWithTag("system-battery-tile").assertDoesNotExist()
             clockPreference(1)
             compose.onNodeWithTag("system-clock").assertIsDisplayed()
             clockPreference(0)

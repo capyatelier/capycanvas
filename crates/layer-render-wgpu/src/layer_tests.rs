@@ -615,7 +615,7 @@ fn region_request_latency() {
 
 // Inspect persistent pigment/wetness independently of layer-level effects.
 // This is test-only readback, never a drawing or selection raster path.
-fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
+pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8> {
     let row = texture.width() * texture.format().block_copy_size(None).unwrap();
     assert_eq!(row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT, 0);
     let buffer = r.device.create_buffer(&wgpu::BufferDescriptor {

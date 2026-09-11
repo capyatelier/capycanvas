@@ -362,6 +362,128 @@ fn halftone_endpoints_match_scalar_color_oracles() {
     }
 }
 
+/// Isolate spatial filter math from sRGB export and unpremultiplication. One
+/// linear byte near zero alpha can become a large straight-sRGB difference.
+/// This independent oracle supplements, never replaces, the strict PNG gate.
+#[test]
+fn spatial_filters_match_linear_sampling_oracles() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let base = setup(&mut r, EXTENT);
+    let stored: Vec<[f64; 4]> = artwork(EXTENT)
+        .chunks_exact(4)
+        .map(|c| {
+            let a = f64::from(c[3]) / 255.;
+            std::array::from_fn(|k| {
+                if k == 3 {
+                    f64::from(c[3])
+                } else {
+                    (scalar_srgb_decode(f64::from(c[k]) / 255.) * a * 255.).round()
+                }
+            })
+        })
+        .collect();
+    let sample = |p: [f64; 2]| -> [f64; 4] {
+        let q: [f64; 2] =
+            std::array::from_fn(|k| p[k].clamp(0.5, f64::from(EXTENT[k]) - 0.5) - 0.5);
+        let tap = |dx: usize, dy: usize| {
+            let x = (q[0] as usize + dx).min(EXTENT[0] as usize - 1);
+            let y = (q[1] as usize + dy).min(EXTENT[1] as usize - 1);
+            stored[y * EXTENT[0] as usize + x]
+        };
+        let t = [tap(0, 0), tap(1, 0), tap(0, 1), tap(1, 1)];
+        std::array::from_fn(|k| {
+            let top = t[0][k] * (1. - q[0].fract()) + t[1][k] * q[0].fract();
+            let bottom = t[2][k] * (1. - q[0].fract()) + t[3][k] * q[0].fract();
+            top * (1. - q[1].fract()) + bottom * q[1].fract()
+        })
+    };
+    let cases = [
+        ("pixel_mosaic", 1., 0., 0.),
+        ("pixel_mosaic", 3., 0., 0.),
+        ("pixel_mosaic", 12., 0., 0.),
+        ("pixel_mosaic", 13., 0., 0.),
+        ("ripple", 12., 64., 0.),
+        ("ripple", 12., 64., 1.25),
+        ("ripple", 12., 64., 2.5),
+        ("ripple", 48., 8., 3600.),
+        ("ripple", 48., 8., 0.25),
+        ("ripple", 48., 8., 3598.25),
+    ];
+    let mut repeated_phase = Vec::new();
+    for (id, size, wavelength, time) in cases {
+        let mut effect = filter(fixture(id));
+        let instance = Arc::make_mut(effect.effect.as_mut().unwrap());
+        if id == "pixel_mosaic" {
+            instance.set("size", EffectValue::Number(size)).unwrap();
+        } else {
+            for (key, value) in [
+                ("distance", size),
+                ("wavelength", wavelength),
+                ("time", time),
+            ] {
+                instance.set(key, EffectValue::Number(value)).unwrap();
+            }
+            instance.set("animate", EffectValue::Toggle(false)).unwrap();
+        }
+        submit(
+            &mut r,
+            EXTENT,
+            &[effect, base.clone()],
+            0.,
+            true,
+            true,
+            None,
+        );
+        let output = crate::layer_tests::page_bytes(&r, r.composite_texture.as_ref().unwrap());
+        if time == 0.25 {
+            repeated_phase = output.clone();
+        } else if time == 3598.25 {
+            assert!(
+                output == repeated_phase,
+                "whole periods must preserve Ripple output"
+            );
+        }
+        let mut maximum = 0;
+        let mut failing = 0;
+        for (i, pixel) in output.chunks_exact(4).enumerate() {
+            let p = [
+                (i % EXTENT[0] as usize) as f64 + 0.5,
+                (i / EXTENT[0] as usize) as f64 + 0.5,
+            ];
+            let position = if id == "pixel_mosaic" {
+                p.map(|v| ((v / f64::from(size)).floor() + 0.5) * f64::from(size))
+            } else {
+                let delta = [p[0] - 192., p[1] - 128.];
+                let radius = delta[0].hypot(delta[1]);
+                let phase = radius / f64::from(wavelength) - f64::from(time) * 0.5;
+                let shift =
+                    (std::f64::consts::TAU * phase).sin() * f64::from(size) / radius.max(1.);
+                std::array::from_fn(|k| p[k] + delta[k] * shift)
+            };
+            let expected = sample(position).map(|v| v.round_ties_even() as u8);
+            let error = pixel
+                .iter()
+                .zip(expected)
+                .map(|(a, b)| a.abs_diff(b))
+                .max()
+                .unwrap();
+            maximum = maximum.max(error);
+            if error > 1 {
+                if failing < 4 {
+                    eprintln!(
+                        "{id} size={size} wavelength={wavelength} time={time} at={p:?} sample={position:?}: actual={pixel:?}, expected={expected:?}"
+                    );
+                }
+                failing += 1;
+            }
+        }
+        assert_eq!(
+            failing, 0,
+            "{id} linear oracle: maximum byte error {maximum}"
+        );
+    }
+}
+
 /// Pre-migration filter algorithms with the corrected import contract. See
 /// fixtures/README.md for independent provenance; never update from this test.
 #[test]
@@ -1454,6 +1576,10 @@ fn filter_library_latency() {
         })
         .collect(),
     ));
+    if let Ok(label) = std::env::var("CAPY_FILTER_BENCHMARK_FILTER") {
+        cases.retain(|(name, _)| *name == label);
+        assert!(!cases.is_empty(), "unknown benchmark filter: {label}");
+    }
     for (label, mut layers) in cases {
         layers.push(base.clone());
         let cold = Instant::now();

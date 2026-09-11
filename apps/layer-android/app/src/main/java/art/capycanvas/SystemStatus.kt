@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -53,7 +54,7 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
 }
 
 /** Native broadcasts/settings drive this small UI island, independently of the render owner. */
-@Composable internal fun SystemStatus(showClock: Boolean = true) {
+@Composable internal fun SystemStatus() {
     val context = LocalContext.current
     var time by remember(context) { mutableStateOf(DateFormat.getTimeFormat(context).format(Date())) }
     var battery by remember(context) { mutableStateOf<DeviceBattery?>(null) }
@@ -84,10 +85,16 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
             context.contentResolver.unregisterContentObserver(observer)
         }
     }
-    Row(Modifier.testTag("system-status").padding(horizontal = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (showClock) Text(time, Modifier.testTag("system-clock"), maxLines = 1, fontWeight = FontWeight.Medium)
-        battery?.let { BatteryIndicator(it) }
+    Row(Modifier.testTag("system-status"),
+        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.height(36.dp).testTag("system-clock").semantics(mergeDescendants = true) {}.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+            Text(time, maxLines = 1, fontWeight = FontWeight.Medium)
+        }
+        battery?.let {
+            Box(Modifier.size(36.dp).testTag("system-battery-tile"), contentAlignment = Alignment.Center) {
+                BatteryIndicator(it)
+            }
+        }
     }
 }
 
@@ -115,7 +122,6 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
             clipRect(right = body.width * battery.percent / 100) {
                 drawRoundRect(fill, size = body, cornerRadius = CornerRadius(3 * u))
             }
-            drawRoundRect(track, Offset(23 * u, 4 * u), Size(2 * u, 6 * u), CornerRadius(u))
             if (battery.charging) {
                 val bolt = Path().apply {
                     moveTo(23f * u, 2f * u); lineTo(18.5f * u, 8f * u)
@@ -126,6 +132,8 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
                 // A fine pale edge keeps the dark terminal mark legible on dark chrome.
                 drawPath(bolt, track, style = Stroke(1.75f * u))
                 drawPath(bolt, ink)
+            } else {
+                drawRoundRect(track, Offset(23 * u, 4 * u), Size(2 * u, 6 * u), CornerRadius(u))
             }
         }
         Box(Modifier.width(height * ((if (battery.charging) 21f else 22f) / 14)).fillMaxHeight(), contentAlignment = Alignment.Center) {

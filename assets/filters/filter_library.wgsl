@@ -150,7 +150,10 @@ fn capy_swirl(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
 }
 fn capy_ripple(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let center=fx_extent()*vec2<f32>(fx_parameter(b,3u).x,fx_parameter(b,4u).x)/100.;let delta=p-center;let radius=length(delta);
-    let wave=sin(2.*FX_PI*(radius/fx_parameter(b,1u).x-fx_time(b)*fx_parameter(b,2u).x));
+    // Reduce each term before subtracting: long-running time must not erase
+    // the spatial phase. Keep sin inside WGSL's specified accuracy interval.
+    let phase=fract(radius/fx_parameter(b,1u).x)-fract(fx_time(b)*fx_parameter(b,2u).x);
+    let wave=sin(2.*FX_PI*(phase-floor(phase+.5)));
     return fx_sample(p+delta/max(radius,1.)*wave*fx_parameter(b,0u).x);
 }
 fn capy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{

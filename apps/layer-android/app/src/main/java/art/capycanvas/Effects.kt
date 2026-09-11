@@ -317,19 +317,21 @@ private suspend fun CanvasHost.previewReply(request: JSONObject): FilterPreviewR
     val colors = LocalPalette.current
     Column(Modifier.fillMaxWidth().testTag("renderer-stats"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         stats?.let { view ->
-            view.array("rows").objects().forEach { row ->
+            view.array("rows").objects().forEachIndexed { index, row ->
                 HoverTip(row.getString("description")) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(row.getString("label")); Text(row.getString("value"))
                     }
                 }
-            }
-            Canvas(Modifier.fillMaxWidth().height(46.dp)) {
-                val samples = view.array("samples").values().map { (it as Number).toFloat() }
-                val budget = view.number("budget_ms"); val max = maxOf(budget,samples.maxOrNull() ?: 0f)*1.1f
-                drawLine(colors.secondary,Offset(0f,size.height*(1-budget/max)),Offset(size.width,size.height*(1-budget/max)))
-                val path=Path();samples.forEachIndexed { i,v -> val x=i*size.width/119;val y=size.height*(1-v/max);if(i==0)path.moveTo(x,y) else path.lineTo(x,y) }
-                drawPath(path,colors.text,style=Stroke(1.dp.toPx()))
+                if (index + 1 == view.getInt("chart_after_rows")) {
+                    Canvas(Modifier.fillMaxWidth().height(46.dp).testTag("renderer-stats-chart")) {
+                        val samples = view.array("samples").values().map { (it as Number).toFloat() }
+                        val budget = view.number("budget_ms"); val max = maxOf(budget,samples.maxOrNull() ?: 0f)*1.1f
+                        drawLine(colors.secondary,Offset(0f,size.height*(1-budget/max)),Offset(size.width,size.height*(1-budget/max)))
+                        val path=Path();samples.forEachIndexed { i,v -> val x=i*size.width/119;val y=size.height*(1-v/max);if(i==0)path.moveTo(x,y) else path.lineTo(x,y) }
+                        drawPath(path,colors.text,style=Stroke(1.dp.toPx()))
+                    }
+                }
             }
         }
     }

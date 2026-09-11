@@ -8,7 +8,7 @@ import { checkEditor } from "./editor.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
-import { checkAdjustments, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
+import { checkAdjustments, checkDiagnostics, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
@@ -187,6 +187,9 @@ try {
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--filter-bench")) {
     await benchmarkFilters({ evaluate });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--diagnostics")) {
+    await checkDiagnostics({evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--adjustments")) {
     await checkAdjustments({ call, evaluate, settle });

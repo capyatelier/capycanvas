@@ -464,3 +464,56 @@ tolerance and all channels remain unchanged. This run does not establish the
 cause or full cross-backend parity; the remaining discrepancy needs independent
 isolation. Windows did not regenerate the reference or adjust expectations.
 Raw output and diagnostic images stay in ignored local artifacts.
+
+### Spatial isolation and long-running Ripple
+
+An independent full-resolution oracle now checks Pixel Mosaic and Ripple in
+premultiplied linear storage, before export/unpremultiplication. It derives
+imported bytes, sampling positions and bilinear interpolation in double precision
+from the original synthetic artwork. Ten cases include odd/even mosaic cells,
+transparent edges, multiple Ripple phases, maximum amplitude, minimum wavelength
+and the maximum frozen time. This supplements the unchanged strict PNG gate;
+it does not discard transparent channels or relax that gate's tolerance.
+
+The oracle found a separate Ripple bug: subtracting a large time phase before
+range reduction erased spatial precision. At 3600 seconds, 48px amplitude and
+8px wavelength, 1,618 pixels differed from the linear oracle by more than one
+byte, with maximum error 14 on hardware Vulkan. The WGSL now reduces the
+spatial and temporal phases separately before subtraction. Its sine argument
+also stays within the interval with a specified
+[WGSL accuracy bound](https://www.w3.org/TR/WGSL/#floating-point-accuracy).
+No Rust filter mathematics, preparation, texture, pass or readback was added to
+production rendering; the existing test-only texture reader inspects the result.
+
+All ten cases now pass on hardware Vulkan and Mesa software Vulkan within one
+linear byte, and equal phases separated by 1,799 periods produce identical
+stored pixels. The unchanged v4 reference also passes on hardware Vulkan. This
+does not explain or resolve every Metal/D3D12 sheet difference; those backends
+have not yet run this new oracle or correction. Software checks are numerical
+evidence only, never hardware performance measurements.
+
+The release benchmark can select a single filter by its catalog label with
+`CAPY_FILTER_BENCHMARK_FILTER=Ripple`. Three alternating before/after pairs use
+the existing 4096×4096 benchmark: 24 warmup and 96 measured CPU/completion
+samples per workload; GPU telemetry retains the whole 120-frame run. Table
+values are the median of each run's median/p95/p99, not pooled percentiles.
+
+| Workload | CPU before ms | CPU after ms | GPU before ms | GPU after ms |
+| --- | --- | --- | --- | --- |
+| Full recomposition | .629/.972/3.240 | .587/.924/1.322 | .255/.256/.275 | .260/.262/.281 |
+| Small dirty-region paint | .059/.072/.178 | .058/.067/.071 | .029/.030/.034 | .029/.030/.034 |
+| Broad paint | 1.586/2.934/5.877 | 1.651/3.053/5.881 | .814/.834/.848 | .817/.830/.839 |
+| Animation | .029/.040/2.097 | .030/.044/2.116 | .120/.121/.122 | .125/.126/.126 |
+| Cached | .013/.016/.022 | .011/.014/.017 | .005/.005/.005 | .005/.005/.005 |
+
+Animation's GPU median increases by about 0.005ms (4%); full recomposition by
+about 0.006ms (2%). There is no host-path change and CPU tails vary both ways,
+so these measurements do not establish a CPU speedup or zero overhead. Broad
+paint's explicit-wait completion p99 is 5.890ms after versus 5.889ms before.
+These are isolated renderer timings, not physical input-to-display latency.
+Raw logs and paired CSVs remain in ignored local storage.
+
+The complete hardware Vulkan renderer suite passes 118 tests, with 17 benchmarks
+separately ignored. Strict renderer Clippy, the WebAssembly compilation check
+and the GTK release build pass. No new native Metal, D3D12, Android or browser
+device validation is claimed for this correction.
