@@ -1,11 +1,11 @@
-# Familiar drawing workspace (GTK review)
+# Familiar drawing workspace (approved GTK design)
 
-This is the active implementation checklist, not a completion claim. The complete
-tool set, panel layout and interactions below must work before the GTK review.
-Web/Android-specific presentation is not part of this approval milestone; shared
-models and behavior must remain portable.
+The GTK design was approved on 2026-09-11, with Navigator made slightly taller
+at Layers' expense. The requirements below remain the shared behavior contract.
+Web/Android-specific presentation is not part of this GTK approval milestone;
+shared models and behavior remain portable.
 
-## Current GTK review checkpoint
+## Approved GTK checkpoint
 
 The integrated feature audit on 2026-09-11 passes the following native scenarios
 from `apps/layer-linux/src/tests.rs`. Older progress/remaining-work entries below
@@ -22,8 +22,9 @@ are historical; this checkpoint and the current requirements take precedence.
 | Connected tool drawers, nested drawers, collapsed-column movement/resize | `native_tool_drawers`, `native_nested_tool_drawers`, `native_collapsed_columns`, `native_collapsed_drop_and_resize` |
 | Partial/total Zen, eight menus, document files, workspace restore, native fullscreen | `native_zen_behaviors`, `native_menu_sections`, `native_document_files`, `native_workspace_restore`, `native_fullscreen_header_clock_and_battery` |
 
-All 20 integrated GTK scenarios pass, plus 298 core/engine/UI unit tests and
-117 hardware renderer tests (17 benchmarks separately ignored). The Navigator
+All 20 integrated GTK scenarios pass. The approval follow-up passes 300
+core/engine/UI unit tests; the renderer suite passes 118 hardware tests
+(17 benchmarks separately ignored). The Navigator
 contrast correction found during visual inspection has its own failing-before,
 passing-after GPU regression. Strict GTK/renderer Clippy, the WebAssembly build
 check and the normal GTK release build pass. Updated dark/light review captures
@@ -31,10 +32,17 @@ are in ignored `artifacts/familiar-workspace/`; default-layout captures are in
 its `default/` subdirectory. Targeted tests also render representative custom
 workspaces, which should not be mistaken for the shipped default.
 
-**Not complete:** human GTK approval, residual transform/presentation stalls,
-and the separately tracked strict Metal/D3D12 filter-pixel parity investigation.
-This audit does not claim physical stylus latency or new native-device testing
-on other platforms. The corrected native event-wait measurements are below.
+The approved height adjustment increases Navigator's default share of the right
+column from approximately 20% to 25%, reduces Layers from 50% to 45%, and retains
+Properties at 30%. This gives Navigator about 40px more space in a 900px-tall
+window. Shared layout tests cover four window sizes, unchanged left panels and
+command ribbon, and the matching reduction in Layers. Existing customized
+workspaces are preserved; Window → Reset layout applies the updated defaults.
+
+**Separate renderer follow-ups remain open:** residual transform/presentation
+stalls and strict Metal/D3D12 filter-pixel parity. GTK design approval does not
+resolve these or establish physical stylus latency or new device validation on
+other platforms. The corrected native event-wait measurements are below.
 
 ## Required layout
 
@@ -2445,6 +2453,6 @@ traces are not changed by this correction.
 The complete GPU suite and integrated GTK workflow audit pass. Navigator and
 the complete default-workspace tests were rerun after the shader change.
 Representative default, compact, three-tile, color, gradient, figure, mask-transform,
-Navigator, collapsed-column and Zen captures were inspected across both themes. Human
-design approval and the separate remaining performance/parity gates are still
-required; this is a consolidated review milestone, not final goal completion.
+Navigator, collapsed-column and Zen captures were inspected across both themes.
+The subsequent GTK design approval and final height adjustment are recorded at
+the top of this document; the separate renderer investigations remain open.

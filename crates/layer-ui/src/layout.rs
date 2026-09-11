@@ -1143,10 +1143,12 @@ impl DockLayout {
                 extent: 260.,
                 root: stack(
                     12,
-                    0.5,
+                    // Navigator gains five percent of the column from Layers;
+                    // Properties keeps its thirty-percent share.
+                    0.55,
                     stack(
                         13,
-                        0.4,
+                        5. / 11.,
                         tabs(14, &[Panel::Navigator, Panel::Stats]),
                         tabs(15, &[Panel::Properties, Panel::Adjustments]),
                     ),
@@ -3927,6 +3929,45 @@ mod tests {
                     );
                     assert!(b.intersection(t.grip.unwrap()).is_none());
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn editor_navigator_height_comes_from_layers_not_properties() {
+        let layout = DockLayout::editor_default();
+        let mut previous = layout.clone();
+        for (id, prior) in [(12, 0.5), (13, 0.4)] {
+            let DockNode::Split { fraction, .. } = previous.node_mut(id).unwrap() else {
+                panic!("right sidebar split");
+            };
+            *fraction = prior;
+        }
+        for [width, height] in [[1600., 1200.], [1200., 900.], [900., 640.], [640., 480.]] {
+            let resolve = |layout: &DockLayout| {
+                layout.workspace(width, height, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+            };
+            let old = resolve(&previous);
+            let new = resolve(&layout);
+            let gained =
+                group(&new, Panel::Navigator).height - group(&old, Panel::Navigator).height;
+            let released = group(&old, Panel::Layers).height - group(&new, Panel::Layers).height;
+            assert!(gained > 0. && (gained - released).abs() < 1.);
+            assert!(
+                (group(&new, Panel::Properties).height - group(&old, Panel::Properties).height)
+                    .abs()
+                    < 1.,
+                "Properties only permits subpixel split rounding"
+            );
+            for panel in [
+                Panel::Toolbar,
+                Panel::Commands,
+                Panel::Brushes,
+                Panel::ToolSettings,
+                Panel::Sizes,
+                Panel::Color,
+            ] {
+                assert_eq!(group(&new, panel), group(&old, panel));
             }
         }
     }
