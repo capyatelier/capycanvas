@@ -1146,14 +1146,29 @@ fn native_collapsed_drop_and_resize() {
             .clone();
         let b = divider.bounds;
         let drag = begin_workspace_drag(&w, &handle, b.width * 0.5, 20.);
-        let x = if divider.reversed {
-            divider.parent.x + divider.parent.width - TILE_SIZE * 0.5
+        let minimum = if group == 5 {
+            layer_ui::TOOL_PANEL_MIN_WIDTH
         } else {
-            divider.parent.x + TILE_SIZE * 0.5
+            layer_ui::LAYERS_MIN_WIDTH
         };
-        let dx = (x - b.x - b.width * 0.5) as f64;
-        drag.update([dx * 0.5, 0.]);
-        drag.update([dx, 0.]);
+        let delta_for_width = |width| {
+            let x = if divider.reversed {
+                divider.parent.x + divider.parent.width - width - WORKSPACE_SPACING * 0.5
+            } else {
+                divider.parent.x + width + WORKSPACE_SPACING * 0.5
+            };
+            [(x - b.x - b.width * 0.5) as f64, 0.]
+        };
+        for requested in [minimum, minimum * 0.75 + 1.] {
+            drag.update(delta_for_width(requested));
+            pump(80);
+            assert!(!state(&w).workspace.layout.is_collapsed(root));
+            assert!(
+                (width() - minimum).abs() < 1.,
+                "minimum width stays clamped"
+            );
+        }
+        drag.update(delta_for_width(minimum * 0.75 - 1.));
         pump(150);
         assert!(state(&w).workspace.layout.is_collapsed(root));
         let collapsed = state(&w).workspace;
