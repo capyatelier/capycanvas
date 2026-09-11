@@ -37,14 +37,30 @@ impl FrameClock {
             return None;
         }
         let period = self.period();
-        // Leave half a refresh interval for the canvas and GTK overlay to be
-        // ready together. An unphased timer can repeatedly miss the same vblank.
-        let base = phase.saturating_sub(period / 2);
+        // Leave three quarters of a refresh for canvas work plus GTK's overlay and
+        // compositor. Half was too short for live transforms with wet paint
+        // and numeric controls updating, despite each renderer fitting 120Hz.
+        let base = phase.saturating_sub(period * 3 / 4);
         Some(if base > now {
             base
         } else {
             base + ((now - base) / period + 1) * period
         })
+    }
+    /// A running timer must also follow newly available/corrected presentation
+    /// phase, not just refresh-rate changes. Ignore small feedback
+    /// jitter rather than continuously rearming an otherwise aligned timer.
+    pub fn aligned(&self, deadline: u64, interval: u64) -> bool {
+        let phase = self.phase_ns.load(Ordering::Acquire);
+        let period = self.period();
+        if interval != period {
+            return false;
+        }
+        if phase == 0 {
+            return true;
+        }
+        let drift = ((deadline + period * 3 / 4) % period).abs_diff(phase % period);
+        drift.min(period - drift) <= period / 16
     }
     pub fn presentation(&self, now: u64) -> u64 {
         let phase = self.phase_ns.load(Ordering::Acquire);
@@ -67,6 +83,7 @@ mod clock_tests {
         let clock = FrameClock::default();
         assert_eq!(clock.deadline(0), None);
         assert_eq!(clock.period(), crate::canvas::FRAME_NS);
+        assert!(clock.aligned(123, crate::canvas::FRAME_NS));
         for period in [8_333_333, 16_666_667, 6_944_444] {
             let phase = 10_000_000_000;
             clock.period_ns.store(period, Ordering::Relaxed);
@@ -74,7 +91,20 @@ mod clock_tests {
             for now in [phase, phase + period / 2, phase + period * 1234 + 1] {
                 let next = clock.deadline(now).unwrap();
                 assert!(next > now && next - now <= period);
-                assert_eq!((next + period / 2 - phase) % period, 0);
+                assert_eq!((next + period * 3 / 4 - phase) % period, 0);
+                assert!(clock.aligned(next, period));
+                assert!(clock.aligned(next + 123 * period, period));
+                assert!(!clock.aligned(next, period * 2));
+                assert!(clock.aligned(next + period / 32, period));
+                assert!(clock.aligned(next - period / 32, period));
+                assert!(!clock.aligned(next + period / 4, period));
+                assert!(!clock.aligned(next - period / 4, period));
+                // Feedback can establish a different phase while input keeps
+                // the timer alive; it need not change the refresh rate.
+                clock.phase_ns.store(phase + period / 4, Ordering::Release);
+                assert!(!clock.aligned(next, period));
+                assert!(clock.aligned(clock.deadline(now).unwrap(), period));
+                clock.phase_ns.store(phase, Ordering::Release);
             }
         }
     }

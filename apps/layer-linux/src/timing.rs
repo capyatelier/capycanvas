@@ -12,10 +12,13 @@ pub struct Stats {
     pub input_handler_cpu: Vec<f64>,
     pub frame_handler_cpu: Vec<f64>,
     pub wake_lateness: Vec<f64>,
-    /// Frame id, acquire/configure ms, render+present CPU ms, total ms, enqueue ns.
+    /// Frame id, acquire/configure elapsed ms, render+present ms, total ms, enqueue ns.
     pub cpu: Vec<[f64; 5]>,
-    /// Frame id, composition, encode, queue submit, feedback, present ms.
+    /// Frame id, composition, encode, queue submit, feedback, present elapsed ms.
     pub cpu_stages: Vec<[f64; 6]>,
+    /// Frame id, acquire/configure, composition, encode, submit, feedback, present
+    /// actual thread CPU ms. Unlike elapsed time, excludes waiting/descheduling.
+    pub thread_cpu: Vec<[f64; 7]>,
     /// Frame id, GPU elapsed ms (timestamps, not callback arrival time).
     pub gpu: Vec<[f64; 2]>,
     /// Frame id, presentation ns, refresh ns, presented=1/discarded=0.
@@ -36,8 +39,23 @@ pub struct Timing {
     id: u64,
     start: Instant,
     acquired: Instant,
+    start_cpu: f64,
+    acquired_cpu: f64,
     queued_ns: u64,
-    stages: std::cell::Cell<[f64; 4]>,
+    stages: std::cell::Cell<[[f64; 2]; 4]>,
+}
+
+fn thread_cpu_ms() -> f64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // Test-only Linux worker instrumentation; no process-wide CPU counters.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) },
+        0
+    );
+    time.tv_sec as f64 * 1000. + time.tv_nsec as f64 / 1_000_000.
 }
 impl Timing {
     pub fn overview(&self, revision: Option<u64>) {
@@ -50,9 +68,10 @@ impl Timing {
         }
     }
     pub fn new(device: &wgpu::Device, stats: Arc<Mutex<Stats>>) -> Self {
-        let enabled = device
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
+        let enabled = std::env::var("LAYER_PACING_GPU_TIMESTAMPS").as_deref() != Ok("0")
+            && device
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let slots = (0..if enabled { 4 } else { 0 })
             .map(|_| Slot {
                 query: device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -82,6 +101,8 @@ impl Timing {
             id: 0,
             start: Instant::now(),
             acquired: Instant::now(),
+            start_cpu: 0.,
+            acquired_cpu: 0.,
             queued_ns: 0,
             stages: Default::default(),
         }
@@ -92,16 +113,21 @@ impl Timing {
     pub fn begin(&mut self, queued_ns: u64) {
         self.id += 1;
         self.start = Instant::now();
+        self.start_cpu = thread_cpu_ms();
         self.queued_ns = queued_ns;
-        self.stages.set([0.; 4]);
+        self.stages.set([[0.; 2]; 4]);
     }
     pub fn mark(&self, stage: usize) {
         let mut stages = self.stages.get();
-        stages[stage] = self.acquired.elapsed().as_secs_f64() * 1000.;
+        stages[stage] = [
+            self.acquired.elapsed().as_secs_f64() * 1000.,
+            thread_cpu_ms() - self.acquired_cpu,
+        ];
         self.stages.set(stages);
     }
     pub fn acquired(&mut self, renderer: &WgpuRasterizer) {
         self.acquired = Instant::now();
+        self.acquired_cpu = thread_cpu_ms();
         self.active = self
             .slots
             .iter()
@@ -124,7 +150,9 @@ impl Timing {
     }
     pub fn end(&self, renderer: &WgpuRasterizer) {
         let end = self.acquired.elapsed().as_secs_f64() * 1000.;
-        let [compose, encode, submit, feedback] = self.stages.get();
+        let end_cpu = thread_cpu_ms() - self.acquired_cpu;
+        let stages = self.stages.get();
+        let [compose, encode, submit, feedback] = stages.map(|s| s[0]);
         let mut stats = self.stats.lock().unwrap();
         stats.cpu_stages.push([
             self.id as f64,
@@ -133,6 +161,16 @@ impl Timing {
             submit - encode,
             feedback - submit,
             end - feedback,
+        ]);
+        let [compose, encode, submit, feedback] = stages.map(|s| s[1]);
+        stats.thread_cpu.push([
+            self.id as f64,
+            self.acquired_cpu - self.start_cpu,
+            compose,
+            encode - compose,
+            submit - encode,
+            feedback - submit,
+            end_cpu - feedback,
         ]);
         stats.cpu.push([
             self.id as f64,
