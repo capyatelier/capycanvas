@@ -27,8 +27,12 @@ final class NativeProjectTask: @unchecked Sendable {
             }) { [self] descriptor in try self.check(capy_project_write(self.handle, descriptor)) }
         }
     }
-    func read(from url: URL?) throws {
-        guard let url else { try check(capy_project_read(handle, -1)); return }
+    func read(from url: URL?, extent: [UInt32]? = nil) throws {
+        guard let url else {
+            if let extent { try check(capy_project_new(handle, extent[0], extent[1])) }
+            else { try check(capy_project_read(handle, -1)) }
+            return
+        }
         try ProjectFileIO.coordinate(url, writing: false) { source in
             let file = try FileHandle(forReadingFrom: source)
             defer { try? file.close() }
@@ -79,12 +83,12 @@ enum ProjectFileIO {
         defer { close(directoryDescriptor) }
         guard fsync(directoryDescriptor) == 0 else { throw posixFailure() }
     }
-    static func stagingURL(title: String) throws -> URL {
+    static func stagingURL(title: String, extension suffix: String = "capy") throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700])
         let name = URL(fileURLWithPath: title).deletingPathExtension().lastPathComponent
-        return folder.appendingPathComponent(name.isEmpty ? "Untitled" : name).appendingPathExtension("capy")
+        return folder.appendingPathComponent(name.isEmpty ? "Untitled" : name).appendingPathExtension(suffix)
     }
     private static func posixFailure() -> NSError { NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
 }

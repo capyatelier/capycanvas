@@ -3,26 +3,43 @@ import SwiftUI
 struct PanelControls: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
+    var scrollable = true
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
+        else if panel["id"].string == "adjustments" {
+            if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
+                AdjustmentPanel(store: store)
+            }
+        }
+        else if panel["id"].string == "navigator" {
+            if panel["controls"].array.contains(where: { $0["control"].string == "navigator" && $0["visible_in_panel"].bool }) {
+                NavigatorPanel(store: store)
+            }
+        }
         else { controls }
     }
     private var controls: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+        Group {
+            if scrollable { ScrollView { controlBody }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else { controlBody }
+        }
+    }
+    private var controlBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
                 ForEach(panel["controls"].array.indices, id: \.self) { index in
                     let item = panel["controls"][index]
                     if item["visible_in_panel"].bool { control(item) }
                 }
-            }.padding(8).frame(maxWidth: .infinity, alignment: .topLeading)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.padding(8).frame(maxWidth: .infinity, alignment: .topLeading)
     }
-    @ViewBuilder private func control(_ item: JSON) -> some View {
+    @ViewBuilder func control(_ item: JSON) -> some View {
         switch item["control"].string {
         case "brushes": ToolSetControls(store: store)
         case "tool_settings": ToolSettingsControls(store: store)
         case "color_wheel": ColorPanel(store: store)
+        case "properties": LayerPropertiesPanel(store: store)
+        case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes

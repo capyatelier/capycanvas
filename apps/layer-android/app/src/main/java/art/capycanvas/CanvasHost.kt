@@ -10,7 +10,6 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -48,28 +47,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var cameraState by mutableStateOf(JSONObject())
         private set
-    internal var navigatorImage by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
-        private set
-    private var navigatorViewers = 0 // Render Looper only.
-    private val navigatorPoll = object : Runnable {
-        override fun run() {
-            if (disposed || handle == 0L) return
-            attempt(canvas = false) {
-                if (attached) Native.navigatorPreview(handle, SystemClock.elapsedRealtimeNanos(), navigatorViewers > 0)?.let { data ->
-                    val size = JSONArray(data[0] as String)
-                    val bitmap = android.graphics.Bitmap.createBitmap(size.getInt(0), size.getInt(1), android.graphics.Bitmap.Config.ARGB_8888)
-                    bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(data[1] as ByteArray))
-                    val image = bitmap.asImageBitmap()
-                    main.post { navigatorImage = image }
-                }
-            }
-            if (navigatorViewers > 0) worker.postDelayed(this, 33)
-        }
-    }
-    internal fun navigatorVisible(visible: Boolean) = post {
-        val previous = navigatorViewers
-        navigatorViewers = (navigatorViewers + if (visible) 1 else -1).coerceAtLeast(0)
-        if (previous == 0 && navigatorViewers > 0) { worker.removeCallbacks(navigatorPoll); worker.post(navigatorPoll) }
+    internal var surfaceOrigin = androidx.compose.ui.geometry.Offset.Zero
+    private val overviewSlots = linkedMapOf<Any, JSONObject>() // UI thread; native owner receives immutable JSON.
+    internal fun navigatorPlacement(key: Any, placement: JSONObject?) {
+        if (overviewSlots[key]?.toString() == placement?.toString()) return
+        if (placement == null) overviewSlots.remove(key) else overviewSlots[key] = placement
+        val payload = JSONArray(overviewSlots.values.toList()).toString()
+        post { Native.navigatorPlacements(handle, payload); wake() }
     }
     var catalog by mutableStateOf(JSONObject())
         private set
@@ -82,6 +66,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
+    internal val documents = DocumentController(this, application)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache()
@@ -101,6 +86,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var lastStartupStage = -1
     private val startupTimes = LongArray(4)
     private var savedWorkspace = ""
+    private var documentEpoch = 0L
     private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 11) else null
     private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
     private val frameCosts = if (BuildConfig.DEBUG) LongArray(5) else null
@@ -156,6 +142,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private fun post(canvas: Boolean = false, block: () -> Unit) {
         worker.post { if (!disposed && handle != 0L) attempt(canvas, block) }
     }
+    internal suspend fun <T> withNative(block: (Long) -> T): T = kotlin.coroutines.suspendCoroutine { continuation ->
+        if (!worker.post {
+            val result = runCatching { check(!disposed && handle != 0L) { "The editor has closed" }; block(handle) }
+            main.post { continuation.resumeWith(result) }
+        }) continuation.resumeWith(Result.failure(IllegalStateException("The editor has closed")))
+    }
+    internal fun documentChanged() = post { refreshChrome(); publish(true); wake() }
+    internal fun reportActionError(message: String) { actionError = message }
     fun clearActionError() { actionError = null }
     fun dispatch(action: JSONObject) = post {
         Native.dispatch(handle, action.toString())
@@ -400,8 +394,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Log.i("CapyStartup", "stage=$stage boot_ns=$now")
         }
         val state = next.getJSONObject("state")
-        val workspace = state.getJSONObject("workspace").toString()
-        if (workspace != savedWorkspace) {
+        val epoch = state.getJSONObject("document_file").optLong("epoch")
+        if (epoch != documentEpoch) {
+            documentEpoch = epoch
+            main.post { filterPreviewCache.images.clear() }
+        }
+        val workspace = next.objectOrNull("workspace_persistence")?.toString()
+        if (workspace != null && workspace != savedWorkspace) {
             savedWorkspace = workspace
             saved.edit().putString("workspace", workspace).apply()
         }

@@ -1563,3 +1563,431 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   validation. Prepared/retired sessions are boxed on the file worker so adoption
   returns a small ownership handle, including on failure, without moving a large
   session through the error value or destroying GPU resources on the input queue.
+
+### Default editor workspace and command ribbon
+
+- GTK now starts with the full shared editor preset: the left-edge Tools ribbon;
+  Tool Set, Tool Settings, Brush size and Color in the next column; the Commands
+  ribbon between the sidebars; and Navigator/Diagnostics, Properties/Filters and
+  Layers stacked on the right. All 17 selectable tools, the Color drawer tile,
+  nine command tiles and their compact dividers use existing toolbar behavior.
+  Text, Comic and Correct line remain excluded. Commands is a stable named toolbar,
+  not a special renderer or a reserved user-toolbar number.
+- The preset and platform rollout policy live in Rust. Other hosts retain their
+  existing initial layout until their presentation is ready. Restoring a saved
+  workspace never replaces its topology or toolbar contents. Reset layout uses
+  the host's preset positions but retains configured/renamed/custom toolbars and
+  does not resurrect deleted ones. New topology IDs cannot collide with custom
+  toolbar IDs from older workspaces.
+- Native visual review caught and fixed allocation issues not detectable from
+  control-state checks alone: Tool Set groups now fit their fixed three-tile
+  widths instead of long natural label widths forcing an extra row; Color's
+  centered wheel compresses before its controls scroll; Navigator's preview
+  shrinks before its buttons clip. Centered color hit testing uses the same
+  origin as rendering. Long lists and settings remain scrollable.
+- Header menu buttons now receive the same six-pixel horizontal padding as
+  other header controls; the document title ellipsizes before overlapping them.
+  The Color tile displays both foreground/background swatches through one new,
+  locally authored shared SVG. Normal, Zen and drawer projections share its
+  palette update function. No new canvas passes or readbacks are introduced.
+- A narrow work area retains at least 128 logical pixels when panel minimums
+  permit, so a wrapping command ribbon does not occupy the entire canvas height.
+  Geometry tests cover 1600×1200 through 640×480, both ribbons, group order,
+  minimum widths, tile/grip bounds, saved-state round trips and customized resets.
+- Validation: 217 shared UI tests, strict UI/GTK Clippy, workspace/all-targets and
+  WebAssembly checks pass. The merged Android column implementation required
+  removing Android from an outdated test of pre-collapse double-click behavior;
+  production behavior is unchanged. Native tests pass for the actual default
+  workspace (all tools and their connected drawers, actual GPU strokes, color
+  input and compact Navigator hit targets), existing color controls, workspace
+  restore, stacked dividers, customization and all application menus.
+  Existing gesture fixtures explicitly restore a representative customized layout
+  rather than implicitly depending on the shipped preset. Startup/pacing tests
+  continue to use the real default.
+- Dark/light captures at 1200×900 and 900×640 are under ignored
+  `artifacts/familiar-workspace/default/`. Generated captures, projects, raw
+  timing reports and machine identifiers are not committed. No new dependency
+  or third-party artwork was added.
+- Remaining for the goal: region gap closing/expansion/antialiasing, watercolor's
+  visible selection boundary, the historical filter-reference mismatch, final
+  integrated tool/render validation and human GTK approval. This milestone does
+  not claim the full goal or cross-platform presentation rollout is complete.
+
+### Full-workspace pacing investigation (gate remains open)
+
+- An old/new workspace comparison on the same release binary reproduced a
+  regression: the old fixture delivered 119.96–120.01Hz, while the complete
+  default delivered 116.62–117.77Hz across the paired drawing runs. Both used
+  real GPU strokes and actual child-surface presentation feedback. This is
+  synthetic input on a private Wayland compositor, not physical tablet latency.
+- The retained benchmark now records native GTK paint and whole-main-context
+  dispatch intervals, in addition to canvas-worker/input timings. These are
+  elapsed intervals (including driver waits), not CPU-utilization measurements.
+  It records the actual GTK renderer and number of live overview updates, waits
+  for startup completion, and can compare `LAYER_PACING_WORKSPACE=fixture` with
+  `default`. No new timers run in production.
+- GTK painting produced a 34ms main-loop stall while G-Pen GPU p99 remained
+  0.38ms. A corrected Navigator exclusion restored 119.96Hz with no discarded
+  frames. The exclusion uses zero opacity and asserts that preview updates stay
+  inactive: simply hiding the widget was invalid because control refresh later
+  restored its configured visibility. Waiting for shader compilation, disabling
+  the canvas cursor, and explicitly requesting GTK Vulkan did not fix the issue.
+- A temporary, local-only Vulkan trace located repeated slow memory allocations
+  and frees inside GTK on its main thread, including 1MiB backing allocations.
+  The default Navigator scale also made GTK create an extra mipmapped image for
+  each incoming 256×192 overview. The trace is not an application dependency or
+  a library override shipped with the app.
+- Navigator now uses GTK's explicit
+  [linear texture sampling](https://docs.gtk.org/gtk4/method.Snapshot.append_scaled_texture.html).
+  The source still uses the existing GPU downsampling and live update rate;
+  only GTK's additional mipmap generation is removed. No CPU canvas raster,
+  mutable-texture trick, new graphics backend or hidden Navigator is used.
+  The native Navigator test passes; its dark/light output was visually checked.
+
+  Latest complete six-second runs with the full workspace and live overview
+  (times in milliseconds, median / p95 / p99):
+
+  | Workload | Worker CPU | Canvas GPU | GTK paint elapsed | Presented Hz | Overview updates |
+  | --- | --- | --- | --- | ---: | ---: |
+  | G-Pen | .297 / .578 / .730 | .125 / .297 / .432 | .005 / .615 / 2.095 | 118.79 | 87 |
+  | Watercolor | 1.088 / 1.986 / 2.404 | 1.244 / 2.289 / 2.842 | .005 / .665 / 2.391 | 116.04 | 88 |
+  | Pan | .223 / .400 / .485 | .064 / .126 / .199 | .270 / .509 / .587 | 119.34 | 0 |
+
+- Earlier linear-sampling runs reached 119.45/118.73Hz for G-Pen/watercolor.
+  GTK paint p99 improved from roughly 7–9ms to 2–4ms, but allocation stalls and
+  missed presentations remain: the latest G-Pen GTK maximum was 23.14ms, and an
+  earlier watercolor maximum was 32.92ms. The smaller typical cost is useful,
+  but **does not close the consistent-120Hz drawing gate**. Further work must
+  address the live-preview texture lifecycle/presentation scheduling without
+  suppressing the overview or changing brush algorithms to hide the issue.
+- The updated benchmark asserts at least twenty live overview updates during
+  drawing; panning correctly reuses the unchanged overview. Raw reports and
+  traces remain local and untracked. Region refinements, the historical filter
+  comparison, final integrated validation and user approval remain outstanding.
+- The full native default-workspace test was rerun successfully after the
+  sampling change. Incoming Apple menu/shortcut work is merged; post-merge
+  validation passes 217 shared UI and 12 host tests, strict UI/GTK Clippy,
+  workspace/Wasm checks and the native GTK menu/document workflows. Existing
+  non-Metal Apple warnings remain. This is shared-source integration, not new
+  Apple-device validation. The temporary Vulkan tracing source and binary were
+  removed; only test-only timing/preview assertions remain in the application.
+
+### GPU overview presentation foundation
+
+- Tested a bounded four-buffer GBM/DMA-buffer preview transport locally. Buffers
+  were reused only after GDK's texture-release callback; steady mapped writes
+  were inexpensive. Nevertheless the full workspace actually using
+  `GdkDmabufTexture` regressed to 115.39/111.34Hz in paired G-Pen runs, with GTK
+  paint p99 of 16.56/23.68ms. Reusing backing storage alone does not remove GTK's
+  import/presentation stalls. The temporary integration, dependency declarations
+  and diagnostic output field were removed, not left as another rendering path.
+  Separate rectangular GraphicsOffload probes also fell back (verified through
+  Wayland attachment requests); they are not evidence of successful offload.
+- Added opt-in overview rendering to the existing `ViewportPresenter`. Native
+  hosts can supply image bounds, camera work-area corners, colors, scale and
+  opacity. The presenter samples its existing document composition and draws all
+  overviews with one instanced draw inside the existing viewport pass. There is
+  no preview image, image upload, pixel readback, extra submission or additional
+  compositor surface. Work-area outlines are drawn in that same shader.
+- The overview pipeline is prepared only for hosts that request it, using the
+  renderer's pipeline cache. Each placement uses an 80-byte record; a single
+  overview retains a 128-byte vertex buffer. Geometry/color changes reuse this
+  buffer; identical placements upload nothing. Hidden overviews draw nothing.
+  Native integration must prewarm the optional pipeline during startup, before
+  accepting drawing input, and present placements through the existing worker.
+- Exported previews and in-surface overviews share the same sixteen-tap linear,
+  premultiplied-color sampling function. Direct overviews sample at their final
+  physical size, whereas exported previews retain their existing 256px limit.
+  This is not a claim of pixel identity to the two-stage GTK-scaled export.
+  Window coverage is shared with canvas/cursor presentation; overview blending
+  retains destination alpha so it cannot thicken antialiased window corners.
+- Release renderer-only benchmark: 2048×1536 output, 40 warmups, 120 measured
+  frames per case. CPU covers presenter setup/encoding/submission; GPU is the
+  queue span between timestamp markers, including submission gaps. Values are
+  median/p95/p99 milliseconds, not physical input-to-display latency:
+
+  | Overview workload | CPU | GPU |
+  | --- | --- | --- |
+  | None | .007 / .017 / .031 | .028 / .034 / .049 |
+  | One, 100×75 | .008 / .027 / .029 | .036 / .051 / .055 |
+  | One, 256×192 | .008 / .015 / .027 | .039 / .043 / .056 |
+  | Two, 256×192 each | .007 / .014 / .026 | .046 / .048 / .061 |
+  | One, with camera/outline updates | .010 / .010 / .016 | .043 / .045 / .046 |
+  | None, repeated control | .007 / .015 / .028 | .028 / .033 / .045 |
+
+- GPU tests cover transparent color composition, linear/sRGB targets, overview
+  bounds, rotated/flipped camera outlines, subsequent painting, multiple views,
+  hiding/reopening, resource reuse and rounded-window alpha. Existing exported
+  Navigator preview and transformed selection-outline regressions also pass.
+  Strict renderer Clippy, workspace/all-targets and WebAssembly checks pass;
+  the native GTK Navigator interaction/capture test passes. Existing non-Metal
+  Apple build warnings remain; no new device validation on other hosts is claimed.
+- This foundation's renderer-only timing did not prove complete GTK delivery.
+  The following milestone connects it to the native workspace and measures that
+  integration. Selection refinements, watercolor boundaries, the historical
+  filter-reference mismatch and final GTK approval remain separate open work.
+
+### GTK in-surface Navigator integration
+
+- GTK now supplies native image geometry, clipping and opacity with the existing
+  canvas frame. The GPU worker prewarms the optional overview pipeline during
+  startup, then draws the image and camera outline from the current composition
+  in its existing presentation pass. Painting and camera changes no longer
+  redraw GTK's Navigator. The GTK exported-preview transport, polling timer and
+  preview-specific frame-clock lifecycle are removed; other hosts' exported
+  preview API is unchanged.
+- A rectangular clip preserves image coordinates when native ancestors scroll
+  or crop content. Each placement is now 96 bytes; the one-overview GPU buffer
+  remains 128 bytes. No image allocation, pixel upload/readback or additional
+  surface/submission is required. This does not mean all per-frame CPU metadata
+  is allocation-free: bounded placement records accompany existing frame data.
+- Native snapshots retain panels, controls and shadows, but leave transparent
+  rectangles for their GPU images. Image holes also cut native panels lower in
+  stacking order, so a floating Navigator can cover another panel; later native
+  panels still cover the image. The canvas itself is never cut. Native CSS fade
+  opacity is read from the snapshot rather than inferred from widget opacity,
+  which does not include CSS transitions. Hidden/unmapped views submit nothing.
+- GPU tests verify partial clipping against the uncropped image, including its
+  camera outline and both output transfer formats. Native regressions cover
+  camera-only composition reuse, docked and drawer overviews together, drawer
+  closing, Zen hiding/reopening, both overlapping panel orders, and stopping
+  presentation while idle. Rectangular subtraction has exact partition/no-
+  overdraw coverage. Review images stay in ignored
+  `artifacts/familiar-workspace/`; no machine-specific reports are committed.
+- Final full-default-workspace release runs on the same private 120Hz Wayland
+  compositor (six seconds of synthetic input each, real GPU painting and actual
+  canvas-surface presentation feedback; not physical stylus-to-display latency):
+
+  | Workload | Worker CPU median/p95/p99 ms | GPU median/p95/p99 ms | Presented Hz | Discarded |
+  | --- | --- | --- | ---: | ---: |
+  | G-Pen | .227 / .547 / .702 | .113 / .252 / .384 | 119.958 | 0 |
+  | Watercolor | 1.040 / 1.743 / 2.347 | 1.200 / 2.146 / 2.575 | 119.958 | 1 |
+  | Pan | .220 / .433 / .529 | .067 / .591 / 1.700 | 119.568 | 1 |
+
+- The live Navigator was drawn in all 723/722/720 canvas frames respectively.
+  Its input composition changed 721/720/1 times: panning correctly reused the
+  image. GTK painted only twice per drawing run and zero times during panning.
+  Main-context dispatch p99/max was .016/1.141ms, .061/1.657ms and .049/.103ms.
+  The previous 23–34ms GTK preview-allocation stalls did not recur.
+- Do not interpret these averages as a no-spike guarantee: that pan run had one
+  33.10ms worker outlier and a 30.21ms presentation interval despite the fast
+  main loop. Test-only timings now separate composition, encoding, queue submit,
+  feedback and present. Three subsequent pan runs delivered
+  120.016/120.005/120.015Hz with zero discarded frames; combined worker CPU p99
+  .569ms, GPU p99 .231ms and main-dispatch max .085ms. Their slowest frame was
+  2.06ms, principally in queue presentation. The original 33ms event predates
+  phase timing, so its exact cause is not established. The additional measurements
+  remain test-only; no production timers or alternate preview path were added.
+- Validation passes: native Navigator and complete default workspace, GPU
+  overview/clipping/resource reuse, existing exported overview and transformed
+  selection-outline tests, 217 shared UI and 12 host tests, strict GTK/UI/renderer
+  Clippy, workspace/all-targets and WebAssembly checks. The only workspace
+  warnings are existing non-Metal Apple unused items. Dark/light, compact,
+  drawer, Zen and overlap captures were visually inspected. Remaining overall
+  work is region gap closing/expansion/antialiasing, watercolor selection edges,
+  the historical filter-reference mismatch, final integrated validation and
+  human GTK review; low-frequency worker presentation outliers still warrant
+  investigation rather than an unconditional latency claim.
+- Merged the independently published Apple Navigator/Diagnostics integration.
+  Both hosts reuse its composition-revision query instead of retaining duplicate
+  getters. Post-merge shared tests, strict GTK/UI/renderer Clippy, workspace/Wasm
+  checks and native Navigator/startup readiness tests pass. This is source and
+  Linux-host validation, not additional physical Apple-device testing.
+
+### Fill and Auto Select edge refinement
+
+- Tool Settings now exposes Close gaps (0–32 document pixels), Expansion
+  (−32–32 pixels), and Edge smoothing (0–100%), separately from color tolerance.
+  Gap closing and expansion default to zero; smoothing defaults to 100% in the
+  shared UI. Numeric kinds, ranges, units, validation and request snapshots live
+  in Rust; GTK uses its existing spin/slider controls without a custom form.
+  The separation follows [CSP's Fill tool controls](https://help.clip-studio.com/en-us/manual_en/420_fill/Fill_Tool.htm),
+  not an attempt to copy its proprietary algorithm or claim identical pixels.
+- Gap closing opens the color-eligible bitmap (closing its complementary line
+  barriers), then the existing connected-component algorithm selects the seed's
+  region. Mirrored footprints prevent odd gap widths shifting the result.
+  Signed square-neighborhood expansion/shrink follows connectivity. Four corner
+  samples soften diagonal stair steps while preserving thin features; the
+  existing quarter-coverage representation is retained. Fractional smoothing
+  tests use [WGSL's ties-to-even rounding](https://www.w3.org/TR/WGSL/#round-builtin).
+  The final selection limit applies after expansion and smoothing as well as
+  during detection, so Fill cannot grow outside the artist's selection.
+- This bounded geometric method is not semantic gap recognition: an aggressive
+  Close gaps value can remove a narrow region, including the seed location.
+  Expansion uses square, not circular, neighborhoods. Smoothing softens corners,
+  not a Gaussian blur, and straight pixel-aligned boundaries stay sharp.
+  These limitations are independent of color tolerance; zero refinements retain
+  the original three GPU dispatches.
+- Morphology processes 32 pixels per word and reuses the component-parent
+  allocation as its other scratch plane outside labeling. Refinements add one
+  retained bit per document pixel (row padded): 0.375 MiB at 2048×1536, versus
+  12 MiB for the existing parent buffer, a 3.125% increase over that buffer.
+  Query-owned resident buffers grow from about 13.5 to 13.875 MiB before source
+  captures, about 2.78%. No scratch image is allocated until a request needs it.
+  Bounds/count now share the coverage buffer footer, preserving the portable
+  four-storage-buffer limit and removing the separate bounds buffer/copy.
+- All eleven pipeline recipes participate in the existing four-stage startup
+  queue as optional work. An early request promotes only its required stages,
+  remains single-flight, and resumes through normal asynchronous polling after
+  compilation. It neither joins the compiler nor allocates document-sized
+  buffers while waiting. Other tools remain usable. Headless callers retain
+  lazy compilation; there is no second raster path or platform-specific policy.
+- Serial release benchmark, 2048×1536 linework, 30 warmups and 120 measured
+  requests; median/p95/p99 milliseconds. CPU is request encoding/submission,
+  GPU is the measured device span, and completion explicitly waits for that
+  submission (not physical input-to-display latency):
+
+  | Refinement | CPU | GPU | Completion |
+  | --- | --- | --- | --- |
+  | None | .016/.028/.036 | .152/.155/.157 | .209/.222/.226 |
+  | Close gaps 4px | .021/.024/.027 | .181/.183/.183 | .241/.258/.275 |
+  | Expand 4px | .023/.025/.026 | .265/.271/.273 | .329/.336/.339 |
+  | Smoothing 100% | .021/.021/.024 | .271/.278/.282 | .333/.341/.349 |
+  | Gap 4px, expand 2px, smoothing | .027/.029/.032 | .305/.310/.312 | .373/.380/.383 |
+  | Gap 32px, expand 32px, smoothing | .027/.077/.211 | .356/.361/.365 | .428/.475/.614 |
+  | Shrink 32px, smoothing | .020/.020/.022 | .306/.312/.314 | .380/.386/.390 |
+
+- A separate complete-request benchmark includes source composition and the
+  asynchronous packed history snapshot. With gap 4px, expansion 2px and smoothing,
+  visible-source CPU/GPU/completion p99 were .229/.379/1.038ms; raw-layer
+  .182/.530/1.268ms; reference-scene .767/.700/1.958ms. Reference-scene median
+  completion rose from 1.231ms without refinement to 1.398ms with it. This is
+  measured additional work, not a zero-overhead claim. First-use measurements
+  are separate: unprepared compilation previously took tens of milliseconds;
+  after pipeline preparation one first complete request still took 16.311ms,
+  including initial resources/history transfer. No cold-request 120Hz guarantee.
+- Native startup passes with document/brush ready at 952ms and all optional
+  compilation done at 1047ms in one warm-cache run; not statistical startup
+  percentiles. A six-second full-workspace G-Pen run with raster selection
+  delivered 119.779Hz with one discarded presentation. Worker CPU p99 .755ms,
+  GPU p99 .315ms and main-context maximum .779ms; maximum worker 1.862ms. This
+  confirms a fast warm drawing path, not elimination of every presentation gap.
+- GPU validation covers independent pixel morphology at odd row widths, gaps,
+  large positive/negative distances, fractional smoothing, invalid inputs,
+  queued scratch reuse, final selection limits, antialiased Fill and history
+  replay, and asynchronous startup ordering. Native testing draws a genuinely
+  open outline, proves the unrefined selection leaks, closes it, fills below
+  reference line art and checks undo/redo. Dark/light selection and Fill captures
+  were inspected under ignored `artifacts/familiar-workspace/`. No external
+  textures, logs or machine-identifying reports are committed.
+- Validation also passes 217 shared UI tests, strict UI/GTK/renderer Clippy,
+  workspace/all-targets and WebAssembly checks. The broad GPU run passed 108
+  tests; a further runtime-kernel test initially failed because its fixture was
+  resolved against the process working directory. It now uses the package path
+  and passes independently from the repository root. Seventeen benchmarks were
+  ignored and the known historical filter-reference failure was explicitly
+  excluded, not waived. Existing non-Metal Apple build warnings remain.
+- Remaining overall gates are watercolor's display-only selection edge policy,
+  historical filter-reference reconciliation, rare presentation outliers,
+  final integrated validation and GTK human approval. Other hosts compile the
+  shared controls and renderer; no new physical-device validation is claimed.
+
+### Filter-reference reconciliation
+
+- The historical reference mismatch is resolved on the Vulkan validation host.
+  The unmodified pre-migration renderer (`7719e6b`) reproduces the old fixture
+  exactly. Applying only the corrected sRGB import to that old renderer makes
+  its unfiltered image and all 160 filter/scope cases exactly match the current
+  renderer. The discrepancy came from the earlier hardware-decoding importer;
+  no filter algorithm change was needed.
+- The replacement reference is generated by that independent old renderer,
+  not today's code under test. Its one-byte tolerance is unchanged, and the
+  test now validates the input against the independent transfer oracle first.
+  See [reference provenance](../crates/layer-render-wgpu/tests/fixtures/README.md)
+  and [the comparison results](runtime-filters.md#import-contract-and-reference-reconciliation).
+  The obsolete PNG is recoverable in Git history. Temporary baseline sources,
+  generated diagnostics and machine-specific output remain outside the commit.
+- No production renderer code changes or additional runtime work. Metal and
+  browser WebGPU still need to run the new reference; GTK/Vulkan evidence does
+  not establish complete cross-backend parity. Remaining GTK goal gates are
+  watercolor's display-only selection edges, rare presentation outliers,
+  final integrated validation and human review.
+- The full Vulkan renderer suite now passes 110 tests with zero failures and
+  zero exclusions; 17 hardware benchmarks remain separately ignored. Strict
+  renderer Clippy passes. The replacement sheet was visually inspected.
+
+### Active presentation phase and driver-stall investigation
+
+- The test-only timing report now separates elapsed stage times from actual
+  worker-thread CPU time (`CLOCK_THREAD_CPUTIME_ID`). Acquire, composition,
+  encoding, submission, feedback and presentation can be correlated by frame
+  ID. These counters, their storage and GPU queries are absent from application
+  builds. `LAYER_PACING_GPU_TIMESTAMPS=0` additionally removes query submissions
+  from the native pacing test; the summarizer keeps these runs separate.
+- The recurring early stall is reproducible without GPU timestamp queries:
+  one unprofiled panning run spent 22.844ms in submission (4.671ms thread CPU),
+  with a 28.504ms presentation gap. Earlier queried runs placed the corresponding
+  event in presentation instead. Native syscall stacks identify memory cleanup
+  inside the NVIDIA Vulkan queue submit/present calls, not GTK rendering or an
+  application destructor. The observed calls are unmap-DMA, unmap-memory and
+  free in NVIDIA's [published ioctl definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/src/nvidia/arch/nvalloc/unix/include/nv_escape.h).
+  Context-switch evidence also records blocking, not just preemption. This
+  identifies the executing path, not which allocations originally triggered
+  driver retirement or a proven driver workaround. The stall is **not fixed**.
+  Profiler/tracer overhead is excluded from the benchmark numbers. Tools were
+  extracted only into temporary storage; raw traces and machine details are
+  not repository artifacts.
+- The broader sweep exposed a separate, actionable pacing problem. Transforming
+  accumulated wet artwork with the ordinary numeric controls updating delivered
+  only 104.35Hz, despite CPU/GPU p99 spans of 2.567/5.368ms. Even the simple
+  rectangle case delivered 114.84Hz with controls, versus 119.96Hz with the side
+  controls hidden. Passing an isolated shader budget did not prove a smooth
+  composited application.
+- A running timer previously noticed changes in refresh **rate**, but not a
+  newly available/corrected presentation **phase**. It now realigns against
+  updated compositor feedback while input remains active. Circular phase error
+  avoids a wraparound mismatch; changes below 1/16 refresh are ignored to avoid
+  rearming for small feedback jitter. Tests cover idle, initial unknown phase,
+  rate changes, phase shifts during activity and both directions of jitter.
+- Phase correction alone did not leave enough room for the wet transform plus
+  native controls. The Wayland deadline now reserves three quarters of a
+  refresh instead of half for canvas, GTK and compositor work together. At
+  120Hz this adds 2.083ms of lead time, not a frame of queued history. No view
+  update throttling, input dropping, extra canvas allocation, GPU readback or
+  additional renderer thread was introduced. Experimental deadline overrides
+  were removed. The clock arithmetic adds only atomic reads on the main thread.
+- Serial six-second full-workspace runs, 384px brushes; later workloads retain
+  earlier artwork. Before/after refer to the same seven-workload sweep, with
+  real child-surface presentation feedback and no simultaneous build/profiler:
+
+  | Workload | Before Hz | After Hz | After CPU median/p95/p99 ms | After GPU span median/p95/p99 ms |
+  | --- | ---: | ---: | --- | --- |
+  | G-Pen | 119.956 | 120.008 | .361/.630/.873 | .163/.410/2.249 |
+  | Natural Blender | 119.789 | 119.797 | .733/1.291/1.608 | .718/1.535/3.310 |
+  | Wet Round | 119.790 | 120.003 | .629/1.218/1.721 | .518/1.220/1.907 |
+  | Watercolor | 119.904 | 120.006 | 1.300/2.534/3.172 | 1.536/4.135/4.985 |
+  | Pan | 120.012 | 119.864 | .209/.491/.710 | .104/1.275/2.281 |
+  | Hand | 120.009 | 119.824 | .284/.540/.762 | .093/.312/1.935 |
+  | Transform accumulated artwork | 104.347 | 119.507 | 1.664/2.357/2.773 | 1.937/2.709/3.304 |
+
+  Transform discards fell from 93 to four. Other workloads discarded zero or
+  one presentation each. Median enqueue-to-presentation after the change was
+  5.375–5.656ms, with p99 6.173–8.877ms; the transform maximum was 11.263ms.
+  This is a measured latency/headroom tradeoff, not a free speedup or a guarantee
+  for every frame. Synthetic input is not a physical stylus measurement, and
+  device timestamp spans include queue bubbles, not only shader execution.
+  CPU/GPU tails were higher for several brushes in this repeat; they are
+  reported, not dismissed as free. No shader or raster algorithm changed.
+- A timestamp-free repeat delivered 119.73–120.01Hz for brushes/navigation,
+  and 118.67Hz for transforms (10 discarded presentations). A two-thirds lead
+  candidate had reached 119.84Hz with queries, but only 117.67Hz without them.
+  The retained change improves composited transforms substantially without
+  throttling controls, but does **not** establish a no-missed-frame guarantee.
+  Remaining performance work includes the driver-retirement trigger and the
+  residual transform presentation misses; watercolor selection-edge behavior
+  and final human GTK review remain separate goal gates.
+- Post-merge validation with the shared estimated-input correction work passes
+  all 306 core/engine/UI/host tests and strict GTK/UI/host Clippy. The release
+  application and test executable build. The native default-workspace workflow
+  passes again, including fresh dark/light and compact captures; the default
+  dark capture was visually inspected. The timer arithmetic regression passes.
+  A new timestamp-free seven-workload sweep delivers 119.80–120.01Hz for brushes
+  and navigation, and 118.50Hz for transforms (10 discarded presentations).
+  Transform worker elapsed median/p95/p99 is 1.649/2.286/2.618ms; GTK dispatch
+  p99 is 1.203ms. Pan has zero discarded presentations, 0.570ms worker p99,
+  0.078ms input-handler p99 and 0.070ms GTK-dispatch p99. These are synthetic
+  input runs with actual presentation feedback, not physical-input acceptance.
+  The incoming Apple report separately confirms that the sRGB import oracle
+  passes on Metal but the v3 filter-output reference fails (maximum channel
+  error 255); see [Apple acceptance](apple-acceptance.md). That cross-backend
+  failure is not waived by the passing Vulkan or GTK checks.

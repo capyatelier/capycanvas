@@ -203,6 +203,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn navigator_updates_continuously(&self) -> bool {
         self.input_pending || self.engine.has_active_stroke() || self.wants_continuous_frames()
     }
+    /// Lets event-driven hosts sleep after the last image, including a final
+    /// document update that arrived inside the preview throttle interval.
+    pub fn navigator_preview_current(&self, revision: u64) -> bool {
+        self.navigator_preview.is_current(revision)
+    }
     pub fn set_platform(&mut self, platform: Platform) {
         self.state.platform = platform;
         self.state.palette = self.state.settings.palette(self.state.theme, platform);
@@ -1399,8 +1404,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
                 let layout = &mut self.state.workspace.layout;
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                    && layout.column_for_group(group).is_some()
+                if matches!(
+                    self.state.platform,
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
+                ) && layout.column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
                 } else {
@@ -1457,8 +1468,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .find(|t| t.id == tile)
                     .is_some_and(|t| t.choice.selected && t.enabled);
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                    && control.drawer_columns().is_some()
+                if matches!(
+                    self.state.platform,
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
+                ) && control.drawer_columns().is_some()
                     && (!control.selectable()
                         || selected
                         || self
@@ -1578,10 +1595,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
-                if id == "tolerance" {
-                    NumericControl::percent().validate(value, "Tolerance")?;
-                    self.region_tools.tolerance = value;
-                    self.region_tools.cancel();
+                if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. })
+                    && id != "opacity"
+                {
+                    self.region_tools.edit(&id, value)?;
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
                 }
@@ -1757,15 +1774,21 @@ impl<R: CanvasRenderer> UiSession<R> {
                             .ok_or("Divider drag is not active")?;
                         if !drag.collapsed {
                             let point = drag.position(position);
-                            let root =
-                                matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                                    .then(|| {
-                                        self.state
-                                            .workspace
-                                            .layout
-                                            .collapse_at_divider(id, point, viewport)
-                                    })
-                                    .flatten();
+                            let root = matches!(
+                                self.state.platform,
+                                Platform::Gtk
+                                    | Platform::Generic
+                                    | Platform::Android
+                                    | Platform::Ios
+                                    | Platform::Mac
+                            )
+                            .then(|| {
+                                self.state
+                                    .workspace
+                                    .layout
+                                    .collapse_at_divider(id, point, viewport)
+                            })
+                            .flatten();
                             if let Some(root) = root {
                                 let original_width =
                                     self.workspace_history.gesture_start().and_then(|s| {
@@ -2509,7 +2532,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((SETTINGS, true))
             }
             CommandId::ResetLayout => {
-                self.state.workspace.layout.reset_docking()?;
+                self.state
+                    .workspace
+                    .layout
+                    .reset_docking(self.state.platform)?;
                 Ok((LAYOUT, false))
             }
             CommandId::UndoWorkspace | CommandId::RedoWorkspace => {
@@ -2681,13 +2707,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Region { fill, .. } = self.layer_interaction.tool {
-            let mut controls = vec![tool_settings::ToolSetting {
-                id: "tolerance",
-                label: "Tolerance",
-                group: "",
-                numeric: NumericControl::percent(),
-                value: self.region_tools.tolerance,
-            }];
+            let mut controls = self.region_tools.controls();
             if fill {
                 controls.extend(
                     tool_settings::controls(self.engine.configured_brush())
@@ -2726,30 +2746,34 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.camera.input_transform(),
         );
     }
+    /// Reapply visibility-dependent sampling after a host attaches its GPU.
+    pub fn sync_renderer_telemetry(&mut self) {
+        self.engine.backend_mut().set_telemetry_enabled(
+            (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
+                && self
+                    .state
+                    .workspace
+                    .layout
+                    .panel_group(Panel::Stats)
+                    .is_none_or(|g| {
+                        self.state
+                            .workspace
+                            .layout
+                            .collapsed_column_for_group(g)
+                            .is_none()
+                    }))
+                || self
+                    .state
+                    .customization
+                    .drawer
+                    .iter()
+                    .chain(self.state.customization.column_drawers.iter())
+                    .any(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
+        );
+    }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
-            self.engine.backend_mut().set_telemetry_enabled(
-                (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
-                    && self
-                        .state
-                        .workspace
-                        .layout
-                        .panel_group(Panel::Stats)
-                        .is_none_or(|g| {
-                            self.state
-                                .workspace
-                                .layout
-                                .collapsed_column_for_group(g)
-                                .is_none()
-                        }))
-                    || self
-                        .state
-                        .customization
-                        .drawer
-                        .iter()
-                        .chain(self.state.customization.column_drawers.iter())
-                        .any(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
-            );
+            self.sync_renderer_telemetry();
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
         if regions & regions::SETTINGS != 0 {
@@ -3375,12 +3399,47 @@ mod tests {
             invoke(&mut s, CommandId::AutoSelect);
             assert_eq!(s.state.tool_set.subtools.len(), 3);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
+            assert_eq!(s.state.tool_settings.len(), 4);
+            assert_eq!(s.region_tools.refinement.smoothing, 1.);
+            for (id, value) in [("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.75)] {
+                s.dispatch(UiAction::SetToolSetting {
+                    id: id.into(),
+                    value,
+                })
+                .unwrap();
+                assert_eq!(
+                    s.state
+                        .tool_settings
+                        .iter()
+                        .find(|c| c.id == id)
+                        .unwrap()
+                        .value,
+                    value
+                );
+            }
+            let refinement = s.region_tools.refinement;
+            for (id, value) in [
+                ("gap_closing", 33.),
+                ("expansion", -33.),
+                ("gap_closing", 1.5),
+                ("smoothing", f32::NAN),
+            ] {
+                assert!(
+                    s.dispatch(UiAction::SetToolSetting {
+                        id: id.into(),
+                        value
+                    })
+                    .is_err()
+                );
+                assert_eq!(s.region_tools.refinement, refinement);
+            }
             send(&mut s, PenPhase::Down);
             send(&mut s, PenPhase::Up);
             assert!(s.wants_continuous_frames());
             s.frame(1, 1).unwrap();
             let request = s.renderer_mut().region_requests[0].clone();
             assert_eq!(request.position, [48, 72]);
+            assert_eq!(request.refinement, refinement);
             assert_eq!(request.source, RegionSource::Composite);
             assert!(request.limit.is_none());
             s.renderer_mut().region_reply = Some(RegionResult {
@@ -3421,6 +3480,10 @@ mod tests {
             assert_eq!(request.position, [40, 60]);
             assert_eq!(request.source, RegionSource::Layer(id));
             assert_eq!(request.tolerance, 0.2);
+            assert_eq!(
+                request.refinement, refinement,
+                "Fill uses the same Rust settings"
+            );
             assert_eq!(
                 request.limit.as_ref().unwrap().affine,
                 layer_core::Affine::translation(Point { x: -8., y: -12. })
@@ -7157,22 +7220,29 @@ mod tests {
         ] {
             let mut app = session();
             app.set_platform(platform);
-            for panel in [Panel::ToolSettings, Panel::Color] {
-                let available = matches!(
-                    platform,
-                    Platform::Gtk
-                        | Platform::Windows
-                        | Platform::Android
-                        | Platform::Ios
-                        | Platform::Mac
-                );
+            for panel in [Panel::ToolSettings, Panel::Color, Panel::Navigator] {
+                let available = match panel {
+                    Panel::ToolSettings | Panel::Color => matches!(
+                        platform,
+                        Platform::Gtk
+                            | Platform::Windows
+                            | Platform::Android
+                            | Platform::Ios
+                            | Platform::Mac
+                    ),
+                    Panel::Navigator => matches!(
+                        platform,
+                        Platform::Gtk | Platform::Android | Platform::Ios | Platform::Mac
+                    ),
+                    _ => unreachable!(),
+                };
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),
                     available
                 );
                 assert_eq!(app.workspace_menu().sections[1].iter().any(|i| matches!(
-                    i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
-                )), available);
+                        i.action, Some(UiAction::Customize { action: CustomizationAction::SetPanelVisible { panel: p, .. } }) if p == panel
+                    )), available);
                 let result = app.dispatch(UiAction::Customize {
                     action: CustomizationAction::SetPanelVisible {
                         panel,
@@ -7738,33 +7808,35 @@ mod tests {
 
     #[test]
     fn configure_from_collapsed_column_reveals_the_ordinary_panel() {
-        let mut s = session();
-        s.set_platform(Platform::Gtk);
-        let viewport = [1200., 900.];
-        s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+        for platform in [Platform::Gtk, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            let viewport = [1200., 900.];
+            s.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+                .unwrap();
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group: 5,
+                    panel: Panel::Brushes,
+                },
+            })
             .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ToggleColumnDrawer {
-                group: 5,
-                panel: Panel::Brushes,
-            },
-        })
-        .unwrap();
-        s.dispatch(UiAction::Customize {
-            action: CustomizationAction::ShowAllControls {
-                panel: Panel::Brushes,
-            },
-        })
-        .unwrap();
-        assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
-        assert!(s.state.customization.column_drawers.is_empty());
-        assert!(s.state.workspace.layout.collapsed.is_empty());
-        assert!(
-            s.layout(viewport)
-                .groups
-                .iter()
-                .any(|g| g.active == Panel::Brushes)
-        );
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ShowAllControls {
+                    panel: Panel::Brushes,
+                },
+            })
+            .unwrap();
+            assert_eq!(s.state.customization.expanded, Some(Panel::Brushes));
+            assert!(s.state.customization.column_drawers.is_empty());
+            assert!(s.state.workspace.layout.collapsed.is_empty());
+            assert!(
+                s.layout(viewport)
+                    .groups
+                    .iter()
+                    .any(|g| g.active == Panel::Brushes)
+            );
+        }
     }
 
     #[test]
@@ -9830,12 +9902,7 @@ mod tests {
 
     #[test]
     fn popup_tiles_toggle_while_explicit_open_remains_idempotent() {
-        for platform in [
-            Platform::Windows,
-            Platform::Web,
-            Platform::Ios,
-            Platform::Mac,
-        ] {
+        for platform in [Platform::Windows, Platform::Web] {
             let mut app = session();
             app.set_platform(platform);
             let tile = |app: &UiSession<Recorder>, control| {

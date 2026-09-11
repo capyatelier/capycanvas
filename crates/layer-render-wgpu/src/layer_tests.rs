@@ -7,6 +7,8 @@ use layer_core::{
 use layer_render::{DabStyle, ViewState};
 #[path = "figure_tests.rs"]
 mod figures;
+#[path = "overview_tests.rs"]
+mod overviews;
 #[path = "paint_transform_tests.rs"]
 mod transforms;
 
@@ -135,6 +137,7 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
         source: RegionSource::Layer(line.id),
         position: [64, 64],
         tolerance: 0.,
+        refinement: Default::default(),
         limit: None,
     };
     assert!(r.request_region(request.clone()).unwrap());
@@ -206,25 +209,155 @@ fn connected_region_is_immutable_replayable_and_shared_by_paint_and_masks() {
     // Detection is constrained by an existing selection, including an empty
     // answer when the seed lies outside its coverage.
     submit(&mut r, &[line], &[], &[], true);
-    for (seed, bounds) in [([32, 64], [17, 17, 64, 112]), ([80, 64], [0; 4])] {
+    for (seed, expansion, bounds) in [
+        ([32, 64], 0, [17, 17, 64, 112]),
+        ([80, 64], 0, [0; 4]),
+        ([32, 64], 3, [14, 14, 64, 115]),
+        ([80, 64], 3, [0; 4]),
+        ([32, 64], -2, [19, 19, 62, 110]),
+    ] {
         assert!(
             r.request_region(RegionRequest {
                 request_id: 8,
                 source: RegionSource::Composite,
                 position: seed,
                 tolerance: 0.,
+                refinement: layer_render::RegionRefinement {
+                    expansion,
+                    smoothing: 1.,
+                    ..Default::default()
+                },
                 limit: left_mask(9).initial.map(std::sync::Arc::new)
             })
             .unwrap()
         );
         r.wait_idle().unwrap();
-        assert_eq!(receive(&mut r).pixels.bounds(), bounds);
+        let refined = receive(&mut r).pixels;
+        assert_eq!(refined.bounds(), bounds);
+        // The final selection limit is applied after expansion and antialiasing.
+        for y in 0..128 {
+            assert!(
+                refined.words()[y * 16 + 8..y * 16 + 16]
+                    .iter()
+                    .all(|w| *w == 0)
+            );
+        }
     }
     assert_eq!(
         result.pixels.bounds(),
         [17, 17, 112, 112],
         "later detection never rewrites history"
     );
+}
+
+#[test]
+fn refined_region_antialias_survives_fill_and_history_replay() {
+    use layer_render::{RegionRefinement, RegionRequest, RegionSource};
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let asset = AssetId::from("test:diagonal-region");
+    let pixels: Vec<_> = (0_u32..128 * 128)
+        .flat_map(|i| {
+            if (i % 128).abs_diff(64) + (i / 128).abs_diff(64) < 40 {
+                [255; 4]
+            } else {
+                [0, 0, 0, 255]
+            }
+        })
+        .collect();
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: 128,
+            height: 128,
+            stride: 512,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &pixels,
+        },
+    )
+    .unwrap();
+    let mut source = Layer::paint(LayerId(1), "Source");
+    source.asset = Some(asset);
+    submit(&mut r, &[source], &[], &[], true);
+    assert!(
+        r.request_region(RegionRequest {
+            request_id: 1,
+            source: RegionSource::Composite,
+            position: [64, 64],
+            tolerance: 0.,
+            refinement: RegionRefinement {
+                smoothing: 1.,
+                ..Default::default()
+            },
+            limit: None,
+        })
+        .unwrap()
+    );
+    let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
+    let pixels = loop {
+        if let Some(result) = r.take_region() {
+            break result.unwrap().pixels;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    };
+    let mut expected = None;
+    for replay in [false, true] {
+        // Distinct owned history storage cannot reuse the live GPU result.
+        let selected = if replay {
+            std::sync::Arc::new(
+                layer_core::SelectionPixels::new(
+                    pixels.extent(),
+                    pixels.bounds(),
+                    pixels.words().to_vec(),
+                )
+                .unwrap(),
+            )
+        } else {
+            pixels.clone()
+        };
+        let mut fill = Layer::paint(LayerId(2), "Fill");
+        let mut coverage = LayerMask::reveal_all(LayerId(3), Point::default());
+        coverage.initial = Some(Selection::pixels(selected));
+        coverage.default_coverage = 0.;
+        fill.operations.push(LayerOperation {
+            after_stroke: 0,
+            coverage,
+            kind: LayerOperationKind::Fill {
+                color: [0., 0., 1., 1.],
+                alpha_locked: false,
+            },
+        });
+        submit(
+            &mut r,
+            &[fill],
+            &[],
+            &[DabBatch {
+                kind: DabBatchKind::LayerOperation(0),
+                dab_count: 0,
+                ..batch(2)
+            }],
+            true,
+        );
+        let output = r.readback_srgb_rgba8().unwrap();
+        let mut partial = 0;
+        for y in 0..128 {
+            for x in 0..128 {
+                let quarters = pixels.words()[y * 16 + x / 8] >> (x % 8 * 4) & 15;
+                let alpha = output[(y * 128 + x) * 4 + 3];
+                assert!(
+                    (i32::from(alpha) - (quarters as f32 * 63.75).round() as i32).abs() <= 1,
+                    "{x},{y}"
+                );
+                partial += usize::from(quarters > 0 && quarters < 4);
+            }
+        }
+        assert!(partial > 40, "diagonal edges must really be antialiased");
+        if let Some(expected) = &expected {
+            assert_eq!(&output, expected);
+        } else {
+            expected = Some(output);
+        }
+    }
 }
 
 #[test]
@@ -280,6 +413,7 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
                 source: RegionSource::Composite,
                 position: [40, 64],
                 tolerance: 0.1,
+                refinement: Default::default(),
                 limit: None
             })
             .unwrap()
@@ -298,6 +432,7 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
                 source: RegionSource::Layers(refs),
                 position: [40, 64],
                 tolerance: 0.1,
+                refinement: Default::default(),
                 limit: None
             })
             .unwrap()
@@ -315,7 +450,7 @@ fn reference_regions_match_isolated_composition_without_changing_visible_canvas(
 #[test]
 #[ignore = "hardware GPU complete region request benchmark; release, serial"]
 fn region_request_latency() {
-    use layer_render::{RegionRequest, RegionSource, TimingSamples};
+    use layer_render::{RegionRefinement, RegionRequest, RegionSource, TimingSamples};
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [2048, 1536];
     let asset = AssetId::from("test:region-benchmark");
@@ -361,14 +496,49 @@ fn region_request_latency() {
     })
     .unwrap();
     r.wait_idle().unwrap();
-    for (name, source) in [
+    // Match interactive startup: prepare pipelines outside the request timer.
+    // The primitive benchmark separately retains an unprepared first request.
+    let preparation = std::time::Instant::now();
+    let regions = region_requests::RegionRequests::new(&r.device);
+    for pipeline in regions.flood.pipelines() {
+        pipeline.compile();
+    }
+    r.regions = Some(regions);
+    eprintln!(
+        "region pipeline preparation {:.3}ms",
+        preparation.elapsed().as_secs_f64() * 1000.
+    );
+    for (name, source, refinement) in [
         ("visible", RegionSource::Composite),
         ("raw layer", RegionSource::Layer(LayerId(1))),
         (
             "references",
             RegionSource::Layers(layers.iter().map(Layer::composite_snapshot).collect()),
         ),
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|(name, source)| {
+        [
+            ("plain", RegionRefinement::default()),
+            (
+                "antialias",
+                RegionRefinement {
+                    smoothing: 1.,
+                    ..Default::default()
+                },
+            ),
+            (
+                "all",
+                RegionRefinement {
+                    gap_closing: 4,
+                    expansion: 2,
+                    smoothing: 1.,
+                },
+            ),
+        ]
+        .into_iter()
+        .map(move |(case, refinement)| (format!("{name}/{case}"), source.clone(), refinement))
+    }) {
         let mut cpu = TimingSamples::default();
         let mut complete = TimingSamples::default();
         for i in 0..150 {
@@ -379,6 +549,7 @@ fn region_request_latency() {
                     source: source.clone(),
                     position: [48, 48],
                     tolerance: 0.1,
+                    refinement,
                     limit: None
                 })
                 .unwrap()
@@ -392,7 +563,11 @@ fn region_request_latency() {
                 .unwrap();
             loop {
                 if let Some(result) = r.take_region() {
-                    assert_eq!(result.unwrap().pixels.bounds(), [0, 0, 100, 75]);
+                    let grow = refinement.expansion as u32;
+                    assert_eq!(
+                        result.unwrap().pixels.bounds(),
+                        [0, 0, 100 + grow, 75 + grow]
+                    );
                     break;
                 }
                 assert!(start.elapsed() < READBACK_TIMEOUT);

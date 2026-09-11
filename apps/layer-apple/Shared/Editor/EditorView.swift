@@ -7,13 +7,15 @@ struct EditorView<Canvas: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openWindow) private var openWindow
     @State private var lastWindowRequest: UInt64 = 0
+    @State private var lastLinkRequest: UInt64 = 0
+    @Environment(\.openURL) private var openURL
+    private var linkRequest: UInt64 {
+        store.state["requests"].array.first { $0["kind"]["type"].string == "open_link" }?["id"].uint ?? 0
+    }
     private var windowRequest: UInt64 {
         store.state["requests"].array.first { $0["kind"]["type"].string == "new_window" }?["id"].uint ?? 0
     }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private var panels: [String: JSON] {
-        Dictionary(uniqueKeysWithValues: store.snapshot["panels"].array.map { ($0["id"].string, $0) })
-    }
     var body: some View {
         ZStack(alignment: .topLeading) {
             canvas().ignoresSafeArea()
@@ -22,12 +24,7 @@ struct EditorView<Canvas: View>: View {
             }
             if !store.state.isNull {
                 if !store.snapshot["chrome_hidden"].bool { header }
-                ForEach(store.snapshot["layout"]["groups"].array.indices, id: \.self) { i in
-                    let group = store.snapshot["layout"]["groups"][i]
-                    if !store.snapshot["chrome_hidden"].bool || (group["floating"].bool && !store.snapshot["hide_floating_panels"].bool) {
-                        panelGroup(group).placed(group["bounds"])
-                    }
-                }
+                WorkspacePanels(store: store, workspace: store.workspace)
                 if !store.snapshot["chrome_hidden"].bool {
                     HStack {
                         Spacer()
@@ -40,6 +37,7 @@ struct EditorView<Canvas: View>: View {
                     IconTile(icon: zen["icon"].string, label: zen["tooltip"].string,
                         selected: zen["selected"].bool, size: CGFloat(store.catalog["zen_icon_size"].number)) { store.invoke("zen_mode") }
                         .frame(width: 36, height: 36).background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                        .modifier(WorkspaceContext(store: store, target: JSON(["kind": "zen_mode"])))
                         .offset(x: 6 + store.headerLeadingInset, y: 6).accessibilityIdentifier("zen-button")
                 }
             }
@@ -61,11 +59,29 @@ struct EditorView<Canvas: View>: View {
             #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .coordinateSpace(name: "editor-workspace")
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor-workspace")).onEnded { event in
+            store.workspace.chrome(["kind": "contact", "position": [event.location.x, event.location.y], "canvas": false])
+        })
+        .onContinuousHover(coordinateSpace: .named("editor-workspace")) { phase in
+            switch phase {
+            case .active(let point): store.workspace.chrome(["kind": "motion", "position": [point.x, point.y]])
+            case .ended: store.workspace.chrome(["kind": "leave", "touch": false])
+            }
+        }
+        .onPreferenceChange(WorkspaceTabs.self) { bounds in
+            store.workspace.tabs = bounds.compactMap { key, rect in
+                let parts = key.split(separator: ":").compactMap { UInt64($0) }
+                guard parts.count == 2 else { return nil }
+                return JSON(["group": parts[0], "index": parts[1], "bounds": ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]])
+            }
+        }
         .ignoresSafeArea().foregroundStyle(palette["text"])
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255))
         .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))
         .modifier(ProjectFilesModifier(files: store.projectFiles))
+        .modifier(WorkspaceDialogs(store: store))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
             SettingsView(store: store).modifier(StorageAlert(store: store))
         }
@@ -76,67 +92,60 @@ struct EditorView<Canvas: View>: View {
             lastWindowRequest = id; openWindow(id: "editor")
             store.dispatch(["type": "complete_request", "id": id, "error": NSNull()])
         }
+        .onChange(of: linkRequest, initial: true) { _, id in
+            guard id > lastLinkRequest,
+                let request = store.state["requests"].array.first(where: { $0["id"].uint == id }) else { return }
+            lastLinkRequest = id
+            store.query(["type": "application_link", "link": request["kind"]["link"].raw]) { result in
+                guard let url = URL(string: result.string) else {
+                    store.dispatch(["type": "complete_request", "id": id, "error": "Could not open the link"])
+                    return
+                }
+                openURL(url) { accepted in
+                    store.dispatch(["type": "complete_request", "id": id,
+                        "error": accepted ? NSNull() : "Could not open the link" as Any])
+                }
+            }
+        }
         .onChange(of: colorScheme) { _, _ in systemTheme() }
     }
     private func systemTheme() { store.dispatch(["type": "system_theme_changed", "theme": colorScheme == .dark ? "dark" : "light"]) }
     private var header: some View {
-        ZStack {
+        EditorHeaderLayout {
+            HStack(spacing: 6) {
+                Color.clear.frame(width: 36 + store.headerLeadingInset, height: 36)
+                if showsApplicationMenus {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
+                            ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
+                                let menu = store.snapshot["application_menus"][index]
+                                Menu { CatalogMenuItems(store: store, id: menu["id"].string) } label: {
+                                    Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
+                                        .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                                }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
+                            }
+                        }.fixedSize()
+                        Menu {
+                            ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
+                                let menu = store.snapshot["application_menus"][index]
+                                Menu(menu["label"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
+                            }
+                        } label: {
+                            SharedIcon(name: "menu").frame(width: 36, height: 36)
+                                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                        }.buttonStyle(.plain).accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
+                    }
+                }
+            }
             let tab = store.state["tabs"][0]
             Text(verbatim: "\(tab["title"].string) · \(Int(tab["width"].number)) × \(Int(tab["height"].number))")
+                .accessibilityIdentifier("document-title")
                 .fontWeight(.semibold).padding(.horizontal, 8).frame(height: 36)
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-            HStack(spacing: 6) {
-                Color.clear.frame(width: 36, height: 36)
-                if showsApplicationMenus {
-                    let menus = [store.catalog["file_menu"]] + store.catalog["menus"].array
-                    ForEach(menus.indices, id: \.self) { index in
-                        let menu = menus[index]
-                        Menu { CatalogMenuItems(store: store, label: menu["label"].string) } label: {
-                            Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
-                                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                        }.buttonStyle(.plain)
-                    }
-                }
-                Spacer()
-                IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
-            }.padding(.leading, store.headerLeadingInset)
+            IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
         }.padding(6).frame(height: 48)
     }
-    private func panelGroup(_ group: JSON) -> some View {
-        let panel = panels[group["active"].string] ?? JSON()
-        return VStack(spacing: 0) {
-            if group["tabs_visible"].bool {
-                HStack(spacing: 0) {
-                    ForEach(group["panels"].array.indices, id: \.self) { index in
-                        let tab = panels[group["panels"][index].string] ?? JSON()
-                        Button { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) } label: {
-                            HStack(spacing: 6) {
-                                if tab["tab"]["show_icon"].bool { SharedIcon(name: tab["icon"].string) }
-                                if tab["tab"]["show_name"].bool { Text(tab["title"].string).fontWeight(.bold).lineLimit(1) }
-                            }.padding(.horizontal, 8).frame(height: 36)
-                                .background(tab["id"].string == panel["id"].string ? palette["panel"] : Color.clear)
-                        }.buttonStyle(.plain).accessibilityLabel(tab["title"].string)
-                    }
-                    Spacer(minLength: 0)
-                    SharedIcon(name: "grip").opacity(0.65).frame(width: 20, height: 36)
-                }.background(palette["tabbar"])
-            }
-            if !group["tiles"].isNull {
-                ZStack(alignment: .topLeading) {
-                    Color.clear
-                    ForEach(panel["tiles"].array.indices, id: \.self) { index in
-                        let tile = panel["tiles"][index]
-                        IconTile(icon: tile["icon"].string, label: tile["tooltip"].string,
-                            selected: tile["selected"].bool, enabled: tile["enabled"].bool) {
-                            store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
-                        }.placed(group["tiles"]["tiles"][index])
-                    }
-                    SharedIcon(name: "grip").opacity(0.65).placed(group["tiles"]["grip"])
-                }
-            } else { PanelControls(store: store, panel: panel) }
-        }.background(palette["panel"]).clipShape(RoundedRectangle(cornerRadius: 8))
-            .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
-    }
+
 }
 
 private struct StorageAlert: ViewModifier {
@@ -164,20 +173,45 @@ struct MenuItems: View {
     @ObservedObject var store: EditorStore
     let sections: JSON
     var didInvoke: () -> Void = {}
+    var usesShortcuts = false
     var body: some View {
         ForEach(sections.array.indices, id: \.self) { i in
             if i > 0 { Divider() }
             ForEach(sections[i].array.indices, id: \.self) { j in
                 let item = sections[i][j]
                 if !item["sections"].array.isEmpty {
-                    Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke)) }.disabled(!item["enabled"].bool)
+                    Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke, usesShortcuts: usesShortcuts)) }.disabled(!item["enabled"].bool)
                 } else {
                     Button { store.dispatch(item["action"]); didInvoke() } label: {
                         if item["selected"].bool { Label(item["label"].string, systemImage: "checkmark") }
                         else { Text(item["label"].string) }
-                    }.disabled(!item["enabled"].bool)
+                    }.disabled(!item["enabled"].bool || item["action"].isNull)
+                        .help(item["hint"].string)
+                        .accessibilityIdentifier(item["action"]["type"].string == "invoke"
+                            ? "command-" + item["action"]["command"].string : "menu-action-" + item["label"].string)
+                        .keyboardShortcut(usesShortcuts ? menuShortcut(item["bindings"][0]) : nil)
                 }
             }
         }
+    }
+}
+
+/// Keep the title centered where space permits, clamping beside native menus.
+/// Narrow windows use the complete submenu list through ViewThatFits.
+private struct EditorHeaderLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 800, height: 36)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let title = subviews[1].sizeThatFits(.unspecified)
+        let trailing = subviews[2].sizeThatFits(.unspecified)
+        let available = max(0, bounds.width - title.width - trailing.width - 12)
+        let ideal = subviews[0].sizeThatFits(.unspecified)
+        let leading = ideal.width <= available ? ideal : subviews[0].sizeThatFits(ProposedViewSize(width: available, height: 36))
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(leading))
+        let center = max(leading.width + 6, (bounds.width - title.width) / 2)
+        subviews[1].place(at: CGPoint(x: bounds.minX + center, y: bounds.minY), proposal: ProposedViewSize(title))
+        subviews[2].place(at: CGPoint(x: bounds.maxX - trailing.width, y: bounds.minY), proposal: ProposedViewSize(trailing))
     }
 }

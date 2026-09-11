@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 const DOCUMENT: u8 = 2;
-const BRUSH: u8 = 3;
+pub(super) const BRUSH: u8 = 3;
 pub(super) const OTHER: u8 = 4;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "startup_native.rs"]
@@ -361,6 +361,12 @@ impl WgpuRasterizer {
             for p in self.transforms.as_ref().unwrap().pipelines() {
                 startup.compiler.pipeline(p, OTHER);
             }
+            let regions = self
+                .regions
+                .get_or_insert_with(|| region_requests::RegionRequests::new(&self.device));
+            for p in regions.flood.pipelines() {
+                startup.compiler.pipeline(p, OTHER);
+            }
             startup.others_queued = true;
         }
         startup.compiler.start();
@@ -493,6 +499,123 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod gpu_tests {
     use super::*;
+    #[test]
+    fn region_requests_wait_for_compilation_without_blocking_or_allocating_images() {
+        let reference = WgpuRasterizer::new_headless().unwrap();
+        let mut renderer = WgpuRasterizer::from_wgpu_staged(
+            reference.adapter.clone(),
+            reference.device().clone(),
+            reference.queue.clone(),
+        )
+        .unwrap();
+        let (release, wait) = mpsc::channel();
+        let (entered, blocked) = mpsc::channel();
+        renderer
+            .startup
+            .as_ref()
+            .unwrap()
+            .compiler
+            .enqueue(OTHER, move || {
+                entered.send(()).map_err(|e| e.to_string())?;
+                wait.recv_timeout(Duration::from_secs(20))
+                    .map_err(|e| e.to_string())
+            });
+        let doc = Document::new("Region startup", 128, 128);
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        renderer.prepare_startup(&doc, &brush, false).unwrap();
+        blocked.recv_timeout(Duration::from_secs(20)).unwrap();
+        assert!(renderer.poll_startup().unwrap().brush_ready);
+        renderer
+            .submit(FramePacket {
+                view: layer_render::ViewState {
+                    width_px: 128,
+                    height_px: 128,
+                    document_to_surface: [1., 0., 0., 1., 0., 0.],
+                    background_rgba_linear: [1.; 4],
+                },
+                document_extent: [128, 128],
+                layers: &doc.layers,
+                dabs: &[],
+                dab_batches: &[],
+                reset_layers: true,
+                composite_all: true,
+                time_seconds: 0.,
+            })
+            .unwrap();
+        let request = layer_render::RegionRequest {
+            request_id: 27,
+            source: layer_render::RegionSource::Composite,
+            position: [64, 64],
+            tolerance: 0.,
+            refinement: layer_render::RegionRefinement {
+                gap_closing: 4,
+                expansion: 3,
+                smoothing: 1.,
+            },
+            limit: Some(Arc::new(
+                layer_core::Selection::polygon(vec![
+                    layer_core::Point { x: 10., y: 10. },
+                    layer_core::Point { x: 100., y: 10. },
+                    layer_core::Point { x: 100., y: 100. },
+                    layer_core::Point { x: 10., y: 100. },
+                ])
+                .unwrap(),
+            )),
+        };
+        let start = std::time::Instant::now();
+        assert!(renderer.request_region(request.clone()).unwrap());
+        assert!(
+            !renderer.request_region(request).unwrap(),
+            "single-flight includes waiting requests"
+        );
+        let pending = renderer.startup.as_ref().unwrap().compiler.pending();
+        for _ in 0..3 {
+            assert!(renderer.take_region().is_none());
+        }
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "never wait for shader compilation"
+        );
+        assert_eq!(
+            pending,
+            renderer.startup.as_ref().unwrap().compiler.pending()
+        );
+        let regions = renderer.regions.as_ref().unwrap();
+        assert!(regions.flood.pipelines().all(|p| !p.ready()));
+        assert_eq!(
+            regions.storage_bytes(),
+            52,
+            "only the two tiny empty bindings exist"
+        );
+        assert!(renderer.region_pending());
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            renderer.poll_startup().unwrap();
+            if let Some(result) = renderer.take_region() {
+                let result = result.unwrap();
+                assert_eq!(result.request_id, 27);
+                assert_eq!(result.pixels.bounds(), [10, 10, 100, 100]);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!renderer.region_pending());
+        while !renderer.poll_startup().unwrap().complete {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            renderer
+                .regions
+                .as_ref()
+                .unwrap()
+                .flood
+                .pipelines()
+                .all(Deferred::ready)
+        );
+    }
     #[test]
     fn live_transform_promotes_dependencies_without_blocking_the_caller() {
         let reference = WgpuRasterizer::new_headless().unwrap();

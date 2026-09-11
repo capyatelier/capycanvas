@@ -19,6 +19,7 @@ final class CanvasView: UIView {
     var contacts: [ObjectIdentifier: PencilContact] = [:]
     var nextContact: UInt64 = 0
     var ignoredContacts: Set<ObjectIdentifier> = []
+    var estimates = EstimatedInput()
 
     init(store: EditorStore) {
         self.store = store
@@ -39,6 +40,7 @@ final class CanvasView: UIView {
         hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         addGestureRecognizer(hover)
         store.wake = { [weak self] in self?.wake() }
+        store.interruptInput = { [weak self] in self?.interruptContacts() }
         frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
         frames.submittedViewport = { [weak self] in self?.accessibilityValue = "Metal ready" }
     }
@@ -48,6 +50,10 @@ final class CanvasView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if let window {
+            store.projectFiles.closeWindow = { [weak window, weak store] in
+                guard let store else { return }
+                DocumentScene.close(window?.windowScene, store: store)
+            }
             contentScaleFactor = window.screen.scale
             if displayLink == nil {
                 let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
@@ -94,6 +100,7 @@ final class CanvasView: UIView {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 2) }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 3) }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 4) }
+    override func touchesEstimatedPropertiesUpdated(_ touches: Set<UITouch>) { updateEstimates(touches) }
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         routeKeys(presses, pressed: true)
         super.pressesBegan(presses, with: event)

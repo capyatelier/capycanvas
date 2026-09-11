@@ -1,7 +1,7 @@
 //! Menu identity and contents are shared policy. Hosts only project these models.
 use super::*;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplicationLink {
     Website,

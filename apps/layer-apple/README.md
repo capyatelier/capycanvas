@@ -40,7 +40,7 @@ the Apple bundle stages them and the root filter library without separate art.
 
 Tool Set consumes shared figure, region, ruler and Operation choices. Painting
 keeps the complete catalog brush list, also used by the web host, so every brush
-remains reachable while Apple toolbar customization is being implemented.
+remains reachable alongside custom toolbar tools.
 Enable **Workspace → Tool Settings panel** for the
 active tool's numeric fields and actions. Numeric expressions, units, ranges,
 slider mappings and stepping resolve through Rust. The shared Apple control
@@ -102,8 +102,21 @@ Team IDs, keys and provisioning profiles are not stored in this repository.
 Settings and committed workspace layouts now persist in private Application
 Support files. Settings propagate across live owners; each restored scene keeps
 its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
-failure/retry behavior and fast tests. Native New/Open/Save/Save As now use the
-shared project format; automatic artwork recovery remains pending.
+failure/retry behavior and fast tests. Native New/Open/Save/Save As use the shared
+project format. Both targets support custom canvas dimensions and PNG export. GPU export
+readback and PNG encoding run on the file worker; automatic artwork recovery
+remains pending.
+
+Both targets now project the live shared application menus. Keyboard Shortcuts
+supports search, alternate bindings, conflict replacement and resets; Settings
+search uses the shared results. The focused
+`EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
+and the resulting Zen action without automating the system menu bar. The shared
+inventory command emits representative menu and shortcut states:
+
+```sh
+cargo run -p layer-host --example inventory > /tmp/capy-inventory.json
+```
 
 Launch a local Mac build with:
 
@@ -115,6 +128,8 @@ open apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
 
 See [PERFORMANCE.md](PERFORMANCE.md) for opt-in local CPU/GPU/presentation traces,
 the report tool, instrumentation checks and the remaining hardware evidence.
+See [INPUT.md](INPUT.md) for Pencil corrections, shared stroke/history handling,
+fast input checks and the physical-device evidence still required.
 
 Check editor behavior directly without driving system menus:
 
@@ -191,6 +206,25 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
+The shared `testFilterSearchPreviewAndProperties` workflow checks filter search,
+GPU preview loading, radius expressions, curve insertion/reset and gradient
+insertion/position/reset. On iPad it also checks canvas geometry while the search
+keyboard is open. A faster Mac-only alternative avoids XCTest startup and never
+addresses the system menu bar:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun swift apps/layer-apple/tests/effect-controls-mac.swift \
+  apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app
+```
+
+This utility requires existing Accessibility permission for its launching
+terminal/agent. It opens a separate editor with persistence disabled, uses
+control identifiers and graph-relative pointer events, and leaves its final
+fixture open for direct capture. Missing permission returns failure without
+launching or modifying an editor. The Chrome `filter-properties` scenario in
+[`tools/visual`](../../tools/visual/README.md) reproduces its final document.
+
 Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state
 before going idle. Each window owns its own session. Reattaching a Metal layer
@@ -211,7 +245,60 @@ tested with coordinate clicks.
 Use [the shared visual tools](../../tools/visual/README.md) for matching local
 Chrome captures and complete image differences for either native target.
 
+Navigator and Diagnostics share their SwiftUI projections across Apple targets.
+Navigator uses Rust geometry, camera actions and an event-driven preview owner:
+one GPU readback at a time, a 256px maximum image dimension, at most 15 updates
+per second, and one worker decode awaiting UI acknowledgement. Camera-only
+changes reuse the image; the last document update remains scheduled through the
+refresh throttle. Images belong to a document epoch and survive editor teardown
+without borrowing GPU resources. Diagnostics queries the shared rows and bounded
+chart at 5Hz only while visible. Timing sampling is restored on GPU attachment
+and document replacement.
+
+`EditorLaunchTests/testNavigatorAndDiagnostics` is the focused shared UI check
+for either scheme. It uses a disposable drawing, in-app navigation buttons and
+an overview drag, then switches to Diagnostics and back. The faster Metal
+regressions run with `cargo test -p layer-apple navigator -- --test-threads=1` and
+verify actual document pixels, history, preview ownership, final delivery and
+document replacement on both Apple platform policies. Full visual and physical
+performance acceptance remains in [the matrix](../../docs/apple-acceptance.md).
+
 ## Implementation status
+
+Workspace customization shares its presentation and gesture ownership across
+iPad and Mac. Panel/group/toolbar/tile and Zen context menus query the live Rust
+models on activation. Toolbar creation, search, selection, naming, duplication,
+management and delete confirmation use shared validation/actions. Expanded
+configuration keeps its live preview beside editable controls and visibility
+toggles. Dragging a panel/group, resizing floating panels and dividers, and
+dropping tiles use Rust placement, eligibility and workspace history. The root
+owns a drag across tab tear-off; source views register only measured rectangles.
+Expansion queries run only during layout/configuration changes and animation;
+ordinary painting/camera updates do not start menu or expansion queries.
+
+The focused `testToolbarCustomization` and
+`testPanelConfigurationAndLiveDrag` checks use in-app controls. The iPad toolbar
+check also verifies canvas pinch navigation through empty workspace regions.
+Run the faster shared Metal/action regressions with
+`cargo test -p layer-apple workspace -- --test-threads=1`.
+The Chrome `panel-configuration` fixture enables direct full-image comparison.
+Collapsed columns, tabbed content drawers, child tool drawers and partial-Zen
+edge toolbars now share native projections on both targets. Content-panel tiles
+and the Commands panel are available. The core supplies column geometry, drawer
+composition, natural toolbar height, anchors, connections and dismissal policy.
+Native scrolling reports clipped tile bounds so a child drawer follows its
+origin and disappears when the tile scrolls out of view. Drawers retain their
+body only through closing and coalesce geometry requests behind one pending
+query per projection. Canvas contact admission runs on the Rust owner: an outside
+contact that dismisses a drawer cannot leak a later move or prediction into paint.
+Mode changes refresh chrome visibility even when native measurements are equal.
+
+`testCollapsedColumnsDrawersAndZen` exercises column tabs, a child drawer,
+outside dismissal and restoring the column; `testPartialZenToolbar` checks the
+default standalone toolbar projection and exiting Zen. These shared checks use
+in-app controls. The `partial-zen` Chrome fixture retains the current browser's
+missing edge toolbar sections in its full-image report. Full interaction,
+visual, physical input and performance acceptance remain open on both targets.
 
 This is an editor-shell milestone, not a finished port. The simulator renders
 the live canvas; the iPad target builds, signs, installs and launches; the AppKit
@@ -225,9 +312,11 @@ limited to visible rows and eight pending readbacks, with no idle polling once
 previews are current. Context gestures, dragging and all menu workflows still
 need complete acceptance on both platforms.
 
-Still required: complete panel/drawer/menu/dialog behavior and customization,
-filters/properties and other specialized controls, complete settings/shortcut
-UI, document persistence and complete settings/workspace lifecycle coverage, Pencil estimated-property
+Shared Filters/Properties, menus/shortcut editing, color/tool settings,
+Navigator, Diagnostics and workspace customization are implemented, with focused workflow evidence in
+the acceptance document. Still required: complete panel/drawer/menu/dialog
+behavior and customization, the remaining specialized controls and complete
+workflow coverage, document recovery and settings/workspace lifecycle coverage, Pencil estimated-property
 corrections, complete hover/sensor/shortcut routing, platform lifecycle coverage,
 full pixel-difference validation, and measured iPad and Mac hardware performance.
 Mac tablet/proximity, mouse, wheel, trackpad and keyboard adapters are present;

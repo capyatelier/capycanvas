@@ -119,10 +119,7 @@ impl ToolbarBody {
                 button.set_tooltip_text(Some(&tile.tooltip));
             }
         }
-        self.palette.load_from_string(&format!(
-            ".brush-color {{ -gtk-icon-palette: success {}; }}",
-            w.color.rgba()
-        ));
+        customization::refresh_color_palette(&self.palette, w);
     }
 }
 impl Body {
@@ -218,7 +215,7 @@ impl View {
             let column = gtk::Box::new(gtk::Orientation::Vertical, WORKSPACE_SPACING as i32);
             for panel in panels {
                 let body = match panel {
-                    Panel::Toolbar | Panel::CustomToolbar(_) => {
+                    Panel::Toolbar | Panel::Commands | Panel::CustomToolbar(_) => {
                         Body::Toolbar(ToolbarBody::new(*panel))
                     }
                     Panel::Brushes => {
@@ -234,7 +231,7 @@ impl View {
                     }
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
                     Panel::Navigator => {
-                        let v = crate::navigator::Navigator::new(&w.navigator_images);
+                        let v = crate::navigator::Navigator::new(&w.navigator_overviews);
                         v.bind(w);
                         Body::Navigator(v)
                     }

@@ -110,6 +110,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         primaryContainer = colors.active, onPrimaryContainer = colors.text)) {
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
+                DocumentRequests(host)
                 // Status/navigation bars overlay this immersive workspace. Their
                 // visibility (including startup animations) must never resize the
                 // SurfaceView or the shared canvas layout. Protect physical screen
@@ -179,7 +180,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("workspace").workspaceGestures(dock)
         .drawWithContent { drawContent(); host.recordUiDraw() }
-        .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft }) {
+        .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
         AndroidView(factory = { CanvasSurfaceView(it, host) }, modifier = Modifier.fillMaxSize())
         // SurfaceView punches through the window background. Cover its empty
@@ -225,7 +226,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
-                        PanelGroup(host, state, group, panels, dock, mod)
+                        val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(group.toString()).put("tiles", it) } ?: group
+                        PanelGroup(host, state, projected, panels, dock, mod)
                         expansion?.getJSONObject("configuration")?.let { rect ->
                             Box(Modifier.placed(rect, density).background(colors.panel)) {
                                 panels[group.getString("active")]?.let { ConfigurePanel(host, it) { height -> dock.configurationHeight = height } }
@@ -314,51 +316,40 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
 
 @Composable private fun Header(host: CanvasHost, state: JSONObject, dock: DockInteraction) {
     val colors = LocalPalette.current
-    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).padding(6.dp)) {
-      if (maxWidth >= 600.dp) state.array("tabs").optJSONObject(0)?.let { tab ->
-        Text("${tab.optString("title")} · ${tab.optInt("width")} × ${tab.optInt("height")}",
-            Modifier.align(Alignment.Center).background(colors.surround, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 8.dp),
-            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Spacer(Modifier.size(36.dp))
-        host.catalog.array("menus").objects().forEach { menu ->
-            var open by remember { mutableStateOf(false) }
-            DisposableEffect(open) {
-                dock.popupOpen = open; dock.refresh()
-                onDispose { if (open) { dock.popupOpen = false; dock.refresh() } }
-            }
-            Box {
-                Box(Modifier.height(36.dp).clip(RoundedCornerShape(6.dp)).background(colors.surround)
-                    .clickable { open = true }.padding(horizontal = 17.dp), contentAlignment = Alignment.Center) {
-                    Text(menu.getString("label"), fontWeight = FontWeight.Bold)
-                }
-                if (open && menu.array("sections").length() == 0) {
-                    host.snapshot?.objectOrNull("workspace_menu")?.let { WorkspaceMenu(host, it) { open = false } }
-                } else DropdownMenu(open, { open = false }, shape = RoundedCornerShape(10.dp), containerColor = colors.panel) {
-                    menu.array("sections").values().forEachIndexed { index, section ->
-                        if (index > 0) HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = colors.divider)
-                        (section as JSONArray).values().forEach { id ->
-                            state.array("commands").objects().find { it.getString("id") == id }?.let { command ->
-                                Row(Modifier.widthIn(min = 200.dp).fillMaxWidth().heightIn(min = 36.dp)
-                                    .padding(horizontal = 6.dp).clip(RoundedCornerShape(6.dp))
-                                    .clickable(enabled = command.getBoolean("enabled")) { open = false; host.invoke(id.toString()) }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                                    Text(command.getString("label"), Modifier.weight(1f), fontWeight = FontWeight.Bold,
-                                        color = if (command.getBoolean("enabled")) colors.text else colors.secondary)
-                                    if (command.optBoolean("selected")) SharedIcon("check", null)
-                                    command.optString("shortcut").takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.secondary) }
-                                }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).chromeRegion(dock).background(colors.surround).padding(6.dp)) {
+        val showTitle = maxWidth >= 1100.dp
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.size(36.dp))
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                host.snapshot?.array("application_menus")?.objects()?.forEach { menu ->
+                    val id = menu.getString("id")
+                    key(id) {
+                        var open by remember { mutableStateOf(false) }
+                        // Menus are part of the GPU-free snapshot, so they open
+                        // immediately even while the render owner initializes.
+                        val model = menu.objectOrNull("model")
+                        DisposableEffect(open) {
+                            val ownsPopup = open
+                            if (ownsPopup) { dock.popupOpen = true; dock.refresh() }
+                            onDispose { if (ownsPopup) { dock.popupOpen = false; dock.refresh() } }
+                        }
+                        Box {
+                            Box(Modifier.height(36.dp).testTag("application-menu-$id").clip(RoundedCornerShape(6.dp)).background(colors.surround)
+                                .clickable { open = true }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                                Text(menu.getString("label"), fontWeight = FontWeight.Bold)
                             }
+                            if (open) model?.let { WorkspaceMenu(host, it) { open = false } }
                         }
                     }
                 }
             }
+            if (showTitle) state.array("tabs").optJSONObject(0)?.let { tab ->
+                Text("${tab.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${tab.optInt("width")} × ${tab.optInt("height")}",
+                    Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = 8.dp),
+                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")) { host.invoke("settings") }
         }
-        Spacer(Modifier.weight(1f))
-        IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")) { host.invoke("settings") }
-      }
     }
 }
 

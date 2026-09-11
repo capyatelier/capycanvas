@@ -40,19 +40,30 @@ extension CanvasView {
             let history = event?.coalescedTouches(for: touch) ?? []
             let samples = history.isEmpty ? [touch] : history
             var records: [Double] = []
+            var updates: [UInt64] = []
+            let revision = store.cameraRevision
             records.reserveCapacity(samples.count * 9)
             for (index, sample) in samples.enumerated() {
                 let terminal = phase >= 3 && index == samples.count - 1
                 guard sample.timestamp > contact.lastTimestamp || terminal else { continue }
                 let samplePhase = terminal ? phase : contact.lastTimestamp < 0 ? 1.0 : 2.0
                 let record = pack(sample, phase: samplePhase)
+                let capture = estimates.capture(key: estimateKey(sample), contact: contact.id,
+                    revision: revision, scale: contentScaleFactor, record: record,
+                    expected: contact.tool == 0 ? UInt64(sample.estimatedPropertiesExpectingUpdates.rawValue) : 0)
+                if let released = capture.released { sendCorrection(released) }
+                updates.append(contentsOf: capture.metadata)
                 records.append(contentsOf: record)
                 contact.last = record
                 contact.lastTimestamp = sample.timestamp
             }
-            if !records.isEmpty { send(contact, records: records, predicted: false) }
+            if !records.isEmpty {
+                store.native?.pointer(id: contact.id, tool: contact.tool, button: 0, records: records,
+                    predicted: false, revision: revision, updates: updates)
+            }
             if phase >= 3 {
                 contacts.removeValue(forKey: key)
+                if phase == 4 { estimates.cancel(contact: contact.id) }
             } else {
                 contacts[key] = contact
                 if contact.tool == 0, let predicted = event?.predictedTouches(for: touch), !predicted.isEmpty {
@@ -62,7 +73,7 @@ extension CanvasView {
         }
         wake()
     }
-    private func pack(_ touch: UITouch, phase: Double) -> [Double] {
+    private func pack(_ touch: UITouch, phase: Double, scale: CGFloat? = nil) -> [Double] {
         let point = touch.preciseLocation(in: self)
         let pencil = touch.type == .pencil
         let pressure = pencil && touch.maximumPossibleForce > 0 ? touch.force / touch.maximumPossibleForce : 1
@@ -70,9 +81,33 @@ extension CanvasView {
         let azimuth = pencil ? touch.azimuthAngle(in: self) : 0
         let tiltX = atan2(cos(altitude) * cos(azimuth), sin(altitude))
         let tiltY = atan2(cos(altitude) * sin(azimuth), sin(altitude))
-        return [Double(point.x * contentScaleFactor), Double(point.y * contentScaleFactor),
+        let scale = scale ?? contentScaleFactor
+        return [Double(point.x * scale), Double(point.y * scale),
             Double(pressure), Double(tiltX), Double(tiltY), pencil ? Double(touch.rollAngle) : 0, 0,
             touch.timestamp * 1_000_000_000, phase]
+    }
+    private func estimateKey(_ touch: UITouch) -> EstimatedInput.Key? {
+        touch.estimationUpdateIndex.map { EstimatedInput.Key(index: $0.uint64Value, timestamp: touch.timestamp) }
+    }
+    func updateEstimates(_ touches: Set<UITouch>) {
+        for touch in touches {
+            guard let key = estimateKey(touch), let captured = estimates.pending[key],
+                let update = estimates.correct(key: key,
+                    record: pack(touch, phase: captured.record[8], scale: captured.scale),
+                    expected: UInt64(touch.estimatedPropertiesExpectingUpdates.rawValue)) else { continue }
+            sendCorrection(update)
+        }
+        wake()
+    }
+    private func sendCorrection(_ sample: EstimatedInput.Sample) {
+        store.native?.pointer(id: sample.contact, tool: 0, button: 0, records: sample.record,
+            predicted: false, revision: sample.revision, updates: sample.metadata, correction: true)
+    }
+    func finishEstimates() { for sample in estimates.finish() { sendCorrection(sample) } }
+    func interruptContacts() {
+        finishEstimates()
+        ignoredContacts.formUnion(contacts.keys)
+        contacts.removeAll()
     }
     private func send(_ contact: PencilContact, records: [Double], predicted: Bool) {
         store.native?.pointer(id: contact.id, tool: contact.tool, button: 0, records: records,
@@ -95,8 +130,8 @@ extension CanvasView {
         for press in presses {
             guard let key = press.key else { continue }
             let flags = key.modifierFlags
-            store.input(["type": "key", "key": key.charactersIgnoringModifiers, "pressed": pressed,
-                "modifiers": ["command": flags.contains(.command), "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
+            store.input(["type": "key", "key": AppleKeyName.name(key), "pressed": pressed,
+                "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty, "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
         }
     }
 }

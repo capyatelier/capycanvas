@@ -3,27 +3,15 @@ import SwiftUI
 /// The in-app iPad menus and the Mac OS menu bar consume the same catalog/state.
 struct CatalogMenuItems: View {
     @ObservedObject var store: EditorStore
-    let label: String
+    let id: String
+    var excluding: Set<String> = []
     var body: some View {
-        let menu = label == "File" ? store.catalog["file_menu"] : store.catalog["menus"].array.first { $0["label"].string == label } ?? JSON()
-        if menu["sections"].array.isEmpty {
-            MenuItems(store: store, sections: store.snapshot["workspace_menu"]["sections"])
-        } else {
-            ForEach(menu["sections"].array.indices, id: \.self) { section in
-                if section > 0 { Divider() }
-                ForEach(menu["sections"][section].array.indices, id: \.self) { item in
-                    let command = store.command(menu["sections"][section][item].string)
-                    Button {
-                        store.invoke(command["id"].string)
-                    } label: {
-                        if command["selected"].bool { Label(command["label"].string, systemImage: "checkmark") }
-                        else { Text(command["label"].string) }
-                    }.disabled(!command["enabled"].bool)
-                        .accessibilityIdentifier("command-" + command["id"].string)
-                        .keyboardShortcut(menuShortcut(command["bindings"][0]))
-                }
-            }
-        }
+        let model = store.snapshot["application_menus"].array.first { $0["id"].string == id } ?? JSON()
+        let sections = JSON(model["model"]["sections"].array.map { section in
+            section.array.filter { !excluding.contains($0["action"]["command"].string) }.map(\.raw)
+        }.filter { !$0.isEmpty })
+        MenuItems(store: store, sections: sections, usesShortcuts: true)
+            .disabled(!store.snapshot["preferences"].isNull)
     }
 }
 
@@ -33,7 +21,11 @@ func menuShortcut(_ binding: JSON) -> KeyboardShortcut? {
         "delete": .deleteForward, "backspace": .delete, "arrowleft": .leftArrow,
         "arrowright": .rightArrow, "arrowup": .upArrow, "arrowdown": .downArrow,
         "home": .home, "end": .end, "pageup": .pageUp, "pagedown": .pageDown]
-    let key = named[text] ?? (text.count == 1 ? text.first.map { KeyEquivalent($0) } : nil)
+    let function = text.first == "f" ? Int(text.dropFirst()).flatMap { number -> KeyEquivalent? in
+        guard (1...24).contains(number), let scalar = UnicodeScalar(0xF703 + number) else { return nil }
+        return KeyEquivalent(Character(scalar))
+    } : nil
+    let key = named[text] ?? function ?? (text.count == 1 ? text.first.map { KeyEquivalent($0) } : nil)
     guard let key else { return nil }
     var flags: EventModifiers = []
     if binding["command"].bool { flags.insert(.command) }

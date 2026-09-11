@@ -49,6 +49,10 @@ class AndroidFeatureParityTest {
         }
     }
     private fun action(value: JSONObject) {
+        if (value.optString("command").contains("document")) compose.activity.getExternalFilesDir(null)!!.resolve("parity-document-debug.json").writeText(state().toString(2))
+        if (value.optString("command").contains("document")) compose.waitUntil(60_000) {
+            state().array("commands").objects().first { it.getString("id") == value.getString("command") }.getBoolean("enabled")
+        }
         val done = CountDownLatch(1)
         compose.runOnIdle { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
         assertTrue(done.await(15, TimeUnit.SECONDS))
@@ -69,6 +73,7 @@ class AndroidFeatureParityTest {
         } finally { bitmap.recycle() }
     }
     @Test fun partialZenProjectsEdgeToolbarsAndPreservesLayout() {
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "commands", "visible" to false)))
         for (edge in listOf("left", "top", "right", "bottom")) {
             action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "edge", "edge" to edge, "outer" to true), "viewport" to viewport()))
             val before = state().getJSONObject("workspace").getJSONObject("layout").toString()
@@ -180,11 +185,16 @@ class AndroidFeatureParityTest {
         readable.recycle(); bitmap.recycle(); return color
     }
     private fun awaitPixel(point: Offset, predicate: (Int) -> Boolean) {
-        compose.waitUntil(20_000) { predicate(pixel(point)) || host.failure != null || host.actionError != null }
+        try { compose.waitUntil(20_000) { predicate(pixel(point)) || host.failure != null || host.actionError != null } }
+        catch (e: Throwable) {
+            capture("pixel-failure")
+            compose.activity.getExternalFilesDir(null)!!.resolve("parity-pixel-debug.json").writeText(state().toString(2))
+            throw e
+        }
         assertNull(host.failure); assertNull(host.actionError); assertTrue(predicate(pixel(point)))
     }
     @Test fun toolDrawersOpenInZenAndOutsideContactDoesNotPaint() {
-        action(obj("type" to "invoke", "command" to "brush"))
+        action(obj("type" to "invoke", "command" to "pen"))
         action(obj("type" to "invoke", "command" to "zen_mode"))
         val pen = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects()
             .first().getInt("id")
@@ -208,7 +218,7 @@ class AndroidFeatureParityTest {
         shown("column-drawer-$column")
         val pen = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects()
             .first().getInt("id")
-        action(obj("type" to "invoke", "command" to "brush"))
+        action(obj("type" to "invoke", "command" to "pen"))
         shown("tile-toolbar-$pen")
         compose.onNodeWithTag("tile-toolbar-$pen").performTouchInput { click() }
         shown("tool-drawer")
@@ -220,6 +230,84 @@ class AndroidFeatureParityTest {
         compose.onNodeWithTag("expand-column-$column").performTouchInput { click() }
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("collapsed").objects().none { it.getInt("id") == column } }
         compose.onNodeWithTag("tile-toolbar-$pen").assertIsDisplayed()
+    }
+    private fun awaitNavigatorPixel(predicate: (Int) -> Boolean) {
+        compose.waitUntil(15_000) {
+            val bounds = compose.onNodeWithTag("navigator-overview").fetchSemanticsNode().boundsInRoot
+            val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+            val image = screenshot.copy(Bitmap.Config.ARGB_8888, false)
+            try { (bounds.left.toInt() until bounds.right.toInt() step 2).any { x ->
+                (bounds.top.toInt() until bounds.bottom.toInt() step 2).any { y -> predicate(image.getPixel(x,y)) }
+            } } finally { image.recycle(); screenshot.recycle() }
+        }
+        assertNull(host.failure)
+    }
+    @Test fun fullEditorPresetShowsToolsCommandsAndContentPanels() {
+        for (id in listOf("toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "navigator", "properties", "layers")) {
+            assertTrue("Default preset includes $id", host.snapshot!!.array("panels").objects().any { it.getString("id") == id })
+        }
+        val commands = host.snapshot!!.array("panels").objects().first { it.getString("id") == "commands" }
+        commands.array("tiles").objects().filter { it.getJSONObject("control").getString("kind") != "divider" }.forEach { compose.onNodeWithTag("tile-commands-${it.getInt("id")}").assertExists() }
+        compose.onNodeWithTag("navigator-zoom_in").assertIsDisplayed()
+        compose.onNodeWithTag("color-wheel").assertIsDisplayed()
+        capture("full-editor-preset")
+    }
+    private fun newSmallDocument() {
+        action(obj("type" to "invoke", "command" to "new_document"))
+        shown("new-document-width")
+        compose.onNodeWithTag("new-document-width").performTextReplacement("512")
+        compose.onNodeWithTag("new-document-height").performTextReplacement("384")
+        compose.onNodeWithTag("new-document-create").performClick()
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 512 }
+        awaitDocument()
+    }
+    private fun documentPoint(x: Float, y: Float): Offset {
+        val camera = state().getJSONObject("camera")
+        val t = camera.array("translation"); val v = camera.array("viewport"); val z = camera.number("zoom")
+        return Offset((t.getDouble(0).toFloat() + x*z)/v.getDouble(0).toFloat(), (t.getDouble(1).toFloat() + y*z)/v.getDouble(1).toFloat())
+    }
+    private fun editToolNumber(label: String, text: String) {
+        if (compose.onAllNodesWithTag("number-value-$label").fetchSemanticsNodes().isNotEmpty()) compose.onNodeWithTag("number-value-$label").performScrollTo().performClick()
+        val field = compose.onNodeWithTag("number-$label").performScrollTo()
+        field.performTextReplacement(text)
+        field.performImeAction()
+        compose.waitForIdle()
+    }
+    @Test fun regionEdgeControlsCloseGapsForFillAndAutoSelect() {
+        newSmallDocument()
+        val rgba = ByteArray(512*384*4) { -1 }
+        for (y in 80..300) for (x in 100..400) {
+            val edge = x < 106 || x > 394 || y < 86 || y > 294
+            val gap = y < 86 && x in 244..251
+            if (edge && !gap) { val i=(y*512+x)*4; rgba[i]=0; rgba[i+1]=0; rgba[i+2]=0 }
+        }
+        compose.runOnIdle { host.importLayer("Gap fixture",512,384,rgba) }
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1,.2,.9,1))))
+        val inside = documentPoint(260f,190f); val outside = documentPoint(440f,190f)
+        awaitPixel(documentPoint(102f,190f)) { android.graphics.Color.red(it) < 80 }
+        action(obj("type" to "move_panel", "panel" to "tool_settings", "target" to obj("kind" to "float", "position" to JSONArray(listOf(10,90))), "viewport" to viewport()))
+        action(obj("type" to "invoke", "command" to "fill"))
+        stroke(inside)
+        awaitPixel(outside) { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+        action(obj("type" to "invoke", "command" to "undo"))
+        awaitPixel(outside) { android.graphics.Color.red(it) > 245 }
+        editToolNumber("Close gaps", "12")
+        editToolNumber("Expansion", "2")
+        editToolNumber("Edge smoothing", "100")
+        stroke(inside)
+        awaitPixel(documentPoint(270f,190f)) { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+        assertTrue(android.graphics.Color.red(pixel(outside)) > 245)
+        capture("gap-closed-fill")
+        action(obj("type" to "invoke", "command" to "undo"))
+        action(obj("type" to "invoke", "command" to "auto_select"))
+        for (id in listOf("gap_closing","expansion","smoothing")) compose.onNodeWithTag("tool-setting-$id").assertExists()
+        stroke(inside)
+        compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "fill_selection" }.getBoolean("enabled") }
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.9,.1,.15,1))))
+        action(obj("type" to "invoke", "command" to "fill_selection"))
+        awaitPixel(documentPoint(270f,190f)) { android.graphics.Color.red(it) > 150 && android.graphics.Color.blue(it) < 80 }
+        assertTrue(android.graphics.Color.red(pixel(outside)) > 245)
+        capture("gap-closed-auto-select")
     }
     @Test fun navigatorAndEyedropperUseActualGpuPixels() {
         action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.85, .12, .24, 1))))
@@ -236,9 +324,17 @@ class AndroidFeatureParityTest {
         action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to true)))
         action(obj("type" to "move_panel", "panel" to "navigator", "target" to obj("kind" to "float", "position" to JSONArray(listOf(360, 100))), "viewport" to viewport()))
         shown("navigator-overview")
-        compose.waitUntil(15_000) { host.navigatorImage != null }
-        val pixels = host.navigatorImage!!.toPixelMap()
-        assertTrue((0 until pixels.width).any { x -> (0 until pixels.height).any { y -> pixels[x,y].red > .6 && pixels[x,y].green < .3 } })
+        awaitNavigatorPixel { android.graphics.Color.red(it) > 150 && android.graphics.Color.green(it) < 80 }
+        // The overview must update while contact remains down, with no idle
+        // readback/polling window between the canvas and Navigator.
+        action(obj("type" to "invoke", "command" to "pen"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .2, .9, 1))))
+        canvasEvent(android.view.MotionEvent.ACTION_DOWN, Offset(.5f,.7f))
+        canvasEvent(android.view.MotionEvent.ACTION_MOVE, Offset(.65f,.7f))
+        awaitNavigatorPixel { android.graphics.Color.blue(it) > 150 && android.graphics.Color.red(it) < 80 }
+        canvasEvent(android.view.MotionEvent.ACTION_UP, Offset(.65f,.7f))
+        compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "zoom_in" }.getBoolean("enabled") }
+        compose.waitForIdle()
         val zoom = state().getJSONObject("camera").number("zoom")
         compose.onNodeWithTag("navigator-zoom_in").performClick()
         compose.waitUntil(10_000) { state().getJSONObject("camera").number("zoom") > zoom }
@@ -246,6 +342,174 @@ class AndroidFeatureParityTest {
         compose.onNodeWithTag("navigator-overview").performTouchInput { swipe(center, center + Offset(40f,20f), 300) }
         compose.waitUntil(10_000) { state().getJSONObject("camera").toString() != before }
         capture("navigator")
+    }
+
+    @Test fun drawingToolsRenderMoveFillGradientAndRulers() {
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0, .2, 1, 1))))
+        action(obj("type" to "set_brush_opacity", "value" to 1))
+        action(obj("type" to "invoke", "command" to "figure"))
+        action(state().getJSONObject("tool_set").array("groups").objects().first { it.getString("label") == "Rectangle" }.getJSONObject("action"))
+        action(state().getJSONObject("tool_set").array("subtools").objects().first { it.getString("label") == "Fill" }.getJSONObject("action"))
+        stroke(Offset(.45f,.4f), Offset(.58f,.65f))
+        awaitPixel(Offset(.5f,.5f)) { android.graphics.Color.blue(it) > 220 && android.graphics.Color.red(it) < 30 }
+        capture("figure")
+        action(obj("type" to "invoke", "command" to "move"))
+        stroke(Offset(.5f,.5f), Offset(.66f,.5f))
+        awaitPixel(Offset(.68f,.55f)) { android.graphics.Color.blue(it) > 220 && android.graphics.Color.red(it) < 30 }
+        awaitPixel(Offset(.5f,.5f)) { android.graphics.Color.red(it) > 245 }
+        action(obj("type" to "invoke", "command" to "undo"))
+        awaitPixel(Offset(.5f,.5f)) { android.graphics.Color.red(it) < 30 }
+        action(obj("type" to "invoke", "command" to "fill"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(1, .1, .1, 1))))
+        stroke(Offset(.5f,.5f))
+        awaitPixel(Offset(.53f,.55f)) { android.graphics.Color.red(it) > 220 && android.graphics.Color.blue(it) < 60 }
+        awaitPixel(Offset(.65f,.5f)) { android.graphics.Color.green(it) > 245 }
+        capture("fill")
+        action(obj("type" to "invoke", "command" to "gradient"))
+        action(state().getJSONObject("tool_set").array("subtools").getJSONObject(0).getJSONObject("action"))
+        stroke(Offset(.42f,.5f), Offset(.68f,.5f))
+        awaitPixel(Offset(.45f,.75f)) { android.graphics.Color.red(it) > 220 && android.graphics.Color.green(it) < 100 }
+        assertTrue(android.graphics.Color.green(pixel(Offset(.65f,.75f))) > 150)
+        capture("gradient")
+        action(obj("type" to "invoke", "command" to "undo"))
+        action(obj("type" to "invoke", "command" to "ruler"))
+        stroke(Offset(.42f,.7f), Offset(.65f,.7f))
+        compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "delete_ruler" }.getBoolean("enabled") }
+        capture("ruler")
+        compose.waitUntil(10_000) {
+            val screen = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+            val pixels = screen.copy(Bitmap.Config.ARGB_8888, false)
+            try {
+                ((pixels.width * .52f).toInt()..(pixels.width * .58f).toInt()).any { x ->
+                    ((pixels.height * .69f).toInt()..(pixels.height * .71f).toInt()).any { y ->
+                        val p = pixels.getPixel(x,y)
+                        android.graphics.Color.red(p) < 235 || android.graphics.Color.green(p) < 235
+                    }
+                }
+            } finally { pixels.recycle(); screen.recycle() }
+        }
+        action(obj("type" to "invoke", "command" to "delete_ruler"))
+        assertFalse(state().array("commands").objects().first { it.getString("id") == "delete_ruler" }.getBoolean("enabled"))
+    }
+    private fun request(): JSONObject? = state().array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "document" }
+    private fun awaitDocument() {
+        compose.waitUntil(60_000) { !state().getJSONObject("document_file").optBoolean("busy") && !host.documents.working }
+        assertNull(state().opt("host_error").takeIf { it != JSONObject.NULL })
+        assertNull(host.failure); assertNull(host.actionError)
+    }
+    private fun systemNode(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
+        fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
+            node ?: return null
+            if (predicate(node)) return node
+            for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+            return null
+        }
+        return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+    }
+    private fun chooseSaveFile(name: String) {
+        // Exercise Android's real DocumentsUI create picker and URI grant result.
+        val until = android.os.SystemClock.uptimeMillis() + 15_000
+        var field: android.view.accessibility.AccessibilityNodeInfo? = null
+        while (field == null && android.os.SystemClock.uptimeMillis() < until) {
+            field = systemNode { it.isEditable && it.packageName?.toString()?.contains("documentsui") == true }
+            if (field == null) android.os.SystemClock.sleep(100)
+        }
+        assertNotNull("DocumentsUI filename field", field)
+        assertTrue(field!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply {
+            putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, name)
+        }))
+        val save = systemNode { it.isClickable && it.text?.toString()?.equals("save", ignoreCase = true) == true }
+        assertNotNull("DocumentsUI Save", save)
+        assertTrue(save!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+    }
+    @Test fun documentSafSaveReopenAndExportPreservePaint() {
+        compose.waitUntil(60_000) { state().array("commands").objects().first { it.getString("id") == "new_document" }.getBoolean("enabled") }
+        compose.onNodeWithTag("application-menu-file").performClick()
+        compose.onNodeWithText("New…").performClick()
+        shown("new-document-width")
+        compose.onNodeWithTag("new-document-width").performTextReplacement("512")
+        compose.onNodeWithTag("new-document-height").performTextReplacement("384")
+        compose.onNodeWithTag("new-document-create").performClick()
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 512 }
+        awaitDocument()
+        action(obj("type" to "invoke", "command" to "pen"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .25, .9, 1))))
+        action(obj("type" to "set_brush_size", "value" to 32))
+        stroke(Offset(.5f,.55f), Offset(.62f,.55f))
+        awaitPixel(Offset(.56f,.55f)) { android.graphics.Color.blue(it) > 160 && android.graphics.Color.red(it) < 80 }
+        val name = "capy-android-parity-${System.currentTimeMillis()}.capy"
+        action(obj("type" to "invoke", "command" to "save_document"))
+        chooseSaveFile(name)
+        awaitDocument()
+        val location = state().getJSONObject("document_file").getJSONObject("location")
+        assertEquals(name, location.getString("name"))
+        assertFalse(state().getJSONObject("document_file").getBoolean("modified"))
+        val uri = android.net.Uri.parse(location.getString("uri"))
+        val resolver = compose.activity.contentResolver
+        val copy = compose.activity.getExternalFilesDir(null)!!.resolve(name)
+        resolver.openInputStream(uri)!!.use { input -> copy.outputStream().use { input.copyTo(it) } }
+        assertTrue(copy.length() > 100)
+        // Reopen through the production candidate preparation/adoption boundary.
+        action(obj("type" to "invoke", "command" to "new_document"))
+        shown("new-document-create")
+        compose.onNodeWithTag("new-document-create").performClick()
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 2048 }
+        awaitDocument()
+        action(obj("type" to "invoke", "command" to "open_document"))
+        val pickerDeadline = android.os.SystemClock.uptimeMillis() + 10_000
+        while (systemNode { it.packageName?.toString()?.contains("documentsui") == true } == null && android.os.SystemClock.uptimeMillis() < pickerDeadline) android.os.SystemClock.sleep(100)
+        var saved = systemNode { it.text?.toString() == name }
+        if (saved == null) {
+            val recent = systemNode { it.isClickable && it.text?.toString() == "Recent" }
+            recent?.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+            android.os.SystemClock.sleep(300)
+            saved = systemNode { it.text?.toString() == name }
+        }
+        assertNotNull("Saved project appears in Android picker", saved)
+        var clickable = saved!!
+        while (!clickable.isClickable && clickable.parent != null) clickable = clickable.parent
+        assertTrue(clickable.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 512 }
+        awaitDocument()
+        awaitPixel(Offset(.56f,.55f)) { android.graphics.Color.blue(it) > 160 && android.graphics.Color.red(it) < 80 }
+        capture("document-reopened")
+        action(obj("type" to "invoke", "command" to "export_document"))
+        chooseSaveFile(name.removeSuffix(".capy") + ".png")
+        awaitDocument()
+        // Verify the exported PNG from its real persisted provider grant and
+        // remove only this test's uniquely named public files.
+        val pngName = name.removeSuffix(".capy") + ".png"
+        val exported = resolver.persistedUriPermissions.map { it.uri }.firstOrNull { candidate ->
+            resolver.query(candidate, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                it.moveToFirst() && it.getString(0) == pngName
+            } == true
+        }
+        assertNotNull("Export returned a persistent file grant", exported)
+        val pngCopy = compose.activity.getExternalFilesDir(null)!!.resolve(pngName)
+        resolver.openInputStream(exported!!)!!.use { input -> pngCopy.outputStream().use { input.copyTo(it) } }
+        val png = android.graphics.BitmapFactory.decodeFile(pngCopy.absolutePath)
+        assertEquals(512, png.width); assertEquals(384, png.height)
+        assertTrue((0 until png.width step 4).any { x -> (0 until png.height step 4).any { y ->
+            val c = png.getPixel(x,y); android.graphics.Color.blue(c) > 160 && android.graphics.Color.red(c) < 80
+        } })
+        png.recycle()
+        android.provider.DocumentsContract.deleteDocument(resolver, exported)
+        android.provider.DocumentsContract.deleteDocument(resolver, uri)
+    }
+    @Test fun newDocumentCancellationKeepsUnsavedCanvas() {
+        action(obj("type" to "invoke", "command" to "pen"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(1,0,0,1))))
+        action(obj("type" to "set_brush_size", "value" to 160))
+        stroke(Offset(.5f,.5f), Offset(.6f,.5f))
+        awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }
+        val epoch = state().getJSONObject("document_file").getLong("epoch")
+        action(obj("type" to "invoke", "command" to "new_document"))
+        shown("document-close-cancel")
+        compose.onNodeWithTag("document-close-cancel").performClick()
+        awaitDocument()
+        assertEquals(epoch, state().getJSONObject("document_file").getLong("epoch"))
+        assertTrue(state().getJSONObject("document_file").getBoolean("modified"))
+        awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }
     }
 
 }

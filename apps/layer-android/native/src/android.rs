@@ -32,11 +32,37 @@ pub(crate) struct Surface {
     _instance: wgpu::Instance,
     _window: Window,
 }
-fn error(e: impl std::fmt::Display) -> String {
+pub(crate) fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct OverviewSlot {
+    bounds: [f32; 4],
+    clip: [f32; 4],
+    order: i32,
+}
+
 impl App {
+    pub(crate) fn project_adopted(&mut self) {
+        self.cursor = Default::default();
+        // The file worker has already rendered this candidate and waited for
+        // its canvas/current-brush shaders. Do not discard the first contact
+        // merely because the adopted window has not ticked another frame yet.
+        self.host.startup = layer_render_wgpu::StartupProgress {
+            canvas_ready: true,
+            brush_ready: true,
+            complete: false,
+        };
+        if let Some(surface) = &mut self.surface {
+            surface.presenter = ViewportPresenter::for_renderer(
+                self.host.session.renderer_mut().0.as_ref().unwrap(),
+                surface.config.format,
+            );
+        }
+        self.blank_presented = true;
+    }
+
     fn attach(
         &mut self,
         env: &JNIEnv,
@@ -44,6 +70,7 @@ impl App {
         cache_directory: &str,
     ) -> Result<(), String> {
         self.surface = None;
+        self.cache_directory = cache_directory.into();
         let window = NonNull::new(unsafe {
             ndk_sys::ANativeWindow_fromSurface(
                 env.get_native_interface().cast(),
@@ -154,6 +181,39 @@ impl App {
         self.host
             .session
             .append_layer_overlay(&mut self.cursor.segments);
+        let state = self.host.session.state();
+        let document = self.host.session.engine().document();
+        let fg = state.palette.text.linear();
+        let bg = state.palette.panel.linear();
+        let overviews: Vec<_> = self
+            .overviews
+            .iter()
+            // Keep the first paper presentation ahead of optional overview
+            // pipeline creation, just like other staged startup work.
+            .filter(|_| self.blank_presented && self.host.startup.canvas_ready)
+            .filter_map(|slot| {
+                let [x, y, w, h] = slot.bounds;
+                let g = layer_ui::NavigatorGeometry::new(
+                    &state.camera,
+                    [document.width, document.height],
+                    [w / scale, h / scale],
+                )?;
+                Some(layer_render_wgpu::OverviewPlacement {
+                    bounds: [
+                        x + g.image.x * scale,
+                        y + g.image.y * scale,
+                        g.image.width * scale,
+                        g.image.height * scale,
+                    ],
+                    clip: Some(slot.clip),
+                    work_area: g.work_area.map(|[a, b]| [x + a * scale, y + b * scale]),
+                    outline_linear: [fg[0], fg[1], fg[2]],
+                    background_linear: [bg[0], bg[1], bg[2]],
+                    scale,
+                    opacity: 1.,
+                })
+            })
+            .collect();
         let surface = self.surface.as_mut().unwrap();
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let extent = [view.width_px, view.height_px];
@@ -184,6 +244,7 @@ impl App {
         surface
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
+        surface.presenter.set_overviews(gpu, &overviews);
         surface.presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),
@@ -208,10 +269,10 @@ impl App {
 
 // The Kotlin host owns this handle and never exposes it to UI callers. Calls
 // are serialized on its render Looper, including lifecycle and final disposal.
-unsafe fn app<'a>(handle: jlong) -> &'a mut App {
+pub(crate) unsafe fn app<'a>(handle: jlong) -> &'a mut App {
     unsafe { &mut *(handle as *mut App) }
 }
-fn fail(env: &mut JNIEnv, result: Result<(), String>) {
+pub(crate) fn fail(env: &mut JNIEnv, result: Result<(), String>) {
     if let Err(message) = result {
         let _ = env.throw_new("java/lang/IllegalStateException", message);
     }
@@ -231,7 +292,7 @@ fn string(env: &mut JNIEnv, result: Result<String, String>) -> jstring {
         }
     }
 }
-fn read(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
+pub(crate) fn read(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
     env.get_string(value).map(Into::into).map_err(error)
 }
 
@@ -481,49 +542,32 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
     string(&mut env, result)
 }
 
-/// One bounded preview shared by all native Navigator projections.
+/// Native layout only. Navigator samples the live composition in the canvas
+/// presentation pass, including while pen input or camera gestures are active.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_navigatorPreview(
+pub extern "system" fn Java_art_capycanvas_Native_navigatorPlacements(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
-    now: jlong,
-    visible: jboolean,
-) -> jni::sys::jobjectArray {
+    value: JString,
+) {
     let result = (|| {
-        let host = &mut unsafe { app(handle) }.host;
-        if let Some(gpu) = &host.session.renderer_mut().0 {
-            gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
-        } else {
-            return Ok(std::ptr::null_mut());
+        let mut slots: Vec<OverviewSlot> =
+            serde_json::from_str(&read(&mut env, &value)?).map_err(error)?;
+        if slots.len() > 32
+            || slots
+                .iter()
+                .any(|s| !s.bounds.iter().chain(&s.clip).all(|v| v.is_finite()))
+        {
+            return Err("Invalid Navigator geometry".into());
         }
-        let Some(image) = host.session.poll_navigator_preview(
-            now.max(0) as u64,
-            visible != 0 && host.startup.canvas_ready && !host.dirty,
-        )?
-        else {
-            return Ok(std::ptr::null_mut());
-        };
-        let values = env
-            .new_object_array(2, "java/lang/Object", JObject::null())
-            .map_err(error)?;
-        let header = env
-            .new_string(serde_json::json!([image.width, image.height]).to_string())
-            .map_err(error)?;
-        let pixels = env.byte_array_from_slice(&image.bytes).map_err(error)?;
-        env.set_object_array_element(&values, 0, header)
-            .map_err(error)?;
-        env.set_object_array_element(&values, 1, pixels)
-            .map_err(error)?;
-        Ok(values.into_raw())
+        slots.sort_by_key(|s| s.order);
+        let a = unsafe { app(handle) };
+        a.overviews = slots;
+        a.host.dirty = true;
+        Ok(())
     })();
-    match result {
-        Ok(value) => value,
-        Err(e) => {
-            fail(&mut env, Err(e));
-            std::ptr::null_mut()
-        }
-    }
+    fail(&mut env, result);
 }
 
 /// One small metadata record and one packed RGBA array, not JSON per channel.

@@ -5,6 +5,9 @@
 //! sees textures, tiles, queues, fences, or presentation objects. There is no
 //! host-memory raster contract.
 
+#[cfg(feature = "png")]
+mod png_export;
+
 use layer_core::{
     AssetId, BrushDeform, BrushExecution, BrushGrain, BrushRendering, BrushTip, BrushTransport,
     BrushWetMix, DualBrush, Layer, LayerId, Point, Rect, StrokeId,
@@ -236,8 +239,32 @@ pub struct RegionRequest {
     pub source: RegionSource,
     pub position: [u32; 2],
     pub tolerance: f32,
+    pub refinement: RegionRefinement,
     /// Optional limit, expressed in the source's coordinates.
     pub limit: Option<std::sync::Arc<layer_core::Selection>>,
+}
+/// Optional GPU morphology after fixed-seed color classification. Distances use
+/// document pixels, independently of zoom and the color tolerance.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RegionRefinement {
+    /// Close passages up to this width before finding the connected component.
+    pub gap_closing: u32,
+    /// Signed square-neighborhood expansion of the resulting region.
+    pub expansion: i32,
+    /// Corner antialiasing strength; zero preserves exact pixel boundaries.
+    pub smoothing: f32,
+}
+impl RegionRefinement {
+    pub const MAX_DISTANCE: u32 = 32;
+    pub fn is_valid(self) -> bool {
+        self.gap_closing <= Self::MAX_DISTANCE
+            && self.expansion.unsigned_abs() <= Self::MAX_DISTANCE
+            && self.smoothing.is_finite()
+            && (0.0..=1.0).contains(&self.smoothing)
+    }
+    pub fn needs_mask(self) -> bool {
+        self.gap_closing != 0 || self.expansion != 0 || self.smoothing != 0.
+    }
 }
 #[derive(Clone, Debug)]
 pub struct RegionResult {

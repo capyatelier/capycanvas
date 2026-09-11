@@ -5,8 +5,12 @@ edition = "2024"
 description = "Minimal backend-neutral render packets for Layer"
 license.workspace = true
 
+[features]
+png = ["dep:png"]
+
 [dependencies]
 layer-core = { path = "../layer-core" }
+png = { version = "0.17.16", optional = true }
 
 [lib]
 path = "src/lib.rs"

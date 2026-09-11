@@ -266,70 +266,103 @@ have no guaranteed latency. There is no CPU canvas fallback and no new rendering
 simulation or alternate brush path.
 
 
-## Cross-backend color evidence
+## Import contract and reference reconciliation
 
-The forty-filter PNG reference remains a strict check with a one-byte channel
-threshold. Failure now writes the actual/reference contact sheets and a per-filter,
-per-mask-scope TSV report under ignored `artifacts/performance/filter-reference`.
-These diagnostics do not replace or regenerate the reference.
+Imported image bytes are decoded with the shared sRGB transfer curve, premultiplied,
+and explicitly rounded before eight-bit linear paint storage. This is one GPU
+initialization pass, not CPU conversion or an extra per-frame operation. Hardware
+sRGB decode approximations and normalized-storage rounding otherwise move some
+values across paint-byte boundaries. The independent 1,536-pixel ramp test checks
+all encoded channel values at six alpha levels against double-precision
+[standard sRGB conversion](https://www.w3.org/Graphics/Color/srgb.pdf).
+Explicit storage rounding avoids relying on the implementation's preferred
+[UNORM rounding](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fixedfpconv).
 
-On Metal, that saved reference also fails against its original `3f6d2d5`
-implementation, with a maximum channel error of 255. With identical explicit
-sRGB import decoding, the current implementation matches the original output
-exactly across all 160 filter/scope cases: zero differing channels. This isolates
-the remaining saved-reference discrepancy from subsequent filter migration and
-transform work; it does not establish cross-backend pixel parity or authorize a
-looser tolerance. The saved-reference test remains failing on the tested Metal
-hardware. Some large raw-channel errors occur near transparent blur edges;
-opaque color differences are also present and remain visible in the report.
+The old v2 filter reference used the earlier hardware-decoding importer. Keeping
+that reference after correcting import produced a maximum channel error of 99 on
+the Vulkan validation host. Reverting import made v2 pass but failed the transfer
+oracle. That is an input-contract mismatch, not a reason to restore the old import.
 
-Imported image bytes now use the shared WGSL sRGB transfer curve before being
-stored as premultiplied linear paint. Initialization reads exact source texels
-and performs the conversion once on the GPU. Existing sampling for transforms
-and effects continues to operate on the resulting linear paint. This avoids
-backend differences in hardware sRGB decoding moving a value across the
-8-bit linear storage boundary. The unmodified Metal path mapped an opaque
-encoded channel of 97 to exported 98 (the reference calculation gives 96), and
-100 to 101 (reference 99). The new path passes a test of all 256 encoded values
-in each RGB channel at six alpha levels, checked against the standard transfer
-curve and existing linear storage quantization. No canvas readback or CPU
-conversion is added to drawing or import.
+This has now been isolated using an independent pre-migration renderer:
 
-The transfer reference is the
-[W3C sRGB specification](https://www.w3.org/Graphics/Color/srgb.pdf).
+| Comparison on Vulkan | Maximum channel error | Differing channels |
+| --- | ---: | ---: |
+| Original renderer vs original v2 reference | 0 | 0 of 1,966,080 |
+| Original vs corrected unfiltered output | 13 | 6,129 of 393,216 |
+| Old/current unfiltered output, both using corrected import | 0 | 0 of 393,216 |
+| Old/current filters, both using corrected import | 0 | 0 of 1,966,080 |
 
-### Explicit import quantization on Vulkan
+The baseline is commit `7719e6b`, before GPU preparation and runtime-definition
+migration. Only its asset texture format and import operation were changed.
+Filter algorithms, Rust-generated Gaussian coefficients, previews, masks,
+clipping, time and composition stayed unchanged. Its corrected output supplies
+`runtime-filters-v3.png`; the current implementation does not generate the
+expected image. See the [fixture provenance](../crates/layer-render-wgpu/tests/fixtures/README.md)
+for reproduction details and its digest. The obsolete v2 PNG is retained in Git
+history, not as a second incompatible active reference.
 
-The incoming explicit-transfer change also exposed a storage-rounding difference
-on the Vulkan workstation. An opaque encoded channel of 18 reached linear paint
-as byte 1 instead of the reference's byte 2, exporting as 13 instead of 22. A
-temporary raw paint/composite sample localized the difference before export;
-those diagnostic reads were then removed. The import shader now explicitly
-rounds premultiplied linear RGBA to eight-bit values before storage. This stays
-inside the existing one-time initialization pass: no extra allocation, pass,
-readback or per-frame preparation. Vulkan permits either neighboring integer
-for normalized storage, with nearest preferred rather than mandatory; see
-[normalized fixed-point conversion](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fixedfpconv).
+The test still requires every compared channel to differ by at most one byte.
+It now independently checks the unfiltered input against the transfer curve
+before comparing the forty filters in four scopes. Failure diagnostics include
+the input, actual/reference sheets and a per-filter/scope report under ignored
+`artifacts/performance/filter-reference/`. They do not overwrite the fixture.
+The reference covers samples from full-resolution renders, not all source pixels;
+separate analytic, incremental, tile-edge, mask, clipping and preparation tests
+cover those behaviors. No production shader or execution path changed in this
+reconciliation, so there is no new renderer performance cost.
 
-The existing 1,536-pixel independent transfer-curve test passes with explicit
-rounding. An A/B run using the pre-merge hardware-decoding import path passes
-the saved filter reference but fails that transfer-curve test. Both the incoming
-unrounded explicit decode and the corrected rounded decode fail the saved filter
-reference, with maximum raw-channel error 99. Its PNG and one-byte threshold are
-unchanged. The sheets were visually inspected, but that does not waive the strict
-failure or establish cross-backend parity. Reconciling the corrected import
-contract with the historical reference remains an open validation item; it is
-not evidence of a runtime-filter migration regression. Metal must also rerun
-the explicit-rounding change before claiming its validation carries forward.
+The v3 reference passes on its original Vulkan validation host. Metal passes
+the independent import oracle but fails v3: 22,616 sampled pixels exceed one
+byte, across 148 of 160 cases, with maximum channel error 255. The pre-migration
+Metal renderer with identical corrected imports produces exactly the same sheet
+as the current Metal renderer. A separate Vulkan SwiftShader numerical run also
+fails v3 (23,594 pixels above one byte, maximum 255); it differs from Metal at
+6,531 pixels above one byte. This is not isolated to the Metal backend.
 
-The complete Vulkan renderer suite after this correction reports 103 passing
-tests, the one strict-reference failure above, and 16 ignored hardware benchmarks.
-This includes the GPU import oracle, all catalog algorithms, prepared-data reuse,
-dirty-region equivalence, clipping, masks, transforms and brush interactions.
+Two independent scalar checks now isolate opaque Curves/Exposure ramps and
+Halftone's full ink/paper endpoints. They calculate expected pixels from input
+bytes and public filter parameters using double-precision transfer functions,
+curve interpolation and nearest eight-bit linear storage. Both checks pass on
+Metal and SwiftShader. They cover neither the full spatial filter algorithms nor
+partial-alpha composition. For example, the full-sheet Curves case at source
+pixel (15, 157) has a stored input red of 1/255. The curve yields approximately
+0.5581 linear byte units, rounding to 1 and exporting as encoded red 13 on both
+backends; the v3 reference has red 0 at that sample. For full Halftone ink, the
+declared green 0.07 similarly exports as 22 in the scalar and endpoint checks.
+These isolate color/storage discrepancies; they do not explain every difference.
+Explicitly rounding every filter output reduced but did not eliminate the full
+Metal mismatch. Flooring made it worse. Neither experiment is a production change.
 
-The merged explicit-rounding path was also checked on Metal. The filter-library
-suite passes 15 tests, including the 1,536-pixel transfer-curve oracle, with the
-same strict saved-reference failure at maximum channel error 255 and three
-ignored benchmarks. Both Apple builds and the Apple/host/UI suites pass. These
-checks validate the import correction on Metal; reconciling the historical PNG
-and demonstrating complete cross-backend parity remain open.
+Run the independent checks with:
+
+```sh
+cargo test -p layer-render-wgpu scalar_color_oracles -- --test-threads=1
+```
+
+For numerical diagnostics only, renderer unit-test binaries accept CPU adapters
+when `LAYER_TEST_SOFTWARE_GPU=numerical` is explicitly set. Select the intended
+adapter with `WGPU_ADAPTER_NAME`; an unmatched name fails selection. On Apple,
+`--features wgpu/vulkan-portability` enables Vulkan in that test build. A local
+Vulkan loader and ICD must also be configured for the test process. This opt-in
+prints a warning, is compiled out of production hosts, and must never supply
+hardware performance evidence. Keep local loader paths and machine logs in
+ignored artifacts. No runtime dependency or default backend selection changes.
+
+The full strict v3 comparison remains a failing cross-backend gate. Its reference,
+one-byte tolerance and all channels remain intact. Browser WebGPU has not yet
+been checked against v3; no cross-backend pixel-parity claim is made.
+
+### Windows D3D12 integration check
+
+A serial hardware D3D12 run at the Windows integration of 007284c reports 110
+passed, 2 failed and 17 ignored benchmark tests. The strict v3 sheet still fails
+with maximum channel error 255. Its reference and one-byte tolerance are
+unchanged.
+
+The new pointwise scalar oracle also fails in Curves: for source
+[113, 142, 121, 255], the output is [102, 152, 117, 255], while the independent
+red-channel expectation is 104 (pre-storage linear byte 34.500680587002336).
+The test stops at that first mismatch, so its Exposure loop was not evaluated
+in this run. This is evidence of a D3D12 mismatch; the cause has not been
+established. The independent imported ramp and Halftone endpoint tests pass.
+Raw failure images and GPU logs remain under ignored local artifacts.

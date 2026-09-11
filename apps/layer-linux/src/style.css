@@ -6,7 +6,7 @@ window, label, text { font-size: var(--ui-text-size); }
 .workspace-header { background: transparent; box-shadow: none; }
 .workspace-header > windowhandle > box { padding-bottom: 6px; }
 .workspace-header button.chrome-control, .workspace-header menubutton.chrome-control > button, .workspace-header windowcontrols button { min-height: 24px; padding-top: 6px; padding-bottom: 6px; }
-.workspace-header button.chrome-control { min-width: 24px; padding-left: 6px; padding-right: 6px; }
+.workspace-header button.chrome-control, .workspace-header menubutton.chrome-control > button { min-width: 24px; padding-left: 6px; padding-right: 6px; }
 .workspace-header .chrome-control, .workspace-header windowcontrols button, .document-title { background: var(--window-bg-color); border-radius: 6px; }
 .workspace-header windowcontrols button image { background: transparent; box-shadow: none; }
 .workspace-header button.chrome-control:hover, .workspace-header windowcontrols button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }

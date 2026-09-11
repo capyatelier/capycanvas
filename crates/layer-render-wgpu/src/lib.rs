@@ -23,6 +23,8 @@ use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 mod builtin_masks;
 mod canvas_preview;
 mod color_sample;
+mod export_readback;
+pub use export_readback::ExportReadback;
 mod deferred;
 mod paint_transform;
 pub mod pixel_transform;
@@ -48,7 +50,7 @@ mod selection_clip;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
-pub use present::ViewportPresenter;
+pub use present::{OverviewPlacement, ViewportPresenter};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -806,7 +808,18 @@ impl WgpuRasterizer {
         queue: wgpu::Queue,
         staged: bool,
     ) -> Result<Self, GpuRasterError> {
-        if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        let hardware = adapter.get_info().device_type != wgpu::DeviceType::Cpu;
+        // Unit-test binaries can explicitly admit a software backend for
+        // numerical comparisons. Production hosts always require hardware.
+        #[cfg(test)]
+        let hardware = hardware || {
+            let numerical = std::env::var("LAYER_TEST_SOFTWARE_GPU").as_deref() == Ok("numerical");
+            if numerical {
+                eprintln!("NUMERICAL TEST ONLY: software renderer; timings are not hardware measurements");
+            }
+            numerical
+        };
+        if !hardware {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -3498,6 +3511,32 @@ impl WgpuRasterizer {
     }
 
     fn readback_srgb_rgba8(&mut self) -> Result<Vec<u8>, GpuRasterError> {
+        // Legacy synchronous inspection/tests. Interactive hosts transfer the
+        // ticket returned by begin_export_readback to their file worker.
+        self.pipelines.export.compile();
+        Ok(self.begin_export_readback(0)?.finish()?.bytes)
+    }
+
+    /// Schedule export conversion without compiling a shader on the input owner.
+    pub fn export_ready(&self) -> bool {
+        if self.pipelines.export.ready() {
+            return true;
+        }
+        if let Some(startup) = &self.startup {
+            startup.compiler.pipeline(&self.pipelines.export, 0);
+            startup.compiler.start();
+        }
+        false
+    }
+    /// Encode a document-sized sRGB snapshot in GPU order. Transfer its ticket
+    /// to a worker for synchronization, row packing and image encoding.
+    pub fn begin_export_readback(
+        &mut self,
+        request_id: u64,
+    ) -> Result<ExportReadback, GpuRasterError> {
+        if !self.export_ready() {
+            return Err(GpuRasterError::Effect("Export shader is preparing".into()));
+        }
         let [width, height] = self.document_extent;
         if width == 0 || height == 0 {
             return Err(GpuRasterError::InvalidExtent);
@@ -3634,30 +3673,15 @@ impl WgpuRasterizer {
             .map_async(wgpu::MapMode::Read, move |result| {
                 let _ = sender.send(result.map_err(|error| error.to_string()));
             });
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(READBACK_TIMEOUT),
-            })
-            .map_err(|error| GpuRasterError::WaitFailed(error.to_string()))?;
-        receiver
-            .recv()
-            .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?
-            .map_err(GpuRasterError::MapFailed)?;
-        let mapped = buffer
-            .slice(..)
-            .get_mapped_range()
-            .map_err(|error| GpuRasterError::MapFailed(error.to_string()))?;
-        let mut pixels = vec![0; row_bytes as usize * height as usize];
-        for y in 0..height as usize {
-            let source = &mapped
-                [y * padded_row_bytes as usize..y * padded_row_bytes as usize + row_bytes as usize];
-            let target = &mut pixels[y * row_bytes as usize..(y + 1) * row_bytes as usize];
-            target.copy_from_slice(source);
-        }
-        drop(mapped);
-        buffer.unmap();
-        Ok(pixels)
+        Ok(ExportReadback::new(
+            self.device().clone(),
+            buffer,
+            submission,
+            receiver,
+            request_id,
+            [width, height],
+            padded_row_bytes,
+        ))
     }
 }
 

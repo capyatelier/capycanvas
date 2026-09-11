@@ -1,8 +1,9 @@
 //! Portable, renderer-agnostic document model for Layer.
 //!
 //! This crate contains no window, graphics API, inference runtime, async
-//! executor, or platform types. Strokes are immutable after commit and use
-//! shared point storage so undo/redo moves handles instead of copying samples.
+//! executor, or platform types. Strokes use shared point storage so undo/redo
+//! moves handles; late sensor corrections replace that storage without changing
+//! already captured document snapshots.
 
 mod effect_catalog;
 mod effects;
@@ -17,6 +18,7 @@ mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
+mod input_corrections;
 mod project;
 pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 

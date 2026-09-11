@@ -84,6 +84,49 @@ fn layer_scenarios(platform: Platform) -> Vec<Value> {
     result
 }
 
+fn menu_scenarios(platform: Platform) -> Vec<Value> {
+    fn capture(host: &NativeHost, name: &str) -> Value {
+        json!({"name":name,"menus":layer_ui::ApplicationMenu::ALL.map(|id|
+            json!({"id":id,"model":host.session.application_menu(id)}))})
+    }
+    let mut host = NativeHost::new(platform).unwrap();
+    let mut scenarios = vec![capture(&host, "initial")];
+    host.dispatch(UiAction::Invoke {
+        command: layer_ui::CommandId::SelectAll,
+    })
+    .unwrap();
+    scenarios.push(capture(&host, "pixel-selection"));
+    let id = host.session.engine().document().active_layer.0;
+    host.dispatch(
+        serde_json::from_value(json!({"type":"layer","action":{"op":"lock","id":id,"value":true}}))
+            .unwrap(),
+    )
+    .unwrap();
+    scenarios.push(capture(&host, "locked-target"));
+    host.dispatch(UiAction::OpenSettings {
+        page: SettingsPage::Shortcuts,
+    })
+    .unwrap();
+    host.dispatch(
+        serde_json::from_value(
+            json!({"type":"preferences","action":{"type":"edit_shortcut","id":"command.ZenMode"}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    scenarios.push(json!({"name":"shortcut-editor","preferences":host.session.preferences()}));
+    host.dispatch(
+        serde_json::from_value(
+            json!({"type":"preferences","action":{"type":"begin_shortcut","id":"command.ZenMode"}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    host.input(serde_json::from_value(json!({"type":"key","key":"z","pressed":true,"modifiers":{"command":true,"shift":false,"alt":false}})).unwrap()).unwrap();
+    scenarios.push(json!({"name":"shortcut-conflict","preferences":host.session.preferences()}));
+    scenarios
+}
+
 fn main() {
     let mut host = NativeHost::new(Platform::Ios).unwrap();
     host.resize(2400, 1800, 2.0).unwrap();
@@ -100,6 +143,7 @@ fn main() {
             "commands": layer_ui::CommandId::ALL.as_slice(),
             "initial": initial,
             "preferences": preferences,
+            "menu_scenarios": { "ios": menu_scenarios(Platform::Ios), "mac": menu_scenarios(Platform::Mac) },
             "layer_scenarios": {
                 "ios": layer_scenarios(Platform::Ios),
                 "mac": layer_scenarios(Platform::Mac),

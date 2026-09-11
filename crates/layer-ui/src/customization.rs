@@ -228,6 +228,9 @@ impl PanelConfig {
     pub(crate) fn defaults() -> Vec<Self> {
         Panel::ALL
             .into_iter()
+            // Commands is installed by the full editor preset. Existing saved
+            // layouts (including deleted toolbars) must remain unchanged.
+            .filter(|id| *id != Panel::Commands)
             .map(|id| Self {
                 id,
                 hide_tab: false,
@@ -433,6 +436,7 @@ pub struct ContextMenuItem {
     pub action: Option<UiAction>,
     pub enabled: bool,
     pub hint: String,
+    pub bindings: Vec<KeyChord>,
     pub sections: Vec<Vec<ContextMenuItem>>,
 }
 impl ContextMenuItem {
@@ -443,6 +447,7 @@ impl ContextMenuItem {
             action: Some(action),
             enabled: true,
             hint: String::new(),
+            bindings: Vec::new(),
             sections: Vec::new(),
         }
     }
@@ -456,6 +461,7 @@ impl ContextMenuItem {
             action: None,
             enabled: sections.iter().any(|s| !s.is_empty()),
             hint: String::new(),
+            bindings: Vec::new(),
             sections,
         }
     }
@@ -470,7 +476,13 @@ impl ContextMenu {
         fn visit(sections: &mut [Vec<ContextMenuItem>], settings: &Settings, platform: Platform) {
             for item in sections.iter_mut().flatten() {
                 if let Some(action) = &item.action {
-                    let shortcut = settings.action_shortcut(action, platform);
+                    item.bindings = settings.action_keys(action, platform);
+                    let shortcut = item
+                        .bindings
+                        .iter()
+                        .map(|key| key.label(platform))
+                        .collect::<Vec<_>>()
+                        .join(" / ");
                     if !shortcut.is_empty() && item.hint != shortcut {
                         item.hint = if item.hint.is_empty() {
                             shortcut
@@ -584,8 +596,16 @@ impl DockLayout {
         ]
     }
     fn column_items(&self, group: Option<u32>, platform: Platform) -> Vec<ContextMenuItem> {
-        let Some(group) = group.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android))
-        else {
+        let Some(group) = group.filter(|_| {
+            matches!(
+                platform,
+                Platform::Gtk
+                    | Platform::Generic
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
+            )
+        }) else {
             return Vec::new();
         };
         if self.column_for_group(group).is_none()
@@ -918,8 +938,15 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain(
-            matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android)
-                .then_some(ToolbarControl::Divider),
+            matches!(
+                platform,
+                Platform::Gtk
+                    | Platform::Generic
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
+            )
+            .then_some(ToolbarControl::Divider),
         )
         .chain(
             Panel::ALL
@@ -927,7 +954,14 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
                 .filter(move |p| {
                     p.kind() == PanelKind::Content
                         && p.available_on(platform)
-                        && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android)
+                        && matches!(
+                            platform,
+                            Platform::Gtk
+                                | Platform::Generic
+                                | Platform::Android
+                                | Platform::Ios
+                                | Platform::Mac
+                        )
                 })
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
@@ -1032,7 +1066,14 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                 }
                 ToolbarControl::Panel { panel } => {
                     enabled = panel.available_on(state.platform)
-                        && matches!(state.platform, Platform::Gtk | Platform::Generic | Platform::Android);
+                        && matches!(
+                            state.platform,
+                            Platform::Gtk
+                                | Platform::Generic
+                                | Platform::Android
+                                | Platform::Ios
+                                | Platform::Mac
+                        );
                     false
                 }
                 _ => false,
@@ -1472,7 +1513,14 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ToggleToolDrawer { anchor } => {
-                if !matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android) {
+                if !matches!(
+                    platform,
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
+                ) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
                 let drawer = ContentDrawer::for_tile(layout, anchor)?;
@@ -1499,7 +1547,14 @@ impl CustomizationState {
                 self.drawer = (!close).then_some(drawer);
             }
             SetColumnCollapsed { group, collapsed } => {
-                if !matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android) {
+                if !matches!(
+                    platform,
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
+                ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
                 layout.set_column_collapsed(group, collapsed, viewport)?;
@@ -1507,7 +1562,14 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ToggleColumnDrawer { group, panel } => {
-                if !matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android) {
+                if !matches!(
+                    platform,
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
+                ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
                 let mut next = ContentDrawer::for_column(layout, group, panel)?;
@@ -1711,7 +1773,10 @@ mod tests {
             state
         );
         let contents = state.layout.panels.clone();
-        state.layout.reset_docking().unwrap();
+        state
+            .layout
+            .reset_docking(crate::Platform::Generic)
+            .unwrap();
         assert_eq!(state.layout.panels, contents);
         assert!(
             state
@@ -1724,7 +1789,11 @@ mod tests {
                 )
         );
         state.validate().unwrap();
-        state.layout.add_toolbar(Some(8), "Second", &[PEN]).unwrap();
+        let group = state.layout.panel_group(Panel::Layers).unwrap();
+        state
+            .layout
+            .add_toolbar(Some(group), "Second", &[PEN])
+            .unwrap();
         state.validate().unwrap();
     }
 
@@ -1927,7 +1996,7 @@ mod tests {
         );
         edit(&mut state, &mut layout, CustomizationAction::ConfirmTools);
         assert!(state.picker.is_none());
-        assert_eq!(layout.panels.len(), Panel::ALL.len() + 1);
+        assert_eq!(layout.panels.len(), original.panels.len() + 1);
         assert_eq!(layout.panels.last().unwrap().tiles()[0].control, PEN);
         let before = layout.clone();
         edit(

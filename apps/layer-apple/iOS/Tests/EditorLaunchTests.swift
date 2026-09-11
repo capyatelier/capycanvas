@@ -3,6 +3,105 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+
+
+    @MainActor func testPartialZenToolbar() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]"#
+        app.launch()
+        let section = app.descendants(matching: .any)["zen-toolbar-0"].firstMatch
+        XCTAssertTrue(section.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.frame.contains(section.frame))
+        #if os(macOS)
+        app.buttons["zen-button"].click()
+        #else
+        app.buttons["zen-button"].tap()
+        #endif
+        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func testCollapsedColumnsDrawersAndZen() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":5},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":5,"collapsed":true}}]"#
+        app.launch()
+        checkCollapsedColumnsDrawersAndZen(in: app)
+    }
+
+    @MainActor func testToolbarCustomization() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"new_toolbar"}]"#
+        app.launch()
+        checkToolbarCustomization(in: app)
+    }
+
+    @MainActor func testPanelConfigurationAndLiveDrag() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]"#
+        app.launch()
+        checkPanelConfigurationAndLiveDrag(in: app)
+    }
+
+    @MainActor func testNavigatorAndDiagnostics() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_panel_visible","panel":"navigator","visible":true}},{"type":"customize","action":{"type":"add_panel","panel":"stats","group":9}},{"type":"select_panel_tab","group":9,"panel":"navigator"}]"#
+        app.launch()
+        checkNavigatorAndDiagnostics(in: app)
+    }
+
+    @MainActor func testFilterSearchPreviewAndProperties() throws {
+        let app = editorTestApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_panel_visible","panel":"adjustments","visible":true}}]"#
+        app.launch()
+        checkFilterSearchPreviewAndProperties(in: app)
+    }
+
+    @MainActor func testShortcutConflictAndEditorEffect() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"keyboard_shortcuts"}]"#
+        app.launch()
+        checkShortcutConflictAndEditorEffect(in: app)
+    }
+
+    @MainActor func testNewDrawingAndExportCancellation() throws {
+        let app = editorTestApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"new_document"}]"#
+        app.launch()
+        checkNewDrawingAndExportCancellation(in: app)
+    }
+
     @MainActor func testSettingsAndWorkspaceRestart() throws {
         let app = editorTestApplication()
         XCUIDevice.shared.orientation = .landscapeLeft

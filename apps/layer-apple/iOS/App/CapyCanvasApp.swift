@@ -9,7 +9,13 @@ private struct IPadEditorScene: View {
     @Environment(\.scenePhase) private var phase
     init(scene: String) { _store = StateObject(wrappedValue: EditorStore(platform: 0, scene: scene)) }
     var body: some View {
-        EditorView(store: store) { MetalCanvas(store: store) }
+        // The editor uses shared absolute dock geometry. Let the keyboard cover
+        // its lower region; shrinking/centering that fixed layout would move
+        // the canvas and its top search fields offscreen.
+        GeometryReader { geometry in
+            EditorView(store: store) { MetalCanvas(store: store) }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }.ignoresSafeArea()
             .statusBarHidden()
             .onChange(of: phase) { _, next in
                 if next != .active {

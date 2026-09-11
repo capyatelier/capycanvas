@@ -284,7 +284,22 @@ impl NativeHost {
         })
     }
 
+    pub fn accepts_pointer_input(&self, view_revision: u64) -> bool {
+        view_revision >= self.document_view_revision
+            && !self.session.state().document_file.close_ready
+    }
     pub fn pointer_batch(&mut self, batch: PointerBatch<'_>) -> Result<(), String> {
+        self.pointer_batch_updates(batch, &[], false)
+    }
+    /// Optional pairs per sample: contact-local estimate token and whether
+    /// further corrections are expected (0/1). Corrections bypass UI routing
+    /// and pointer ownership: they refer to previously admitted paint only.
+    pub fn pointer_batch_updates(
+        &mut self,
+        batch: PointerBatch<'_>,
+        updates: &[u64],
+        correction: bool,
+    ) -> Result<(), String> {
         let PointerBatch {
             id,
             tool,
@@ -302,12 +317,21 @@ impl NativeHost {
         {
             return Err("Invalid native pointer batch".into());
         }
-        if view_revision < self.document_view_revision
-            || self.session.state().document_file.close_ready
+        if (!updates.is_empty() && updates.len() != records.len() / 9 * 2)
+            || updates
+                .chunks_exact(2)
+                .any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0))
+            || (correction
+                && (predicted || updates.is_empty() || updates.chunks_exact(2).any(|u| u[0] == 0)))
+            || (predicted && !updates.is_empty())
         {
+            return Err("Invalid native input estimates".into());
+        }
+        if !self.accepts_pointer_input(view_revision) {
             return Ok(());
         }
-        for sample in records.chunks_exact(9) {
+        for (index, sample) in records.chunks_exact(9).enumerate() {
+            let update = updates.get(index * 2..index * 2 + 2).unwrap_or(&[0, 0]);
             let phase = match sample[8] as u8 {
                 0 => PenPhase::Hover,
                 1 => PenPhase::Down,
@@ -318,7 +342,11 @@ impl NativeHost {
             let position = [sample[0] as f32, sample[1] as f32];
             let event = PenEvent {
                 device_id: id,
-                sequence: self.sequence + 1,
+                sequence: if update[0] != 0 {
+                    update[0]
+                } else {
+                    self.sequence + 1
+                },
                 timestamp_ns: sample[7] as u64,
                 view_revision,
                 surface_position: Point {
@@ -338,6 +366,16 @@ impl NativeHost {
                 },
                 flags: SampleFlags(
                     SampleFlags::PRIMARY.0
+                        | if correction {
+                            SampleFlags::CORRECTION.0
+                        } else {
+                            0
+                        }
+                        | if update[1] != 0 {
+                            SampleFlags::ESTIMATED.0
+                        } else {
+                            0
+                        }
                         | if predicted {
                             SampleFlags::PREDICTED.0
                         } else {
@@ -345,25 +383,39 @@ impl NativeHost {
                         },
                 ),
             };
-            self.pointer_event(
+            if correction {
+                // Corrections refer to previously admitted sample tokens and never
+                // enter UI pointer ownership or replace the current cursor.
+                self.sequence += 1;
+                self.enqueue(event)?;
+                continue;
+            }
+            self.pointer_event_inner(
                 event,
                 match button {
                     0 => PointerButton::Primary,
                     1 => PointerButton::Pan,
                     _ => PointerButton::Other,
                 },
+                update[0] != 0,
             )?;
         }
         Ok(())
     }
-    /// Route a typed platform sample through shared interaction and readiness policy.
-    /// The host assigns engine sequence numbers because it also inserts cancellation
-    /// events. Capture-time position, timestamp, camera revision, axes and flags remain
-    /// unchanged. Callers validate an entire transport batch before invoking this.
-    pub fn pointer_event(
+    /// Route a validated typed platform sample through shared input policy.
+    /// Capture-time coordinates, axes, timestamps and flags remain unchanged.
+    /// The host assigns engine sequence numbers, including inserted cancellations.
+    pub fn pointer_event(&mut self, event: PenEvent, button: PointerButton) -> Result<(), String> {
+        if !self.accepts_pointer_input(event.view_revision) {
+            return Ok(());
+        }
+        self.pointer_event_inner(event, button, false)
+    }
+    fn pointer_event_inner(
         &mut self,
         mut event: PenEvent,
         button: PointerButton,
+        preserve_token: bool,
     ) -> Result<(), String> {
         let id = event.device_id;
         let phase = event.phase;
@@ -396,7 +448,9 @@ impl NativeHost {
         } else {
             false
         };
-        event.sequence = self.sequence + 1;
+        if !preserve_token {
+            event.sequence = self.sequence + 1;
+        }
         if !touch && !predicted {
             self.session.cursor_input(if phase == PenPhase::Cancel {
                 None
@@ -519,8 +573,15 @@ impl NativeHost {
             .filter_map(|p| self.session.panel_view(p).ok())
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
+            "filter_preview_revision": self.session.filter_preview_revision(),
             "partial_zen": state.partial_zen(), "zen_toolbars": zen,
+            "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id": menu, "label": menu.label(), "model": self.session.application_menu(menu)})),
             "color_panel": self.session.state().colors.view(),
+            "document_options": {"extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
+                "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
+                "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
+                "new_title": layer_ui::DocumentRequest::New.title(),
+                "unsaved_description": layer_ui::UNSAVED_DESCRIPTION, "discard_label": layer_ui::DISCARD_DOCUMENT_LABEL},
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
             "toolbar_manager": self.session.toolbar_manager(),
@@ -543,8 +604,16 @@ impl NativeHost {
                 manifest: String,
                 modules: std::collections::BTreeMap<String, std::sync::Arc<str>>,
                 mode: layer_core::EffectInstallMode,
+                #[serde(default)]
+                library: bool,
             },
             Catalog,
+            ApplicationMenu {
+                menu: layer_ui::ApplicationMenu,
+            },
+            ApplicationLink {
+                link: layer_ui::ApplicationLink,
+            },
             RendererStats,
             FilterPreviews {
                 request: u64,
@@ -610,23 +679,25 @@ impl NativeHost {
                 manifest,
                 modules,
                 mode,
+                library,
             } => {
-                self.dirty |= self
-                    .session
-                    .load_effect_package(
-                        &manifest,
-                        |name| {
-                            modules
-                                .get(name)
-                                .cloned()
-                                .ok_or_else(|| format!("Missing filter module: {name}"))
-                        },
-                        mode,
-                    )?
-                    .canvas_wake;
+                let read = |name: &str| {
+                    modules
+                        .get(name)
+                        .cloned()
+                        .ok_or_else(|| format!("Missing filter module: {name}"))
+                };
+                let change = if library {
+                    self.session.load_effect_library(&manifest, read, mode)
+                } else {
+                    self.session.load_effect_package(&manifest, read, mode)
+                }?;
+                self.dirty |= change.canvas_wake;
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
+            Query::ApplicationLink { link } => json!(link.url()),
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
                 request,
@@ -692,10 +763,20 @@ impl NativeHost {
                 tabs,
                 item,
                 expansion,
-            } => json!(
-                self.session
-                    .drop_hint(self.logical, position, &tabs, item, expansion)
-            ),
+            } => self
+                .session
+                .drop_hint(self.logical, position, &tabs, item, expansion)
+                .map_or(Value::Null, |hint| {
+                    let action = item.move_action(hint.target.clone(), self.logical);
+                    let mut value = json!(hint);
+                    // Panel/group gestures use DragWorkspace for live movement,
+                    // grab offsets and one history transaction. Tile drops apply
+                    // a single action after their final preview has resolved.
+                    if matches!(item, layer_ui::DockItem::Tile { .. }) {
+                        value["action"] = json!(action);
+                    }
+                    value
+                }),
             Query::Drawer {
                 column,
                 heights,
@@ -737,14 +818,22 @@ impl NativeHost {
                     return Err("Invalid drawer toolbar size".into());
                 }
                 let config = self.session.state().workspace.layout.panel(panel)?;
-                json!(layer_ui::toolbar_tile_layout(
+                let geometry = layer_ui::toolbar_tile_layout(
                     width,
-                    height,
+                    layer_ui::toolbar_content_height(width, config.tiles(), config.tile_style),
                     layer_ui::Axis::Vertical,
                     config.tiles(),
                     false,
-                    config.tile_style
-                ))
+                    config.tile_style,
+                );
+                let content_height = geometry
+                    .tiles
+                    .iter()
+                    .map(|b| b.y + b.height + 4.)
+                    .fold(0., f32::max);
+                let mut value = json!(geometry);
+                value["content_height"] = json!(content_height);
+                value
             }
             Query::Navigator { viewport } => {
                 let state = self.session.state();
@@ -771,10 +860,28 @@ impl NativeHost {
                 );
                 let from =
                     from.or_else(|| layout.expanded_panel(self.logical, panel, heights, 0.0));
-                json!(
-                    end.zip(from)
-                        .map(|(end, from)| end.interpolate_from(from, progress))
-                )
+                let resolved = self.session.layout(self.logical);
+                end.zip(from).map_or(Value::Null, |(end, from)| {
+                    let placement = end.interpolate_from(from, progress);
+                    let mut value = json!(placement);
+                    if panel.kind() == layer_ui::PanelKind::Tiles {
+                        let config = layout.panel(panel).expect("expanded panel exists");
+                        let group = resolved
+                            .groups
+                            .iter()
+                            .find(|g| g.panels.contains(&panel))
+                            .expect("expanded group exists");
+                        value["tiles"] = json!(layer_ui::toolbar_tile_layout(
+                            placement.preview.width,
+                            (placement.preview.height - placement.configuration.y).max(0.0),
+                            group.axis,
+                            config.tiles(),
+                            !group.tabs_visible,
+                            config.tile_style,
+                        ));
+                    }
+                    value
+                })
             }
         };
         Ok(result)
@@ -784,6 +891,77 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn application_menus_follow_actions_without_entering_camera_patches() {
+        use layer_ui::{ApplicationMenu, CommandId, Platform};
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.resize(1200, 900, 1.).unwrap();
+            let menus = host.take_snapshot().unwrap()["application_menus"].clone();
+            assert_eq!(menus.as_array().unwrap().len(), ApplicationMenu::ALL.len());
+            for (id, menu) in ApplicationMenu::ALL
+                .into_iter()
+                .zip(menus.as_array().unwrap())
+            {
+                let expected =
+                    json!({"id":id,"label":id.label(),"model":host.session.application_menu(id)});
+                assert_eq!(
+                    host.query(json!({"type":"application_menu","menu":id}))
+                        .unwrap(),
+                    expected["model"]
+                );
+                assert_eq!(*menu, expected);
+            }
+            let help = menus
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"] == "help")
+                .unwrap();
+            assert_eq!(
+                help["model"]["sections"][1][0]["action"]["command"],
+                "website"
+            );
+            assert_eq!(help["model"]["sections"][1][0]["enabled"], true);
+            assert!(host.take_snapshot().is_none());
+            host.dispatch(UiAction::Invoke {
+                command: CommandId::SelectAll,
+            })
+            .unwrap();
+            let next = host.take_snapshot().unwrap();
+            let select = next["application_menus"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"] == "select")
+                .unwrap();
+            assert!(
+                select["model"]["sections"][0][1]["enabled"]
+                    .as_bool()
+                    .unwrap()
+            );
+            host.dispatch(UiAction::Invoke {
+                command: CommandId::ZoomIn,
+            })
+            .unwrap();
+            let camera = host.take_snapshot().unwrap();
+            assert!(camera.get("camera").is_some());
+            assert!(
+                camera.get("application_menus").is_none(),
+                "No menu rebuild at camera input rate"
+            );
+            for link in [
+                layer_ui::ApplicationLink::Website,
+                layer_ui::ApplicationLink::SourceCode,
+            ] {
+                assert_eq!(
+                    host.query(json!({"type":"application_link", "link":link}))
+                        .unwrap(),
+                    link.url()
+                );
+            }
+        }
+    }
     #[test]
     fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
@@ -1230,6 +1408,111 @@ mod tests {
             json!(packed.session.state().camera)
         );
         assert_eq!(typed.sequence, 0);
+    }
+
+    #[test]
+    fn typed_samples_from_retired_or_closed_documents_do_not_acquire_contacts() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.resize(800, 600, 1.).unwrap();
+        let old_revision = host.session.state().camera.revision;
+        host.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ZoomIn,
+        })
+        .unwrap();
+        host.document_adopted();
+        assert!(host.session.state().camera.revision > old_revision);
+        let mut event = PenEvent {
+            device_id: 1,
+            sequence: 1,
+            timestamp_ns: 1_000_000,
+            view_revision: old_revision,
+            surface_position: Point { x: 400., y: 300. },
+            pressure: 0.5,
+            tilt_radians: [0.; 2],
+            twist_radians: 0.,
+            distance: 0.,
+            phase: PenPhase::Down,
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
+        };
+        host.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(host.deferred_contacts.is_empty());
+        host.session.require_document_idle().unwrap();
+        host.session.request_document_close().unwrap();
+        assert!(host.session.state().document_file.close_ready);
+        event.view_revision = host.session.state().camera.revision;
+        host.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(host.deferred_contacts.is_empty());
+        host.session.require_document_idle().unwrap();
+    }
+
+    #[test]
+    #[ignore = "Requires an explicitly selected hardware GPU"]
+    fn estimated_input_tokens_reach_committed_stroke_corrections() {
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_headless().unwrap();
+        assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        host.session = UiSession::from_project(
+            Renderer(Some(gpu)),
+            layer_ui::new_drawing(64, 48).unwrap(),
+            None,
+            [64, 48],
+        )
+        .unwrap();
+        host.session.frame(0, 0).unwrap();
+        assert!(host.paint_ready());
+        let revision = host.session.state().camera.revision;
+        for (token, pending, x, phase, time) in [
+            (9001, 1, 20., 1., 10_000_000.),
+            (9002, 0, 40., 2., 20_000_000.),
+            (9003, 0, 40., 3., 21_000_000.),
+        ] {
+            host.pointer_batch_updates(
+                PointerBatch {
+                    id: 7,
+                    tool: 0,
+                    button: 0,
+                    predicted: false,
+                    view_revision: revision,
+                    records: &[x, 24., 0.25, 0., 0., 0., 0., time, phase],
+                },
+                &[token, pending],
+                false,
+            )
+            .unwrap();
+            host.session.frame(time as u64, time as u64).unwrap();
+        }
+        assert!(host.last_pen.is_none());
+        let stroke = host.session.engine().document().strokes().next().unwrap();
+        let before = stroke.points[0];
+        assert_eq!(before.pressure, 0.25);
+        let count = stroke.points.len();
+        let camera = json!(host.session.state().camera);
+        host.pointer_batch_updates(
+            PointerBatch {
+                id: 7,
+                tool: 0,
+                button: 0,
+                predicted: false,
+                view_revision: revision,
+                records: &[24., 24., 0.9, 0.2, -0.3, 1.7, 0., 10_000_000., 1.],
+            },
+            &[9001, 0],
+            true,
+        )
+        .unwrap();
+        host.session.frame(30_000_000, 30_000_000).unwrap();
+        let stroke = host.session.engine().document().strokes().next().unwrap();
+        assert_eq!(stroke.points.len(), count);
+        assert_eq!(stroke.points[0].pressure, 0.9);
+        assert_eq!(stroke.points[0].tilt, [0.2, -0.3]);
+        assert_eq!(stroke.points[0].twist, 1.7);
+        assert!(stroke.points[0].position.x > before.position.x);
+        assert_eq!(host.session.engine().document().strokes().count(), 1);
+        assert!(host.last_pen.is_none());
+        assert!(host.deferred_contacts.is_empty());
+        assert_eq!(json!(host.session.state().camera), camera);
+        host.session.require_document_idle().unwrap();
     }
 
     #[test]

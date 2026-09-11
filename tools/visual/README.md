@@ -12,6 +12,21 @@ Arguments are logical width, height, pixel scale, output directory and theme.
 An optional final `layer-added` argument captures one new empty layer selected
 above the original ink/paper layers, matching the iPad layer workflow's final
 capture. The default scenario is `initial`.
+`filter-properties` reproduces the final state of the shared Apple
+`testFilterSearchPreviewAndProperties` workflow: Gaussian Blur radius 5, identity
+Curves and default Gradient Map, with Properties open. The test attaches the full
+native window/screen and logical viewport dimensions. Use those dimensions and
+light theme for each platform's separate Chrome reference and full-image diff.
+`panel-configuration` opens the Brush size configuration with every control
+visible. On an isolated Apple debug launch, set `CAPY_INITIAL_ACTIONS` to
+`[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"show_all_controls","panel":"sizes"}}]`.
+Capture after the expansion settles, at the same viewport and scale. Native
+control heights can differ; keep those differences in the full-image report.
+`partial-zen` toggles Zen on the default workspace. The Apple debug actions are
+`[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]`.
+Apple projects shared edge toolbar sections; the current web host does not.
+Retain this visible host difference in the report; the fixture cannot establish
+parity for those missing web sections.
 `CAPY_CHROME` overrides the default macOS Chrome executable path. WebGPU must use
 a hardware adapter. Captures wait for staged GPU startup, fonts/images, visible
 layer thumbnail pixels and layout. GPU attachment alone can precede the actual

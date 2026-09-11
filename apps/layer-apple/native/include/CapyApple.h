@@ -17,9 +17,11 @@ typedef struct CapyProjectTask CapyProjectTask;
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
 CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t opening);
-int32_t capy_apple_project_ready(CapyApple *app);
+int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
+int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
+int32_t capy_project_new(const CapyProjectTask *task, uint32_t width, uint32_t height);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
@@ -39,6 +41,37 @@ uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t space);
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);
+/* Nonblocking owner poll. The owned atlas is independent of the editor; decode
+   and free on a worker. All info pointers are borrowed until previews_free.
+   Pixels are straight sRGB RGBA8, with equal-height rows in filters JSON order. */
+typedef struct CapyFilterPreviews CapyFilterPreviews;
+typedef struct {
+    uint64_t request;
+    uint32_t width, height, stride;
+    const uint8_t *pixels;
+    size_t count;
+    const char *filters;
+} CapyFilterPreviewInfo;
+CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app);
+void capy_filter_previews_read(const CapyFilterPreviews *previews, CapyFilterPreviewInfo *output);
+void capy_filter_previews_free(CapyFilterPreviews *previews);
+typedef struct CapyPreviewImage CapyPreviewImage;
+typedef struct { uint64_t epoch, revision; } CapyNavigatorKey;
+typedef struct {
+    CapyNavigatorKey key;
+    uint32_t width, height, stride;
+    const uint8_t *pixels;
+    size_t count;
+} CapyPreviewImageInfo;
+/* Owner-only observation; camera changes do not invalidate the image key. */
+void capy_apple_navigator_key(const CapyApple *app, CapyNavigatorKey *output);
+/* One shared 15Hz producer; 1 needs another poll, 0 idle, -1 error. Returns an
+   independent owned image, straight sRGB RGBA8, maximum dimension 256 pixels. */
+int32_t capy_apple_navigator_preview(CapyApple *app, uint64_t now, uint32_t visible, CapyPreviewImage **output);
+void capy_preview_image_read(const CapyPreviewImage *image, CapyPreviewImageInfo *output);
+void capy_preview_image_free(CapyPreviewImage *image);
+/* Stateless [Camera, documentExtent, viewport] -> shared geometry JSON. */
+char *capy_apple_navigator_geometry(const char *json);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
                          const char *cache_directory);
@@ -54,6 +87,13 @@ int32_t capy_apple_detach(CapyApple *app);
 int32_t capy_apple_pointer(CapyApple *app, uint64_t id, uint32_t tool, uint32_t button,
                           const double *records, size_t count, uint32_t predicted,
                           uint64_t view_revision);
+/* Estimate metadata is two uint64_t values per nine-double sample: an opaque
+   contact-local token (zero for untracked samples) and expecting updates (0/1).
+   Corrections replace previously admitted points, including after pen-up, and
+   must carry the original contact and view revision. They never route UI input. */
+int32_t capy_apple_pointer_updates(CapyApple *app, uint64_t id, uint32_t tool, uint32_t button,
+                                  const double *records, size_t count, const uint64_t *updates,
+                                  uint32_t correction, uint64_t view_revision);
 /* Anchors are physical canvas pixels; wheel deltas are logical points.
    Magnification is a multiplicative factor; rotation is in radians. */
 int32_t capy_apple_scroll(CapyApple *app, float x, float y, float dx, float dy,

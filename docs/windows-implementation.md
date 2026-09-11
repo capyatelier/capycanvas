@@ -544,3 +544,34 @@ This checkpoint provides the transport for the forthcoming native dialogs.
 Windows File-menu commands, New/Open/Save dialogs, unsaved window-close handling
 and PNG export remain to be connected and tested. Full workspace/input/lifecycle
 and release acceptance also remain open. No 120 Hz probe was resumed.
+
+The subsequent integration through shared commit 007284c passes 331
+core/engine/UI/host/Windows unit tests. The dedicated hardware D3D12 document
+test also passes. Shared typed Windows routing and Apple's delayed estimate
+updates now converge on the same pointer policy while preserving estimate
+tokens. A new hardware test proves that a correction received after pen-up
+changes the original committed point's pressure, tilt and twist without creating
+another stroke or acquiring a contact. A unit test rejects typed input from a
+retired document or after close authorization.
+
+Windows keeps Tool Settings and Color available; the merged Apple/Android
+Navigator and Commands capabilities remain enabled on their implemented hosts.
+Legacy popup and dock-handle tests still cover Windows and Web; Apple and Android
+use their newer shared drawers and columns.
+
+The merged WinUI build passes tool, Color pixel, Preferences/header and workspace
+fixtures, plus all five settings-storage launches. The combined review exceeded
+the existing five-second close check, then exited normally with empty stderr.
+The simpler settings launches closed within the check. This repeats the earlier
+shutdown-cost issue and remains a lifecycle investigation.
+
+The full serial D3D12 renderer run reports 110 passed, 2 failed and 17 ignored
+performance tests. The independent Curves ramp case differs by two encoded red
+values (102 versus 104); its later Exposure portion was not reached. The strict
+v3 filter sheet still reports maximum error 255. Imported sRGB ramp, Halftone
+endpoint and the other functional checks pass. Neither reference data nor
+tolerances were changed by Windows integration; filter parity remains open.
+
+The 120 Hz display has been reconnected. Presentation/input-latency benchmarking
+still awaits the remaining application work, as requested. All review processes
+from this checkpoint are closed; captures, test profiles and logs stay local.

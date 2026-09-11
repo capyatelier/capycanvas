@@ -23,6 +23,12 @@ final class NativeOwner: @unchecked Sendable {
     private var lastSnapshotTime: UInt64 = 0
     private var bundledFiltersLoaded = false
     private var canvasReady = false
+    typealias NavigatorReceiver = @Sendable (NativePreviewImage, @escaping @Sendable () -> Void) -> Void
+    private var navigatorReceiver: NavigatorReceiver?
+    private var navigatorScheduled = false
+    private var navigatorDeliveryPending = false
+    private var navigatorNeedsUpdate = false
+    private var navigatorKey = CapyNavigatorKey()
     private var shadersReady = false
     private let trace: FrameTrace?
     private var latestTracedInput: UInt64 = 0
@@ -104,6 +110,60 @@ final class NativeOwner: @unchecked Sendable {
             receive(snapshot, nil)
         }
     }
+    func filterPreviews(_ query: JSON, completion: @escaping @Sendable (FilterPreviewReply) -> Void) {
+        queue.async { [self] in
+            do {
+                let status = try request(2, query) ?? JSON()
+                let pointer = capy_apple_take_filter_previews(handle)
+                if let error = capy_apple_error(handle) { throw HostFailure(message: String(cString: error)) }
+                completion(FilterPreviewReply(status: status, atlas: pointer.map(NativeFilterPreviews.init), error: nil))
+            } catch { completion(FilterPreviewReply(status: JSON(), atlas: nil, error: error.localizedDescription)) }
+        }
+    }
+    func setNavigatorReceiver(_ receiver: NavigatorReceiver?) {
+        queue.async { [self] in
+            navigatorReceiver = receiver
+            if receiver != nil { navigatorNeedsUpdate = true; scheduleNavigator() }
+        }
+    }
+    /// One scheduled poll and one image delivery at most. A stalled UI/decoder
+    /// cannot queue more bitmaps behind it. The shared producer also caps GPU
+    /// sampling to 15Hz and keeps a final update alive through its throttle.
+    private func scheduleNavigator() {
+        guard navigatorReceiver != nil, canvasReady, layer != nil, navigatorNeedsUpdate,
+            !navigatorScheduled, !navigatorDeliveryPending else { return }
+        navigatorScheduled = true
+        queue.asyncAfter(deadline: .now() + .milliseconds(33)) { [self] in
+            navigatorScheduled = false
+            guard navigatorReceiver != nil, layer != nil else { return }
+            var pointer: OpaquePointer?
+            let result = capy_apple_navigator_preview(handle, FrameTrace.now(), 1, &pointer)
+            navigatorNeedsUpdate = result == 1
+            if result < 0 {
+                receive(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Navigator preview failed")
+                return
+            }
+            if let pointer, let receiver = navigatorReceiver {
+                navigatorDeliveryPending = true
+                receiver(NativePreviewImage(pointer)) { [weak self] in
+                    self?.queue.async { [weak self] in
+                        guard let self else { return }
+                        self.navigatorDeliveryPending = false; self.scheduleNavigator()
+                    }
+                }
+            }
+            scheduleNavigator()
+        }
+    }
+    private func updateNavigator() {
+        guard navigatorReceiver != nil, canvasReady else { return }
+        var key = CapyNavigatorKey()
+        capy_apple_navigator_key(handle, &key)
+        if key.epoch != navigatorKey.epoch || key.revision != navigatorKey.revision {
+            navigatorKey = key; navigatorNeedsUpdate = true
+        }
+        scheduleNavigator()
+    }
     private func restore(_ loaded: EditorPersistence.Loaded) {
         for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
             ("workspace", loaded.workspace, "restore_workspace")] {
@@ -179,7 +239,15 @@ final class NativeOwner: @unchecked Sendable {
     }
     func projectTask(opening: Bool, expected: (UInt64, UInt64)? = nil,
         completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
-        queue.async { [self] in
+        let deadline = DispatchTime.now() + .seconds(30)
+        @Sendable func poll() {
+            let ready = capy_apple_project_ready(handle)
+            if ready == 1 {
+                if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
+                else { completion(nil, "Document preparation timed out") }
+                return
+            }
+            if ready < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable"); return }
             guard let pointer = capy_apple_project_task(handle, opening ? 1 : 0) else {
                 completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable")
                 return
@@ -189,6 +257,22 @@ final class NativeOwner: @unchecked Sendable {
                 completion(nil, "The document changed; review those changes before opening another drawing")
             } else { completion(task, nil) }
         }
+        queue.async(execute: poll)
+    }
+    /// Poll only while document/export shaders prepare. GPU synchronization and
+    /// pixel packing happen later on the file worker through the returned job.
+    func exportTask(id: UInt64, completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+        let deadline = DispatchTime.now() + .seconds(30)
+        @Sendable func poll() {
+            var pointer: OpaquePointer?
+            let ready = capy_apple_project_ready(handle)
+            let result = ready == 1 ? 0 : capy_apple_export_task(handle, UInt32(id), FrameTrace.now(), &pointer)
+            if result < 0 { completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Export failed") }
+            else if let pointer { completion(NativeProjectTask(pointer), nil) }
+            else if DispatchTime.now() >= deadline { completion(nil, "The canvas is not ready to export") }
+            else { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
+        }
+        queue.async(execute: poll)
     }
     func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?,
         completion: @escaping @Sendable (String?) -> Void) {
@@ -283,7 +367,7 @@ final class NativeOwner: @unchecked Sendable {
             for name in names {
                 modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
             }
-            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge"]))
+            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge", "library": true]))
         }
         try check(capy_apple_finish_startup_cache(handle))
         bundledFiltersLoaded = true
@@ -314,7 +398,9 @@ final class NativeOwner: @unchecked Sendable {
     func detach() {
         perform { [self] in try check(capy_apple_detach(handle)); layer = nil }
     }
-    func pointer(id: UInt64, tool: UInt32, button: UInt32, records: [Double], predicted: Bool, revision: UInt64) {
+    func pointer(id: UInt64, tool: UInt32, button: UInt32, records: [Double], predicted: Bool, revision: UInt64,
+                 updates: [UInt64] = [], correction: Bool = false) {
+        precondition(updates.isEmpty || updates.count == records.count / 9 * 2)
         let observation = trace.flatMap { $0.isRecording ? $0 : nil }
         let queued = observation == nil ? 0 : FrameTrace.now()
         perform { [self] in
@@ -325,12 +411,20 @@ final class NativeOwner: @unchecked Sendable {
                     let timestamps = stride(from: 7, to: records.count, by: 9).map { FrameTrace.timestamp(records[$0]) }
                     observation.record(FrameTraceEvent(kind: .input, a: queued, b: start, c: FrameTrace.now(),
                         d: timestamps.min() ?? 0, e: timestamps.max() ?? 0, f: UInt64(records.count / 9),
-                        g: predicted ? 1 : 0, h: FrameTrace.timestamp(records.last ?? 0), i: UInt64(tool), j: succeeded ? 1 : 0))
+                        g: correction ? 2 : predicted ? 1 : 0, h: FrameTrace.timestamp(records.last ?? 0), i: UInt64(tool), j: succeeded ? 1 : 0))
                     if succeeded && !predicted { latestTracedInput = queued }
                 }
             }
             try records.withUnsafeBufferPointer {
-                try check(capy_apple_pointer(handle, id, tool, button, $0.baseAddress, $0.count, predicted ? 1 : 0, revision))
+                if updates.isEmpty {
+                    try check(capy_apple_pointer(handle, id, tool, button, $0.baseAddress, $0.count, predicted ? 1 : 0, revision))
+                } else {
+                    let samples = $0
+                    try updates.withUnsafeBufferPointer {
+                        try check(capy_apple_pointer_updates(handle, id, tool, button, samples.baseAddress, samples.count,
+                            $0.baseAddress, correction ? 1 : 0, revision))
+                    }
+                }
             }
             succeeded = true
         }
@@ -407,6 +501,7 @@ final class NativeOwner: @unchecked Sendable {
                     try publish(); lastSnapshotTime = now
                 }
                 if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
+                updateNavigator()
                 if let observation {
                     let state: UInt64 = (canvasReady ? 1 : 0) | (bundledFiltersLoaded ? 2 : 0)
                         | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)

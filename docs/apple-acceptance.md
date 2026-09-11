@@ -100,8 +100,8 @@ build is only build evidence.
 | Milestone and shared gate | iPadOS evidence / remaining work | macOS evidence / remaining work |
 | --- | --- | --- |
 | 1. Shared host, Apple bridge and native target builds | Device/simulator builds pass; device signed and installed. | Native AppKit target and Rust Metal library build pass. |
-| 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. Physical Pencil, undo/redo and lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
-| 3. Complete input contract and bounded transport | Coalesced/predicted input foundation exists; corrections, sensors, palm/navigation, interruption and real Pencil evidence remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
+| 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. User confirms basic Pencil pressure, pen-up and Undo/Redo; full lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
+| 3. Complete input contract and bounded transport | Coalescing, prediction and estimated corrections implemented with synthetic oracles. Basic physical Pencil/palm check passes; correction delivery, full sensors/navigation/interruption coverage remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
 | 5. Document/settings/workspace persistence and lifecycle | Atomic settings and per-scene workspace persistence implemented; Simulator restart passes. Manual Save/Open and shared checkpoint policy pass direct checks; recovery, picker delivery and full physical lifecycle matrix remain. | Same persistence; native restart and owner isolation pass. Manual Save/Open and unsaved close pass direct checks; recovery and full window/display/sleep/memory-pressure matrix remain. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
@@ -502,3 +502,424 @@ normally on the attached device, and the Mac app launches. The Swift staged-expo
 and destination-first save checks pass, as do the settings/workspace regression
 checks and WebAssembly compilation. These are launch and direct-effect results;
 no new full-editor visual or sustained hardware acceptance is claimed.
+
+
+## Canvas creation and PNG export
+
+Both Apple targets now expose a native New drawing size form from the shared
+catalog, with a 2048×1536 default and 1…8192 pixels per dimension. Validation runs
+again in Rust before candidate allocation. PNG export uses the existing document
+composite and shared RGBA8/sRGB encoder, also used by GTK. It excludes viewport
+inspection aids and preserves the editable document's location and save checkpoint.
+
+The owner submits a GPU snapshot, then transfers a ticket to the file worker.
+Shader preparation, GPU waits, row packing and PNG encoding occur off the input
+owner. The Metal check proves captured pixels remain exact after subsequent
+painting and destruction of the original renderer. It also verifies non-aligned
+row widths, dimensions and sRGB metadata. This scheduling removes synchronous
+export waits from input dispatch; it does not establish the hardware frame budget
+or large-document memory/latency acceptance.
+
+A startup race found by the Mac UI check is fixed: file capture waits asynchronously
+for bundled filter preparation. Bundled loading updates the filter library without
+migrating embedded document definitions or changing the saved checkpoint. The
+regression check exercises that preservation on both Apple configurations.
+
+The shared regression suites pass 319 tests (41 core, 32 engine, 4 render,
+215 UI, 11 host and 16 Apple). Standalone Swift document checks pass both platform
+configurations, including sized creation, cancellation, PNG decoding, durable
+writes and checkpoint preservation. The iPad Simulator workflow passes native
+size entry, export cancellation and closing the last clean drawing. iPad's
+floating number pad consumes an initial outside tap; the test dismisses it before
+activating Create. The equivalent native Mac creation/export cancellation check also passes, using
+shortcuts and Escape without system-menu coordinate automation.
+
+The latest Android drawers/Navigator and GTK shared menu policy are integrated.
+Mac workspace commands now appear in the native Window menu. The old unsupported
+column test is updated for Android's new support, with a positive Android drawer
+check and continued coverage of the Apple behavior awaiting column projection.
+Both signed builds and WebAssembly compilation pass. The iPad build installs and
+launches on the attached physical device; the final Mac build launches normally.
+
+Artwork autosave/recovery, complete file-provider delivery and conflict handling,
+physical lifecycle coverage, full editor pixels, the remaining feature inventory
+and sustained 120 Hz workloads remain open. These file-workflow results do not
+close those acceptance gates.
+
+
+## Shared application menus and shortcut editing
+
+Apple now projects File, Edit, Layer, Select, Filter, View, Window and Help from
+the same live Rust menu models used by GTK and Android. Both native ports share
+the incoming Android menu snapshot/query contract. Menu actions carry typed
+keyboard chords, including custom/contextual bindings, alongside display hints.
+The native Mac app places Settings/About in their standard application menu and
+uses the OS menu bar for top-level menus. iPad keeps its menus over the canvas;
+the title moves beside wide menus, with a complete submenu fallback when space
+is limited. A clean landscape Simulator capture shows all eight menus with no
+title overlap. Full pixel acceptance and the complete narrow-window matrix
+remain open.
+
+Keyboard Shortcuts now has a searchable action list, alternate binding editor,
+Add/Remove, conflict replacement, per-action reset and Reset All. Native capture
+uses the shared Rust validation and conflict policy. Mac captures events before
+menu equivalents; iPad uses a focused native responder. Capture emits complete
+key pairs so closing its sheet cannot leave a canvas key held. Named/function
+keys use the same platform translation in capture and ordinary canvas input.
+Settings search navigates to shared search results; About and shortcut commands
+open the corresponding native settings page. Help links use the shared URL
+resolver and acknowledge native browser handoff.
+
+Direct Metal checks pass on both Apple configurations for actions selected from
+the actual menu models: clear, full pixel selection/fill, deselection, Gaussian
+blur insertion, and exact pixel restoration through Undo. The host check verifies
+all eight transported models, link availability and current command state. Camera
+patches contain no menu trees; unchanged snapshots remain absent. This does not
+establish the cost of full menu publication in the sustained hardware workloads.
+
+The focused shortcut UI workflow passes on Mac and iPad Simulator: search for
+Zen, capture Command-Z, show the Undo conflict, explicitly replace it, close the
+editors and toggle Zen twice with the new binding. It uses no system-menu clicks.
+The affected regression suites pass 244 tests (215 UI, 12 host and 17 Apple).
+The inventory example additionally emits menu states for initial content, a pixel
+selection, a locked target, shortcut editing and a conflicting captured chord
+on each Apple platform.
+
+This closes the missing top-level menu projection and basic shortcut editor gaps.
+Complete action/customization workflows, filter/property visual acceptance, recovery,
+physical input/lifecycle coverage, full visual parity and sustained performance
+remain required. In particular, the current shared capability policy still omits
+New Window on iPad; enabling multi-scene support alone does not verify that flow.
+
+
+After adopting the incoming Android document/menu changes, both shortcut UI
+workflows and all 244 affected regression tests pass again. Both signed builds
+pass; the final app installs and launches on the attached iPad, and the Mac app
+launches normally. WebAssembly compilation also passes. Private screenshots,
+logs, device/signing details and test artifacts remain outside version control.
+
+## Shared filter picker and properties
+
+Both Apple targets now project shared filter categories, search, empty state,
+insertion actions and the live Properties schema. Number, toggle, choice,
+straight sRGB color/alpha, curve and gradient controls use shared editing/reset
+actions. Curve plots come from Rust's sampled interpolation; point ordering,
+endpoint protection, gradient insertion colors, validation and undo stay in Rust.
+Numeric fields retain drafts across ordinary updates, with a stable schema key
+to reset them when their target/schema changes. Locked properties disable native
+controls and graph hit testing.
+
+One preview cache per editor combines visible rows across panel projections.
+Requests contain at most eight rows, bounded to 512 by 128 pixels each. Painting
+and pending document edits defer new requests through shared policy. The C ABI
+transfers an owned straight-RGBA atlas independently of the editor; Swift image
+creation runs on a utility worker. Polling is nonblocking, stops when visible
+rows are current, and does not run on zoom-only snapshots. Document epoch,
+paint/active-layer/catalog revision and pixel size reject stale results. These
+bounds do not establish hardware performance acceptance.
+
+Filter search exposed iPad keyboard avoidance translating the fixed dock layout
+above the screen. The scene now retains full-window geometry while the keyboard
+covers its lower region. The focused iPad test verifies stable canvas position
+and height plus an onscreen search field, then exercises GPU preview loading,
+radius expression input, curve insertion/reset and gradient insertion/position/
+reset. It passes with the final graph gesture handling. Lower controls, floating
+keyboards and the full input/lifecycle matrix remain open.
+
+After integrating the GTK workspace milestone, all 249 affected tests pass:
+217 shared UI, 12 native host and 20 Apple bridge tests. Apple checks cover all
+six property kinds, reset and undo/redo on both platform policies; actual Metal
+radius changes with exact undo/redo pixels; and preview buffer ownership after
+editor teardown without changing document pixels. Signed builds for both targets
+and the WebAssembly build pass. The updated physical iPad installs and launches.
+
+Mac filter search, preview loading and insertion reached Properties during UI
+runs. Subsequent complete runs stopped before assertions while macOS displayed
+the XCTest Touch ID/password prompt to enable UI automation. The direct control
+utility also reports missing Accessibility access for its launching session.
+Full Mac gesture-workflow evidence remains open; these setup failures are not
+passing tests. Independent bridge/Metal results still cover Mac.
+
+The Chrome `filter-properties` fixture matches the tested stack and viewport.
+The first valid full iPad capture differs at 8.2396% of pixels at zero tolerance.
+After removing the redundant gradient label and adding inline stop opacity, a
+direct final simulator capture differs at 7.9577%. Its portrait raster is rotated
+90 degrees counterclockwise without resampling, then every pixel is compared.
+Header, control and styling differences remain. Raw images, full difference,
+heatmap and overlay stay local. The Mac capture is obstructed by the
+pending permission dialog and is rejected as a comparison fixture. Full visual
+parity, all panel projections/customization, recovery, physical input and
+sustained hardware performance remain required; this is a partial milestone.
+
+## Shared Navigator and Diagnostics
+
+Navigator is now exposed by Apple capability policy and rendered by one shared
+SwiftUI panel. Its six camera controls, drag/recenter/cancel behavior, document
+aspect fit and rotated/reflected work-area outline use Rust actions and geometry.
+A stateless geometry ABI consumes the already-published camera patch, avoiding
+asynchronous session queries or duplicated camera math on the UI thread.
+
+The preview path uses the existing shared 15Hz producer and a 256px maximum
+dimension. The serial owner keeps one poll scheduled and one image delivery in
+flight; utility-worker decoding must acknowledge delivery before another image
+is sent. Camera-only frames reuse the image. Polling sleeps once the current
+composition is consumed, including a final stroke that arrives inside the
+throttle interval. Owned straight-sRGB pixels carry a document epoch. Document
+replay and replacement cannot publish a previous drawing as the new preview.
+
+Diagnostics projects the seven shared statistics rows, descriptions, 120-sample
+chart and frame-budget reference. Its 5Hz query task runs only while visible.
+Review found that restoring an open Diagnostics panel before GPU attachment, or
+replacing its document renderer, lost the visibility-dependent sampling flag.
+Attachment and shared project adoption now reapply that policy.
+
+All 253 affected regression tests pass (217 UI, 12 host, 24 Apple). The four new
+Apple tests exercise both platform policies: exact artwork/history preservation
+through Navigator gestures and all six commands, owned preview pixels after
+editor teardown, idle/camera reuse, delivery of the throttled final stroke,
+replacement while an old preview is pending, and Diagnostics sampling across
+attachment/replacement/hiding. The first focused iPad UI run exposed a missing
+capability flag; after fixing it, the complete preview/controls/drag/Diagnostics
+tab workflow passes and its full-screen capture is retained locally. Both signed
+targets build; the updated physical iPad installs and launches.
+
+The parallel shared in-surface GPU overview foundation is integrated, and its
+three non-benchmark tests pass on Metal. Apple currently uses the bounded
+exported-preview path above. Connecting the new in-surface presenter requires
+native panel transparency/stacking integration and hardware measurement; its
+renderer-only evidence does not validate Apple's current preview transport or
+the sustained 120Hz target.
+
+Screen recording now works, but the separate XCTest authentication dialog still
+obstructs the Mac capture. Mac UI automation was not repeated in that state.
+The current web host does not expose Navigator, so this native Navigator capture
+has no matching Chrome fixture and is not a pixel-parity pass. Complete main
+editor visual acceptance, custom panel projections/drawers, recovery, physical
+input/lifecycle coverage and sustained performance remain open on both platforms.
+
+## Shared workspace customization and live dragging
+
+Both Apple targets now share panel/group/toolbar/tile and Zen context menus,
+tool selection/search, toolbar creation/rename/duplicate/management/delete
+dialogs, standalone color/opacity editing and expanded panel configuration.
+The Rust models supply labels, eligibility, validation, selection and actions.
+Context queries happen on activation; ordinary paint/camera publication does
+not query menus or expansion geometry. A single cancellable task resolves the
+shared expansion animation from native content measurements.
+
+Panel/group movement and floating/divider resizing send shared down/move/up/
+cancel actions. The gesture belongs to the persistent workspace root so tearing
+a tab into a floating group preserves input ownership. Native source views only
+register rectangles. Tile dragging allows one pending drop query, coalesces
+position changes, rejects stale replies and applies the final Rust action.
+Expanded toolbar tile geometry comes from the same layout used for drop hints.
+Divider tiles are exposed on both Apple platforms.
+
+All 256 affected regression tests pass (217 UI, 12 host, 27 Apple), after
+integrating the incoming GTK in-surface Navigator and shared renderer updates.
+The three new Apple checks exercise both platform policies: toolbar naming,
+duplication, deletion cancellation and workspace undo; live drag cancellation,
+resize and history; and exact expanded tile/drop geometry. Actual Metal artwork
+pixels remain unchanged through the workspace edits. Both final signed builds
+pass, the Mac UI test target compiles, and the physical iPad installs and launches.
+
+The focused iPad workflows pass toolbar creation/rename/duplicate/delete and
+control visibility/panel tear-off. Toolbar testing also verifies canvas pinch
+navigation through empty workspace regions. Accessibility grouping and control
+lookup errors found during these checks are corrected. The drag assertion
+accepts the shared policy that hides a lone floating built-in panel's tab and
+retains its footer grip. No system-menu coordinate testing was used. The
+separate XCTest authentication dialog remains pending on Mac; a direct screen
+capture verifies recording permission but is obstructed and rejected for parity.
+Mac interaction evidence for this milestone remains incomplete.
+
+The new Chrome `panel-configuration` fixture runs on hardware WebGPU at the
+iPad's 1376 by 1032 logical viewport and 2x scale. Its full-image comparison
+exposed SwiftUI clipping the expanded group to one child's width; the container
+now fills the complete Rust bounds and its right-side controls are visible.
+The configuration/tear-off check passes again after that correction. Exact
+different pixels fall from 21.1210% to 18.0784%; the final maximum channel error
+is 232. The portrait native raster is rotated 90 degrees counterclockwise
+without resampling, and every pixel remains in the comparison. Configuration
+control heights/styles, header, layer controls and other differences remain:
+this is a failing visual gate, not a parity pass. Raw images, reports, device
+details and test bundles remain local and ignored.
+
+Collapsed columns/drawers, remaining panel projections and complete context/
+dialog/drag workflows still require acceptance on both platforms. Recovery,
+physical Pencil/tablet and lifecycle coverage, the complete visual fixture
+matrix and sustained hardware performance remain open.
+
+## Collapsed columns, content drawers and partial Zen
+
+Apple now projects the same collapsed columns, tabbed column drawers, child
+tool drawers and partial-Zen edge toolbar sections as the shared core/Android
+path. Both platforms expose collapse/expand, content-panel toolbar choices and
+the Commands panel. Ordinary dock topology and source panel ownership are
+preserved. Column scrolling reports a native offset; clipped toolbar tile
+rectangles update child anchors. Drawer tabs reuse the existing shared controls,
+including filters, layers, tool settings, color, Navigator and Diagnostics.
+The host query returns shared natural toolbar height and connection geometry.
+
+Each drawer coalesces layout, content measurement and anchor changes behind
+one pending geometry query; stale replies cannot publish earlier placement.
+Camera/painting snapshots do not start new geometry queries unless those inputs
+changed. Native hit testing respects drawer stacking and clipping, including
+blank drawer regions covering dock grips. The actual animated bounds feed the
+shared chrome policy. Context popovers and native sheets supply the popup fact.
+Chrome visibility refreshes on Zen mode changes as well as geometry changes;
+the focused UI check exposed and verified the missing mode refresh on exit.
+
+Canvas admission stays on the serial Rust owner. A real down uses logical
+workspace coordinates and shared dismissal before the physical pointer batch.
+If consumed, the whole contact, including subsequent movement and prediction,
+is suppressed until its terminal event. Focus loss clears that admission state.
+Invalid and stale-document samples remain rejected before they affect chrome.
+Both platform policies pass actual Metal checks for no paint through dismissal,
+subsequent normal painting and exact Undo, including a 2x coordinate case.
+
+All 258 affected tests pass (217 UI, 12 host, 29 Apple). The second new Apple
+test verifies column/tab projection, child anchor movement/clipping, transient
+measurement state, collapse undo, panel choices and Zen topology preservation.
+Its Zen fixture restores an outward-facing lone toolbar: the shared policy
+intentionally excludes a toolbar nested in a content tab group. Both signed
+builds and WebAssembly compile; the Mac test target compiles. The physical iPad
+build installs and launches, and a separate disposable Mac editor launches.
+
+The iPad column/tab/child drawer/dismissal/expand workflow passes, and the Zen
+entry/exit check passes after the visibility fix. An earlier Xcode invocation
+reported zero executed tests despite the new method being present in its built
+binary; removing only the disposable test runner allowed the focused checks to
+execute. That zero-test result is not counted as passing evidence. Mac GUI
+checks remain limited by the pending XCTest authentication prompt and were not
+repeated. No system-menu coordinate tests were used.
+
+The new 1376 by 1032, 2x Chrome/native Zen comparison retains every pixel and
+rotates only the native portrait raster. It differs at 1.3477% of pixels, with
+maximum channel error 166; all differing pixels lie in the top 119 physical
+rows. Chrome currently omits the partial-Zen toolbar sections, so this is an
+explicit host feature difference and a failing full-image result. The native
+sections remain present. Complete drawer/style/gesture fixtures, source-corner
+connections, full main-editor visual acceptance, recovery, physical input and
+lifecycle coverage and sustained performance remain required on both platforms.
+
+The incoming shared GPU Fill/Auto Select edge refinements are integrated. All
+258 UI/host/Apple tests pass again, along with six focused GPU checks covering
+flood masks, independent pixel morphology, antialiasing through history replay,
+invalid requests and startup compilation. Two hardware latency benchmarks remain
+explicitly ignored; these correctness results establish no performance claim.
+The integrated signed iPad and Mac builds and WebAssembly build pass. The iPad
+build installs and launches, and the Mac build launches with a disposable workspace. The
+drawer UI and blank-canvas visual fixtures above predate the renderer merge and
+do not establish visual parity for the incoming Fill/Auto Select refinements.
+
+## Estimated Pencil observations and shared stroke correction
+
+UIKit now handles delayed Pencil property updates through the common Apple ABI
+and shared Rust input engine. Numeric observations retain their contact, token,
+timestamp, scale and original resolved transform/pressure policy. Partial/final
+updates include force, location, tilt and roll; prediction remains separate.
+Corrections bypass chrome/pointer/cursor routing and cannot start a contact.
+The adapter keeps pending observations after pen-up, releases them on blur and
+clears canceled contacts. Repeated terminal observations and stationary
+airbrush samples derived from an estimate follow the original token.
+
+Pending observations use the replaceable tail where possible. The first exact
+Metal oracle exposed watercolor material boundaries changing when persistent
+samples waited for corrections. Recording those boundaries from real input and
+retaining their indices through finalization fixes the discrepancy. Corrected
+G Pen, Pencil, watercolor and smudge strokes now match the final-value input
+oracle exactly in both stored semantics and GPU pixels on both Apple policies.
+Undo removes the original stroke; Redo restores its corrected pixels.
+
+Committed corrections amend the original history entry without adding an undo
+step or discarding redoable artwork. Captured project snapshots remain immutable,
+and affected save-checkpoint identities change while states before the stroke
+retain theirs. Direct tests also cover camera-history eviction, capture-time
+pressure policy, correction after Undo, repeated final callbacks, duplicate
+terminal samples, stationary airbrush input and cancellation/contact isolation.
+All 336 affected Rust tests pass (42 core, 35 engine, 217 UI, 12 host, 30 Apple).
+The standalone Swift observation checks and all five trace analyzer checks pass.
+Both final signed Apple builds pass, the physical iPad installs and launches,
+and the Mac launches a disposable editor.
+
+This establishes synthetic input correctness, not physical Pencil/tablet or
+performance acceptance. Retention has explicit bounds and expiry counts; callback
+loss/overflow, orientation changes and the complete physical interruption matrix
+remain open. Corrections racing later explicit point edits retain a matching
+guard and require broader workflow acceptance. Late corrections to persistent
+ink currently replay the scene: long strokes, 4K multilayer costs and sustained
+120 Hz performance remain unverified. The trace reports correction queueing and
+receipt/presentation proxies separately. See [Apple input details](../apps/layer-apple/INPUT.md)
+for the shared contract, exact bounds, limitations and reproducible checks.
+
+The parallel port's independent filter-reference reconciliation is integrated,
+and the WebAssembly build passes with the shared correction changes. Its sRGB
+import oracle passes on Metal. The strict `runtime_filter_pixel_reference`
+comparison against the new Vulkan-generated v3 fixture fails on this Mac with
+maximum channel error 255. That test constructs renderer packets directly and
+does not exercise the input-correction path. Full input/output/difference
+artifacts remain local; no channel masks, fixture replacement or tolerance
+relaxation was applied. Cross-backend filter parity remains an explicit failing
+gate and requires further investigation beyond this input milestone.
+
+## Filter color isolation across backends
+
+The strict reference discrepancy is reproduced on both Metal and a local Vulkan
+SwiftShader numerical backend. Metal's full sheet also exactly matches the
+pre-migration implementation with identical corrected imports. New independent
+scalar tests cover the complete opaque Curves/Exposure channel ramp and
+Halftone's full ink/paper endpoints; both tests pass on both backends. They
+isolate color/storage behavior without generating expected images from renderer
+output. Partial alpha, spatial filtering and the full 160-case reference remain
+open. See [the filter investigation](runtime-filters.md) for numerical evidence.
+
+The software backend is admitted only by an explicit opt-in in renderer unit-test
+binaries. Production iPad and Mac hosts retain their hardware requirement.
+Software results establish no performance claim. Output-rounding experiments
+were reverted: neither solved the strict full-sheet comparison. The checked-in
+reference, one-byte tolerance and all compared channels remain unchanged.
+Both signed Apple builds and the production renderer library check pass with
+the test-only diagnostics present. This milestone changes no app rendering code.
+
+## Physical Pencil smoke check and resumed Mac workspace checks
+
+The user confirmed pressure response, persistent ink after pen-up, drawing with
+a resting palm and expected Undo/Redo on the physical iPad. Its four-minute Debug
+capture contains about nine seconds of pointer activity, five Pencil contacts,
+730 real pointer batches and 417 prediction batches. There are no frame errors,
+recorder drops, missing presentation callbacks or invalid/skipped GPU samples.
+Eight drawable callbacks report zero presentation time. No correction batches
+were observed; physical estimated-property coverage remains open.
+
+After readiness, owner CPU service is p50 3.70 ms, p95 8.01 ms, p99 11.79 ms and
+maximum 39.43 ms, with 17 of 672 submitted frames above 8.33 ms. Across the whole
+capture, continuous active presentation intervals are p50/p95 8.33 ms, p99
+16.67 ms and maximum 25.00 ms; 25 of 999 intervals exceed the analyzer's 120 Hz
+cadence allowance. These Debug measurements include profiler overhead and do
+not establish sustained performance. All receipt latency proxies, startup memory
+growth and missing/zero observations remain in the local full report. The
+required Release workload matrix, ten-minute sessions and physical latency
+measurements remain open on both platforms.
+
+After the user enabled XCTest, two focused Mac workflows execute and pass:
+collapsed column/tab/child drawer dismissal and expansion, plus control
+visibility and live panel tear-off. Initial failures came from the test harness:
+application-level coordinates have no finite Mac window extent, and XCTest
+cannot always derive a hit point for the visible SwiftUI scroll controls. The
+shared check now uses the actual editor window and a bounded, measured in-app
+click fallback, retaining assertions on the resulting editor state. No system
+menu coordinates or menu mechanics are tested. These interaction checks do not
+close the outstanding full-image visual or full-workflow acceptance gates.
+The separate Mac partial-Zen entry/exit check also passes with window-based
+containment; three focused Mac checks execute in total. The iPad test target
+compiles with the shared harness changes without interrupting the physical app.
+
+Direct Mac screen capture now succeeds without the permission dialog. A settled
+Brush size configuration fixture is compared with local hardware-WebGPU Chrome
+at 1200 by 870 logical pixels and 2x scale. The full sRGB image differs at
+25.3555% of pixels, maximum channel error 232. No masks, rescaling or cropping
+are applied by the comparator. The Mac OS window controls/menu arrangement is
+an intentional adaptation retained in the report; configuration control styles
+and heights, panel placement, toolbar color shape and other differences still
+fail visual acceptance. The source captures and complete report remain ignored.

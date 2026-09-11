@@ -27,7 +27,14 @@ pub(super) fn tile_button(
     let panel = config.id;
     let id = tile.id;
     let button = gtk::Button::builder().tooltip_text(&choice.label).build();
-    let icon = gtk::Image::from_icon_name(&format!("layer-{}-symbolic", choice.icon));
+    let icon = gtk::Image::from_icon_name(&format!(
+        "layer-{}-symbolic",
+        if tile.control == ToolbarControl::Color {
+            "colors"
+        } else {
+            choice.icon
+        }
+    ));
     icon.set_pixel_size(config.tile_style.icon_size() as i32);
     if config.tile_style == TileStyle::Labeled {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -77,6 +84,18 @@ pub(super) fn tile_button(
         button.add_css_class("toolbar-divider");
     }
     button
+}
+
+pub(super) fn refresh_color_palette(palette: &gtk::CssProvider, w: &Workspace) {
+    if let Some(gpu) = w.gpu.borrow().as_ref() {
+        let colors = &gpu.session.state().colors;
+        let rgba = |[r, g, b, a]: [f32; 4]| gdk::RGBA::new(r, g, b, a);
+        palette.load_from_string(&format!(
+            ".brush-color {{ -gtk-icon-palette: success {}, warning {}; }}",
+            rgba(colors.foreground),
+            rgba(colors.background)
+        ));
+    }
 }
 
 pub(super) struct ToolbarView {
@@ -897,10 +916,7 @@ impl Customization {
                     button.set_tooltip_text(Some(&tile.tooltip));
                 }
             }
-            toolbar.palette.load_from_string(&format!(
-                ".brush-color {{ -gtk-icon-palette: success {}; }}",
-                w.color.rgba()
-            ));
+            refresh_color_palette(&toolbar.palette, w);
         }
         self.refresh_expansion(w, &views);
         let brush = w

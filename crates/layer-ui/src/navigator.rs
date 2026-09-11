@@ -13,6 +13,9 @@ pub(crate) struct Preview {
     requested_ns: Option<u64>,
 }
 impl Preview {
+    pub fn is_current(&self, revision: u64) -> bool {
+        self.revision == Some(revision)
+    }
     pub fn poll<R: layer_render::CanvasRenderer>(
         &mut self,
         renderer: &mut R,

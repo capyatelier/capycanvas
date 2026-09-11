@@ -88,15 +88,16 @@ import kotlin.math.roundToInt
         AdjustmentPanel(host, state, modifier)
         return
     }
-    Box(modifier) {
+    BoxWithConstraints(modifier) {
+        val availableHeight = maxHeight
         Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onSizeChanged { onHeight(it.height / density) }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties", "stats" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             panel.array("controls").objects().filter { it.getBoolean("visible_in_panel") }.forEach { item ->
                 when (item.getString("control")) {
                     "brushes" -> ToolSetControls(host, state)
                     "tool_settings" -> ToolSettingsControls(host, state)
-                    "color_wheel" -> ColorPanelControls(host)
-                    "navigator" -> NavigatorPanel(host)
+                    "color_wheel" -> ColorPanelControls(host, availableHeight)
+                    "navigator" -> NavigatorPanel(host, availableHeight)
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))
                     }

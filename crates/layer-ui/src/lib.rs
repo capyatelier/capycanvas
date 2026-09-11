@@ -190,7 +190,11 @@ pub const MENUS: &[MenuSpec] = &[
 pub const FILE_MENU: MenuSpec = MenuSpec {
     label: "File",
     sections: &[
-        &[CommandId::NewDocument, CommandId::OpenDocument],
+        &[
+            CommandId::NewDocument,
+            CommandId::OpenDocument,
+            CommandId::NewWindow,
+        ],
         &[
             CommandId::SaveDocument,
             CommandId::SaveDocumentAs,
@@ -227,6 +231,7 @@ pub struct UiCatalog {
     /// Primary drawing tools for hosts that also expose a compact tool chooser.
     pub tool_commands: &'static [CommandId],
     pub file_menu: MenuSpec,
+    pub new_document: session::NewDocumentSpec,
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
     pub brush_sizes: &'static [f32],
@@ -346,6 +351,7 @@ pub fn ui_catalog() -> UiCatalog {
         toolbar: TOOLBAR_CONTROLS,
         menus: MENUS,
         file_menu: FILE_MENU,
+        new_document: session::new_document_spec(),
         layer_commands: &CommandId::LAYERS,
         tool_commands: &CommandId::TOOLS,
         brush_categories: brush_categories().collect(),
@@ -431,10 +437,23 @@ impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
             Self::NewDocument | Self::OpenDocument | Self::SaveDocument | Self::SaveDocumentAs => {
-                matches!(platform, Platform::Gtk | Platform::Mac | Platform::Ios)
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                )
             }
-            Self::CloseDocument => matches!(platform, Platform::Gtk | Platform::Mac),
-            Self::ExportDocument | Self::Website | Self::SourceCode => platform == Platform::Gtk,
+            Self::CloseDocument | Self::ExportDocument => {
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                )
+            }
+            Self::Website | Self::SourceCode => {
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Ios | Platform::Mac | Platform::Android
+                )
+            }
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }

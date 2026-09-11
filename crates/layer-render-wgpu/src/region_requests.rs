@@ -5,11 +5,12 @@ use flood::{Flood, Region};
 use layer_render::{RegionRequest, RegionResult, RegionSource};
 
 pub(super) struct RegionRequests {
-    flood: Flood,
+    pub(super) flood: Flood,
     source: Option<(wgpu::Texture, wgpu::TextureView)>,
     scene: Option<scene::Scene>,
     readback: Option<wgpu::Buffer>,
     pending: Option<Region>,
+    waiting: Option<RegionRequest>,
     tx: mpsc::Sender<Result<RegionResult, GpuRasterError>>,
     rx: mpsc::Receiver<Result<RegionResult, GpuRasterError>>,
     #[cfg(test)]
@@ -24,12 +25,9 @@ impl RegionRequests {
                 .map_or(0, |(t, _)| u64::from(t.width()) * u64::from(t.height()) * 4)
             + self.scene.as_ref().map_or(0, |s| s.scratch_bytes())
             + self.readback.as_ref().map_or(0, |b| b.size())
-            + self
-                .pending
-                .as_ref()
-                .map_or(0, |r| r.coverage.size() + r.bounds.size())
+            + self.pending.as_ref().map_or(0, |r| r.coverage.size())
     }
-    fn new(device: &PipelineDevice) -> Self {
+    pub(super) fn new(device: &PipelineDevice) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             flood: Flood::new(device),
@@ -37,6 +35,7 @@ impl RegionRequests {
             scene: None,
             readback: None,
             pending: None,
+            waiting: None,
             tx,
             rx,
             #[cfg(test)]
@@ -48,7 +47,7 @@ impl RegionRequests {
         r: &mut WgpuRasterizer,
         request: RegionRequest,
     ) -> Result<bool, GpuRasterError> {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.waiting.is_some() {
             return Ok(false);
         }
         let extent = r.document_extent;
@@ -57,8 +56,27 @@ impl RegionRequests {
             || request.position[1] >= extent[1]
             || !request.tolerance.is_finite()
             || !(0.0..=1.).contains(&request.tolerance)
+            || !request.refinement.is_valid()
         {
             return Err(GpuRasterError::InvalidExtent);
+        }
+        if let Some(startup) = &r.startup {
+            startup.compiler.check()?;
+            let mut ready = self.flood.prepare(&startup.compiler, request.refinement);
+            if request.limit.is_some() {
+                for pipeline in [
+                    &r.selection_clip.crossings,
+                    &r.selection_clip.fill,
+                    &r.selection_clip.resample,
+                ] {
+                    startup.compiler.pipeline(pipeline, startup::BRUSH);
+                    ready &= pipeline.ready();
+                }
+            }
+            if !ready {
+                self.waiting = Some(request);
+                return Ok(true);
+            }
         }
         let mut encoder = r
             .device
@@ -182,8 +200,9 @@ impl RegionRequests {
             request.position,
             request.tolerance,
             request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
+            request.refinement,
         )?;
-        let coverage_size = region.coverage.size();
+        let coverage_size = region.bounds_offset;
         let size = coverage_size + 32;
         if self.readback.as_ref().is_none_or(|b| b.size() < size) {
             self.readback = Some(r.device.create_buffer(&wgpu::BufferDescriptor {
@@ -194,8 +213,7 @@ impl RegionRequests {
             }));
         }
         let readback = self.readback.as_ref().unwrap();
-        encoder.copy_buffer_to_buffer(&region.coverage, 0, readback, 0, coverage_size);
-        encoder.copy_buffer_to_buffer(&region.bounds, 0, readback, coverage_size, 32);
+        encoder.copy_buffer_to_buffer(&region.coverage, 0, readback, 0, size);
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
             t.end(&mut encoder);
@@ -246,7 +264,9 @@ impl RegionRequests {
 }
 impl WgpuRasterizer {
     pub fn region_pending(&self) -> bool {
-        self.regions.as_ref().is_some_and(|r| r.pending.is_some())
+        self.regions
+            .as_ref()
+            .is_some_and(|r| r.pending.is_some() || r.waiting.is_some())
     }
     pub(super) fn start_region(&mut self, request: RegionRequest) -> Result<bool, GpuRasterError> {
         let mut regions = self
@@ -258,6 +278,15 @@ impl WgpuRasterizer {
         result
     }
     pub(super) fn poll_region(&mut self) -> Option<Result<RegionResult, GpuRasterError>> {
+        if self.regions.as_ref()?.waiting.is_some() {
+            let mut requests = self.regions.take().unwrap();
+            let request = requests.waiting.take().unwrap();
+            let result = requests.start(self, request);
+            self.regions = Some(requests);
+            if let Err(error) = result {
+                return Some(Err(error));
+            }
+        }
         let requests = self.regions.as_mut()?;
         requests.pending.as_ref()?;
         let _ = self.device.poll(wgpu::PollType::Poll);

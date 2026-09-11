@@ -339,6 +339,14 @@ impl Settings {
     /// Resolve action identity, not translated labels or widget names. Custom
     /// actions work in contextual menus too, including parameterized actions.
     pub fn action_shortcut(&self, action: &UiAction, platform: Platform) -> String {
+        self.action_keys(action, platform)
+            .iter()
+            .map(|key| key.label(platform))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
+    /// Native menu equivalents use typed chords, never parsed display labels.
+    pub fn action_keys(&self, action: &UiAction, platform: Platform) -> Vec<KeyChord> {
         fn canonical(action: &UiAction) -> UiAction {
             use LayerAction as L;
             match action {
@@ -441,33 +449,29 @@ impl Settings {
             UiAction::SetBrushSize { value } => Some(format!("size.{value}")),
             _ => None,
         };
-        let mut labels = Vec::new();
-        if let Some(id) = builtin {
-            let label = if let UiAction::Invoke { command } = action {
+        let mut keys = if let Some(id) = builtin {
+            if let UiAction::Invoke { command } = action {
                 self.command_keys(command)
-                    .into_iter()
-                    .filter(|k| k.available(platform))
-                    .map(|k| k.label(platform))
-                    .collect::<Vec<_>>()
-                    .join(" / ")
             } else {
-                self.shortcut_label(&id, platform)
-            };
-            if !label.is_empty() {
-                labels.push(label);
+                self.keys(&id)
             }
-        }
+        } else {
+            Vec::new()
+        };
         for definition in &self.custom_actions {
             if matches!(&definition.action, ShortcutAction::Action { action: a } if canonical(a) == action)
             {
-                let label = self.shortcut_label(&definition.id, platform);
-                if !label.is_empty() && !labels.contains(&label) {
-                    labels.push(label);
+                for key in self.keys(&definition.id) {
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
                 }
             }
         }
-        labels.join(" / ")
+        keys.retain(|key| key.available(platform));
+        keys
     }
+
     pub fn action_tooltip(&self, label: &str, action: &UiAction, platform: Platform) -> String {
         let shortcut = self.action_shortcut(action, platform);
         if shortcut.is_empty() {
@@ -680,6 +684,7 @@ mod tests {
         let item = ContextMenuItem {
             label: "Translated reset".into(),
             hint: "Default icon".into(),
+            bindings: Vec::new(),
             selected: Some(false),
             enabled: true,
             action: Some(action),
@@ -689,6 +694,7 @@ mod tests {
             title: "Context".into(),
             sections: vec![vec![ContextMenuItem {
                 label: "Submenu".into(),
+                bindings: Vec::new(),
                 hint: String::new(),
                 selected: None,
                 enabled: true,
@@ -700,6 +706,10 @@ mod tests {
         assert_eq!(
             menu.sections[0][0].sections[0][0].hint,
             "Default icon · Ctrl+Shift+I"
+        );
+        assert_eq!(
+            menu.sections[0][0].sections[0][0].bindings,
+            [key("i", true, true)]
         );
         let reset = settings
             .pages(Platform::Gtk)

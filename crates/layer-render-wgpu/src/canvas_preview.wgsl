@@ -9,14 +9,6 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     // Average premultiplied linear color before unpremultiplication/sRGB export.
     // Sixteen stratified bilinear samples reduce aliasing of fine line art;
     // bounded by preview size, not by document area or layer/filter count.
-    let footprint = fwidth(v.uv);
-    var color = vec4(0.);
-    for (var y=0u; y<4u; y++) {
-        for (var x=0u; x<4u; x++) {
-            let offset = (vec2(f32(x),f32(y))+.5)/4.-.5;
-            color += textureSampleLevel(source, source_sampler, v.uv+offset*footprint, 0.);
-        }
-    }
-    color /= 16.;
+    let color = sample_overview(source, source_sampler, v.uv, fwidth(v.uv));
     return vec4(color.rgb/max(color.a,.000001), color.a);
 }

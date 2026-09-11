@@ -227,10 +227,7 @@ impl Zen {
                 }
             }
         }
-        self.palette.load_from_string(&format!(
-            ".brush-color {{ -gtk-icon-palette: success {}; }}",
-            w.color.rgba()
-        ));
+        customization::refresh_color_palette(&self.palette, w);
         w.surface.raise_drawer(0);
     }
 }
