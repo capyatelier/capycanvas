@@ -150,7 +150,7 @@ pub fn install(workspace: &Rc<Workspace>) {
                 });
             let position = event
                 .position()
-                .and_then(|(x, y)| surface_point(&workspace, x, y))
+                .and_then(|(x, y)| widget_point(&workspace.area, x, y))
                 .map(|p| [p.x(), p.y()])
                 .or_else(|| matches!(phase, PenPhase::Up | PenPhase::Cancel).then_some([0.0; 2]));
             if let Some(position) = position {
@@ -232,7 +232,7 @@ pub fn install(workspace: &Rc<Workspace>) {
             let point = controller
                 .current_event()
                 .and_then(|e| e.position())
-                .and_then(|(x, y)| surface_point(&workspace, x, y));
+                .and_then(|(x, y)| widget_point(&workspace.area, x, y));
             if let Some(point) = point {
                 let dpi = workspace.area.scale_factor() as f32;
                 let unit = if controller.unit() == gdk::ScrollUnit::Wheel {
@@ -338,11 +338,20 @@ fn contact_phase(phase: PenPhase) -> ContactPhase {
     }
 }
 
-fn surface_point(workspace: &Workspace, x: f64, y: f64) -> Option<gtk::graphene::Point> {
-    let (dx, dy) = workspace.window.surface_transform();
-    workspace.window.compute_point(
-        &workspace.area,
-        &gtk::graphene::Point::new((x + dx) as f32, (y + dy) as f32),
+/// Convert a raw GDK surface position to widget coordinates. GTK's native
+/// transform places the widget inside the surface (including CSD shadows),
+/// so input must subtract it. Maximized/fullscreen windows hide a wrong sign
+/// because their decoration offset is zero.
+pub(crate) fn widget_point(
+    widget: &impl IsA<gtk::Widget>,
+    x: f64,
+    y: f64,
+) -> Option<gtk::graphene::Point> {
+    let native = widget.native()?;
+    let (dx, dy) = native.surface_transform();
+    native.dynamic_cast::<gtk::Widget>().ok()?.compute_point(
+        widget,
+        &gtk::graphene::Point::new((x - dx) as f32, (y - dy) as f32),
     )
 }
 

@@ -1202,29 +1202,25 @@ impl Workspace {
             self,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, event| {
+            move |controller, event| {
+                let point = this.event_point(controller);
                 if matches!(
                     event.event_type(),
                     gdk::EventType::ButtonPress | gdk::EventType::TouchBegin
                 ) && this.customization.placement().is_some()
-                    && let Some((x, y)) = event.position()
-                {
-                    let offset = this.window.surface_transform();
-                    if this
+                    && let Some(position) = point
+                    && this
                         .chrome_event(ChromeEvent::Contact {
-                            position: [(x + offset.0) as f32, (y + offset.1) as f32],
+                            position,
                             canvas: false,
                         })
                         .handled
-                    {
-                        return glib::Propagation::Stop;
-                    }
+                {
+                    return glib::Propagation::Stop;
                 }
                 let was_held = this.chrome_held.get();
                 if event.event_type() == gdk::EventType::ButtonPress
-                    && event.position().is_some_and(|(_, y)| {
-                        y + this.window.surface_transform().1 < HEADER_HEIGHT as f64
-                    })
+                    && point.is_some_and(|[_, y]| y < HEADER_HEIGHT)
                 {
                     this.chrome_held.set(true);
                 } else if event.event_type() == gdk::EventType::ButtonRelease
@@ -2366,11 +2362,7 @@ impl Workspace {
     }
     fn event_point(&self, controller: &impl IsA<gtk::EventController>) -> Option<[f32; 2]> {
         let (x, y) = controller.current_event()?.position()?;
-        let (dx, dy) = self.window.surface_transform();
-        let p = self.window.compute_point(
-            &self.surface,
-            &gtk::graphene::Point::new((x + dx) as f32, (y + dy) as f32),
-        )?;
+        let p = crate::input::widget_point(&self.surface, x, y)?;
         Some([p.x(), p.y()])
     }
     fn add_divider(self: &Rc<Self>, divider: Divider) {

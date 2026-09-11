@@ -10847,6 +10847,228 @@ fn native_frame_pacing() {
 
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_window_drag_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.WindowDragInput");
+    let w = fixture_workspace(&app);
+    w.window.set_default_size(1100, 760);
+    let observed = Rc::new(Cell::new(None));
+    let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    motion.connect_motion(glib::clone!(
+        #[weak]
+        w,
+        #[strong]
+        observed,
+        move |controller, x, y| {
+            let toolkit = w
+                .window
+                .compute_point(&w.surface, &gtk::graphene::Point::new(x as f32, y as f32))
+                .unwrap();
+            observed.set(Some((
+                [toolkit.x(), toolkit.y()],
+                w.event_point(controller).unwrap(),
+            )));
+        }
+    ));
+    w.window.add_controller(motion);
+    w.window.present();
+    pump(1200);
+    let original = state(&w).workspace;
+    let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native pointer timed out"
+        );
+        step += 1;
+        pump(180);
+    };
+    for mode in ["windowed", "maximized", "fullscreen", "restored"] {
+        match mode {
+            "maximized" => w.window.maximize(),
+            "fullscreen" => {
+                w.window.unmaximize();
+                pump(400); // Let the compositor save the restored geometry before fullscreen.
+                w.window.fullscreen();
+            }
+            "restored" => w.window.unfullscreen(),
+            _ => (),
+        }
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original.clone(),
+        });
+        pump(500);
+        // Wayland does not expose global window positions to clients. Calibrate
+        // the test pointer using GTK's widget-local motion, independently of
+        // the production raw-event transform being checked here.
+        observed.set(None);
+        perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
+        let (toolkit, raw) = observed.get().expect("pointer inside the test window");
+        let mut origin = [800. - toolkit[0], 500. - toolkit[1]];
+        assert!(
+            (raw[0] - toolkit[0]).abs() < 0.5 && (raw[1] - toolkit[1]).abs() < 0.5,
+            "{mode}: raw workspace point {raw:?} differs from GTK {toolkit:?}, surface transform {:?}",
+            w.window.surface_transform()
+        );
+        if matches!(mode, "windowed" | "restored") {
+            assert!(!w.window.is_maximized() && !w.window.is_fullscreen());
+            assert_ne!(
+                w.window.surface_transform(),
+                (0., 0.),
+                "exercise CSD shadow offsets"
+            );
+            let before = saved(&w);
+            let title = find_css(w.header.upcast_ref(), "document-title").unwrap();
+            let b = title.compute_bounds(&w.surface).unwrap();
+            let start = [
+                origin[0] + b.x() + b.width() * 0.5,
+                origin[1] + b.y() + b.height() * 0.5,
+            ];
+            perform(
+                serde_json::json!([{ "point": start }, { "down": true }, { "point": [start[0] + 20., start[1] + 10.] }, { "point": [start[0] + 80., start[1] + 40.] }, { "down": false }]),
+            );
+            perform(serde_json::json!([{ "point": [799., 499.] }, { "point": [800., 500.] }]));
+            let (point, _) = observed.get().unwrap();
+            let moved = [800. - point[0], 500. - point[1]];
+            assert!(
+                (moved[0] - origin[0]).abs() > 30. && (moved[1] - origin[1]).abs() > 10.,
+                "title bar must move the {mode} window: {origin:?} -> {moved:?}; start={start:?}, title={b:?}, size={}x{}, active={}, drag={}",
+                w.window.width(),
+                w.window.height(),
+                w.window.is_active(),
+                w.workspace_drag.borrow().is_some()
+            );
+            assert_eq!(saved(&w), before, "window movement must not drag a panel");
+            assert!(w.workspace_drag.borrow().is_none());
+            assert!(!w.chrome_held.get());
+            origin = moved;
+        }
+        let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+        let global = |p: [f32; 2]| [p[0] + origin[0], p[1] + origin[1]];
+        // Normal docked tabs and divider handles must use the same coordinates.
+        let before = saved(&w);
+        let tab = w
+            .tab_hits()
+            .into_iter()
+            .find(|t| t.group == 8 && t.index == 0)
+            .unwrap()
+            .bounds;
+        let start = global([tab.x + tab.width * 0.5, tab.y + tab.height * 0.5]);
+        let away = global([viewport[0] * 0.5, viewport[1] * 0.55]);
+        perform(
+            serde_json::json!([{ "point": start }, { "down": true }, { "point": away }, { "down": false }]),
+        );
+        assert_eq!(
+            state(&w).workspace.layout.floating.len(),
+            1,
+            "tab tear-off in {mode}"
+        );
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        pump(200);
+        assert_eq!(saved(&w), before);
+        let divider = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.band && d.id == 7)
+            .unwrap();
+        let start = global([
+            divider.bounds.x + divider.bounds.width * 0.5,
+            divider.bounds.y + 150.,
+        ]);
+        let end = [start[0] - 40., start[1]];
+        perform(
+            serde_json::json!([{ "point": start }, { "down": true }, { "point": end }, { "down": false }]),
+        );
+        assert_ne!(saved(&w), before, "divider resize in {mode}");
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        pump(200);
+        assert_eq!(saved(&w), before);
+        w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group: 8,
+                panel: Panel::Layers,
+            },
+        });
+        pump(400);
+        let collapsed = saved(&w);
+        let root = find_named(w.surface.upcast_ref(), "column-drawer-8").unwrap();
+        let grip = find_named(&root, "column-drawer-grip").unwrap();
+        let b = grip.compute_bounds(&w.surface).unwrap();
+        let start = global([b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]);
+        perform(
+            serde_json::json!([{ "point": start }, { "down": true }, { "point": away }, { "down": false }]),
+        );
+        let layout = state(&w).workspace.layout;
+        assert_eq!(layout.floating.len(), 1, "drawer group tear-off in {mode}");
+        assert_eq!(
+            layout
+                .group_panels(layout.panel_group(Panel::Layers).unwrap())
+                .unwrap()
+                .len(),
+            3
+        );
+        let floating = saved(&w);
+        let source = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.floating)
+            .unwrap()
+            .bounds;
+        let target = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.id == 5)
+            .unwrap()
+            .bounds;
+        let start = global([source.x + source.width - 10., source.y + 18.]);
+        let end = global([target.x + target.width * 0.5, target.y + 18.]);
+        perform(
+            serde_json::json!([{ "point": start }, { "down": true }, { "point": end }, { "down": false }]),
+        );
+        assert_eq!(
+            state(&w).workspace.layout.panel_group(Panel::Layers),
+            Some(5),
+            "group drop in {mode}"
+        );
+        assert!(state(&w).workspace.layout.floating.is_empty());
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        pump(200);
+        assert_eq!(saved(&w), floating);
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        pump(200);
+        assert_eq!(saved(&w), collapsed);
+    }
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_column_drawer_drag_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.ColumnDrawerDragInput");
