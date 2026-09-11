@@ -1407,6 +1407,8 @@ pub struct CustomizationState {
     pub column_drawers: Vec<ContentDrawer>,
     #[serde(skip)]
     pub(crate) drawer_tiles: Vec<DrawerTileMeasurement>,
+    #[serde(skip)]
+    pub(crate) column_drawer_bounds: Vec<ColumnDrawerMeasurement>,
     pub picker: Option<ToolPicker>,
     pub control: Option<PanelControl>,
     pub toolbar_prompt: Option<ToolbarPrompt>,
@@ -1664,6 +1666,7 @@ impl CustomizationState {
                     unreachable!()
                 };
                 self.drawer_tiles.retain(|m| m.column != column);
+                self.column_drawer_bounds.retain(|m| m.group != group);
                 let existing = self.column_drawers.iter().position(
                     |d| matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column),
                 );

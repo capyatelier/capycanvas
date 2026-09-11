@@ -26,8 +26,8 @@ mod customization;
 mod drawers;
 mod zen;
 pub use drawers::{
-    ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal, DrawerPlacement, DrawerTabs,
-    DrawerTileMeasurement, TileAnchor,
+    ColumnDrawerMeasurement, ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal,
+    DrawerPlacement, DrawerTabs, DrawerTileMeasurement, TileAnchor,
 };
 pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
@@ -836,6 +836,9 @@ pub enum UiAction {
     },
     MeasureDrawerTiles {
         measurements: Vec<DrawerTileMeasurement>,
+    },
+    MeasureColumnDrawers {
+        measurements: Vec<ColumnDrawerMeasurement>,
     },
     MeasureColumnScroll {
         column: u32,

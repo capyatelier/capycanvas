@@ -46,6 +46,7 @@ struct WorkspaceDrag {
     press: [f32; 2],
     chrome_revealed: bool,
     moved: bool,
+    drawer: Option<DrawerAnchor>,
 }
 #[derive(Clone, Copy)]
 struct FloatingResize {
@@ -785,9 +786,27 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Invalid drag position".into());
         }
         if phase == ContactPhase::Cancel {
-            if self.workspace_drag.is_some_and(|d| d.original == item) {
+            if let Some(drag) = self.workspace_drag.filter(|d| d.original == item) {
                 self.workspace_drag = None;
                 self.workspace_history.cancel(&mut self.state.workspace);
+                if let Some(DrawerAnchor::Column {
+                    column,
+                    group,
+                    origin,
+                }) = drag.drawer
+                {
+                    self.state.customization.column_drawers.retain(|d| {
+                        !matches!(d.anchor, DrawerAnchor::Column { column: c, .. } if c == column)
+                    });
+                    self.state
+                        .customization
+                        .column_drawers
+                        .push(ContentDrawer::for_column(
+                            &self.state.workspace.layout,
+                            group,
+                            origin,
+                        )?);
+                }
                 self.interaction.keep_chrome_until_contact = false;
             }
             return Ok(());
@@ -796,7 +815,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.interaction.viewport = Some(viewport);
         self.interaction.zen_entry_guard = false;
         if phase == ContactPhase::Down {
-            let layout = self.layout(viewport);
+            let mut layout = self.layout(viewport);
+            layout.groups.extend(
+                self.state
+                    .customization
+                    .column_drawer_groups(&self.state.workspace.layout),
+            );
             if let DockItem::Column { column } = item {
                 let source = layout
                     .collapsed
@@ -814,6 +838,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     press: position,
                     chrome_revealed: true,
                     moved: false,
+                    drawer: None,
                 });
                 self.state.customization = CustomizationState::default();
                 return Ok(());
@@ -847,6 +872,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                 press: position,
                 chrome_revealed: !source.floating || !self.interaction.hidden,
                 moved: false,
+                drawer: self
+                    .state
+                    .customization
+                    .column_drawers
+                    .iter()
+                    .find_map(|d| {
+                        matches!(d.anchor, DrawerAnchor::Column { group, .. } if group == source.id)
+                            .then_some(d.anchor)
+                    }),
             });
             if whole && source.floating {
                 let floats = &mut self.state.workspace.layout.floating;
@@ -857,7 +891,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let floating = floats.remove(index);
                 floats.push(floating);
             }
-            self.state.customization = CustomizationState::default();
+            // Measured column drawers are dock projections: keep them available
+            // for drops until a move removes their source from the column. Hosts
+            // without drawer drag support retain their existing dismissal behavior.
+            let mut column_drawers = std::mem::take(&mut self.state.customization.column_drawers);
+            column_drawers.retain(|d| {
+                d.tabs.as_ref().is_some_and(|tabs| {
+                    self.state
+                        .customization
+                        .column_drawer_bounds
+                        .iter()
+                        .any(|m| m.group == tabs.group)
+                })
+            });
+            self.state.customization = CustomizationState {
+                column_drawers,
+                column_drawer_bounds: std::mem::take(
+                    &mut self.state.customization.column_drawer_bounds,
+                ),
+                drawer_tiles: std::mem::take(&mut self.state.customization.drawer_tiles),
+                ..CustomizationState::default()
+            };
             return Ok(());
         }
         let mut drag = self
@@ -950,6 +1004,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             return None;
         }
         let mut resolved = self.layout(viewport);
+        resolved.groups.extend(
+            self.state
+                .customization
+                .column_drawer_groups(&self.state.workspace.layout),
+        );
         let docks_hidden = self.state.workspace.zen_mode
             && self
                 .workspace_drag
@@ -1226,6 +1285,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::MeasureColumnDrawers { measurements } => {
+                self.state
+                    .customization
+                    .measure_column_drawers(measurements)?;
+                return Ok(UiChange::default());
+            }
             UiAction::MeasureDrawerTiles { measurements } => {
                 self.state
                     .customization
@@ -9038,6 +9103,190 @@ mod tests {
         .unwrap();
         assert!(s.state.customization.column_drawers.is_empty());
         assert!(!s.state.workspace.layout.is_collapsed(4));
+    }
+
+    #[test]
+    fn column_drawer_drag_tear_off_cancel_dock_and_history() {
+        let viewport = [1200., 900.];
+        for (group, panel, whole) in [
+            (5, Panel::Brushes, false),
+            (8, Panel::Properties, false),
+            (8, Panel::Layers, true),
+        ] {
+            let mut s = session();
+            s.set_platform(Platform::Gtk);
+            s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap();
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer { group, panel },
+            })
+            .unwrap();
+            let drawer = s.state.customization.column_drawers[0].clone();
+            let bounds = drawer
+                .placement(&s.state.workspace.layout, viewport, &[450.], false)
+                .unwrap()
+                .bounds;
+            let before = s.state.workspace.clone();
+            let item = if whole {
+                DockItem::Group { group }
+            } else {
+                DockItem::Panel { panel }
+            };
+            let measure = |s: &mut UiSession<Recorder>| {
+                s.dispatch(UiAction::MeasureColumnDrawers {
+                    measurements: vec![ColumnDrawerMeasurement { group, bounds }],
+                })
+                .unwrap();
+            };
+            let drag = |s: &mut UiSession<Recorder>, phase, position| {
+                s.dispatch(UiAction::DragWorkspace {
+                    item,
+                    phase,
+                    position,
+                    viewport,
+                    tabs: vec![],
+                })
+                .unwrap();
+            };
+            let press = [bounds.x + bounds.width * 0.5, bounds.y + 18.];
+            let away = [600., 500.];
+            measure(&mut s);
+            drag(&mut s, ContactPhase::Down, press);
+            drag(&mut s, ContactPhase::Move, [press[0] + 12., press[1]]);
+            assert_eq!(s.state.workspace, before);
+            assert_eq!(
+                s.state.customization.column_drawers,
+                std::slice::from_ref(&drawer)
+            );
+            drag(&mut s, ContactPhase::Move, away);
+            assert_eq!(s.state.workspace.layout.floating.len(), 1);
+            assert!(s.state.customization.column_drawers.is_empty());
+            drag(&mut s, ContactPhase::Cancel, away);
+            assert_eq!(s.state.workspace, before);
+            assert_eq!(
+                s.state.customization.column_drawers,
+                std::slice::from_ref(&drawer)
+            );
+            for dock in [false, true] {
+                measure(&mut s);
+                drag(&mut s, ContactPhase::Down, press);
+                drag(&mut s, ContactPhase::Move, away);
+                let point = if dock {
+                    let target = s
+                        .layout(viewport)
+                        .groups
+                        .into_iter()
+                        .find(|g| g.id == if group == 5 { 8 } else { 5 })
+                        .unwrap();
+                    [
+                        target.bounds.x + target.bounds.width * 0.5,
+                        target.bounds.y + 18.,
+                    ]
+                } else {
+                    away
+                };
+                drag(&mut s, ContactPhase::Move, point);
+                drag(&mut s, ContactPhase::Up, point);
+                assert_eq!(s.state.workspace.layout.floating.len(), usize::from(!dock));
+                if dock {
+                    let target = if group == 5 { 8 } else { 5 };
+                    assert_eq!(s.state.workspace.layout.panel_group(panel), Some(target));
+                    if whole {
+                        for panel in before.layout.group_panels(group).unwrap() {
+                            assert_eq!(s.state.workspace.layout.panel_group(*panel), Some(target));
+                        }
+                    }
+                }
+                s.state.workspace.layout.validate().unwrap();
+                let after = s.state.workspace.clone();
+                invoke(&mut s, CommandId::UndoWorkspace);
+                assert_eq!(s.state.workspace, before);
+                invoke(&mut s, CommandId::RedoWorkspace);
+                assert_eq!(s.state.workspace, after);
+                invoke(&mut s, CommandId::UndoWorkspace);
+                s.state.customization.column_drawers = vec![drawer.clone()];
+            }
+        }
+    }
+
+    #[test]
+    fn column_drawer_tabs_reorder_and_reject_stale_geometry() {
+        let mut s = session();
+        let viewport = [1200., 900.];
+        let group = 8;
+        s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+            .unwrap();
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group,
+                panel: Panel::Layers,
+            },
+        })
+        .unwrap();
+        let bounds = s.state.customization.column_drawers[0]
+            .placement(&s.state.workspace.layout, viewport, &[450.], false)
+            .unwrap()
+            .bounds;
+        s.dispatch(UiAction::MeasureColumnDrawers {
+            measurements: vec![ColumnDrawerMeasurement { group, bounds }],
+        })
+        .unwrap();
+        let before = s.state.workspace.clone();
+        let tabs: Vec<_> = (0..3)
+            .map(|index| TabHit {
+                group,
+                index,
+                bounds: Bounds {
+                    x: bounds.x + index as f32 * 90.,
+                    y: bounds.y,
+                    width: 90.,
+                    height: TAB_BAR_HEIGHT,
+                },
+            })
+            .collect();
+        let item = DockItem::Panel {
+            panel: Panel::Properties,
+        };
+        for (phase, position) in [
+            (ContactPhase::Down, [bounds.x + 220., bounds.y + 18.]),
+            (ContactPhase::Move, [bounds.x + 10., bounds.y + 18.]),
+            (ContactPhase::Up, [bounds.x + 10., bounds.y + 18.]),
+        ] {
+            s.dispatch(UiAction::DragWorkspace {
+                item,
+                phase,
+                position,
+                viewport,
+                tabs: tabs.clone(),
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            s.state.workspace.layout.group_panels(group).unwrap(),
+            &[Panel::Properties, Panel::Layers, Panel::Adjustments]
+        );
+        assert!(s.state.workspace.layout.is_collapsed(group));
+        assert!(s.state.workspace.layout.floating.is_empty());
+        assert_eq!(s.state.customization.column_drawers.len(), 1);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace, before);
+        s.state.customization.column_drawers.clear();
+        assert!(
+            s.dispatch(UiAction::DragWorkspace {
+                item,
+                phase: ContactPhase::Down,
+                position: [bounds.x + 10., bounds.y + 18.],
+                viewport,
+                tabs,
+            })
+            .is_err()
+        );
+        assert!(
+            serde_json::to_value(&s.state.customization)
+                .unwrap()
+                .get("column_drawer_bounds")
+                .is_none()
+        );
     }
 
     #[test]

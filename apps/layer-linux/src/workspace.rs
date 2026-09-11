@@ -2224,8 +2224,10 @@ impl Workspace {
     }
     fn measure_drawer_tiles(&self) {
         let mut measurements = Vec::new();
+        let mut columns = Vec::new();
         for drawer in self.columns.drawers.borrow().iter() {
             drawer.tile_measurements(self, &mut measurements);
+            columns.extend(drawer.measurement());
         }
         if let Some(g) = self.gpu.borrow_mut().as_mut() {
             // Measurement-only dispatch: no widget refresh during allocation.
@@ -2234,6 +2236,11 @@ impl Workspace {
                 .dispatch(UiAction::MeasureDrawerTiles { measurements })
             {
                 eprintln!("Drawer measurement: {error}");
+            }
+            if let Err(error) = g.session.dispatch(UiAction::MeasureColumnDrawers {
+                measurements: columns,
+            }) {
+                eprintln!("Column drawer measurement: {error}");
             }
         }
     }
@@ -2272,7 +2279,8 @@ impl Workspace {
         self.surface.queue_draw();
     }
     fn tab_hits(&self) -> Vec<TabHit> {
-        self.groups
+        let mut hits: Vec<_> = self
+            .groups
             .borrow()
             .iter()
             .flat_map(|g| {
@@ -2290,7 +2298,11 @@ impl Workspace {
                     })
                 })
             })
-            .collect()
+            .collect();
+        for drawer in self.columns.drawers.borrow().iter() {
+            hits.extend(drawer.tab_hits(self));
+        }
+        hits
     }
     fn drop_at(&self, x: f32, y: f32, item: DockItem) -> Option<DropHint> {
         self.gpu.borrow().as_ref()?.session.drop_hint(

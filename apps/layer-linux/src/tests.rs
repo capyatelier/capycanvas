@@ -10847,6 +10847,352 @@ fn native_frame_pacing() {
 
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_column_drawer_drag_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.ColumnDrawerDragInput");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let original = state(&w).workspace;
+    let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
+    let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native pointer timed out"
+        );
+        step += 1;
+        pump(150);
+    };
+    for (group, panel, whole) in [
+        (8, Panel::Layers, false),
+        (8, Panel::Adjustments, false),
+        (8, Panel::Layers, true),
+        (5, Panel::Brushes, false),
+    ] {
+        for dock in [false, true] {
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: original.clone(),
+            });
+            w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+            let origin = if group == 8 {
+                Panel::Layers
+            } else {
+                Panel::Brushes
+            };
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group,
+                    panel: origin,
+                },
+            });
+            pump(400);
+            let before = saved(&w);
+            let column = original.layout.column_for_group(group).unwrap();
+            let root =
+                find_named(w.surface.upcast_ref(), &format!("column-drawer-{column}")).unwrap();
+            let grip = find_named(&root, "column-drawer-grip").unwrap();
+            let gb = grip.compute_bounds(&w.surface).unwrap();
+            let bounds = w
+                .columns
+                .drawers
+                .borrow()
+                .iter()
+                .find(|d| d.id == column)
+                .unwrap()
+                .placement()
+                .unwrap()
+                .bounds;
+            assert!(
+                (gb.x() + gb.width() - bounds.x - bounds.width).abs() < 2.,
+                "fixed top-right grip"
+            );
+            let start = if whole {
+                [gb.x() + gb.width() * 0.5, gb.y() + gb.height() * 0.5]
+            } else {
+                let index = original
+                    .layout
+                    .group_panels(group)
+                    .unwrap()
+                    .iter()
+                    .position(|p| *p == panel)
+                    .unwrap();
+                center(
+                    w.tab_hits()
+                        .into_iter()
+                        .find(|t| t.group == group && t.index == index)
+                        .unwrap()
+                        .bounds,
+                )
+            };
+            let item = if whole {
+                DockItem::Group { group }
+            } else {
+                DockItem::Panel { panel }
+            };
+            assert!(
+                matches!(w.drag_target_at(start), Some(DragTarget::Dock(target)) if target == item)
+            );
+            let away = [viewport[0] * 0.5, viewport[1] * 0.55];
+            perform(
+                serde_json::json!([{ "point": start }, { "down": true }, { "point": [start[0] - 12., start[1]] }]),
+            );
+            assert!(
+                w.workspace_drag
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|d| d.started)
+            );
+            assert_eq!(
+                saved(&w),
+                before,
+                "inside the drawer retains the source dock"
+            );
+            perform(serde_json::json!([{ "point": away }]));
+            assert_eq!(
+                state(&w).workspace.layout.floating.len(),
+                1,
+                "{group} {panel:?} {whole}"
+            );
+            if !dock {
+                // Cancellation restores both the dock and the open drawer.
+                assert!(w.workspace_drag_input(ContactPhase::Cancel, away, None));
+                perform(serde_json::json!([{ "down": false }]));
+                assert_eq!(saved(&w), before);
+                assert_eq!(state(&w).customization.column_drawers.len(), 1);
+                perform(
+                    serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]),
+                );
+            }
+            let destination = if dock {
+                let target = w
+                    .resolved()
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == if group == 5 { 8 } else { 5 })
+                    .unwrap();
+                [
+                    target.bounds.x + target.bounds.width * 0.5,
+                    target.bounds.y + 18.,
+                ]
+            } else {
+                away
+            };
+            perform(serde_json::json!([{ "point": destination }, { "down": false }]));
+            assert!(w.workspace_drag.borrow().is_none());
+            let layout = state(&w).workspace.layout;
+            assert_eq!(layout.floating.len(), usize::from(!dock));
+            let destination_group = layout.panel_group(panel).unwrap();
+            if dock {
+                assert_eq!(destination_group, if group == 5 { 8 } else { 5 });
+            }
+            if whole {
+                assert_eq!(
+                    layout.group_panels(destination_group).unwrap().len(),
+                    if dock { 4 } else { 3 }
+                );
+            } else if group == 8 {
+                assert_eq!(layout.group_panels(group).unwrap().len(), 2);
+                assert!(layout.is_collapsed(column));
+            }
+            layout.validate().unwrap();
+            let after = saved(&w);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            pump(200);
+            assert_eq!(saved(&w), before);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            });
+            pump(200);
+            assert_eq!(saved(&w), after);
+        }
+    }
+    // Open drawers accept normal tab insertion, body merging, and edge splits.
+    for (target_group, whole, zone) in [(8, false, 0), (8, true, 1), (5, true, 0), (8, false, 2)] {
+        let mut workspace = original.clone();
+        if target_group == 8 && whole {
+            workspace
+                .layout
+                .move_panel(
+                    viewport,
+                    Panel::Sizes,
+                    DockTarget::Tab {
+                        group: 5,
+                        index: None,
+                    },
+                )
+                .unwrap();
+        }
+        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::DoubleClickPanelHandle {
+            group: target_group,
+            viewport,
+        });
+        let origin = if target_group == 8 {
+            Panel::Layers
+        } else {
+            Panel::Brushes
+        };
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group: target_group,
+                panel: origin,
+            },
+        });
+        pump(400);
+        let before = saved(&w);
+        let source_group = if target_group == 8 { 5 } else { 8 };
+        let panel = if target_group == 8 {
+            Panel::Brushes
+        } else {
+            Panel::Layers
+        };
+        let source = w
+            .resolved()
+            .groups
+            .into_iter()
+            .find(|g| g.id == source_group)
+            .unwrap();
+        let start = if whole {
+            [
+                source.bounds.x + source.bounds.width - 10.,
+                source.bounds.y + 18.,
+            ]
+        } else {
+            center(
+                w.tab_hits()
+                    .into_iter()
+                    .find(|t| t.group == source_group && t.index == 0)
+                    .unwrap()
+                    .bounds,
+            )
+        };
+        let item = if whole {
+            DockItem::Group {
+                group: source_group,
+            }
+        } else {
+            DockItem::Panel { panel }
+        };
+        assert!(
+            matches!(w.drag_target_at(start), Some(DragTarget::Dock(target)) if target == item)
+        );
+        let bounds = w.columns.drawers.borrow()[0].placement().unwrap().bounds;
+        let destination = match zone {
+            0 => [bounds.x + 4., bounds.y + 18.],
+            1 => center(bounds),
+            _ => [
+                bounds.x + bounds.width * 0.5,
+                bounds.y + TAB_BAR_HEIGHT + 4.,
+            ],
+        };
+        perform(
+            serde_json::json!([{ "point": start }, { "down": true }, { "point": [viewport[0] * 0.5, viewport[1] * 0.6] }, { "point": destination }]),
+        );
+        let hint = w
+            .drop_hint
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| panic!("open drawer drop indicator: target={target_group}, whole={whole}, zone={zone}, point={destination:?}, start={start:?}, drag={}, drawers={:?}, floating={}, direct={:?}", w.workspace_drag.borrow().is_some(), state(&w).customization.column_drawers, state(&w).workspace.layout.floating.len(), w.drop_at(destination[0], destination[1], item)));
+        let expected = match zone {
+            0 => DockTarget::Tab {
+                group: target_group,
+                index: Some(0),
+            },
+            1 => DockTarget::Tab {
+                group: target_group,
+                index: None,
+            },
+            _ => DockTarget::Split {
+                group: target_group,
+                edge: Edge::Top,
+            },
+        };
+        assert_eq!(hint.target, expected);
+        perform(serde_json::json!([{ "down": false }]));
+        let layout = state(&w).workspace.layout;
+        let destination_group = layout.panel_group(panel).unwrap();
+        if zone == 2 {
+            assert_ne!(destination_group, target_group);
+        } else {
+            assert_eq!(destination_group, target_group);
+            if zone == 0 {
+                assert_eq!(layout.group_panels(target_group).unwrap()[0], panel);
+            }
+        }
+        assert!(
+            layout
+                .collapsed_column_for_group(destination_group)
+                .is_some()
+        );
+        assert!(layout.floating.is_empty());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+        layout.validate().unwrap();
+        let after = saved(&w);
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        pump(200);
+        assert_eq!(saved(&w), before);
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::RedoWorkspace,
+        });
+        pump(200);
+        assert_eq!(saved(&w), after);
+    }
+    // A real header drag can also reorder tabs without leaving the drawer.
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: original,
+    });
+    w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
+    w.dispatch(UiAction::Customize {
+        action: CustomizationAction::ToggleColumnDrawer {
+            group: 8,
+            panel: Panel::Layers,
+        },
+    });
+    pump(400);
+    let start = center(
+        w.tab_hits()
+            .into_iter()
+            .find(|t| t.group == 8 && t.index == 0)
+            .unwrap()
+            .bounds,
+    );
+    let bounds = w.columns.drawers.borrow()[0].placement().unwrap().bounds;
+    let end = [bounds.x + bounds.width - 10., start[1]];
+    perform(
+        serde_json::json!([{ "point": start }, { "down": true }, { "point": end }, { "down": false }]),
+    );
+    let layout = state(&w).workspace.layout;
+    assert_eq!(
+        layout.group_panels(8).unwrap(),
+        &[Panel::Adjustments, Panel::Properties, Panel::Layers]
+    );
+    assert!(layout.is_collapsed(8));
+    assert!(layout.floating.is_empty());
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_divider_cursor_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.DividerCursorInput");

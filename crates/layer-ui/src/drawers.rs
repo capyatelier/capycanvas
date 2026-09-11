@@ -18,6 +18,13 @@ pub struct DrawerTileMeasurement {
     pub bounds: Bounds,
 }
 
+/// Presented column drawer bounds, including its header and clipped body.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ColumnDrawerMeasurement {
+    pub group: u32,
+    pub bounds: Bounds,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawerAnchor {
@@ -549,6 +556,63 @@ impl ContentDrawer {
 }
 
 impl CustomizationState {
+    pub(crate) fn measure_column_drawers(
+        &mut self,
+        measurements: Vec<ColumnDrawerMeasurement>,
+    ) -> Result<(), String> {
+        if measurements.iter().any(|m| {
+            ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
+                .into_iter()
+                .all(f32::is_finite)
+                || m.bounds.width <= 0.
+                || m.bounds.height <= 0.
+        }) {
+            return Err("Invalid column drawer bounds".into());
+        }
+        self.column_drawer_bounds = measurements;
+        Ok(())
+    }
+
+    pub(crate) fn column_drawer_groups(&self, layout: &DockLayout) -> Vec<GroupPlacement> {
+        self.column_drawers
+            .iter()
+            .filter_map(|d| {
+                let DrawerAnchor::Column {
+                    column,
+                    group,
+                    origin,
+                } = d.anchor
+                else {
+                    return None;
+                };
+                if layout.collapsed_column_for_group(group) != Some(column) {
+                    return None;
+                }
+                let panels = layout.group_panels(group).ok()?;
+                if !panels.contains(&origin) {
+                    return None;
+                }
+                let bounds = self
+                    .column_drawer_bounds
+                    .iter()
+                    .find(|m| m.group == group)?
+                    .bounds;
+                Some(GroupPlacement {
+                    id: group,
+                    bounds,
+                    panels: panels.to_vec(),
+                    active: layout.active_panel(origin)?,
+                    axis: Axis::Vertical,
+                    tabs_visible: true,
+                    footer_grip: None,
+                    floating: false,
+                    resize_handles: Vec::new(),
+                    tiles: None,
+                })
+            })
+            .collect()
+    }
+
     fn accepts_drawer_tile(&self, m: &DrawerTileMeasurement) -> bool {
         self.column_drawers.iter().any(|d| {
             matches!(d.anchor, DrawerAnchor::Column { column, .. } if column == m.column)

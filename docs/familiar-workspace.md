@@ -20,6 +20,7 @@ are historical; this checkpoint and the current requirements take precedence.
 | Connected selection/fill, reference layers, selection-constrained brushes, gradients | `native_connected_tools`, `native_selected_brushes`, `native_gradient_tool`, GPU oracle tests |
 | Operation/linked masks, figures, editable/snapping rulers | `native_operation_tool`, `native_figure_tools`, `native_ruler_tools`, engine/GPU tests |
 | Connected tool drawers, nested drawers, collapsed-column movement/resize | `native_tool_drawers`, `native_nested_tool_drawers`, `native_collapsed_columns`, `native_collapsed_drop_and_resize` |
+| GTK column drawer tab/group tear-off, incoming drops, tab reordering, cancellation and history | `native_column_drawer_drag_input` (`native-input.js --workspace-drawer` in an isolated Mutter session) |
 | Partial/total Zen, eight menus, document files, workspace restore, native fullscreen | `native_zen_behaviors`, `native_menu_sections`, `native_document_files`, `native_workspace_restore`, `native_fullscreen_header_clock_and_battery` |
 
 All 20 integrated GTK scenarios pass. The approval follow-up passes 300
@@ -264,6 +265,14 @@ drop eligibility and drawer selection; GTK only renders and forwards input.
   changing the active tab does not change its width. All built-in panels use
   their shared `drawer_width` here and in tool-tile drawers. Keep drawers within
   the usable viewport, with content scrolling where needed.
+- On GTK, drawer tabs drag individual panels and the fixed top-right grip or
+  empty header drags the whole group. Keep the grip outside the scrolling tabs.
+  Open drawers accept ordinary tab insertion, body merges and top/bottom splits;
+  the collapsed dock tree remains the owner of their panels. Use the presented
+  drawer bounds and clipped native tab rectangles with shared docking policy.
+  Cancellation restores the source column and its open drawer; completed moves
+  participate in normal workspace undo/redo. Other hosts still need to publish
+  `MeasureColumnDrawers` and wire their drawer headers into workspace dragging.
 - Fit this into the existing recursive column layout, rather than creating a
   second docking system. Preserve workspace save/restore and undo/redo behavior;
   ordinary floating-panel tear-off rules must not turn collapsed columns into

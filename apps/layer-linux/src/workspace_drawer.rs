@@ -170,6 +170,8 @@ struct View {
     columns: Vec<gtk::Box>,
     clips: Vec<gtk::Widget>,
     bodies: Vec<Body>,
+    tabs: Vec<gtk::Button>,
+    tab_clip: Option<gtk::ScrolledWindow>,
 }
 impl View {
     fn new(w: &Rc<Workspace>, drawer: &ContentDrawer) -> Self {
@@ -208,6 +210,8 @@ impl View {
         let mut clips = Vec::new();
         let mut bodies = Vec::new();
         let mut effects = None;
+        let mut tab_buttons = Vec::new();
+        let mut tab_clip = None;
         for panels in &drawer.columns {
             let column = gtk::Box::new(gtk::Orientation::Vertical, WORKSPACE_SPACING as i32);
             for panel in panels {
@@ -276,6 +280,8 @@ impl View {
                 let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 header.add_css_class("dock-tabs");
                 header.set_height_request(TAB_BAR_HEIGHT as i32);
+                let labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                w.install_panel_drag(&header, DockItem::Group { group: tabs.group });
                 let layout = w.surface.imp().layout.borrow();
                 for panel in &tabs.panels {
                     let config = layout.panel(*panel).unwrap();
@@ -305,14 +311,25 @@ impl View {
                     }
                     button.set_child(Some(&content));
                     selected(&button, tabs.active == *panel);
-                    header.append(&button);
+                    w.install_panel_drag(&button, DockItem::Panel { panel: *panel });
+                    labels.append(&button);
+                    tab_buttons.push(button);
                 }
                 let header_clip = gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::External)
                     .vscrollbar_policy(gtk::PolicyType::Never)
-                    .child(&header)
+                    .hexpand(true)
+                    .child(&labels)
                     .build();
-                container.append(&header_clip);
+                header.append(&header_clip);
+                tab_clip = Some(header_clip);
+                let grip = tiles::grip();
+                grip.set_widget_name("column-drawer-grip");
+                grip.set_size_request(20, 24);
+                grip.set_halign(gtk::Align::End);
+                grip.set_valign(gtk::Align::Center);
+                header.append(&grip);
+                container.append(&header);
                 scroller.set_vexpand(true);
                 container.append(&scroller);
                 container.upcast::<gtk::Widget>()
@@ -330,6 +347,8 @@ impl View {
             columns,
             clips,
             bodies,
+            tabs: tab_buttons,
+            tab_clip,
         }
     }
 }
@@ -377,6 +396,58 @@ impl Drawer {
     }
     pub fn placement(&self) -> Option<DrawerPlacement> {
         self.presented.borrow().clone()
+    }
+    pub fn measurement(&self) -> Option<layer_ui::ColumnDrawerMeasurement> {
+        if self.closing.get() {
+            return None;
+        }
+        let state = self.state.borrow();
+        let group = state.as_ref()?.tabs.as_ref()?.group;
+        let bounds = self.placement()?.bounds;
+        (bounds.width > 0. && bounds.height > 0.)
+            .then_some(layer_ui::ColumnDrawerMeasurement { group, bounds })
+    }
+    pub fn tab_hits(&self, w: &Workspace) -> Vec<TabHit> {
+        let Some(measurement) = self.measurement() else {
+            return Vec::new();
+        };
+        let view = self.view.borrow();
+        let Some(view) = view.as_ref() else {
+            return Vec::new();
+        };
+        let Some(clip) = view
+            .tab_clip
+            .as_ref()
+            .and_then(|c| c.compute_bounds(&w.surface))
+        else {
+            return Vec::new();
+        };
+        let clip = Bounds {
+            x: clip.x(),
+            y: clip.y(),
+            width: clip.width(),
+            height: clip.height(),
+        };
+        view.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                let b = tab.compute_bounds(&w.surface)?;
+                let bounds = Bounds {
+                    x: b.x(),
+                    y: b.y(),
+                    width: b.width(),
+                    height: b.height(),
+                }
+                .intersection(clip)?
+                .intersection(measurement.bounds)?;
+                Some(TabHit {
+                    group: measurement.group,
+                    index,
+                    bounds,
+                })
+            })
+            .collect()
     }
     pub fn tile_measurements(&self, w: &Workspace, out: &mut Vec<DrawerTileMeasurement>) {
         if self.closing.get() {
