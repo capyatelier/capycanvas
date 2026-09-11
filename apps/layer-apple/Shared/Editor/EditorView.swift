@@ -46,13 +46,22 @@ struct EditorView<Canvas: View>: View {
                 }.padding(24).frame(maxWidth: 500).background(palette["panel"], in: RoundedRectangle(cornerRadius: 12))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
+                Text(store.storagePending ? "Saving" : store.storageFailure == nil ? "Saved" : "Failed")
+                    .foregroundStyle(.clear).frame(width: 1, height: 1)
+                    .accessibilityIdentifier("persistence-status")
+                    .accessibilityValue(store.state["theme"].string)
+            }
+            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .ignoresSafeArea().foregroundStyle(palette["text"])
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255))
+        .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
-            SettingsView(store: store)
+            SettingsView(store: store).modifier(StorageAlert(store: store))
         }
         .onAppear { systemTheme() }
         .onChange(of: colorScheme) { _, _ in systemTheme() }
@@ -114,6 +123,19 @@ struct EditorView<Canvas: View>: View {
             } else { PanelControls(store: store, panel: panel) }
         }.background(palette["panel"]).clipShape(RoundedRectangle(cornerRadius: 8))
             .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
+    }
+}
+
+private struct StorageAlert: ViewModifier {
+    @ObservedObject var store: EditorStore
+    var active = true
+    func body(content: Content) -> some View {
+        content.alert("Settings and Workspace", isPresented: Binding(
+            get: { active && store.storageFailure != nil },
+            set: { if !$0 && active { store.storageFailure = nil } })) {
+            if store.canRetryStorage { Button("Retry Save") { store.native?.retryPersistence() } }
+            Button("OK") { store.storageFailure = nil }
+        } message: { Text(store.storageFailure ?? "") }
     }
 }
 

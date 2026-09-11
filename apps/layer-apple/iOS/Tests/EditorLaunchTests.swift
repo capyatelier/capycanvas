@@ -3,9 +3,15 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testSettingsAndWorkspaceRestart() throws {
+        let app = editorTestApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSettingsAndWorkspaceRestart(in: app)
+    }
+
     @MainActor func testColorControls() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
-        let app = XCUIApplication()
+        let app = editorTestApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"preferences","action":{"type":"edit","id":"theme","value":1}},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"set_color","rgba":[1,0,0,1]}]"#
         app.launch()
         checkColorControls(in: app) { mode, wheel in
@@ -16,7 +22,7 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testNumericToolControls() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
-        let app = XCUIApplication()
+        let app = editorTestApplication()
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]"#
         app.launch()
         checkNumericToolControls(in: app)
@@ -26,7 +32,7 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testMetalLaunchAndEditorCapture() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
-        let app = XCUIApplication()
+        let app = editorTestApplication()
         app.launch()
         let canvas = app.otherElements["canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))

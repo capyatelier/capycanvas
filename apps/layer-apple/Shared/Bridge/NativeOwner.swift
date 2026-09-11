@@ -8,6 +8,13 @@ private final class MetalLayerLease: @unchecked Sendable {
     init(_ value: CAMetalLayer) { self.value = value }
 }
 
+private final class PersistenceLoad: @unchecked Sendable {
+    private let lock = NSLock()
+    private var loaded = EditorPersistence.Loaded()
+    func set(_ value: EditorPersistence.Loaded) { lock.lock(); loaded = value; lock.unlock() }
+    func value() -> EditorPersistence.Loaded { lock.lock(); defer { lock.unlock() }; return loaded }
+}
+
 /// The only owner of Rust and GPU state. UI callbacks submit owned input batches.
 final class NativeOwner: @unchecked Sendable {
     private let queue: DispatchQueue
@@ -23,17 +30,51 @@ final class NativeOwner: @unchecked Sendable {
     private var gpuPollScheduled = false
     private var gpuSamples = [CapyGpuFrameSample](repeating: CapyGpuFrameSample(), count: 8)
     private var lastTraceState: UInt64?
+    private let persistence: EditorPersistence
+    private let scene: String
+    private let observerID = UUID()
+    private var settingsRequests = Set<UInt64>()
+    private var settingsWrites = 0
+    private var workspaceWrites = 0
+    private var lastSettingsData: Data?
+    private var lastWorkspaceData: Data?
+    private var lastWorkspaceUpdatesDefault = true
+    private var failedSettingsWrite = false
+    private var failedWorkspaceWrite = false
+    private var firstWorkspace = true
+    private var initialWorkspaceNeedsSave = false
+    private var currentSettings = JSON()
+    private var latestSettings: EditorPersistence.SettingsChange?
+    private var appliedSettingsRevision: UInt64 = 0
+    private var storageErrors: [String: String] = [:]
+    private var lastStorageStatus: Data?
     let receive: @Sendable (JSON?, String?) -> Void
 
-    init(platform: UInt32, receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
+    init(platform: UInt32, scene: String, persistence: EditorPersistence = .shared,
+        receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
         let queue = DispatchQueue(label: "art.capycanvas.render", qos: .userInteractive)
         guard let handle = queue.sync(execute: { capy_apple_create(platform) }) else {
             throw HostFailure(message: "Could not create the native canvas session")
         }
         self.queue = queue; self.handle = handle; self.receive = receive
+        self.persistence = persistence; self.scene = scene
         trace = FrameTrace.configured(platform: platform)
+        // Reserve the first owner operation before exposing this instance.
+        // Disk reads run on the I/O queue; no input or surface task can overtake
+        // restoration, and the UI thread never waits for the filesystem.
+        let loaded = PersistenceLoad()
+        queue.suspend()
+        queue.async { [self] in restore(loaded.value()) }
+        persistence.load(scene: scene, observer: observerID, changed: { [weak self] change in
+            self?.perform { [weak self] in
+                guard let self else { return }
+                if change.revision > appliedSettingsRevision { latestSettings = change }
+                try applySharedSettings(); try publish()
+            }
+        }) { value in loaded.set(value); queue.resume() }
     }
     deinit {
+        persistence.unsubscribe(observerID)
         trace?.finish()
         let handle = handle, retainedLayer = layer
         queue.async {
@@ -59,7 +100,98 @@ final class NativeOwner: @unchecked Sendable {
         if let snapshot = try request(3) {
             if !snapshot["canvas_ready"].isNull { canvasReady = snapshot["canvas_ready"].bool }
             if !snapshot["shaders_ready"].isNull { shadersReady = snapshot["shaders_ready"].bool }
+            try persist(snapshot)
             receive(snapshot, nil)
+        }
+    }
+    private func restore(_ loaded: EditorPersistence.Loaded) {
+        for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
+            ("workspace", loaded.workspace, "restore_workspace")] {
+            guard let data else { continue }
+            do {
+                let value = try JSONSerialization.jsonObject(with: data)
+                _ = try request(0, JSON(["type": action, key: value]))
+            } catch { storageErrors[key] = "Could not restore \(key): \(error.localizedDescription)" }
+        }
+        storageErrors.merge(loaded.errors) { _, new in new }
+        initialWorkspaceNeedsSave = loaded.workspaceNeedsSnapshot && storageErrors["workspace"] == nil
+        do { try publish() } catch { receive(nil, error.localizedDescription) }
+        reportStorage()
+    }
+    private func persist(_ snapshot: JSON) throws {
+        guard !snapshot["state"].isNull else { return }
+        currentSettings = snapshot["state"]["settings"]
+        if !snapshot["workspace_persistence"].isNull {
+            if !firstWorkspace || initialWorkspaceNeedsSave {
+                let data = try JSONSerialization.data(withJSONObject: snapshot["workspace_persistence"].raw, options: [.sortedKeys])
+                saveWorkspace(data, updateDefault: !firstWorkspace)
+            }
+            firstWorkspace = false
+        }
+        for request in snapshot["state"]["requests"].array where request["kind"]["type"].string == "save_settings" {
+            let id = request["id"].uint
+            guard !settingsRequests.contains(id) else { continue }
+            let data = try JSONSerialization.data(withJSONObject: request["kind"]["settings"].raw, options: [.sortedKeys])
+            settingsRequests.insert(id)
+            saveSettings(data, request: id)
+        }
+        reportStorage()
+    }
+    private func saveWorkspace(_ data: Data, updateDefault: Bool = true) {
+        lastWorkspaceData = data; lastWorkspaceUpdatesDefault = updateDefault; workspaceWrites += 1
+        persistence.saveWorkspace(data, scene: scene, updateDefault: updateDefault) { [self] error in
+            perform { [self] in
+                workspaceWrites -= 1; storageErrors["workspace"] = error; failedWorkspaceWrite = error != nil; reportStorage()
+            }
+        }
+    }
+    private func saveSettings(_ data: Data, request id: UInt64?) {
+        lastSettingsData = data; settingsWrites += 1
+        persistence.saveSettings(data) { [self] error in
+            perform { [self] in
+                if let id {
+                    _ = try self.request(0, JSON(["type": "complete_request", "id": id, "error": error as Any? ?? NSNull()]))
+                    settingsRequests.remove(id)
+                }
+                settingsWrites -= 1; storageErrors["settings"] = error; failedSettingsWrite = error != nil
+                try applySharedSettings(); try publish(); reportStorage()
+            }
+        }
+    }
+    func retryPersistence() {
+        perform { [self] in
+            if failedSettingsWrite, settingsWrites == 0, let data = lastSettingsData { saveSettings(data, request: nil) }
+            if failedWorkspaceWrite, workspaceWrites == 0, let data = lastWorkspaceData {
+                saveWorkspace(data, updateDefault: lastWorkspaceUpdatesDefault)
+            }
+            reportStorage()
+        }
+    }
+    private func applySharedSettings() throws {
+        // A global notification must not roll back a newer local edit whose
+        // write is still pending. Apply the newest committed settings once all
+        // of this owner's writes have been acknowledged, including our own.
+        guard settingsWrites == 0, !failedSettingsWrite, let change = latestSettings else { return }
+        latestSettings = nil; appliedSettingsRevision = change.revision
+        let settings = try JSONSerialization.jsonObject(with: change.data)
+        storageErrors["settings"] = nil
+        guard !NSDictionary(dictionary: currentSettings.object).isEqual(settings) else { return }
+        _ = try request(0, JSON(["type": "restore_settings", "settings": settings]))
+    }
+    private func reportStorage() {
+        let error = storageErrors.values.sorted().joined(separator: "\n")
+        let status = JSON(["pending": settingsWrites + workspaceWrites, "error": error.isEmpty ? NSNull() : error as Any,
+            "can_retry": failedSettingsWrite || failedWorkspaceWrite])
+        guard let data = try? JSONSerialization.data(withJSONObject: status.raw, options: [.sortedKeys]), data != lastStorageStatus else { return }
+        lastStorageStatus = data
+        receive(JSON(["persistence": status.raw]), nil)
+    }
+    /// A barrier across both queues includes accepted edits, their writes and
+    /// acknowledgments. Lifecycle adapters can hold a background/termination
+    /// allowance without synchronously blocking the UI or render owner.
+    func flushPersistence(_ completion: @escaping @Sendable (Bool) -> Void) {
+        queue.async { [self] in
+            persistence.flush { [self] in queue.async { [self] in completion(storageErrors.isEmpty) } }
         }
     }
     private func perform(_ work: @escaping @Sendable () throws -> Void) {

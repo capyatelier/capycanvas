@@ -46,6 +46,7 @@ pub struct NativeHost {
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
     last_camera_revision: Option<u64>,
+    last_durable_workspace: Option<layer_ui::WorkspaceState>,
 }
 
 impl NativeHost {
@@ -71,6 +72,7 @@ impl NativeHost {
             last_pen: None,
             last_snapshot: None,
             last_camera_revision: None,
+            last_durable_workspace: None,
         })
     }
     pub fn resize(&mut self, width: u32, height: u32, density: f32) -> Result<(), String> {
@@ -423,7 +425,13 @@ impl NativeHost {
         }
         self.last_snapshot = Some(key);
         self.last_camera_revision = Some(self.session.state().camera.revision);
-        Some(self.snapshot())
+        let mut snapshot = self.snapshot();
+        let workspace = self.session.durable_workspace();
+        if self.last_durable_workspace.as_ref() != Some(&workspace) {
+            snapshot["workspace_persistence"] = json!(workspace);
+            self.last_durable_workspace = Some(workspace);
+        }
+        Some(snapshot)
     }
     fn snapshot(&self) -> Value {
         let layout = self.session.layout(self.logical);
@@ -623,6 +631,94 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_persistence_only_emits_committed_topology_changes() {
+        for platform in [layer_ui::Platform::Mac, layer_ui::Platform::Ios] {
+            let mut app = NativeHost::new(platform).unwrap();
+            let viewport = [1200., 900.];
+            app.resize(2400, 1800, 2.).unwrap();
+            let initial = app.take_snapshot().unwrap()["workspace_persistence"].clone();
+            assert_eq!(initial["version"], 1);
+            app.dispatch(UiAction::SetBrushSize { value: 40. }).unwrap();
+            assert!(
+                app.take_snapshot()
+                    .unwrap()
+                    .get("workspace_persistence")
+                    .is_none()
+            );
+            app.dispatch(UiAction::MeasurePanels {
+                measurements: vec![layer_ui::PanelMeasurement {
+                    panel: layer_ui::Panel::Brushes,
+                    tab_width: 100.,
+                    content_height: 900.,
+                }],
+            })
+            .unwrap();
+            if let Some(snapshot) = app.take_snapshot() {
+                assert!(
+                    snapshot.get("workspace_persistence").is_none(),
+                    "Host measurements are transient"
+                );
+            }
+            let divider = app.session.layout(viewport).dividers[0].clone();
+            let point = [
+                divider.bounds.x + divider.bounds.width / 2.,
+                divider.bounds.y + divider.bounds.height / 2.,
+            ];
+            for end in [ContactPhase::Cancel, ContactPhase::Up] {
+                for (phase, delta) in [(ContactPhase::Down, 0.), (ContactPhase::Move, 40.)] {
+                    app.dispatch(UiAction::DragDivider {
+                        id: divider.id,
+                        phase,
+                        position: [point[0] + delta, point[1]],
+                        viewport,
+                    })
+                    .unwrap();
+                    if let Some(snapshot) = app.take_snapshot() {
+                        assert!(
+                            snapshot.get("workspace_persistence").is_none(),
+                            "Never persist a provisional resize"
+                        );
+                    }
+                }
+                app.dispatch(UiAction::DragDivider {
+                    id: divider.id,
+                    phase: end,
+                    position: [point[0] + 40., point[1]],
+                    viewport,
+                })
+                .unwrap();
+                let snapshot = app.take_snapshot().unwrap();
+                if end == ContactPhase::Cancel {
+                    assert!(snapshot.get("workspace_persistence").is_none());
+                } else {
+                    let saved = snapshot["workspace_persistence"].clone();
+                    assert!(!saved.is_null() && saved != initial);
+                    let mut restored = NativeHost::new(platform).unwrap();
+                    restored
+                        .dispatch(
+                            serde_json::from_value(
+                                json!({"type":"restore_workspace", "workspace":saved}),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        restored.take_snapshot().unwrap()["workspace_persistence"],
+                        saved
+                    );
+                    app.dispatch(UiAction::Invoke {
+                        command: layer_ui::CommandId::UndoWorkspace,
+                    })
+                    .unwrap();
+                    assert_eq!(
+                        app.take_snapshot().unwrap()["workspace_persistence"],
+                        initial
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn native_navigation_preserves_camera_patches_and_rejects_nonfinite_input() {
         let mut app = NativeHost::new(layer_ui::Platform::Mac).unwrap();
