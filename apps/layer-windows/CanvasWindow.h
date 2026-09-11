@@ -1,6 +1,7 @@
 #pragma once
 #include "pch.h"
 #include "WorkspaceView.h"
+#include "CanvasWorkBuffer.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
 #include <condition_variable>
@@ -10,6 +11,7 @@
 #include <thread>
 #include <variant>
 #include <vector>
+#include <unordered_map>
 
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
@@ -17,16 +19,18 @@ public:
     ~CanvasWindow();
 private:
     struct Size { uint32_t width=1, height=1; float scale=1; };
-    struct Command { bool input=false; std::string json; };
-    using Work = std::variant<std::vector<CapyPointer>, Command>;
     winrt::Microsoft::UI::Xaml::Window window;
     winrt::Microsoft::UI::Xaml::Controls::SwapChainPanel panel;
+    winrt::Microsoft::UI::Xaml::Controls::ContentControl canvasFocus;
     winrt::Microsoft::UI::Xaml::Controls::TextBlock status;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueueController inputController{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueue inputDispatcher{nullptr};
     winrt::Microsoft::UI::Input::InputPointerSource inputSource{nullptr}; // input thread only
-    std::atomic<float> inputScale{1};
+    // Captured together under mutex; never pair a new DPI with an old camera.
+    float inputScale=1;
+    uint64_t revision=0;
+    std::unordered_map<uint32_t,std::wstring> heldKeys; // UI thread
     bool inputDone=false;
     CapyHost* host=nullptr;
     std::unique_ptr<WorkspaceView> workspace;
@@ -39,11 +43,13 @@ private:
     std::jthread renderer;
     std::mutex mutex;
     std::condition_variable wake;
-    std::deque<Work> work;
+    std::condition_variable space;
+    CanvasWorkBuffer work;
+    bool transportFailed=false;
+    bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
     bool closing=false, closed=false, resize=false, paused=false;
     std::atomic<bool> rendererDone{false};
-    std::atomic<uint64_t> revision{0};
     uint64_t sequence=0;
     void Start();
     void Resize();
@@ -53,7 +59,10 @@ private:
     void Finish();
     void Fail(std::string message);
     void Send(std::string json, bool input=false);
-    void Replay(bool pan); // Explicit smoke-test fixture, not OS input evidence.
+    bool SendIndependent(CanvasWork item);
+    void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
+    void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);
+    void Replay(bool pan, bool backlog=false); // Explicit smoke-test fixture, not OS input evidence.
     void StartInput();
     void Pointer(winrt::Microsoft::UI::Input::PointerEventArgs const&, uint32_t phase);
 };

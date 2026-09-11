@@ -1,5 +1,5 @@
 param([Parameter(Mandatory)][int]$ProcessId,
-      [ValidateSet('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan')][string]$Action='Stroke',
+      [ValidateSet('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan','Test backlog')][string]$Action='Stroke',
       [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
@@ -42,7 +42,7 @@ if($Action -eq 'Close') {
     if(!$p.WaitForExit(5000)){throw 'Close exceeded five seconds.'}
 } elseif($Action -eq 'Resize') {
     if(![CapyWindowExercise]::MoveWindow($handle,$rect.left,$rect.top,$Width,$Height,$true)){throw 'Resize failed.'}
-} elseif($Action -in @('Undo','Redo','Test stroke','Test pan')) {
+} elseif($Action -in @('Undo','Redo','Test stroke','Test pan','Test backlog')) {
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
     $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty,$Action)
     $button=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)

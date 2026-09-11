@@ -95,3 +95,28 @@ uniform spacing/corner construction, numeric units and track styling, and UTF-8
 source decoding. Header, detailed layer layout, docking/customization, settings,
 remaining panels and full visual parity are unfinished. Native frame accounting
 and presentation/input acceptance remain open.
+
+## Input transport checks
+
+Canvas histories are bounded and ordered; UI commands never block the UI thread.
+A full command channel reports an explicit error and cancels active input.
+Wheel and canvas shortcuts use shared Rust navigation/keymap policy. Native
+widgets keep their own text, slider and focus-navigation keys.
+
+Run allocation/order checks from a Visual Studio developer PowerShell:
+
+~~~powershell
+./apps/layer-windows/scripts/test-input.ps1
+~~~
+
+With CAPY_SMOKE_TEST=1, Test backlog replays 32,768 records in bounded batches.
+CAPY_TRACE_TRANSPORT=1 logs capacity waits locally to input-transport.log.
+Invoke Test backlog and then Close with exercise-window.ps1 to exercise shutdown
+during producer backpressure. Both transport and raw input tracing must be off
+for timing runs. Replay is not evidence of physical input delivery.
+
+WinUI's independent input source reports terminal capture loss and routed release;
+the adapter cancels shared contact state on those paths. Physical mouse/pen/touch,
+keyboard, wheel and mixed-DPI continuity still require end-to-end validation.
+See Microsoft's [InputPointerSource event ordering](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.input.inputpointersource?view=windows-app-sdk-1.8)
+for the OS routing contract.

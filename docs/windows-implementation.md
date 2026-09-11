@@ -230,3 +230,28 @@ NativeHost::prepare_canvas_frame, shared with the Apple and Android presenters.
 The merged build passes 14 adapter/shared-host tests and the native workspace,
 controlled drawing and shutdown smoke checks. OS mouse automation still cannot
 target this window reliably; physical pointer delivery remains unverified.
+
+### Bounded input and navigation checkpoint
+
+The canvas transport now bounds both queued items (256) and retained payload
+allocations (1 MiB), reserving 32 slots and 64 KiB for UI commands. Pointer
+histories are sent in ordered batches of at most 64.
+The independent input producer waits for capacity without blocking XAML; drain,
+close, render failure and explicit command overflow wake waiting producers.
+UI command submission never waits. Exhaustion reports a persistent error,
+drains accepted work, cancels active input and stops the render owner.
+
+Wheel input uses shared scroll policy with Windows wheel settings, Ctrl zoom
+and Shift horizontal pan. Canvas keyboard input uses the shared shortcut policy;
+native widgets retain editing/navigation, and releases preserve their original
+key identity across modifier changes. DPI and camera revision are captured
+together. Routed release joins capture loss/routed-away as a cancellation path.
+These routes still require physical-device and mixed-DPI interaction validation.
+
+The native build, 14 adapter/shared-host Rust tests and queue allocation/order
+tests pass. UI Automation workspace controls, controlled drawing, resize and
+close pass. A 32,768-sample replay reaches bounded backpressure, and coordinated
+close completes within five seconds with no runtime stderr. This validates
+transport shutdown, not physical input delivery or presentation performance.
+Local captures preserve the existing full canvas extent. Full workspace,
+settings, lifecycle/recovery and measured 120 Hz acceptance remain open.

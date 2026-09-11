@@ -283,6 +283,23 @@ pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) ->
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_scroll(
+    host: *mut CapyHost,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    density: f32,
+    zoom: bool,
+    horizontal: bool,
+) -> i32 {
+    guard(host, |host| {
+        host.native
+            .scroll([x, y], [dx, dy], density, zoom, horizontal)?;
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
         if host.config.is_none() {

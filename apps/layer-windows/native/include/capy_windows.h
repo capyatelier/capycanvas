@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,8 @@ __declspec(dllimport) int32_t capy_pointer(CapyHost*, const CapyPointer*, size_t
 /* 1=action rejected (capy_error explains); the host remains usable. -1=fatal. */
 __declspec(dllimport) int32_t capy_action(CapyHost*, const char* json);
 __declspec(dllimport) int32_t capy_input(CapyHost*, const char* json);
+/* Physical anchor, logical wheel deltas, current composition density. */
+__declspec(dllimport) int32_t capy_scroll(CapyHost*, float x, float y, float dx, float dy, float density, bool zoom, bool horizontal);
 __declspec(dllimport) int32_t capy_suspend(CapyHost*);
 __declspec(dllimport) uint64_t capy_view_revision(const CapyHost*);
 /* Acquisition: 2=UI-thread reconfiguration required. Can wait for DXGI. Drain newly arrived input after this call. */
