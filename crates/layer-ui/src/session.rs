@@ -3638,6 +3638,83 @@ mod tests {
     }
 
     #[test]
+    fn operation_controls_support_active_masks_and_linked_paint_without_host_logic() {
+        use layer_core::{LayerOperationKind, Point, Selection};
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            for linked in [false, true] {
+                let mut s = session();
+                s.set_platform(platform);
+                let area = Selection::polygon(vec![
+                    Point { x: 100., y: 100. },
+                    Point { x: 300., y: 100. },
+                    Point { x: 300., y: 300. },
+                    Point { x: 100., y: 300. },
+                ])
+                .unwrap();
+                s.fill_selection(area.clone()).unwrap();
+                s.layer_edit(layer_core::Edit::SetSelection(Some(area)))
+                    .unwrap();
+                let id = s.engine.document().active_layer;
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::AddMask {
+                        id: id.0,
+                        replace: false,
+                    },
+                })
+                .unwrap();
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::LinkMask {
+                        id: id.0,
+                        value: linked,
+                    },
+                })
+                .unwrap();
+                s.frame(1, 1).unwrap();
+                let before = s.engine.document().layers.clone();
+                assert!(s.engine.document().active_mask);
+                assert!(s.command(CommandId::ScaleRotate).enabled);
+                invoke(&mut s, CommandId::ScaleRotate);
+                s.frame(2, 2).unwrap();
+                assert_eq!(
+                    s.renderer_mut().transform.as_ref().unwrap().layer,
+                    before[0].mask.as_ref().unwrap().id
+                );
+                s.dispatch(UiAction::SetToolSetting {
+                    id: "transform_x".into(),
+                    value: 24.,
+                })
+                .unwrap();
+                invoke(&mut s, CommandId::ApplyTransform);
+                s.frame(2, 2).unwrap();
+                let after = &s.engine.document().layers[0];
+                assert_eq!(
+                    after.operations.len(),
+                    before[0].operations.len() + usize::from(linked)
+                );
+                let mask = after.mask.as_ref().unwrap();
+                assert_eq!(mask.operations.len(), 1);
+                assert!(matches!(
+                    mask.operations[0].kind,
+                    LayerOperationKind::Transform(_)
+                ));
+                invoke(&mut s, CommandId::Undo);
+                assert_eq!(s.engine.document().layers, before);
+                s.layer_edit(layer_core::Edit::SetMaskTarget(false))
+                    .unwrap();
+                assert!(s.command(CommandId::ScaleRotate).enabled);
+                invoke(&mut s, CommandId::ScaleRotate);
+                s.dispatch(UiAction::SetToolSetting {
+                    id: "transform_width".into(),
+                    value: 1.2,
+                })
+                .unwrap();
+                invoke(&mut s, CommandId::CancelTransform);
+                assert_eq!(s.engine.document().layers, before);
+            }
+        }
+    }
+
+    #[test]
     fn operation_controls_preview_cancel_apply_and_undo_share_one_transaction() {
         use layer_core::{Affine, Point, Selection};
         let mut s = session();

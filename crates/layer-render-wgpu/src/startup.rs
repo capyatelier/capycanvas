@@ -236,6 +236,7 @@ impl WgpuRasterizer {
             if document.layers.iter().any(|l| {
                 l.operations
                     .iter()
+                    .chain(l.masks().flat_map(|m| m.operations.iter()))
                     .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))
             }) {
                 required.render.extend(
@@ -464,13 +465,18 @@ mod gpu_tests {
     use super::*;
     #[test]
     fn loaded_filters_and_current_brush_render_before_unused_pipelines() {
-        verify_document_startup(false);
+        verify_document_startup(0);
     }
     #[test]
     fn saved_transforms_compile_before_document_replay() {
-        verify_document_startup(true);
+        verify_document_startup(1);
     }
-    fn verify_document_startup(transform: bool) {
+    #[test]
+    fn saved_mask_transforms_compile_before_document_replay() {
+        verify_document_startup(2);
+    }
+    fn verify_document_startup(target: u8) {
+        let transform = target != 0;
         let mut reference = WgpuRasterizer::new_headless().unwrap();
         let mut renderer = WgpuRasterizer::from_wgpu_staged(
             reference.adapter.clone(),
@@ -514,6 +520,21 @@ mod gpu_tests {
                     ..Default::default()
                 }),
             });
+            if target == 2 {
+                let mut mask =
+                    layer_core::LayerMask::reveal_all(LayerId(9), layer_core::Point::default());
+                mask.default_coverage = 0.;
+                mask.initial = Some(
+                    layer_core::Selection::polygon(vec![
+                        layer_core::Point { x: 10., y: 10. },
+                        layer_core::Point { x: 110., y: 10. },
+                        layer_core::Point { x: 10., y: 110. },
+                    ])
+                    .unwrap(),
+                );
+                mask.operations = Arc::new(std::mem::take(&mut doc.layers[0].operations));
+                doc.layers[0].mask = Some(mask);
+            }
         }
         for (i, id) in ["domain_warp", "curves", "curves"].into_iter().enumerate() {
             let mut layer = Layer::paint(LayerId(10 + i as u64), id);
@@ -610,6 +631,11 @@ mod gpu_tests {
                 0,
                 DabBatch {
                     kind: DabBatchKind::LayerOperation(0),
+                    layer_id: if target == 2 {
+                        LayerId(9)
+                    } else {
+                        doc.active_layer
+                    },
                     dab_count: 0,
                     damage: layer_core::Rect {
                         min: layer_core::Point::default(),

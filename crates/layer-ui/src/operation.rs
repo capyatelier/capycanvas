@@ -122,7 +122,9 @@ pub(crate) fn tool_set(transform: bool) -> ToolSetView {
 // Conservative history geometry avoids a readback at interaction start. Erased
 // regions may leave extra transparent room; operations and assets remain bounded
 // by the finite raster canvas. Selecting an area uses that area's bounds instead.
-fn content_bounds(doc: &Document, layer: &layer_core::Layer) -> Rect {
+fn content_bounds(doc: &Document, target: layer_core::LayerId) -> Rect {
+    let layer = doc.target_owner(target).unwrap();
+    let (strokes, history) = layer.target_history(target).unwrap();
     let canvas = Rect {
         min: Point::default(),
         max: Point {
@@ -130,13 +132,19 @@ fn content_bounds(doc: &Document, layer: &layer_core::Layer) -> Rect {
             y: doc.height as f32,
         },
     };
-    let mut bounds = if layer.asset.is_some() {
+    let mut bounds = if target == layer.id && layer.asset.is_some() {
         canvas
+    } else if target != layer.id {
+        layer
+            .mask
+            .as_ref()
+            .and_then(|m| m.initial.as_ref())
+            .map_or(Rect::EMPTY, |s| s.bounds())
     } else {
         Rect::EMPTY
     };
-    let mut operations = layer.operations.iter().peekable();
-    for i in 0..=layer.strokes.len() {
+    let mut operations = history.iter().peekable();
+    for i in 0..=strokes.len() {
         while let Some(op) = operations.next_if(|op| op.after_stroke == i) {
             bounds = match op.kind {
                 LayerOperationKind::Transform(t) if op.coverage.initial.is_none() => {
@@ -146,7 +154,7 @@ fn content_bounds(doc: &Document, layer: &layer_core::Layer) -> Rect {
                 _ => bounds.union(op.bounds([doc.width, doc.height])),
             };
         }
-        if let Some(stroke) = layer.strokes.get(i).and_then(|id| doc.stroke(*id)) {
+        if let Some(stroke) = strokes.get(i).and_then(|id| doc.stroke(*id)) {
             bounds = bounds.union(stroke.bounds);
         }
     }
@@ -165,32 +173,65 @@ fn content_bounds(doc: &Document, layer: &layer_core::Layer) -> Rect {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn can_transform(&self) -> bool {
         let doc = self.engine.document();
-        !doc.active_mask
-            && !doc.is_locked(doc.active_layer)
+        !doc.is_locked(doc.active_target())
             && doc.layer(doc.active_layer).is_some_and(|l| {
-                l.kind == LayerKind::Paint
-                    && !l.mask.as_ref().is_some_and(|m| m.linked)
-                    && (l.asset.is_some() || !l.strokes.is_empty() || !l.operations.is_empty())
+                if doc.active_mask {
+                    l.mask.is_some()
+                } else {
+                    l.kind == LayerKind::Paint
+                        && (l.asset.is_some() || !l.strokes.is_empty() || !l.operations.is_empty())
+                }
             })
     }
     pub(super) fn begin_transform(&mut self) -> Result<(), String> {
         self.require_idle()?;
         if !self.can_transform() {
-            return Err("Select unlocked paint content without a linked mask".into());
+            return Err("Select unlocked paint content or a layer mask".into());
         }
         if self.operation.active() {
             return Ok(());
         }
         self.cancel_layer_gesture()?;
         let doc = self.engine.document();
-        let offset = doc.layer_offset(doc.active_layer);
+        let target = doc.active_target();
+        let offset = doc.layer_offset(target);
         let selection = doc.selection.as_ref().map(|s| {
             s.translated(Point {
                 x: -offset.x,
                 y: -offset.y,
             })
         });
-        let mut bounds = content_bounds(doc, doc.layer(doc.active_layer).unwrap());
+        let mut bounds = content_bounds(doc, target);
+        let request = TransformPreview {
+            transaction: 0,
+            layer: target,
+            selection: None,
+            transform: Default::default(),
+        };
+        if let Some(companion) = request.companion(&doc.layers) {
+            let other_offset = doc.layer_offset(companion.layer);
+            let other = content_bounds(doc, companion.layer);
+            if !other.is_empty() {
+                bounds = bounds.union(
+                    layer_core::Affine::translation(Point {
+                        x: other_offset.x - offset.x,
+                        y: other_offset.y - offset.y,
+                    })
+                    .bounds(other),
+                );
+            }
+        }
+        if bounds.is_empty() && doc.active_mask {
+            // A constant mask has no allocated content, but its finite editing
+            // area is still selectable. Transforming it preserves that constant.
+            bounds = Rect {
+                min: Point::default(),
+                max: Point {
+                    x: doc.width as f32,
+                    y: doc.height as f32,
+                },
+            };
+        }
         if let Some(s) = selection.as_ref().filter(|s| !s.inverted) {
             let b = s.bounds();
             bounds.min.x = bounds.min.x.max(b.min.x);
@@ -207,7 +248,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.operation.current = Some(Transaction {
             request: TransformPreview {
                 transaction: self.operation.serial,
-                layer: doc.active_layer,
+                layer: target,
                 selection,
                 transform: ImageTransform::default(),
             },

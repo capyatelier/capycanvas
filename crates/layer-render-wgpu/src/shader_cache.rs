@@ -318,8 +318,13 @@ mod tests {
             ..Default::default()
         }))
         .unwrap();
-        let mut reference =
-            WgpuRasterizer::from_wgpu_inner(adapter.clone(), device.clone().into(), queue.clone(), false).unwrap();
+        let mut reference = WgpuRasterizer::from_wgpu_inner(
+            adapter.clone(),
+            device.clone().into(),
+            queue.clone(),
+            false,
+        )
+        .unwrap();
         let doc = layer_core::Document::new("cached", 64, 64);
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         let dabs = [layer_render::Dab {

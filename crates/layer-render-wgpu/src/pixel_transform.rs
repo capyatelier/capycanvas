@@ -7,6 +7,7 @@ use layer_core::{Affine, ImageTransform, Interpolation};
 pub struct TransformSource {
     binding: wgpu::BindGroup,
     origin: [i32; 2],
+    pub(crate) background: f32,
 }
 pub struct TransformTarget<'a> {
     /// Single-sample RGBA8Unorm (or R8Unorm for scalar mode) render attachment,
@@ -21,6 +22,7 @@ pub struct TransformTarget<'a> {
 
 pub struct PixelTransform {
     scalar: bool,
+    visibility: bool,
     pub(super) pipeline: Deferred<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
@@ -48,6 +50,12 @@ impl PixelTransform {
         pass
     }
     pub(super) fn staged(device: &PipelineDevice, scalar: bool) -> Self {
+        Self::create(device, scalar, false)
+    }
+    pub(super) fn staged_visibility(device: &PipelineDevice) -> Self {
+        Self::create(device, true, true)
+    }
+    fn create(device: &PipelineDevice, scalar: bool, visibility: bool) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("affine transform parameters"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -116,7 +124,10 @@ impl PixelTransform {
                     module: &shader,
                     entry_point: Some("fragment_main"),
                     compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[("scalar", f64::from(scalar))],
+                        constants: &[
+                            ("scalar", f64::from(scalar)),
+                            ("visibility", f64::from(visibility)),
+                        ],
                         ..Default::default()
                     },
                     targets: &[Some(wgpu::ColorTargetState {
@@ -138,6 +149,7 @@ impl PixelTransform {
         });
         Self {
             scalar,
+            visibility,
             pipeline,
             layout,
             source_layout,
@@ -150,6 +162,23 @@ impl PixelTransform {
             uniforms: None,
             stride: 48_u32.div_ceil(device.limits().min_uniform_buffer_offset_alignment)
                 * device.limits().min_uniform_buffer_offset_alignment,
+            capacity: 0,
+            records: Vec::new(),
+            next_record: 0,
+        }
+    }
+    /// Another concurrent source shares shader recipes/layouts, never uniform
+    /// ranges or mutable pixel captures. Compilation is still once per device.
+    pub(super) fn fork(&self) -> Self {
+        Self {
+            scalar: self.scalar,
+            visibility: self.visibility,
+            pipeline: self.pipeline.clone(),
+            layout: self.layout.clone(),
+            source_layout: self.source_layout.clone(),
+            empty_selection: self.empty_selection.clone(),
+            uniforms: None,
+            stride: self.stride,
             capacity: 0,
             records: Vec::new(),
             next_record: 0,
@@ -209,7 +238,11 @@ impl PixelTransform {
                 },
             ],
         });
-        Ok(TransformSource { binding, origin })
+        Ok(TransformSource {
+            binding,
+            origin,
+            background: 0.,
+        })
     }
     /// Begin a submitted frame. Multiple encodes in that frame use distinct
     /// uniform ranges. Submit the previous frame before calling this again.
@@ -231,6 +264,9 @@ impl PixelTransform {
             affine: matrix,
             interpolation,
         } = transform;
+        if !source.background.is_finite() || !(0.0..=1.0).contains(&source.background) {
+            return Err("Invalid transform background");
+        }
         let inverse = matrix
             .inverse()
             .ok_or("Transform must be finite and invertible")?
@@ -302,8 +338,9 @@ impl PixelTransform {
                 source.origin[1] as f32,
                 target.origin[0] as f32,
                 target.origin[1] as f32,
-                f32::from(interpolation == Interpolation::Linear),
-                f32::from(matrix == Affine::IDENTITY),
+                f32::from(interpolation == Interpolation::Linear)
+                    + 2. * f32::from(matrix == Affine::IDENTITY),
+                source.background,
             ];
             let record = &mut self.records[index * self.stride as usize..][..48];
             for (value, slot) in values.iter().zip(record.chunks_exact_mut(4)) {
