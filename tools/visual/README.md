@@ -133,3 +133,43 @@ policy; it is not inferred from the screenshot. Existing fixtures may omit it.
 On Windows, pass the built `color_wheel_reference.exe` with `--oracle`.
 The comparator's test doubles use `--oracle-interpreter` so their tests run
 without relying on POSIX executable-script behavior.
+
+## Toolbar components
+
+For fast Apple/browser component comparisons, generate actual Rust panel views
+and render the shared SwiftUI buttons directly. The temporary capture bundle
+uses `Assets.car` from a built Mac app; it opens no editor window and does not
+run XCTest. Use a freshly built app when shared icons change.
+
+```sh
+mkdir -p artifacts/ui/toolbar-parity
+cargo run -p layer-host --example toolbar-fixture -- mac light \
+  > artifacts/ui/toolbar-parity/mac-light.json
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  bash apps/layer-apple/scripts/capture-toolbar.sh \
+  artifacts/ui/toolbar-parity/mac-light.json \
+  artifacts/ui/toolbar-parity/native-light-toolbar-tiles.png \
+  PATH_TO_BUILT_MAC_APP
+node tools/visual/chrome-capture.mjs 780 324 2 artifacts/ui/toolbar-parity \
+  light toolbar-tiles artifacts/ui/toolbar-parity/mac-light.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/ui/toolbar-parity/web-light-toolbar-tiles.png \
+  artifacts/ui/toolbar-parity/native-light-toolbar-tiles.png \
+  --output artifacts/ui/toolbar-parity/light-comparison
+```
+
+Repeat with `dark` and matching filenames. The generator also accepts `ios` and
+`web` to inspect each host's projected fields. Rows are small, medium, large,
+medium labeled and large labeled; each includes selected/disabled commands,
+a brush preset, dynamic color, opacity, size and a wrapping shortcut label.
+The browser uses its real toolbar factory, CSS and SVG assets and checks tile,
+icon and label-column geometry. It needs no Wasm build or GPU drawing session
+in this mode. The native renderer uses the same SwiftUI button/content types as
+the editor, including disabled/selected rendering. All fixture pixels are compared;
+there is no cropping, masking or global tolerance waiver.
+
+These fixtures omit surrounding editor chrome, panel shadows, tooltips and
+interaction. Mac component output does not prove physical iPad rasterization,
+whole-window parity, drawer transitions, hit testing or performance. Keep exact
+diff failures and validate native editor actions separately with
+`EditorLaunchTests/testToolbarStylesAndActions` on each Apple target.

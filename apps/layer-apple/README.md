@@ -34,6 +34,21 @@ Tool Set, Tool, Brush size, Color, Navigator/Diagnostics,
 Properties/Filters and Layers. Restoring a saved workspace preserves its layout
 and toolbar contents, including workspaces from earlier Apple builds.
 
+Both hosts support all five shared toolbar styles: small, medium, large, medium
+labeled and large labeled. Ribbons, floating panels, content drawers and partial
+Zen use the Rust icon sizes, label line counts and weight. Labeled tiles place
+text beside the icon; size controls retain the shared size glyph. Vertical bars
+use horizontal separators. Zen strips retain individually accessible buttons,
+and disabled toolbar controls apply one dimming step while remaining inactive.
+`testToolbarStylesAndActions` checks native style selection, button bounds,
+the Zoom action and Zen visibility. Direct bridge checks cover all style
+projections and workspace history on both hosts.
+
+The [toolbar component capture](../../tools/visual/README.md#toolbar-components)
+compares all five styles with Chrome using actual SwiftUI controls and shared
+vector assets, without launching an editor or automating window/menu controls.
+Component evidence supplements the full-editor visual and physical input gates.
+
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;
 Rust remembers the selected subtool and edited settings when changing groups.

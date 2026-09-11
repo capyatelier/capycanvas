@@ -72,9 +72,9 @@
     {
       "name": "Workspace and Zen",
       "commands": ["undo_workspace", "redo_workspace", "new_toolbar", "manage_toolbars", "reset_layout", "zen_mode"],
-      "checks": ["native/src/workspace_tests.rs", "Shared/Tests/WorkspaceControlChecks.swift"],
-      "ios": "partial: direct topology/history and focused simulator controls; full customization/Zen/physical layout matrix remains",
-      "mac": "partial: direct topology/history and focused editor controls; full customization/Zen/window layout matrix remains"
+      "checks": ["native/src/workspace_tests.rs", "Shared/Tests/WorkspaceControlChecks.swift", "Shared/Tests/ToolbarStyleChecks.swift", "tests/toolbar-capture.swift"],
+      "ios": "partial: direct topology/style/history, shared component captures and focused simulator controls; full customization/Zen/physical layout matrix remains",
+      "mac": "partial: direct topology/style/history, component captures and focused editor controls; full customization/Zen/window layout matrix remains"
     },
     {
       "name": "Camera",

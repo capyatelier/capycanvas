@@ -9,11 +9,12 @@ struct WorkspaceZenToolbars: View {
             let tiles = section["tiles"].array.compactMap { pair in panel["tiles"].array.first { $0["id"].uint == pair[0].uint }?.raw }
             WorkspaceToolbar(store: store,
                 panel: panel.replacing("tiles", with: JSON(tiles)).replacing("tile_style", with: section["style"]),
-                geometry: JSON(["tiles": section["tiles"].array.map { $0[1].raw }]))
+                geometry: JSON(["tiles": section["tiles"].array.map { $0[1].raw }]),
+                vertical: ["left", "right"].contains(section["edge"].string))
                 .background(EditorPalette(source: store.state["palette"])["panel"], in: RoundedRectangle(cornerRadius: 6))
                 .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
                 .placed(section["bounds"]).zIndex(150).environment(\.workspaceGesturesEnabled, false)
-                .accessibilityIdentifier("zen-toolbar-\(index)")
+                .accessibilityElement(children: .contain).accessibilityIdentifier("zen-toolbar-\(index)")
         }
     }
 }
@@ -149,7 +150,7 @@ private struct DrawerPanelBody: View {
     var body: some View {
         Group {
             if !panel["tiles"].array.isEmpty {
-                WorkspaceToolbar(store: store, panel: panel, geometry: tiles)
+                WorkspaceToolbar(store: store, panel: panel, geometry: tiles, vertical: true)
                     .frame(height: tiles["content_height"].number)
                     .task(id: tileKey) {
                         let result: JSON = await withCheckedContinuation { c in

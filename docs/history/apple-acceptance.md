@@ -70,6 +70,65 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Apple toolbar rendering and Zen accessibility — 2026-09-11
+
+Both Apple editors use one SwiftUI toolbar button/content implementation for
+ribbons, floating panels, drawers and Zen strips. All five shared styles consume
+Rust icon sizes, label line counts and font weight. Labeled tiles place text
+beside the icon, size tiles use the shared glyph, and vertical bars draw horizontal
+separators. A custom button style removes the extra native disabled dimming
+before the shared 0.36 opacity and retains pressed feedback. Zen containers now
+preserve their individual buttons' accessibility identifiers.
+
+Direct bridge checks pass all five styles on both hosts, ribbon/drawer geometry,
+Zen style projection and workspace undo/redo without changing brush or artwork.
+One focused native editor workflow passes on Mac and iPad Simulator: 108×54
+medium-labeled bounds, Zoom's effect on the camera readout, selecting 54×54
+Medium Tiles through the in-app toolbar menu, and Zen hide/restore. These checks
+exercise editor behavior and do not automate the OS menu bar.
+
+The new repeatable component capture uses actual shared SwiftUI buttons and
+compiled vector assets, rendered directly without an editor window or XCTest.
+Chrome uses its real toolbar factory, CSS and SVGs with the same Rust-generated
+panel views. The matrix contains seven selected/disabled, command, preset,
+color, opacity, size and wrapping-label controls in each of five styles at 2×.
+The displayed fixture fields agree across Mac, iPad and web projections; browser
+tile, icon and label-column geometry checks pass.
+
+Exact sRGB comparisons still fail: light differs at 190,902/1,010,880 pixels
+(18.8847%) and dark at 17,949/1,010,880 (1.7756%). Most light differences are a
+one-byte red-channel difference in the selected background. Pixels differing by
+more than one byte number 15,353 light and 15,902 dark; text and edge differences
+remain. The reports retain every pixel with no masks or relaxed acceptance
+threshold. Mac ImageRenderer output does not establish physical iPad
+rasterization or full-editor parity. The Mac workflow screenshot includes a
+Zen tooltip and is not used as a clean full-editor pixel reference.
+
+Concurrent changes through `fd1ade7`, including shared medium-style support,
+column header actions and GTK drawer dragging, are integrated. Both Apple Release
+builds pass, as do 33 Apple bridge, 15 host and 246 shared UI checks (294 total;
+one existing hardware-only host check remains ignored). The command audit still
+classifies all 62 commands on both hosts. The Mac workflow precedes `930ea78`;
+the iPad Simulator workflow and web build follow it. Both workflows precede the
+final GTK/shared drawer integration; both Apple builds and shared checks follow
+that integration. The component capture passes again with identical pixels.
+A separate
+1200×870 Chrome initial-editor capture also completes with WebGPU ready and no
+runtime errors, validating the existing full-editor capture path without
+claiming a new paired full-editor comparison.
+
+The integrated signed app installs and is observed running on the physical iPad;
+this verifies startup only. Test processes are closed and the original Mac editor
+is preserved. Reproduction commands are in the
+[visual tools guide](../../tools/visual/README.md#toolbar-components). Raw captures,
+pixel reports, result bundles and device/signing logs remain in ignored local
+`artifacts/ui/toolbar-parity` and `artifacts/apple-toolbar-*` paths.
+
+This milestone adds no new hardware timing or physical Pencil evidence. Full
+feature/lifecycle coverage, full-editor visual differences, filter-reference
+failures, physical latency and sustained 90 Hz Mac / 120 Hz iPad performance
+remain open. Mac 120 Hz testing remains explicitly deferred.
+
 ## Apple system status and current refresh target — 2026-09-11
 
 Both Apple editors now expose and implement Appearance's **Show battery and

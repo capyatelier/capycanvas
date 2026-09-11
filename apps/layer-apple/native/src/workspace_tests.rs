@@ -41,6 +41,96 @@ fn menu_action(menu: &Value, operation: &str) -> Value {
 }
 
 #[test]
+fn apple_toolbar_styles_reach_ribbons_drawers_and_zen_with_shared_metrics() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let before = app.state();
+        for (style, size, icon, lines, bold) in [
+            ("medium", [54., 54.], 24, 0, false),
+            ("large", [72., 72.], 32, 0, false),
+            ("medium_labeled", [108., 54.], 16, 2, false),
+            ("labeled", [108., 72.], 16, 3, true),
+            ("small", [36., 36.], 16, 0, false),
+        ] {
+            let previous = config(&app, "commands")["tile_style"].clone();
+            let menu = app
+                .request(
+                    2,
+                    json!({"type":"context","target":{"kind":"ribbon","panel":"commands"}}),
+                )
+                .unwrap();
+            let action = menu["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|s| s.as_array().unwrap())
+                .find(|item| item["action"]["action"]["style"] == style)
+                .unwrap()["action"]
+                .clone();
+            app.action(action);
+            let view = snapshot(&app);
+            let panel = view["panels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == "commands")
+                .unwrap();
+            assert_eq!(panel["tile_icon_size"], icon);
+            assert_eq!(panel["tile_label_lines"], lines);
+            assert_eq!(panel["tile_label_bold"], bold);
+            let ribbon = view["layout"]["groups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["active"] == "commands")
+                .unwrap();
+            let drawer = app
+                .request(
+                    2,
+                    json!({"type":"drawer_toolbar","panel":"commands","width":232,"height":800}),
+                )
+                .unwrap();
+            for geometry in [&ribbon["tiles"], &drawer] {
+                assert_eq!(
+                    geometry["tiles"].as_array().unwrap().len(),
+                    panel["tiles"].as_array().unwrap().len()
+                );
+                for (bounds, tile) in geometry["tiles"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .zip(panel["tiles"].as_array().unwrap())
+                {
+                    if tile["control"]["kind"] != "divider" {
+                        assert_eq!(bounds["width"].as_f64().unwrap(), size[0]);
+                        assert_eq!(bounds["height"].as_f64().unwrap(), size[1]);
+                    }
+                }
+            }
+            app.invoke("undo_workspace");
+            assert_eq!(config(&app, "commands")["tile_style"], previous);
+            app.invoke("redo_workspace");
+            assert_eq!(config(&app, "commands")["tile_style"], style);
+            app.invoke("zen_mode");
+            let zen = snapshot(&app);
+            let sections: Vec<_> = zen["zen_toolbars"]["sections"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|s| s["panel"] == "commands")
+                .collect();
+            assert!(!sections.is_empty());
+            for section in sections {
+                assert_eq!(section["style"], style);
+            }
+            app.invoke("zen_mode");
+            assert_eq!(app.state()["brush"], before["brush"]);
+            assert_eq!(app.state()["layers"], before["layers"]);
+        }
+    }
+}
+
+#[test]
 fn apple_default_workspace_reaches_every_grouped_brush_without_changing_artwork() {
     use std::collections::BTreeSet;
     for platform in [0, 1] {

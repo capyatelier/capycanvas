@@ -102,7 +102,7 @@ private struct WorkspacePanelGroup: View {
     private func preview(tiles: JSON) -> some View {
         VStack(spacing: 0) {
             if group["tabs_visible"].bool { header }
-            if !tiles.isNull { WorkspaceToolbar(store: store, panel: active, geometry: tiles) }
+            if !tiles.isNull { WorkspaceToolbar(store: store, panel: active, geometry: tiles, vertical: group["axis"].string == "vertical") }
             else {
                 PanelControls(store: store, panel: active)
                     .overlay(alignment: .topLeading) {
@@ -149,12 +149,13 @@ struct WorkspaceToolbar: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
     let geometry: JSON
+    var vertical = false
     var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear
             ForEach(panel["tiles"].array.indices, id: \.self) { index in
                 let tile = panel["tiles"][index]
-                WorkspaceTile(store: store, panel: panel, tile: tile)
+                WorkspaceTile(store: store, panel: panel, tile: tile, vertical: vertical)
                     .modifier(DrawerTileMeasurement(panel: panel["id"].string, tile: tile["id"].uint))
                     .modifier(WorkspaceContext(store: store, target: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
                     .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
@@ -180,40 +181,20 @@ private struct WorkspaceTile: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
     let tile: JSON
+    let vertical: Bool
     private var kind: String { tile["control"]["kind"].string }
-    private var iconSize: CGFloat { CGFloat(panel["tile_icon_size"].number) }
-    private var labelLines: Int { Int(panel["tile_label_lines"].uint) }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         Group {
             if kind == "divider" {
-                Rectangle().fill(.secondary.opacity(0.4)).frame(width: 1).padding(.vertical, 7)
+                Rectangle().fill(.secondary.opacity(0.4))
+                    .frame(width: vertical ? nil : 1, height: vertical ? 1 : nil)
+                    .padding(vertical ? .horizontal : .vertical, 4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
             } else {
-                Button { store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw]) } label: {
-                    HStack(spacing: 0) {
-                        Group {
-                            if kind == "color" {
-                                // Dynamic fill within the canonical color icon's
-                                // 16-unit viewbox (5.5 radius, 1.5 outline).
-                                let scale = iconSize / 16
-                                ColorSwatch(rgba: store.state["brush"]["color"])
-                                    .frame(width: 11 * scale, height: 11 * scale).clipShape(Circle())
-                                    .overlay(Circle().stroke(palette["text"], lineWidth: 1.5 * scale))
-                                    .frame(width: 16 * scale, height: 16 * scale)
-                            }
-                            else if kind == "size" { Text(String(tile["control"]["pixels"].uint)) }
-                            else { SharedIcon(name: tile["icon"].string, size: iconSize) }
-                        }.frame(width: labelLines > 0 ? 36 : nil)
-                        if labelLines > 0 {
-                            Text(tile["label"].string)
-                                .fontWeight(panel["tile_label_bold"].bool ? .bold : .regular)
-                                .lineLimit(labelLines).truncationMode(.tail).multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 4)
-                        }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-                }.buttonStyle(.plain).disabled(!tile["enabled"].bool).opacity(tile["enabled"].bool ? 1 : 0.4)
-                    .background(tile["selected"].bool ? Color.accentColor.opacity(0.22) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                ToolbarTileButton(panel: panel, tile: tile, palette: palette, color: store.state["brush"]["color"]) {
+                    store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
+                }
             }
         }.accessibilityLabel(tile["label"].string).help(tile["tooltip"].string)
             .accessibilityIdentifier("toolbar-tile-\(panel["id"].string)-\(tile["id"].uint)")
