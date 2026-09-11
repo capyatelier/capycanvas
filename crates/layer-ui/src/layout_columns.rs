@@ -424,6 +424,26 @@ impl DockLayout {
         collapsed: bool,
         viewport: [f32; 2],
     ) -> Result<(), String> {
+        self.set_column_collapsed_with_minimum(group, collapsed, viewport, false)
+    }
+
+    /// Opening with a resize gesture starts at the allocation minimum, so the
+    /// pointer can reach the edge without traversing the previous column width.
+    pub(crate) fn expand_column_for_resize(
+        &mut self,
+        root: u32,
+        viewport: [f32; 2],
+    ) -> Result<(), String> {
+        self.set_column_collapsed_with_minimum(root, false, viewport, true)
+    }
+
+    fn set_column_collapsed_with_minimum(
+        &mut self,
+        group: u32,
+        collapsed: bool,
+        viewport: [f32; 2],
+        expand_to_minimum: bool,
+    ) -> Result<(), String> {
         if !viewport.into_iter().all(|v| v.is_finite() && v > 0.) {
             return Err("Invalid workspace size".into());
         }
@@ -461,7 +481,17 @@ impl DockLayout {
             TILE_SIZE
         } else {
             let index = self.collapsed.iter().position(|c| c.root == root).unwrap();
-            self.collapsed.remove(index).expanded_width
+            let remembered = self.collapsed.remove(index).expanded_width;
+            if expand_to_minimum {
+                // Remove this root's collapsed state before measuring, while
+                // respecting any collapsed subcolumns that remain inside it.
+                let node = self.node(root).unwrap();
+                tab_min_width(node, self)
+                    .max(ribbon_cross_min(node, Axis::Vertical, bounds.height, self))
+                    .max(TILE_SIZE)
+            } else {
+                remembered
+            }
         };
         let band = self
             .bands
@@ -529,7 +559,7 @@ impl DockLayout {
         id: u32,
         position: [f32; 2],
         viewport: [f32; 2],
-    ) -> Option<u32> {
+    ) -> Option<ResizeCollapse> {
         let geometry = self.workspace(
             viewport[0],
             viewport[1],
@@ -540,11 +570,9 @@ impl DockLayout {
             .dividers
             .iter()
             .find(|d| d.id == id && d.axis == Axis::Horizontal)?;
-        let left = position[0] - divider.parent.x - WORKSPACE_SPACING * 0.5;
-        let right = divider.parent.x + divider.parent.width - position[0] - WORKSPACE_SPACING * 0.5;
-        let should_collapse = |node: &DockNode, width: f32| {
+        let collapse = |node: &DockNode, reversed: bool| {
             if self.is_collapsed(node.id()) {
-                return false;
+                return None;
             }
             let minimum = tab_min_width(node, self).max(ribbon_cross_min(
                 node,
@@ -552,33 +580,33 @@ impl DockLayout {
                 divider.parent.height,
                 self,
             ));
-            // Use the unclamped drag width: collapse more than 25% into the
-            // allocation minimum, or at the existing icon-strip threshold.
-            width < minimum * 0.75 || width <= TILE_SIZE
+            let collapse = ResizeCollapse {
+                root: node.id(),
+                expanded_width: subtree_bounds(node, &geometry)?.width,
+                origin: if reversed {
+                    divider.parent.x + divider.parent.width - WORKSPACE_SPACING * 0.5
+                } else {
+                    divider.parent.x + WORKSPACE_SPACING * 0.5
+                },
+                reversed,
+                minimum,
+            };
+            collapse.contains(position[0]).then_some(collapse)
         };
-        let root = if divider.band {
+        let collapse = if divider.band {
             let node = &self.bands.iter().find(|b| b.id == id)?.root;
-            if !should_collapse(node, if divider.reversed { right } else { left }) {
-                return None;
-            }
-            node.id()
+            collapse(node, divider.reversed)?
         } else {
             let DockNode::Split { first, second, .. } = self.node(id)? else {
                 return None;
             };
-            if should_collapse(first, left) {
-                first.id()
-            } else if should_collapse(second, right) {
-                second.id()
-            } else {
-                return None;
-            }
+            collapse(first, false).or_else(|| collapse(second, true))?
         };
-        if matches!(self.node(root)?, DockNode::Tabs { panels, active, .. } if panels.len() == 1 && active.kind() == PanelKind::Tiles)
+        if matches!(self.node(collapse.root)?, DockNode::Tabs { panels, active, .. } if panels.len() == 1 && active.kind() == PanelKind::Tiles)
         {
             return None;
         }
-        Some(root)
+        Some(collapse)
     }
 
     pub(super) fn validate_columns(&self) -> Result<(), String> {
@@ -805,7 +833,9 @@ mod tests {
                 d.parent.x + width + WORKSPACE_SPACING * 0.5
             };
             assert_eq!(
-                layout.collapse_at_divider(divider, [x, d.bounds.y + 20.], VIEW),
+                layout
+                    .collapse_at_divider(divider, [x, d.bounds.y + 20.], VIEW)
+                    .map(|c| c.root),
                 expected,
                 "divider {divider}, root {root}, requested width {width}"
             );

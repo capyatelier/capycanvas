@@ -316,15 +316,39 @@ pub fn tile_layout(
 pub(crate) enum ResizeDragPhase {
     #[default]
     Resizing,
-    /// A collapse ends resizing for this gesture, avoiding threshold oscillation.
-    Collapsed,
+    /// Retain the original threshold so the same drag can reverse a collapse.
+    Collapsed(ResizeCollapse),
     /// A collapsed edge stays fixed while the pointer crosses the opening distance.
     Expand {
         columns: [Option<u32>; 2],
         edge: f32,
     },
-    /// Expansion restores the saved width before the pointer reaches that edge.
-    CatchUp { edge: f32, reversed: bool },
+    /// Use the original opening threshold until the pointer reaches the expanded edge.
+    CatchUp {
+        columns: [Option<u32>; 2],
+        collapsed_edge: f32,
+        edge: f32,
+        reversed: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ResizeCollapse {
+    pub root: u32,
+    pub expanded_width: f32,
+    origin: f32,
+    reversed: bool,
+    minimum: f32,
+}
+impl ResizeCollapse {
+    pub fn contains(self, x: f32) -> bool {
+        let width = if self.reversed {
+            self.origin - x
+        } else {
+            x - self.origin
+        };
+        width < self.minimum * 0.75 || width <= TILE_SIZE
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -518,6 +518,7 @@ impl DockSurface {
                     | Slot::Drawer(_)
                     | Slot::DrawerConnection(_)
                     | Slot::ZenToolbars
+                    | Slot::Divider(_)
             )
         });
     }
@@ -2102,10 +2103,39 @@ impl Workspace {
             }
         }
         if !same_groups || !same_dividers {
-            self.surface
-                .remove_slots(|slot| matches!(slot, Slot::Divider(_)));
+            // The pressed divider owns GTK's implicit pointer grab and resize
+            // cursor. Keep it parented when collapse/expansion rebuilds panels.
+            self.surface.remove_slots(|slot| {
+                matches!(slot, Slot::Divider(id) if !resolved.dividers.iter().any(|d| d.id == id))
+            });
             for divider in &resolved.dividers {
-                self.add_divider(divider.clone());
+                let existing = self
+                    .surface
+                    .imp()
+                    .children
+                    .borrow()
+                    .iter()
+                    .find(|(slot, _)| *slot == Slot::Divider(divider.id))
+                    .map(|(_, widget)| widget.clone());
+                if let Some(handle) = existing {
+                    handle.set_cursor_from_name(Some(if divider.axis == Axis::Horizontal {
+                        "col-resize"
+                    } else {
+                        "row-resize"
+                    }));
+                    // Raise retained handles above newly built groups without
+                    // unparenting them or breaking the ongoing pointer grab.
+                    let mut children = self.surface.imp().children.borrow_mut();
+                    let index = children
+                        .iter()
+                        .position(|(slot, _)| *slot == Slot::Divider(divider.id))
+                        .unwrap();
+                    let item = children.remove(index);
+                    handle.insert_after(&self.surface, children.last().map(|(_, widget)| widget));
+                    children.push(item);
+                } else {
+                    self.add_divider(divider.clone());
+                }
             }
         }
         self.surface.remove_slots(|slot| {

@@ -1227,13 +1227,9 @@ fn native_collapsed_drop_and_resize() {
         pump(150);
         assert!(state(&w).workspace.layout.is_collapsed(root));
         let collapsed = state(&w).workspace;
-        drag.update([0., 0.]);
+        drag.update(delta_for_width(minimum * 0.75 - 2.));
         pump(80);
-        assert_eq!(
-            state(&w).workspace,
-            collapsed,
-            "native gesture must not oscillate"
-        );
+        assert_eq!(state(&w).workspace, collapsed, "hold below the threshold");
         drag.end();
         let expand = find_named(w.surface.upcast_ref(), &format!("expand-column-{root}"))
             .unwrap()
@@ -1255,7 +1251,17 @@ fn native_collapsed_divider_expansion() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
-    let original = state(&w).workspace;
+    let mut original = state(&w).workspace;
+    // Remember a deliberately wide column on both sides, so opening at the
+    // minimum cannot accidentally pass by restoring the same old width.
+    for band in original
+        .layout
+        .bands
+        .iter_mut()
+        .filter(|b| matches!(b.edge, Edge::Left | Edge::Right))
+    {
+        band.extent = 400.;
+    }
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     for group in [5, 8] {
         w.dispatch(UiAction::RestoreWorkspace {
@@ -1280,6 +1286,12 @@ fn native_collapsed_divider_expansion() {
                 .width
         };
         let saved_width = width();
+        let minimum = if group == 5 {
+            layer_ui::TOOL_PANEL_MIN_WIDTH
+        } else {
+            layer_ui::LAYERS_MIN_WIDTH
+        };
+        assert!(saved_width > minimum);
         w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
         pump(150);
         let collapsed = state(&w).workspace;
@@ -1323,7 +1335,7 @@ fn native_collapsed_divider_expansion() {
         }
         update(36.);
         assert!(!state(&w).workspace.layout.is_collapsed(root));
-        assert!((width() - saved_width).abs() < 1.);
+        assert!((width() - minimum).abs() < 1.);
         let expanded = state(&w).workspace;
         let d = w
             .resolved()
@@ -1332,22 +1344,42 @@ fn native_collapsed_divider_expansion() {
             .find(|d| d.id == band)
             .unwrap();
         let edge = (d.bounds.x + d.bounds.width * 0.5 - center) * outward;
-        for distance in [36., 0., -40., edge - 1.] {
+        for distance in [36., 40., edge - 1., 36.] {
             update(distance);
             assert_eq!(
                 state(&w).workspace,
                 expanded,
-                "expanded column waits for its edge"
+                "expanded column uses the opening threshold until it reaches its edge"
             );
         }
+        for _ in 0..3 {
+            for distance in [35., 0., -40., 35.] {
+                update(distance);
+                assert_eq!(state(&w).workspace, collapsed);
+                assert_eq!(w.resolved().work_area, geometry.work_area);
+            }
+            update(36.);
+            assert_eq!(state(&w).workspace, expanded);
+        }
+        update(edge);
         update(edge + 40.);
-        assert!((width() - saved_width - 40.).abs() < 1.);
-        let minimum = if group == 5 {
-            layer_ui::TOOL_PANEL_MIN_WIDTH
-        } else {
-            layer_ui::LAYERS_MIN_WIDTH
-        };
-        update(minimum * 0.75 - TILE_SIZE - 1.);
+        assert!((width() - minimum - 40.).abs() < 1.);
+        let threshold = minimum * 0.75 - TILE_SIZE;
+        for _ in 0..3 {
+            update(threshold - 1.);
+            assert!(state(&w).workspace.layout.is_collapsed(root));
+            let held = state(&w).workspace;
+            update(threshold - 10.);
+            assert_eq!(state(&w).workspace, held);
+            update(threshold + 1.);
+            assert!(!state(&w).workspace.layout.is_collapsed(root));
+            assert!((width() - minimum).abs() < 1.);
+            // Reversal has no wait: the next inward crossing collapses again
+            // even though the pointer never reached the expanded edge.
+        }
+        update(edge + 25.);
+        assert!((width() - minimum - 25.).abs() < 1.);
+        update(threshold - 1.);
         assert!(state(&w).workspace.layout.is_collapsed(root));
         assert!(
             (state(&w)
@@ -1373,7 +1405,7 @@ fn native_collapsed_divider_expansion() {
             drag.update([(36. * outward) as f64, 0.]);
             pump(100);
             assert!(!state(&w).workspace.layout.is_collapsed(root));
-            assert!((width() - saved_width).abs() < 1.);
+            assert!((width() - minimum).abs() < 1.);
             if cancel {
                 w.workspace_drag_input(ContactPhase::Cancel, drag.origin, None);
                 pump(100);
@@ -1390,7 +1422,7 @@ fn native_collapsed_divider_expansion() {
                 });
                 pump(100);
                 assert!(!state(&w).workspace.layout.is_collapsed(root));
-                assert!((width() - saved_width).abs() < 1.);
+                assert!((width() - minimum).abs() < 1.);
             }
         }
     }
@@ -10409,6 +10441,140 @@ fn native_frame_pacing() {
     if let Ok(path) = std::env::var("LAYER_PACING_CAPTURE") {
         crate::capture(&w, &path);
     }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_divider_cursor_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.DividerCursorInput");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let original = state(&w).workspace;
+    let native = w.window.surface().unwrap();
+    let pointer = native.display().default_seat().unwrap().pointer().unwrap();
+    let cursor = || native.device_cursor(&pointer).and_then(|c| c.name());
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native pointer timed out"
+        );
+        step += 1;
+        pump(150);
+    };
+    for group in [5, 8] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original.clone(),
+        });
+        w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+        pump(150);
+        let root = original.layout.column_for_group(group).unwrap();
+        let band = original
+            .layout
+            .bands
+            .iter()
+            .find(|b| b.root.id() == root)
+            .unwrap()
+            .id;
+        let divider = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.id == band)
+            .unwrap();
+        let handle = w
+            .surface
+            .imp()
+            .children
+            .borrow()
+            .iter()
+            .find(|(slot, _)| *slot == Slot::Divider(band))
+            .unwrap()
+            .1
+            .clone();
+        let start = [
+            divider.bounds.x + divider.bounds.width * 0.5,
+            divider.bounds.y + 80.,
+        ];
+        let outward = if divider.reversed { -1. } else { 1. };
+        perform(serde_json::json!([{ "point": start }]));
+        assert_eq!(cursor().as_deref(), Some("col-resize"));
+        perform(
+            serde_json::json!([{ "down": true }, { "point": [start[0] + outward * 18., start[1]] }]),
+        );
+        assert_eq!(cursor().as_deref(), Some("col-resize"));
+        for (distance, collapsed) in [
+            (36., false),
+            (40., false),
+            (35., true),
+            (36., false),
+            (35., true),
+            (40., false),
+            (36., false),
+        ] {
+            perform(serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]));
+            assert_eq!(state(&w).workspace.layout.is_collapsed(root), collapsed);
+            assert_eq!(
+                cursor().as_deref(),
+                Some("col-resize"),
+                "resize cursor while the pointer is inside the expanded panel"
+            );
+            assert_eq!(handle.parent().as_ref(), Some(w.surface.upcast_ref()));
+            assert!(
+                w.surface
+                    .imp()
+                    .children
+                    .borrow()
+                    .iter()
+                    .any(|(slot, widget)| *slot == Slot::Divider(band) && *widget == handle)
+            );
+        }
+        let minimum = if group == 5 {
+            layer_ui::TOOL_PANEL_MIN_WIDTH
+        } else {
+            layer_ui::LAYERS_MIN_WIDTH
+        };
+        let threshold = minimum * 0.75 - TILE_SIZE;
+        for (distance, collapsed) in [
+            (minimum - TILE_SIZE + 20., false),
+            (threshold - 2., true),
+            (threshold + 2., false),
+            (threshold - 2., true),
+            (threshold + 2., false),
+        ] {
+            perform(serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]));
+            assert_eq!(state(&w).workspace.layout.is_collapsed(root), collapsed);
+            assert_eq!(cursor().as_deref(), Some("col-resize"));
+        }
+        perform(serde_json::json!([
+            { "down": false },
+            { "point": [start[0] + outward * (threshold + 3.), start[1]] }
+        ]));
+        assert!(w.workspace_drag.borrow().is_none());
+        assert_ne!(
+            cursor().as_deref(),
+            Some("col-resize"),
+            "release restores the hovered widget's cursor"
+        );
+    }
+    std::fs::write(dir.join("finished"), "done").unwrap();
+    pump(100);
     w.window.destroy();
     pump(100);
 }

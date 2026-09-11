@@ -6,6 +6,8 @@
 //! readbacks. Destination-aware brush stages can be added beside this
 //! fast path without changing the engine packet or duplicating pixel semantics.
 
+mod submission;
+
 use layer_core::{
     AssetId, BRISTLE_GRAIN_TEXTURE_ASSET, BrushAccumulation, BrushBlendMode, BrushExecution,
     BrushGrainBehavior, BrushTip, ColorMixSpace, DualCombineMode, Layer, LayerId, LayerKind,
@@ -817,7 +819,9 @@ impl WgpuRasterizer {
         let hardware = hardware || {
             let numerical = std::env::var("LAYER_TEST_SOFTWARE_GPU").as_deref() == Ok("numerical");
             if numerical {
-                eprintln!("NUMERICAL TEST ONLY: software renderer; timings are not hardware measurements");
+                eprintln!(
+                    "NUMERICAL TEST ONLY: software renderer; timings are not hardware measurements"
+                );
             }
             numerical
         };
@@ -1898,7 +1902,7 @@ impl WgpuRasterizer {
         &mut self,
         packet: FramePacket<'_>,
         scene_required: bool,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<usize, GpuRasterError> {
         let background_index = packet.dab_batches.len() + packet.layers.len();
         self.ensure_upload_capacity(packet.dabs.len(), background_index + 1)?;
@@ -2070,7 +2074,7 @@ impl WgpuRasterizer {
 
     fn encode_clear(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         view: &wgpu::TextureView,
         label: &'static str,
     ) {
@@ -2078,7 +2082,7 @@ impl WgpuRasterizer {
     }
     fn encode_clear_value(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         view: &wgpu::TextureView,
         label: &'static str,
         value: f32,
@@ -2108,7 +2112,7 @@ impl WgpuRasterizer {
 
     fn encode_batch(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         target: &wgpu::TextureView,
@@ -2187,7 +2191,7 @@ impl WgpuRasterizer {
 
     fn prepare_selection(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         style: &layer_render::DabStyle,
     ) -> Result<(), GpuRasterError> {
         if let Some(geometry) = &style.selection {
@@ -2218,7 +2222,7 @@ impl WgpuRasterizer {
 
     fn encode_brush_batch(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         context: BrushEncodingContext<'_>,
@@ -2318,7 +2322,7 @@ impl WgpuRasterizer {
 
     fn begin_watercolor_wetness_update(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         layer_id: LayerId,
         damages: &[PixelRect],
         preview: bool,
@@ -2393,7 +2397,7 @@ impl WgpuRasterizer {
 
     fn encode_material_batch(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         damage: PixelRect,
@@ -2765,7 +2769,7 @@ impl WgpuRasterizer {
 
     fn encode_watercolor_transport(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         damages: &[PixelRect],
@@ -3025,7 +3029,7 @@ impl WgpuRasterizer {
 
     fn encode_reservoir_update(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         coordinate: [u32; 2],
@@ -3076,7 +3080,7 @@ impl WgpuRasterizer {
 
     fn encode_stroke_edge(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
     ) -> Result<(), GpuRasterError> {
@@ -3191,7 +3195,7 @@ impl WgpuRasterizer {
 
     fn encode_preview_material_batch(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         damage: PixelRect,
@@ -3430,7 +3434,7 @@ impl WgpuRasterizer {
     /// avoiding both committed-to-preview and preview ping-pong copies.
     fn encode_preview_material_from_persistent(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         batch_index: usize,
         batch: &DabBatch,
         damage: PixelRect,
@@ -3567,11 +3571,12 @@ impl WgpuRasterizer {
             view_formats: &[],
         });
         let export_view = export_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
                 label: Some("layer explicit readback encoder"),
-            });
+            },
+        );
         // Inspection is a display aid, never exported. Recompose only on this
         // explicit export path, then restore the visible scene in GPU order.
         let inspection = self.inspection.take();
@@ -3668,7 +3673,7 @@ impl WgpuRasterizer {
         }
         self.inspection = inspection;
         self.uploads.finish(&encoder);
-        let submission = self.queue.submit([encoder.finish()]);
+        let submission = encoder.submit(&self.queue);
         let (sender, receiver) = mpsc::channel();
         buffer
             .slice(..)
@@ -4056,11 +4061,12 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_requires_base = false;
             self.preview_direct_to_composite = false;
         }
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
                 label: Some("layer incremental sparse frame"),
-            });
+            },
+        );
         self.telemetry.begin(&self.device, &mut encoder);
         let committed_preview = if self.transform_preview.is_none() {
             self.transforms.as_mut().unwrap().consume_commit(packet)
@@ -4992,7 +4998,7 @@ impl CanvasRenderer for WgpuRasterizer {
 
         self.uploads.finish(&encoder);
         self.telemetry.end(&mut encoder);
-        let submission = self.queue.submit([encoder.finish()]);
+        let submission = encoder.submit(&self.queue);
         self.telemetry.submitted();
         self.last_submission = Some(submission);
         self.metrics.submissions = self.metrics.submissions.saturating_add(1);

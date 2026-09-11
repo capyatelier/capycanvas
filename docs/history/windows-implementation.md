@@ -945,3 +945,11 @@ packaging remain open. The full Windows editor preset stays gated. Sustained
 120 Hz painting and physical input-to-present latency remain deferred until the
 application is otherwise complete. All generated images, projects, profiles and
 diagnostic output remain ignored and local.
+
+The publication integrates main through 43f9dcf, including reversible column
+resize gestures and bounded GPU submission chunks for large document replay.
+The merged tree passes 290 UI/host/Windows unit checks, strict Windows adapter
+Clippy, both explicit hardware D3D12 document tests, and the release-mode 4K
+seven-layer replay regression with exact pixel equality. The native build and
+document, effects, Layers and all four lifecycle fixtures pass after the merge.
+The intermittent shader-close sample above remains an acceptance gap.

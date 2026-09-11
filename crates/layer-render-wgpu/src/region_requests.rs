@@ -78,11 +78,12 @@ impl RegionRequests {
                 return Ok(true);
             }
         }
-        let mut encoder = r
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &r.device,
+            &wgpu::CommandEncoderDescriptor {
                 label: Some("connected region request"),
-            });
+            },
+        );
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
             t.begin(&r.device, &mut encoder);
@@ -219,7 +220,7 @@ impl RegionRequests {
             t.end(&mut encoder);
         }
         r.uploads.finish(&encoder);
-        r.queue.submit([encoder.finish()]);
+        encoder.submit(&r.queue);
         #[cfg(test)]
         if let Some(t) = &mut self.timing {
             t.submitted();

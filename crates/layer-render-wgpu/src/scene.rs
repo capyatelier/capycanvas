@@ -117,7 +117,7 @@ impl Scene {
         &mut self,
         r: &mut WgpuRasterizer,
         layers: &[Layer],
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         self.jobs.clear();
         for layer in layers {
@@ -797,7 +797,7 @@ impl Scene {
         packet: FramePacket<'_>,
         layer_index: usize,
         operation_index: usize,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         use layer_core::LayerOperationKind;
         self.jobs.clear();
@@ -947,7 +947,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         destination: &wgpu::Texture,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         self.begin_frame();
         self.style_base = r.last_style_base;
@@ -967,7 +967,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         dirty: PixelRect,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         overlay: bool,
     ) -> Result<(), GpuRasterError> {
         self.effects.retain(packet.layers);
@@ -1089,7 +1089,7 @@ impl Scene {
     fn encode_jobs(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let base = self.record_count;
         self.effects.encode_preparation(encoder);

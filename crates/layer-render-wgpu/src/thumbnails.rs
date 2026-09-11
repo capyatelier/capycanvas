@@ -34,11 +34,12 @@ impl WgpuRasterizer {
         id: u64,
         target: LayerId,
     ) -> Result<(), GpuRasterError> {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &self.device,
+            &wgpu::CommandEncoderDescriptor {
                 label: Some("asynchronous layer preview"),
-            });
+            },
+        );
         let gpu = self
             .thumbnails
             .gpu
@@ -64,7 +65,7 @@ impl WgpuRasterizer {
     /// Neither thumbnails nor filter previews synchronously wait for the GPU.
     pub(super) fn submit_ui_readback(
         &mut self,
-        mut encoder: wgpu::CommandEncoder,
+        mut encoder: crate::submission::CommandEncoder,
         source: &wgpu::BindGroup,
         [width, height]: [u32; 2],
         request_id: u64,
@@ -73,7 +74,7 @@ impl WgpuRasterizer {
         let target = UiImageTarget::new(&self.device, [width, height]);
         target.encode(&mut encoder, &self.pipelines.export, source);
         self.uploads.finish(&encoder);
-        self.queue.submit([encoder.finish()]);
+        encoder.submit(&self.queue);
         target.map(request_id, reply);
     }
 }
@@ -111,7 +112,7 @@ impl UiImageTarget {
     }
     pub fn encode(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         pipeline: &wgpu::RenderPipeline,
         source: &wgpu::BindGroup,
     ) {
@@ -290,7 +291,7 @@ impl PreviewPipeline {
         &self,
         r: &WgpuRasterizer,
         id: LayerId,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> PageSurface {
         let mask = r.layer_masks.definitions.get(&id);
         let gray = mask.map_or(0., |m| {

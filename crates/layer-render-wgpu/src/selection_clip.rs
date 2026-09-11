@@ -156,7 +156,7 @@ impl SelectionClip {
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         extent: [u32; 2],
         geometry: &Arc<layer_core::Selection>,
     ) -> Result<(), GpuRasterError> {

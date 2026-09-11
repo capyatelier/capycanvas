@@ -188,7 +188,7 @@ impl MaskRenderer {
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         inputs: (&[Layer], &[DabBatch]),
         extent: [u32; 2],
         reset: bool,
@@ -289,7 +289,7 @@ impl MaskRenderer {
 impl WgpuRasterizer {
     pub(super) fn encode_mask_dabs(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         layers: &[Layer],
         batches: &[DabBatch],
         committed: &[(LayerId, u32)],

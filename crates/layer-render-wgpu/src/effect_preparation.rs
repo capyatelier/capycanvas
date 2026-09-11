@@ -171,7 +171,7 @@ impl Preparation {
         self.pipelines.push((key.clone(), pipeline.clone()));
         Ok(pipeline)
     }
-    pub fn encode(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn encode(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         if self.pending.is_empty() {
             return;
         }
