@@ -1017,9 +1017,6 @@ impl WgpuRasterizer {
         &self.adapter
     }
 
-    /// Changes only when document composition changes, never for camera/UI motion.
-    pub fn composite_revision(&self) -> u64 { self.composite_revision }
-
     pub fn adapter_info(&self) -> GpuAdapterInfo {
         let info = self.adapter.get_info();
         GpuAdapterInfo {

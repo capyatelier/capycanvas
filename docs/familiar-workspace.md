@@ -1788,3 +1788,8 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   the historical filter-reference mismatch, final integrated validation and
   human GTK review; low-frequency worker presentation outliers still warrant
   investigation rather than an unconditional latency claim.
+- Merged the independently published Apple Navigator/Diagnostics integration.
+  Both hosts reuse its composition-revision query instead of retaining duplicate
+  getters. Post-merge shared tests, strict GTK/UI/renderer Clippy, workspace/Wasm
+  checks and native Navigator/startup readiness tests pass. This is source and
+  Linux-host validation, not additional physical Apple-device testing.

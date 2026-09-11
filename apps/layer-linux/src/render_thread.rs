@@ -989,8 +989,9 @@ impl Worker {
             .encode(&self.renderer, &mut encoder, &view, camera, surround);
         #[cfg(test)]
         if let Some(timing) = &timing {
-            timing
-                .overview((!self.overviews.is_empty()).then(|| self.renderer.composite_revision()));
+            timing.overview(
+                (!self.overviews.is_empty()).then(|| self.renderer.canvas_preview_revision()),
+            );
         }
         #[cfg(test)]
         if let Some(timing) = &timing {
