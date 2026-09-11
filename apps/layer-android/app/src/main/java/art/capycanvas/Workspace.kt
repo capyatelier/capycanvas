@@ -110,7 +110,13 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         primaryContainer = colors.active, onPrimaryContainer = colors.text)) {
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
-                Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(WindowInsets.safeDrawing.exclude(WindowInsets.ime))) {
+                // Status/navigation bars overlay this immersive workspace. Their
+                // visibility (including startup animations) must never resize the
+                // SurfaceView or the shared canvas layout. Protect physical screen
+                // obstructions and desktop window captions independently of bars.
+                val workspaceInsets = WindowInsets.displayCutout
+                    .union(WindowInsets.waterfall).union(WindowInsets.captionBar)
+                Box(Modifier.fillMaxSize().background(colors.surround).windowInsetsPadding(workspaceInsets)) {
                     Box(if (snapshot?.objectOrNull("preferences") != null) Modifier.clearAndSetSemantics {} else Modifier) {
                         Workspace(host, snapshot)
                     }
