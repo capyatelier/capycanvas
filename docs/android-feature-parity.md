@@ -82,4 +82,9 @@ A deliberately gapped outline leaks with gap closing disabled, then contains
 both Fill and Auto Select with gap closing enabled. Compact numeric controls are
 also checked within their correct panel when the full preset shows multiple
 brush-size fields. Refresh artifacts are under
-`artifacts/android/parity-refresh/`; the shared host/UI suite passes 229 tests.
+`artifacts/android/parity-refresh/`. The integrated refresh passes all 17 tablet
+tests (`integrated-device.txt`, 70.915 seconds), 229 shared host/UI tests
+(`shared-tests.txt`), ARM64 application/instrumentation builds and Android lint
+(`integrated-build.txt`). The tablet run also repeats pre-GPU UI, system-bar
+sizing, navigation/surface recovery, camera publication, palm/eraser and compact
+numeric/vertical-toolbar regressions.
