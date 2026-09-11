@@ -76,8 +76,8 @@ pub use numeric::{
 };
 pub use session::{LayerControls, UiSession};
 pub use settings::{
-    ChoicePresentation, HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup,
-    PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
+    ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PreferenceAction,
+    PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
     PreferenceSearchResult, PreferenceValue, PreferencesState, PreferencesView, Settings,
     SettingsPage, ShortcutEditor, TextConstraint, ZenIcon,
 };

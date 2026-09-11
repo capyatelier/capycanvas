@@ -648,6 +648,7 @@ function update(regions) {
       }
   if (regions & 16) {
     applyTheme(state.theme, state.palette);
+    systemStatus?.setClockVisibility(state.settings.show_clock);
     refreshPreferences(app.preferences());
   }
   if (regions & 32)

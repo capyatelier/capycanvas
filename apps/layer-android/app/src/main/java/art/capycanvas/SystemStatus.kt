@@ -12,7 +12,6 @@ import android.provider.Settings
 import android.text.format.DateFormat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,12 +19,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,7 +53,7 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
 }
 
 /** Native broadcasts/settings drive this small UI island, independently of the render owner. */
-@Composable internal fun SystemStatus() {
+@Composable internal fun SystemStatus(showClock: Boolean = true) {
     val context = LocalContext.current
     var time by remember(context) { mutableStateOf(DateFormat.getTimeFormat(context).format(Date())) }
     var battery by remember(context) { mutableStateOf<DeviceBattery?>(null) }
@@ -82,33 +86,51 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
     }
     Row(Modifier.testTag("system-status").padding(horizontal = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(time, Modifier.testTag("system-clock"), maxLines = 1, fontWeight = FontWeight.Medium)
+        if (showClock) Text(time, Modifier.testTag("system-clock"), maxLines = 1, fontWeight = FontWeight.Medium)
         battery?.let { BatteryIndicator(it) }
     }
 }
 
 @Composable internal fun BatteryIndicator(battery: DeviceBattery) {
-    val color = if (battery.low && !battery.charging) MaterialTheme.colorScheme.error else LocalPalette.current.text
+    val dark = LocalPalette.current.dark
+    // Both halves must contrast with the inset number, even when nearly empty.
+    val (fill, track, ink) = when {
+        battery.charging -> Triple(Color(0xFF5ACB7D), Color(0xFFC4C9CF), Color(0xFF13251A))
+        battery.low && dark -> Triple(Color(0xFFF28B82), Color(0xFFA3A8B0), Color(0xFF202226))
+        battery.low -> Triple(Color(0xFFB3261E), Color(0xFF707479), Color.White)
+        dark -> Triple(Color(0xFFE5E7EB), Color(0xFFA3A8B0), Color(0xFF202226))
+        else -> Triple(Color(0xFF3F4246), Color(0xFF707479), Color.White)
+    }
     val percent = NumberFormat.getIntegerInstance().format(battery.percent)
     val description = "Battery $percent%${if (battery.charging) ", charging" else if (battery.low) ", low" else ""}"
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = Modifier.testTag("system-battery").clearAndSetSemantics {
-            contentDescription = description
-            stateDescription = if (battery.low && !battery.charging) "low" else if (battery.charging) "charging" else "normal"
-        }) {
-        if (battery.charging) Text("ϟ", color = color, fontSize = 16.sp)
-        Box(Modifier.size(42.dp, 22.dp), contentAlignment = Alignment.Center) {
-            Canvas(Modifier.fillMaxSize()) {
-                val border = 1.5.dp.toPx()
-                val body = Size(size.width - 4.dp.toPx(), size.height - border)
-                drawRoundRect(color.copy(alpha = .18f), Offset(border, border),
-                    Size((body.width - border * 2) * battery.percent / 100, body.height - border * 2), CornerRadius(3.dp.toPx()))
-                drawRoundRect(color, Offset(border / 2, border / 2), body,
-                    CornerRadius(4.dp.toPx()), style = Stroke(border))
-                drawRoundRect(color, Offset(size.width - 2.dp.toPx(), size.height * .3f),
-                    Size(2.dp.toPx(), size.height * .4f), CornerRadius(1.dp.toPx()))
+    val height = with(LocalDensity.current) { 14.sp.toDp() }
+    Box(Modifier.size(height * (26f / 14), height).testTag("system-battery").clearAndSetSemantics {
+        contentDescription = description
+        stateDescription = if (battery.low && !battery.charging) "low" else if (battery.charging) "charging" else "normal"
+    }) {
+        Canvas(Modifier.fillMaxSize()) {
+            val u = size.height / 14
+            val body = Size(22 * u, size.height)
+            drawRoundRect(track, size = body, cornerRadius = CornerRadius(3 * u))
+            clipRect(right = body.width * battery.percent / 100) {
+                drawRoundRect(fill, size = body, cornerRadius = CornerRadius(3 * u))
             }
-            Text(percent, Modifier.padding(end = 4.dp), color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            drawRoundRect(track, Offset(23 * u, 4 * u), Size(2 * u, 6 * u), CornerRadius(u))
+            if (battery.charging) {
+                val bolt = Path().apply {
+                    moveTo(23f * u, 1.5f * u); lineTo(18.5f * u, 7.7f * u)
+                    lineTo(21.2f * u, 7.7f * u); lineTo(20f * u, 12.5f * u)
+                    lineTo(25.5f * u, 6.2f * u); lineTo(22.7f * u, 6.2f * u)
+                    lineTo(24.1f * u, 1.5f * u); close()
+                }
+                // A fine pale edge keeps the dark terminal mark legible on dark chrome.
+                drawPath(bolt, track, style = Stroke(1.25f * u))
+                drawPath(bolt, ink)
+            }
+        }
+        Box(Modifier.width(height * ((if (battery.charging) 21f else 22f) / 14)).fillMaxHeight(), contentAlignment = Alignment.Center) {
+            Text(percent, color = ink, fontSize = if (battery.percent == 100) 10.sp else 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold,
+                style = androidx.compose.ui.text.TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)))
         }
     }
 }

@@ -21,10 +21,19 @@ class AndroidSystemStatusTest {
     }
     @Test fun headerTracksAndroidClockPreferenceAndShowsLiveBatteryInOrder() {
         shell("input keyevent KEYCODE_WAKEUP"); shell("wm dismiss-keyguard")
-        compose.waitUntil(30_000) { compose.onAllNodesWithTag("system-clock").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(30_000) { compose.activity.host.snapshot != null }
+        val host = compose.activity.host
+        val modes = listOf("fullscreen", "always", "never")
+        val originalClock = modes.indexOf(host.snapshot!!.getJSONObject("state").getJSONObject("settings").optString("show_clock", "fullscreen")).coerceAtLeast(0)
+        fun clockPreference(value: Int) {
+            compose.runOnIdle { host.preference(obj("type" to "edit", "id" to "show_clock", "value" to value)) }
+            compose.waitUntil(5_000) { host.snapshot!!.getJSONObject("state").getJSONObject("settings").optString("show_clock") == modes[value] }
+        }
         val resolver = compose.activity.contentResolver
         val original = Settings.System.getString(resolver, Settings.System.TIME_12_24)
         try {
+            clockPreference(0)
+            compose.onNodeWithTag("system-clock").assertIsDisplayed()
             for (format in listOf("12", "24")) {
                 shell("settings put system time_12_24 $format")
                 compose.waitUntil(5_000) {
@@ -40,7 +49,15 @@ class AndroidSystemStatusTest {
             val icon = compose.onNodeWithTag("system-battery").fetchSemanticsNode().boundsInRoot
             val settings = compose.onNodeWithTag("header-settings").fetchSemanticsNode().boundsInRoot
             assertTrue(title.right <= clock.left && clock.right <= icon.left && icon.right <= settings.left)
+            clockPreference(2)
+            compose.onNodeWithTag("system-clock").assertDoesNotExist()
+            compose.onNodeWithTag("system-battery").assertIsDisplayed()
+            clockPreference(1)
+            compose.onNodeWithTag("system-clock").assertIsDisplayed()
+            clockPreference(0)
+            compose.onNodeWithTag("system-clock").assertIsDisplayed()
         } finally {
+            clockPreference(originalClock)
             shell(if (original == null) "settings delete system time_12_24" else "settings put system time_12_24 $original")
         }
     }
