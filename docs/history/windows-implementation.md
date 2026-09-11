@@ -773,3 +773,39 @@ existing unselected-wet-paint preservation regression both pass on hardware
 D3D12. The rebuilt native app again passes the complete Navigator fixture and
 exits cleanly. These targeted checks cover the incoming shader change without
 repeating unrelated rendering benchmarks.
+
+### Native Windows Properties and GPU filter picker
+
+The native Properties panel now projects all six shared property kinds: numbers,
+choices, toggles, RGBA colors, curves and gradients. Rust remains responsible for
+numeric expressions, sampled curve plots, effect values, point/stop constraints,
+insertion, Undo and locked-layer enablement. Native point and stop editors retain
+their graph controls across value changes and resize. Draft callbacks are bound
+to the document epoch, layer, schema and selected point/stop generation, so a
+reset or replacement cannot redirect an old edit into a different value.
+
+Filters now follows Android's category/search and preview-row layout. Visible
+rows request at most eight shared GPU previews, at most every 200 milliseconds.
+A separate single-slot mailbox runs after painting and yields to queued input;
+it neither fills the input queue nor waits for a GPU readback. An owned binary
+atlas crosses to a worker for straight-RGBA to premultiplied-BGRA conversion.
+WinUI bitmap creation happens on its dispatcher. The cache retains at most 64
+rows (16 MiB at maximum tile size), rejects obsolete revisions and abandons
+pending requests when document state changes. Request/revision identities cross
+the bridge as strings, including the document epoch.
+
+The Rust adapter's 27 unit tests pass (two explicit GPU tests remain ignored in
+that command), and strict adapter Clippy with --no-deps passes. The native build
+and isolated effects fixture pass all six property kinds, point/stop reset draft
+guards, disabled endpoint coordinates, retained curve controls during edits and
+resize, category/search/insertion, GPU preview pixel changes after a controlled
+stroke with exact Undo restoration, both themes, document replacement, clean new
+document state and exit code zero. Screenshot/profile/report output stays local.
+The app-capture helper now also accepts absolute output paths.
+
+This is a Properties/Filters milestone, not full workspace parity. Runtime filter
+package import, full Layers operations, application menus, columns/drawers and
+the full Windows editor preset remain pending. Physical curve/gradient pointer
+gestures, broader DPI/device recovery, release packaging and deferred 120 Hz and
+input-to-present acceptance remain open. The strict v4 filter reference
+difference is unchanged.

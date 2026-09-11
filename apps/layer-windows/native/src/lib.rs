@@ -9,6 +9,8 @@ mod events;
 #[cfg(any(target_os = "windows", test))]
 mod navigator;
 #[cfg(any(target_os = "windows", test))]
+mod previews;
+#[cfg(any(target_os = "windows", test))]
 pub use navigator::capy_navigator_image;
 #[cfg(any(target_os = "windows", test))]
 mod settings;

@@ -685,3 +685,20 @@ pub unsafe extern "C" fn capy_overviews(host: *mut CapyHost, json: *const c_char
         }
     })
 }
+
+/// # Safety
+/// Exclusive render-owner access to host; json is a readable NUL-terminated
+/// buffer. Transfer/free a nonnull CPU packet using capy_preview_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_filter_previews(
+    host: *mut CapyHost,
+    json: *const c_char,
+) -> *mut crate::previews::CapyPreview {
+    let mut result = std::ptr::null_mut();
+    guard(host, |host| {
+        let packet = crate::previews::query(&mut host.native, unsafe { read_json(json) }?)?;
+        result = Box::into_raw(Box::new(packet));
+        Ok(0)
+    });
+    result
+}

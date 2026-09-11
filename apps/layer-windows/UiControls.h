@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "FilterPreviews.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -87,6 +88,7 @@ inline J numeric(J const& spec,double value,J const& operation){
 using Bindings=std::vector<std::function<void()>>;
 struct WorkspaceData {
     J state,catalog,model;
+    std::shared_ptr<FilterPreviewCache> previews;
     std::function<void(std::string)> send;
     bool updating=false;
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;

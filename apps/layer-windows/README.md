@@ -359,3 +359,29 @@ These are functional checks. Physical Navigator pointer gestures, full workspace
 visual parity, mixed-DPI movement, device recovery, painting cadence and
 input-to-present latency still require acceptance. The overview performance test
 remains ignored during these checks.
+
+## Properties and filter previews
+
+Properties renders shared number, choice, toggle, RGBA color, curve and gradient
+controls with native WinUI widgets. Curve plots and effect constraints come from
+Rust. Reset, point/stop selection and document changes invalidate old edit drafts.
+
+Filters uses the shared category/search catalog and GPU previews, following
+Android's row layout. Only visible rows request previews, in batches of at most
+eight every 200 milliseconds. The drawing owner polls without waiting, and a
+separate worker converts packed RGBA pixels for native WinUI bitmaps. Preview
+requests and memory are bounded, and obsolete document/revision results are
+discarded. This optional picker readback does not replace the GPU canvas or
+Navigator presentation paths.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-effects.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+The isolated fixture checks all six property kinds, reset draft guards, retained
+curve controls, resize, category/search/insertion, actual preview pixels after a
+controlled stroke and exact Undo, both themes, document replacement and zero exit.
+It saves only app captures and synthetic state under ignored artifacts/windows.
+Runtime filter package import, complete Layers/workspace controls and the full
+editor preset remain pending. These checks do not establish physical pointer
+gesture, full visual parity or frame-cadence/input-latency acceptance.

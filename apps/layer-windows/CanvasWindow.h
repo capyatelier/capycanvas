@@ -5,6 +5,7 @@
 #include "SettingsView.h"
 #include "DocumentView.h"
 #include "CanvasWorkBuffer.h"
+#include "FilterPreviews.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
 #include <condition_variable>
@@ -69,6 +70,8 @@ private:
     std::condition_variable wake;
     std::condition_variable space;
     CanvasWorkBuffer work;
+    std::optional<PreviewWork> previewWork;
+    bool RequestPreviews(std::string,PreviewReply);
     bool transportFailed=false;
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;

@@ -30,5 +30,6 @@ try {
     $flags=if($ClientOnly){3}else{2}
     if(![CapyWindowCapture]::PrintWindow($handle,$dc,$flags)){throw 'Window capture failed.'}
 } finally {$graphics.ReleaseHdc($dc)}
-try {$bitmap.Save((Join-Path (Get-Location) $Output),[System.Drawing.Imaging.ImageFormat]::Png)}
+if(![IO.Path]::IsPathRooted($Output)){$Output=Join-Path (Get-Location) $Output}
+try {$bitmap.Save($Output,[System.Drawing.Imaging.ImageFormat]::Png)}
 finally {$graphics.Dispose();$bitmap.Dispose()}

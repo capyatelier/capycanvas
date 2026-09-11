@@ -166,6 +166,8 @@ void CanvasWindow::Start() {
         if(auto self=weak.lock())self->Send(std::move(json));
     },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)),[weak=weak_from_this()](std::string json){
         if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Overviews);
+    },[weak=weak_from_this()](std::string json,PreviewReply reply){
+        if(auto self=weak.lock())return self->RequestPreviews(std::move(json),std::move(reply));return false;
     });
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
@@ -192,6 +194,13 @@ void CanvasWindow::Start() {
     inputController=Microsoft::UI::Dispatching::DispatcherQueueController::CreateOnDedicatedThread();
     inputDispatcher=inputController.DispatcherQueue();
     renderer=std::jthread([this]{Run();});
+}
+bool CanvasWindow::RequestPreviews(std::string json,PreviewReply reply) {
+    {std::lock_guard lock(mutex);
+        if(closing||!host||rendererDone.load()||transportFailed||previewWork||json.size()>8192)return false;
+        previewWork=PreviewWork{std::move(json),std::move(reply)};
+    }
+    wake.notify_one();return true;
 }
 void CanvasWindow::Send(std::string json, CanvasCommandKind kind) {
     bool overflow=false;
@@ -427,7 +436,7 @@ void CanvasWindow::Run() {
             bool pollServices=false;
             {
                 std::unique_lock lock(mutex);
-                wake.wait(lock,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value();});
+                wake.wait(lock,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||previewWork.has_value();});
                 if(closing) break;
                 if(resize) {
                     paused=true;resize=false;probeReady=false;
@@ -520,6 +529,15 @@ void CanvasWindow::Run() {
                 std::ofstream("presentation-probe.json") << to_string(model.Stringify());
                 probeReady=true;
             }
+            // Optional readbacks run after painting and yield to newly queued input.
+            // The GPU poll never waits; CPU conversion belongs to another worker.
+            std::optional<PreviewWork> preview;
+            {std::lock_guard lock(mutex);if(!closing&&work.Empty())preview=std::exchange(previewWork,std::nullopt);}
+            if(preview){
+                PreviewPacket packet(capy_filter_previews(host,preview->json.c_str()),capy_preview_free);
+                if(!packet)Fail(capy_error());
+                preview->reply(std::move(packet));
+            }
             // Opt-in baseline only: present unchanged content at DXGI cadence.
             // No timer, per-frame disk I/O, synthetic input or display-time claim.
             if(probeReady)dirty=true;
@@ -532,7 +550,7 @@ void CanvasWindow::Run() {
     // UI close commits drafts before rejecting new work. Drain accepted commands
     // so a final preferences edit reaches storage even when no next frame runs.
     std::deque<CanvasWork> finalWork;
-    {std::lock_guard lock(mutex);finalWork=work.Take();}
+    {std::lock_guard lock(mutex);finalWork=work.Take();previewWork.reset();}
     space.notify_all();
     for(auto& item:finalWork)if(auto command=std::get_if<CanvasCommand>(&item)){
         auto result=DispatchCanvasCommand(host,*command);

@@ -3,6 +3,7 @@
 #include "ColorView.h"
 #include "ToolView.h"
 #include "NavigatorView.h"
+#include "EffectControls.h"
 #include "UiControls.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -40,7 +41,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
     Bindings popupBindings;
     TextBlock camera;
-    Impl(Dispatch send,J catalog,Dispatch report):overviews(std::move(report)){
+    Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews):overviews(std::move(report)){
+        data->previews=CreateFilterPreviewCache(std::move(previews));
         data->send=std::move(send);data->catalog=catalog;
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
@@ -127,6 +129,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             group.border.Background(clear());
             group.navigator=std::make_unique<NavigatorView>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
             auto view=group.navigator->Root();Grid::SetRow(view,1);frame.Children().Append(view);
+        }else if(str(panel,L"id")==L"adjustments"){
+            auto view=FiltersPanel(data,bindings);Grid::SetRow(view,1);frame.Children().Append(view);
         }else if(tileGeometry.Size()){
             Canvas tiles;auto views=array(panel,L"tiles");auto rects=array(tileGeometry,L"tiles");
             for(uint32_t i=0;i<std::min(views.Size(),rects.Size());i++){
@@ -166,6 +170,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 else if(kind==L"layers")content.Children().Append(layers(bindings));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel")content.Children().Append(ColorPanel(data,bindings));
+                else if(kind==L"properties")content.Children().Append(PropertiesPanel(data,bindings));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
                     bool size=kind==L"brush_size";
                     content.Children().Append(number(data,size?L"Brush size":L"Brush opacity",
@@ -186,7 +191,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                     }content.Children().Append(actions);
                 }
             }
-            if(str(panel,L"id")==L"tool_settings"){
+            if(str(panel,L"id")==L"tool_settings"||str(panel,L"id")==L"properties"){
                 ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
                 scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
                 scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);
@@ -251,7 +256,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto structure=J::Parse(geometry.Stringify());
             auto size=object(structure,L"bounds");size.Remove(L"x");size.Remove(L"y");
             structure.Insert(L"bounds",size);
-            if(str(panel,L"id")==L"navigator")structure.Remove(L"bounds");
+            if(str(panel,L"id")==L"navigator"||str(panel,L"id")==L"properties"||str(panel,L"id")==L"adjustments")structure.Remove(L"bounds");
             J signature=O({{L"geometry",structure},{L"controls",array(panel,L"controls")},
                 {L"style",S(str(panel,L"tile_style"))}});
             A tileKeys;for(auto item:array(panel,L"tiles")){
@@ -296,7 +301,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             to_hstring(int(std::round(num(view,L"rotation")*180/3.141592653589793)))+L"°");
     }
 };
-WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews))){}
+WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews))){}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 void WorkspaceView::Apply(Json const& snapshot){impl->apply(snapshot);}
