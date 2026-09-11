@@ -125,11 +125,17 @@ and upstream main at 40d9096. This is a design review, not a performance pass.
 
 ### Hardware gate
 
-Initial host: Intel Iris Xe, reported 2256 x 1504 at 59 Hz via
-Win32_VideoController. Confirm exact active refresh via display configuration
-APIs in the native probe. This configuration cannot demonstrate 120 Hz scanout.
-Benchmark rendering headroom here, but leave the >=120 Hz presentation gate
-open until a supported >=120 Hz display mode is available.
+Host: Intel Iris Xe. On 2026-09-10, the per-display EnumDisplaySettings probe
+confirmed the built-in Surface Panel at 2256 x 1504, 60 Hz, and an external
+display at 3840 x 2160, 120 Hz. The external display begins at desktop position
+(2256, 0). Run presentation acceptance on that display and record its active
+mode again with each benchmark; a connected monitor alone does not establish
+application presentation cadence. The hardware prerequisite is now available;
+the >=120 Hz application presentation gate remains unmeasured.
+
+Run `apps/layer-windows/scripts/probe-displays.ps1` to inspect every active
+monitor. Win32_VideoController reports only the built-in mode on this host
+and must not be used to determine the external display's refresh rate.
 
 Before performance acceptance, record a fixed matrix including 4K/32-layer
 documents, G-Pen, large eraser, Natural Blender, Watercolor Wash, pen-up,
