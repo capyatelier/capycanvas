@@ -86,7 +86,7 @@ struct EditorView<Canvas: View>: View {
                 let request = store.state["requests"].array.first(where: { $0["id"].uint == id }) else { return }
             lastLinkRequest = id
             store.query(["type": "application_link", "link": request["kind"]["link"].raw]) { result in
-                guard let url = URL(string: result["url"].string) else {
+                guard let url = URL(string: result.string) else {
                     store.dispatch(["type": "complete_request", "id": id, "error": "Could not open the link"])
                     return
                 }
@@ -109,15 +109,15 @@ struct EditorView<Canvas: View>: View {
                             ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                                 let menu = store.snapshot["application_menus"][index]
                                 Menu { CatalogMenuItems(store: store, id: menu["id"].string) } label: {
-                                    Text(menu["title"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
+                                    Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
                                         .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                                }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["title"].string)
+                                }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
                             }
                         }.fixedSize()
                         Menu {
                             ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
                                 let menu = store.snapshot["application_menus"][index]
-                                Menu(menu["title"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
+                                Menu(menu["label"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
                             }
                         } label: {
                             SharedIcon(name: "menu").frame(width: 36, height: 36)

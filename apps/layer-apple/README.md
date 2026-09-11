@@ -107,6 +107,17 @@ project format. Both targets support custom canvas dimensions and PNG export. GP
 readback and PNG encoding run on the file worker; automatic artwork recovery
 remains pending.
 
+Both targets now project the live shared application menus. Keyboard Shortcuts
+supports search, alternate bindings, conflict replacement and resets; Settings
+search uses the shared results. The focused
+`EditorLaunchTests/testShortcutConflictAndEditorEffect` test exercises capture
+and the resulting Zen action without automating the system menu bar. The shared
+inventory command emits representative menu and shortcut states:
+
+```sh
+cargo run -p layer-host --example inventory > /tmp/capy-inventory.json
+```
+
 Launch a local Mac build with:
 
 ```sh

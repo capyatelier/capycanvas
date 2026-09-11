@@ -474,7 +474,12 @@ impl ContextMenu {
             for item in sections.iter_mut().flatten() {
                 if let Some(action) = &item.action {
                     item.bindings = settings.action_keys(action, platform);
-                    let shortcut = item.bindings.iter().map(|key| key.label(platform)).collect::<Vec<_>>().join(" / ");
+                    let shortcut = item
+                        .bindings
+                        .iter()
+                        .map(|key| key.label(platform))
+                        .collect::<Vec<_>>()
+                        .join(" / ");
                     if !shortcut.is_empty() && item.hint != shortcut {
                         item.hint = if item.hint.is_empty() {
                             shortcut

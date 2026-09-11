@@ -91,15 +91,37 @@ fn menu_scenarios(platform: Platform) -> Vec<Value> {
     }
     let mut host = NativeHost::new(platform).unwrap();
     let mut scenarios = vec![capture(&host, "initial")];
-    host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::SelectAll }).unwrap();
+    host.dispatch(UiAction::Invoke {
+        command: layer_ui::CommandId::SelectAll,
+    })
+    .unwrap();
     scenarios.push(capture(&host, "pixel-selection"));
     let id = host.session.engine().document().active_layer.0;
-    host.dispatch(serde_json::from_value(json!({"type":"layer","action":{"op":"lock","id":id,"value":true}})).unwrap()).unwrap();
+    host.dispatch(
+        serde_json::from_value(json!({"type":"layer","action":{"op":"lock","id":id,"value":true}}))
+            .unwrap(),
+    )
+    .unwrap();
     scenarios.push(capture(&host, "locked-target"));
-    host.dispatch(UiAction::OpenSettings { page: SettingsPage::Shortcuts }).unwrap();
-    host.dispatch(serde_json::from_value(json!({"type":"preferences","action":{"type":"edit_shortcut","id":"command.ZenMode"}})).unwrap()).unwrap();
+    host.dispatch(UiAction::OpenSettings {
+        page: SettingsPage::Shortcuts,
+    })
+    .unwrap();
+    host.dispatch(
+        serde_json::from_value(
+            json!({"type":"preferences","action":{"type":"edit_shortcut","id":"command.ZenMode"}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     scenarios.push(json!({"name":"shortcut-editor","preferences":host.session.preferences()}));
-    host.dispatch(serde_json::from_value(json!({"type":"preferences","action":{"type":"begin_shortcut","id":"command.ZenMode"}})).unwrap()).unwrap();
+    host.dispatch(
+        serde_json::from_value(
+            json!({"type":"preferences","action":{"type":"begin_shortcut","id":"command.ZenMode"}}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
     host.input(serde_json::from_value(json!({"type":"key","key":"z","pressed":true,"modifiers":{"command":true,"shift":false,"alt":false}})).unwrap()).unwrap();
     scenarios.push(json!({"name":"shortcut-conflict","preferences":host.session.preferences()}));
     scenarios

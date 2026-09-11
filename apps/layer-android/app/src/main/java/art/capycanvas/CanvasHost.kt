@@ -82,6 +82,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val main = Handler(Looper.getMainLooper())
     private val thread = HandlerThread("capy-canvas", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     private val worker = Handler(thread.looper)
+    internal val documents = DocumentController(this, application)
     private val saved = application.getSharedPreferences("capy-canvas", 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache()
@@ -101,6 +102,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var lastStartupStage = -1
     private val startupTimes = LongArray(4)
     private var savedWorkspace = ""
+    private var documentEpoch = 0L
     private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 11) else null
     private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
     private val frameCosts = if (BuildConfig.DEBUG) LongArray(5) else null
@@ -156,6 +158,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private fun post(canvas: Boolean = false, block: () -> Unit) {
         worker.post { if (!disposed && handle != 0L) attempt(canvas, block) }
     }
+    internal suspend fun <T> withNative(block: (Long) -> T): T = kotlin.coroutines.suspendCoroutine { continuation ->
+        if (!worker.post {
+            val result = runCatching { check(!disposed && handle != 0L) { "The editor has closed" }; block(handle) }
+            main.post { continuation.resumeWith(result) }
+        }) continuation.resumeWith(Result.failure(IllegalStateException("The editor has closed")))
+    }
+    internal fun documentChanged() = post { refreshChrome(); publish(true); wake() }
+    internal fun reportActionError(message: String) { actionError = message }
     fun clearActionError() { actionError = null }
     fun dispatch(action: JSONObject) = post {
         Native.dispatch(handle, action.toString())
@@ -400,8 +410,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             Log.i("CapyStartup", "stage=$stage boot_ns=$now")
         }
         val state = next.getJSONObject("state")
-        val workspace = state.getJSONObject("workspace").toString()
-        if (workspace != savedWorkspace) {
+        val epoch = state.getJSONObject("document_file").optLong("epoch")
+        if (epoch != documentEpoch) {
+            documentEpoch = epoch
+            main.post { navigatorImage = null; filterPreviewCache.images.clear() }
+        }
+        val workspace = next.objectOrNull("workspace_persistence")?.toString()
+        if (workspace != null && workspace != savedWorkspace) {
             savedWorkspace = workspace
             saved.edit().putString("workspace", workspace).apply()
         }

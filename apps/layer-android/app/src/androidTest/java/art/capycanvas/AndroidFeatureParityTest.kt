@@ -49,6 +49,10 @@ class AndroidFeatureParityTest {
         }
     }
     private fun action(value: JSONObject) {
+        if (value.optString("command").contains("document")) compose.activity.getExternalFilesDir(null)!!.resolve("parity-document-debug.json").writeText(state().toString(2))
+        if (value.optString("command").contains("document")) compose.waitUntil(60_000) {
+            state().array("commands").objects().first { it.getString("id") == value.getString("command") }.getBoolean("enabled")
+        }
         val done = CountDownLatch(1)
         compose.runOnIdle { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
         assertTrue(done.await(15, TimeUnit.SECONDS))
@@ -180,7 +184,12 @@ class AndroidFeatureParityTest {
         readable.recycle(); bitmap.recycle(); return color
     }
     private fun awaitPixel(point: Offset, predicate: (Int) -> Boolean) {
-        compose.waitUntil(20_000) { predicate(pixel(point)) || host.failure != null || host.actionError != null }
+        try { compose.waitUntil(20_000) { predicate(pixel(point)) || host.failure != null || host.actionError != null } }
+        catch (e: Throwable) {
+            capture("pixel-failure")
+            compose.activity.getExternalFilesDir(null)!!.resolve("parity-pixel-debug.json").writeText(state().toString(2))
+            throw e
+        }
         assertNull(host.failure); assertNull(host.actionError); assertTrue(predicate(pixel(point)))
     }
     @Test fun toolDrawersOpenInZenAndOutsideContactDoesNotPaint() {
@@ -246,6 +255,174 @@ class AndroidFeatureParityTest {
         compose.onNodeWithTag("navigator-overview").performTouchInput { swipe(center, center + Offset(40f,20f), 300) }
         compose.waitUntil(10_000) { state().getJSONObject("camera").toString() != before }
         capture("navigator")
+    }
+
+    @Test fun drawingToolsRenderMoveFillGradientAndRulers() {
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(0, .2, 1, 1))))
+        action(obj("type" to "set_brush_opacity", "value" to 1))
+        action(obj("type" to "invoke", "command" to "figure"))
+        action(state().getJSONObject("tool_set").array("groups").objects().first { it.getString("label") == "Rectangle" }.getJSONObject("action"))
+        action(state().getJSONObject("tool_set").array("subtools").objects().first { it.getString("label") == "Fill" }.getJSONObject("action"))
+        stroke(Offset(.45f,.4f), Offset(.58f,.65f))
+        awaitPixel(Offset(.5f,.5f)) { android.graphics.Color.blue(it) > 220 && android.graphics.Color.red(it) < 30 }
+        capture("figure")
+        action(obj("type" to "invoke", "command" to "move"))
+        stroke(Offset(.5f,.5f), Offset(.66f,.5f))
+        awaitPixel(Offset(.68f,.55f)) { android.graphics.Color.blue(it) > 220 && android.graphics.Color.red(it) < 30 }
+        awaitPixel(Offset(.5f,.5f)) { android.graphics.Color.red(it) > 245 }
+        action(obj("type" to "invoke", "command" to "undo"))
+        awaitPixel(Offset(.5f,.5f)) { android.graphics.Color.red(it) < 30 }
+        action(obj("type" to "invoke", "command" to "fill"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(1, .1, .1, 1))))
+        stroke(Offset(.5f,.5f))
+        awaitPixel(Offset(.53f,.55f)) { android.graphics.Color.red(it) > 220 && android.graphics.Color.blue(it) < 60 }
+        awaitPixel(Offset(.65f,.5f)) { android.graphics.Color.green(it) > 245 }
+        capture("fill")
+        action(obj("type" to "invoke", "command" to "gradient"))
+        action(state().getJSONObject("tool_set").array("subtools").getJSONObject(0).getJSONObject("action"))
+        stroke(Offset(.42f,.5f), Offset(.68f,.5f))
+        awaitPixel(Offset(.45f,.75f)) { android.graphics.Color.red(it) > 220 && android.graphics.Color.green(it) < 100 }
+        assertTrue(android.graphics.Color.green(pixel(Offset(.65f,.75f))) > 150)
+        capture("gradient")
+        action(obj("type" to "invoke", "command" to "undo"))
+        action(obj("type" to "invoke", "command" to "ruler"))
+        stroke(Offset(.42f,.7f), Offset(.65f,.7f))
+        compose.waitUntil(10_000) { state().array("commands").objects().first { it.getString("id") == "delete_ruler" }.getBoolean("enabled") }
+        capture("ruler")
+        compose.waitUntil(10_000) {
+            val screen = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+            val pixels = screen.copy(Bitmap.Config.ARGB_8888, false)
+            try {
+                ((pixels.width * .52f).toInt()..(pixels.width * .58f).toInt()).any { x ->
+                    ((pixels.height * .69f).toInt()..(pixels.height * .71f).toInt()).any { y ->
+                        val p = pixels.getPixel(x,y)
+                        android.graphics.Color.red(p) < 235 || android.graphics.Color.green(p) < 235
+                    }
+                }
+            } finally { pixels.recycle(); screen.recycle() }
+        }
+        action(obj("type" to "invoke", "command" to "delete_ruler"))
+        assertFalse(state().array("commands").objects().first { it.getString("id") == "delete_ruler" }.getBoolean("enabled"))
+    }
+    private fun request(): JSONObject? = state().array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "document" }
+    private fun awaitDocument() {
+        compose.waitUntil(60_000) { !state().getJSONObject("document_file").optBoolean("busy") && !host.documents.working }
+        assertNull(state().opt("host_error").takeIf { it != JSONObject.NULL })
+        assertNull(host.failure); assertNull(host.actionError)
+    }
+    private fun systemNode(predicate: (android.view.accessibility.AccessibilityNodeInfo) -> Boolean): android.view.accessibility.AccessibilityNodeInfo? {
+        fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
+            node ?: return null
+            if (predicate(node)) return node
+            for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+            return null
+        }
+        return find(InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow)
+    }
+    private fun chooseSaveFile(name: String) {
+        // Exercise Android's real DocumentsUI create picker and URI grant result.
+        val until = android.os.SystemClock.uptimeMillis() + 15_000
+        var field: android.view.accessibility.AccessibilityNodeInfo? = null
+        while (field == null && android.os.SystemClock.uptimeMillis() < until) {
+            field = systemNode { it.isEditable && it.packageName?.toString()?.contains("documentsui") == true }
+            if (field == null) android.os.SystemClock.sleep(100)
+        }
+        assertNotNull("DocumentsUI filename field", field)
+        assertTrue(field!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT, android.os.Bundle().apply {
+            putCharSequence(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, name)
+        }))
+        val save = systemNode { it.isClickable && it.text?.toString()?.equals("save", ignoreCase = true) == true }
+        assertNotNull("DocumentsUI Save", save)
+        assertTrue(save!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+    }
+    @Test fun documentSafSaveReopenAndExportPreservePaint() {
+        compose.waitUntil(60_000) { state().array("commands").objects().first { it.getString("id") == "new_document" }.getBoolean("enabled") }
+        compose.onNodeWithTag("application-menu-file").performClick()
+        compose.onNodeWithText("New…").performClick()
+        shown("new-document-width")
+        compose.onNodeWithTag("new-document-width").performTextReplacement("512")
+        compose.onNodeWithTag("new-document-height").performTextReplacement("384")
+        compose.onNodeWithTag("new-document-create").performClick()
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 512 }
+        awaitDocument()
+        action(obj("type" to "invoke", "command" to "pen"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(.1, .25, .9, 1))))
+        action(obj("type" to "set_brush_size", "value" to 32))
+        stroke(Offset(.5f,.55f), Offset(.62f,.55f))
+        awaitPixel(Offset(.56f,.55f)) { android.graphics.Color.blue(it) > 160 && android.graphics.Color.red(it) < 80 }
+        val name = "capy-android-parity-${System.currentTimeMillis()}.capy"
+        action(obj("type" to "invoke", "command" to "save_document"))
+        chooseSaveFile(name)
+        awaitDocument()
+        val location = state().getJSONObject("document_file").getJSONObject("location")
+        assertEquals(name, location.getString("name"))
+        assertFalse(state().getJSONObject("document_file").getBoolean("modified"))
+        val uri = android.net.Uri.parse(location.getString("uri"))
+        val resolver = compose.activity.contentResolver
+        val copy = compose.activity.getExternalFilesDir(null)!!.resolve(name)
+        resolver.openInputStream(uri)!!.use { input -> copy.outputStream().use { input.copyTo(it) } }
+        assertTrue(copy.length() > 100)
+        // Reopen through the production candidate preparation/adoption boundary.
+        action(obj("type" to "invoke", "command" to "new_document"))
+        shown("new-document-create")
+        compose.onNodeWithTag("new-document-create").performClick()
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 2048 }
+        awaitDocument()
+        action(obj("type" to "invoke", "command" to "open_document"))
+        val pickerDeadline = android.os.SystemClock.uptimeMillis() + 10_000
+        while (systemNode { it.packageName?.toString()?.contains("documentsui") == true } == null && android.os.SystemClock.uptimeMillis() < pickerDeadline) android.os.SystemClock.sleep(100)
+        var saved = systemNode { it.text?.toString() == name }
+        if (saved == null) {
+            val recent = systemNode { it.isClickable && it.text?.toString() == "Recent" }
+            recent?.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+            android.os.SystemClock.sleep(300)
+            saved = systemNode { it.text?.toString() == name }
+        }
+        assertNotNull("Saved project appears in Android picker", saved)
+        var clickable = saved!!
+        while (!clickable.isClickable && clickable.parent != null) clickable = clickable.parent
+        assertTrue(clickable.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK))
+        compose.waitUntil(60_000) { state().array("tabs").getJSONObject(0).getInt("width") == 512 }
+        awaitDocument()
+        awaitPixel(Offset(.56f,.55f)) { android.graphics.Color.blue(it) > 160 && android.graphics.Color.red(it) < 80 }
+        capture("document-reopened")
+        action(obj("type" to "invoke", "command" to "export_document"))
+        chooseSaveFile(name.removeSuffix(".capy") + ".png")
+        awaitDocument()
+        // Verify the exported PNG from its real persisted provider grant and
+        // remove only this test's uniquely named public files.
+        val pngName = name.removeSuffix(".capy") + ".png"
+        val exported = resolver.persistedUriPermissions.map { it.uri }.firstOrNull { candidate ->
+            resolver.query(candidate, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                it.moveToFirst() && it.getString(0) == pngName
+            } == true
+        }
+        assertNotNull("Export returned a persistent file grant", exported)
+        val pngCopy = compose.activity.getExternalFilesDir(null)!!.resolve(pngName)
+        resolver.openInputStream(exported!!)!!.use { input -> pngCopy.outputStream().use { input.copyTo(it) } }
+        val png = android.graphics.BitmapFactory.decodeFile(pngCopy.absolutePath)
+        assertEquals(512, png.width); assertEquals(384, png.height)
+        assertTrue((0 until png.width step 4).any { x -> (0 until png.height step 4).any { y ->
+            val c = png.getPixel(x,y); android.graphics.Color.blue(c) > 160 && android.graphics.Color.red(c) < 80
+        } })
+        png.recycle()
+        android.provider.DocumentsContract.deleteDocument(resolver, exported)
+        android.provider.DocumentsContract.deleteDocument(resolver, uri)
+    }
+    @Test fun newDocumentCancellationKeepsUnsavedCanvas() {
+        action(obj("type" to "invoke", "command" to "pen"))
+        action(obj("type" to "set_color", "rgba" to JSONArray(listOf(1,0,0,1))))
+        action(obj("type" to "set_brush_size", "value" to 160))
+        stroke(Offset(.5f,.5f), Offset(.6f,.5f))
+        awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }
+        val epoch = state().getJSONObject("document_file").getLong("epoch")
+        action(obj("type" to "invoke", "command" to "new_document"))
+        shown("document-close-cancel")
+        compose.onNodeWithTag("document-close-cancel").performClick()
+        awaitDocument()
+        assertEquals(epoch, state().getJSONObject("document_file").getLong("epoch"))
+        assertTrue(state().getJSONObject("document_file").getBoolean("modified"))
+        awaitPixel(Offset(.55f,.5f)) { android.graphics.Color.green(it) < 50 }
     }
 
 }

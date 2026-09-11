@@ -7,7 +7,7 @@ struct CatalogMenuItems: View {
     var excluding: Set<String> = []
     var body: some View {
         let model = store.snapshot["application_menus"].array.first { $0["id"].string == id } ?? JSON()
-        let sections = JSON(model["sections"].array.map { section in
+        let sections = JSON(model["model"]["sections"].array.map { section in
             section.array.filter { !excluding.contains($0["action"]["command"].string) }.map(\.raw)
         }.filter { !$0.isEmpty })
         MenuItems(store: store, sections: sections, usesShortcuts: true)

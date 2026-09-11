@@ -69,7 +69,8 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     val layers = state.array("layers").objects()
     val currentLayers by rememberUpdatedState(layers)
     val list = rememberLazyListState()
-    val images = remember { mutableStateMapOf<String, ImageBitmap>() }
+    val epoch = state.getJSONObject("document_file").optLong("epoch")
+    val images = remember(epoch) { mutableStateMapOf<String, ImageBitmap>() }
     val bounds = remember { mutableMapOf<Long, Rect>() }
     var panelOrigin by remember { mutableStateOf(Offset.Zero) }
     var drag by remember { mutableStateOf<LayerDrag?>(null) }
@@ -80,7 +81,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
         host.layer(obj("op" to "context", "id" to id, "mask" to mask))
         host.query(obj("type" to "layer_menu", "id" to id, "mask" to mask)) { menu = it as? JSONObject; menuPoint = point - panelOrigin }
     }
-    LaunchedEffect(host) {
+    LaunchedEffect(host, epoch) {
         val revisions = mutableMapOf<String, Long>()
         val pending = mutableMapOf<Long, PreviewRequest>()
         var next = 0L
@@ -119,16 +120,20 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
         if (uri != null) scope.launch {
             try {
                 val decoded = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }
-                if (decoded != null) {
+                checkNotNull(decoded) { "This image could not be decoded" }
+                try {
                     val rgba = withContext(Dispatchers.Default) {
                         val pixels = IntArray(decoded.width*decoded.height); decoded.getPixels(pixels,0,decoded.width,0,0,decoded.width,decoded.height)
                         ByteArray(pixels.size*4).also { bytes -> pixels.forEachIndexed { i,p ->
                             bytes[i*4] = (p shr 16).toByte(); bytes[i*4+1] = (p shr 8).toByte(); bytes[i*4+2] = p.toByte(); bytes[i*4+3] = (p ushr 24).toByte()
                         } }
                     }
-                    host.importLayer("Imported image",decoded.width,decoded.height,rgba); decoded.recycle()
-                }
-            } catch (error: Exception) { android.util.Log.e("CapyCanvas","Image import failed",error) }
+                    host.importLayer("Imported image",decoded.width,decoded.height,rgba)
+                } finally { decoded.recycle() }
+            } catch (error: Exception) {
+                android.util.Log.e("CapyCanvas","Image import failed",error)
+                host.reportActionError(error.message ?: "Could not import the image")
+            }
         }
     }
     Box(modifier.fillMaxSize().onGloballyPositioned { panelOrigin = it.boundsInRoot().topLeft }) {

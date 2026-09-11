@@ -190,7 +190,11 @@ pub const MENUS: &[MenuSpec] = &[
 pub const FILE_MENU: MenuSpec = MenuSpec {
     label: "File",
     sections: &[
-        &[CommandId::NewDocument, CommandId::OpenDocument, CommandId::NewWindow],
+        &[
+            CommandId::NewDocument,
+            CommandId::OpenDocument,
+            CommandId::NewWindow,
+        ],
         &[
             CommandId::SaveDocument,
             CommandId::SaveDocumentAs,
@@ -430,12 +434,23 @@ impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
             Self::NewDocument | Self::OpenDocument | Self::SaveDocument | Self::SaveDocumentAs => {
-                matches!(platform, Platform::Gtk | Platform::Mac | Platform::Ios)
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                )
             }
             Self::CloseDocument | Self::ExportDocument => {
-                matches!(platform, Platform::Gtk | Platform::Ios | Platform::Mac)
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                )
             }
-            Self::Website | Self::SourceCode => matches!(platform, Platform::Gtk | Platform::Ios | Platform::Mac),
+            Self::Website | Self::SourceCode => {
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Ios | Platform::Mac | Platform::Android
+                )
+            }
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }

@@ -29,7 +29,7 @@ import org.json.JSONObject
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             view.array("groups").objects().forEach { item ->
-                ToolChoice(host, item, Modifier.width(108.dp).testTag("tool-group-${item.getString("label")}"))
+                ToolChoice(host, item, (if (view.array("groups").length() == 1) Modifier.fillMaxWidth() else Modifier.width(108.dp)).testTag("tool-group-${item.getString("label")}"))
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {

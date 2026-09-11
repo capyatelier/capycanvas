@@ -115,10 +115,7 @@ final class NativeOwner: @unchecked Sendable {
         }
         storageErrors.merge(loaded.errors) { _, new in new }
         initialWorkspaceNeedsSave = loaded.workspaceNeedsSnapshot && storageErrors["workspace"] == nil
-        do {
-            _ = try request(2, JSON(["type": "application_menus", "subscribe": true]))
-            try publish()
-        } catch { receive(nil, error.localizedDescription) }
+        do { try publish() } catch { receive(nil, error.localizedDescription) }
         reportStorage()
     }
     private func persist(_ snapshot: JSON) throws {

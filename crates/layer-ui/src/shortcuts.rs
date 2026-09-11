@@ -339,7 +339,11 @@ impl Settings {
     /// Resolve action identity, not translated labels or widget names. Custom
     /// actions work in contextual menus too, including parameterized actions.
     pub fn action_shortcut(&self, action: &UiAction, platform: Platform) -> String {
-        self.action_keys(action, platform).iter().map(|key| key.label(platform)).collect::<Vec<_>>().join(" / ")
+        self.action_keys(action, platform)
+            .iter()
+            .map(|key| key.label(platform))
+            .collect::<Vec<_>>()
+            .join(" / ")
     }
     /// Native menu equivalents use typed chords, never parsed display labels.
     pub fn action_keys(&self, action: &UiAction, platform: Platform) -> Vec<KeyChord> {
@@ -446,13 +450,21 @@ impl Settings {
             _ => None,
         };
         let mut keys = if let Some(id) = builtin {
-            if let UiAction::Invoke { command } = action { self.command_keys(command) }
-            else { self.keys(&id) }
-        } else { Vec::new() };
+            if let UiAction::Invoke { command } = action {
+                self.command_keys(command)
+            } else {
+                self.keys(&id)
+            }
+        } else {
+            Vec::new()
+        };
         for definition in &self.custom_actions {
-            if matches!(&definition.action, ShortcutAction::Action { action: a } if canonical(a) == action) {
+            if matches!(&definition.action, ShortcutAction::Action { action: a } if canonical(a) == action)
+            {
                 for key in self.keys(&definition.id) {
-                    if !keys.contains(&key) { keys.push(key); }
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
                 }
             }
         }
@@ -695,7 +707,10 @@ mod tests {
             menu.sections[0][0].sections[0][0].hint,
             "Default icon · Ctrl+Shift+I"
         );
-        assert_eq!(menu.sections[0][0].sections[0][0].bindings, [key("i", true, true)]);
+        assert_eq!(
+            menu.sections[0][0].sections[0][0].bindings,
+            [key("i", true, true)]
+        );
         let reset = settings
             .pages(Platform::Gtk)
             .into_iter()
