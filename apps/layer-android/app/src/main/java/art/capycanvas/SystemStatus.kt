@@ -118,10 +118,10 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
             drawRoundRect(track, Offset(23 * u, 4 * u), Size(2 * u, 6 * u), CornerRadius(u))
             if (battery.charging) {
                 val bolt = Path().apply {
-                    moveTo(23f * u, 1.5f * u); lineTo(18.5f * u, 7.7f * u)
-                    lineTo(21.2f * u, 7.7f * u); lineTo(20f * u, 12.5f * u)
-                    lineTo(25f * u, 6.2f * u); lineTo(22.7f * u, 6.2f * u)
-                    lineTo(24.1f * u, 1.5f * u); close()
+                    moveTo(23f * u, 2f * u); lineTo(18.5f * u, 8f * u)
+                    lineTo(21.2f * u, 8f * u); lineTo(20f * u, 12f * u)
+                    lineTo(25f * u, 5.9f * u); lineTo(22.7f * u, 5.9f * u)
+                    lineTo(24.1f * u, 2f * u); close()
                 }
                 // A fine pale edge keeps the dark terminal mark legible on dark chrome.
                 drawPath(bolt, track, style = Stroke(1.75f * u))
