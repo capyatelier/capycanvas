@@ -15,11 +15,12 @@ for (const path of process.argv.slice(2)) {
     const bytes = readFileSync(path);
     const json = JSON.parse(path.endsWith('.gz') ? gunzipSync(bytes) : bytes);
     for (const r of Array.isArray(json) ? json : [json]) {
-        const name = (r.events ? 'NativePan' : r.brush) + (r.gpu_timestamps === false ? ' (no GPU queries)' : '');
+        const name = (r.events ? 'NativePan' : r.brush) + (r.gpu_timestamps === false ? ' (no GPU queries)' : '')
+            + (r.event_loop === 'native_wait' ? ' (native event wait)' : '');
         if (!groups.has(name)) groups.set(name, {runs: [], samples: {}});
         const group = groups.get(name);
         const add = (key, samples) => (group.samples[key] ??= []).push(...samples);
-        for (const key of ['input_cpu', 'input_handler_cpu', 'frame_handler_cpu', 'gtk_paint_cpu', 'main_dispatch_cpu', 'wake_lateness'])
+        for (const key of ['input_cpu', 'input_handler_cpu', 'frame_handler_cpu', 'gtk_paint_cpu', 'main_dispatch_cpu', 'main_dispatch_thread_cpu', 'wake_lateness'])
             add(`${key}_ms`, r[key] ?? []);
         add('gpu_ms', r.worker_gpu.map(v => v[1]));
         add('worker_cpu_ms', r.worker_cpu.map(v => v[3]));
@@ -38,6 +39,10 @@ for (const path of process.argv.slice(2)) {
         add('enqueue_to_presentation_ms', presented.filter(p => queued.has(p[0])).map(p => (p[1] - queued.get(p[0])) / 1e6));
         const rate = list => list.length < 2 ? 0 : (list.length - 1) * 1e9 / (list.at(-1) - list[0]);
         const run = {path, presented: presented.length, presented_fps: +rate(presented.map(p => p[1])).toFixed(3), discarded: r.canvas_presentation.filter(p => !p[3]).length};
+        if (r.input_hz !== undefined) {
+            run.synthetic_input_events = r.input_events;
+            run.synthetic_input_hz = +r.input_hz.toFixed(3);
+        }
         if (pan?.length) {
             run.pan_events = pan.length;
             run.pointer_hz = +rate(pan.map(e => e[0])).toFixed(3);

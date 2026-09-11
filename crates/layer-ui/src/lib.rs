@@ -443,7 +443,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web),
+            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac),
             Self::NewDocument
             | Self::OpenDocument
             | Self::SaveDocument

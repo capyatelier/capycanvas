@@ -1,8 +1,21 @@
 //! Emit catalog, initial/settings views and representative dynamic layer menus.
 //! These fixtures support parity review; they are not a completeness proof.
 use layer_host::NativeHost;
-use layer_ui::{Platform, SettingsPage, UiAction};
+use layer_ui::{CommandId, Panel, Platform, SettingsPage, UiAction, WorkspaceState};
 use serde_json::{Value, json};
+
+fn apple_host(platform: Platform) -> NativeHost {
+    let mut host = NativeHost::new(platform).unwrap();
+    // Match capy_apple_create, including the full editor preset. NativeHost's
+    // session constructor alone uses a different, generic initial workspace.
+    host.dispatch(UiAction::RestoreWorkspace {
+        workspace: WorkspaceState::for_platform(platform),
+    })
+    .unwrap();
+    host.session.set_document_replacement(true);
+    host.resize(2400, 1800, 2.0).unwrap();
+    host
+}
 
 fn layer_scenarios(platform: Platform) -> Vec<Value> {
     fn action(host: &mut NativeHost, action: Value) {
@@ -26,7 +39,7 @@ fn layer_scenarios(platform: Platform) -> Vec<Value> {
             .collect();
         json!({"name":name,"layers":state.layers,"tools":state.layer_tools,"menus":menus})
     }
-    let mut host = NativeHost::new(platform).unwrap();
+    let mut host = apple_host(platform);
     let mut result = vec![capture(&host, "initial-paint-and-paper")];
     let original = host
         .session
@@ -89,7 +102,7 @@ fn menu_scenarios(platform: Platform) -> Vec<Value> {
         json!({"name":name,"menus":layer_ui::ApplicationMenu::ALL.map(|id|
             json!({"id":id,"model":host.session.application_menu(id)}))})
     }
-    let mut host = NativeHost::new(platform).unwrap();
+    let mut host = apple_host(platform);
     let mut scenarios = vec![capture(&host, "initial")];
     host.dispatch(UiAction::Invoke {
         command: layer_ui::CommandId::SelectAll,
@@ -127,26 +140,42 @@ fn menu_scenarios(platform: Platform) -> Vec<Value> {
     scenarios
 }
 
-fn main() {
-    let mut host = NativeHost::new(Platform::Ios).unwrap();
-    host.resize(2400, 1800, 2.0).unwrap();
+fn platform_inventory(platform: Platform) -> Value {
+    let mut host = apple_host(platform);
     let initial = host.take_snapshot().unwrap();
+    // Enumerate unavailable entries too. Filtering by visible menus would hide
+    // an unimplemented host capability from the parity audit.
+    let commands: Vec<_> = CommandId::ALL
+        .iter()
+        .map(|&id| {
+            json!({"id": id, "available": id.available_on(platform),
+            "initial": host.session.command(id)})
+        })
+        .collect();
+    let panels: Vec<_> = Panel::ALL
+        .iter()
+        .map(|&id| json!({"id": id, "available": id.available_on(platform)}))
+        .collect();
     let mut preferences = Vec::new();
     for page in SettingsPage::ALL {
         host.dispatch(UiAction::OpenSettings { page }).unwrap();
         preferences.push(serde_json::to_value(host.session.preferences()).unwrap());
     }
+    json!({"initial": initial, "commands": commands, "panels": panels,
+        "preferences": preferences, "menu_scenarios": menu_scenarios(platform),
+        "layer_scenarios": layer_scenarios(platform)})
+}
+
+fn main() {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
+            "schema": 2,
             "catalog": layer_ui::ui_catalog(),
-            "commands": layer_ui::CommandId::ALL.as_slice(),
-            "initial": initial,
-            "preferences": preferences,
-            "menu_scenarios": { "ios": menu_scenarios(Platform::Ios), "mac": menu_scenarios(Platform::Mac) },
-            "layer_scenarios": {
-                "ios": layer_scenarios(Platform::Ios),
-                "mac": layer_scenarios(Platform::Mac),
+            "commands": CommandId::ALL.as_slice(),
+            "platforms": {
+                "ios": platform_inventory(Platform::Ios),
+                "mac": platform_inventory(Platform::Mac),
             },
         }))
         .unwrap()

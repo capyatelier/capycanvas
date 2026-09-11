@@ -95,6 +95,7 @@ final class MacCanvasView: NSView {
     }
     func wake() { frames.wake() }
     func stop() {
+        documentDelegate.attach(nil)
         frames.deactivate(); input.blur()
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
@@ -125,6 +126,9 @@ final class MacCanvasView: NSView {
     override func flagsChanged(with event: NSEvent) { input.updateModifiers(event.modifierFlags) }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self, event.modifierFlags.contains(.command) else { return false }
+        // Control-Command-F and other native Control-Command chords belong to
+        // AppKit; the shared keymap represents Command and Control as one flag.
+        guard !event.modifierFlags.contains(.control) else { return false }
         if ["q", "w", "n", "m", "h"].contains(event.charactersIgnoringModifiers?.lowercased() ?? "") { return false }
         // The shared keymap owns canvas shortcuts; focused native text editors
         // retain the system's command-key handling.

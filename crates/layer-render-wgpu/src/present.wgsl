@@ -107,6 +107,7 @@ struct OverviewVertex {
     @location(3) @interpolate(flat) outline: vec4<f32>,
     @location(4) @interpolate(flat) background_scale: vec4<f32>,
     @location(5) @interpolate(flat) clip: vec4<f32>,
+    @location(6) @interpolate(flat) halo: f32,
 };
 @vertex fn overview_vertex(@builtin(vertex_index) index: u32,
     @location(0) bounds: vec4<f32>, @location(1) ab: vec4<f32>, @location(2) cd: vec4<f32>,
@@ -115,7 +116,10 @@ struct OverviewVertex {
     let corners = array(vec2(0.,0.), vec2(1.,0.), vec2(0.,1.), vec2(0.,1.), vec2(1.,0.), vec2(1.,1.));
     let uv = corners[index];
     let point = bounds.xy + uv * bounds.zw;
-    return OverviewVertex(vec4(point / camera.viewport.xy * vec2(2.,-2.) + vec2(-1.,1.),0.,1.), uv, ab, cd, outline, background_scale, clip);
+    // Choose the more contrasting black/white surround once per vertex. A
+    // constant white halo disappears with a light-colored outline in dark UI.
+    let halo = select(1., 0., dot(outline.rgb, vec3(.2126,.7152,.0722)) > .179);
+    return OverviewVertex(vec4(point / camera.viewport.xy * vec2(2.,-2.) + vec2(-1.,1.),0.,1.), uv, ab, cd, outline, background_scale, clip, halo);
 }
 fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let d = b-a;
@@ -130,7 +134,7 @@ fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
                    min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));
     let scale = v.background_scale.w;
-    rgb = mix(rgb,vec3(1.),clamp(1.5*scale+.5-edge,0.,1.));
+    rgb = mix(rgb,vec3(v.halo),clamp(1.5*scale+.5-edge,0.,1.));
     rgb = mix(rgb,v.outline.rgb,clamp(.75*scale+.5-edge,0.,1.));
     if camera.viewport.z > .5 { rgb = display_color(rgb); }
     let opacity = v.outline.a;

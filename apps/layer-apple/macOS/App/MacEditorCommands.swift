@@ -30,7 +30,9 @@ struct MacEditorCommands: Commands {
             if let store { SettingsMenuItem(store: store) }
         }
         CommandGroup(after: .toolbar) {
-            if let store { CatalogMenuItems(store: store, id: "view") }
+            // AppKit supplies View's native Full Screen item. The shared command
+            // remains available to customized controls and shortcut editing.
+            if let store { CatalogMenuItems(store: store, id: "view", excluding: ["fullscreen"]) }
         }
         CommandGroup(after: .windowArrangement) {
             if let store { CatalogMenuItems(store: store, id: "window") }

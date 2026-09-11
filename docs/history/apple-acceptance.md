@@ -1305,6 +1305,68 @@ error of 5. The table uses that later reference and applies no masking or extra
 tolerance. This checkpoint does not establish Apple coverage for the new
 fullscreen/system-status surfaces or close the complete feature inventory.
 
+## Apple command coverage and native full-screen requests
+
+The command inventory now uses the same initial full editor workspace and
+document-replacement policy as `capy_apple_create`, at a declared 1200×900 logical
+viewport and scale 2. Both Apple platforms have initial snapshots, all five
+settings pages, every command and panel's availability, and the existing dynamic
+menu/layer/shortcut scenarios. Schema 2 places the platform-specific fixtures
+under `platforms.ios` and `platforms.mac`. The old iPad-only initial/settings
+fixture used the generic `NativeHost` workspace and did not represent a fresh
+Apple editor.
+
+`apps/layer-apple/command-coverage.json` classifies all 62 current commands in 14
+groups, with references and separate iPad/Mac remaining-work notes. The audit
+requires every catalog entry exactly once in both platform inventories and in
+the review, verifies referenced files exist, and detects availability changes.
+It passes with 62 commands, 11 panels and five settings pages per platform. An
+injected new command, omitted iPad entry, duplicate classification and changed
+Mac capability are each rejected. These are inventory checks; partial/open
+group notes are not promoted to successful workflow or complete UI acceptance.
+
+The newly shared Full Screen command now routes to the native Mac window.
+`WindowPresentation` serializes requests per editor; `DocumentWindowDelegate`
+adapts AppKit transitions while forwarding SwiftUI's original delegate callbacks.
+The requested mode does not optimistically change selection or the enter/exit
+icon. Actual notifications, including changes through native controls, update
+the shared state. Repeated enter requests cannot toggle the window back out;
+requests during a native transition wait for its result. Failed transitions and
+detachment complete the shared request with a visible error. Consecutive native
+observations are retained even when the serial owner has not published the first
+snapshot yet. Other Mac/iPad editor sessions retain their independent state.
+
+Mac View uses its existing native Full Screen item; the shared command remains
+available to toolbar customization and shortcut editing. Control-Command chords
+pass through the canvas's key-equivalent handler to AppKit. The adapter follows
+[AppKit's full-screen request](https://developer.apple.com/documentation/appkit/nswindow/togglefullscreen(_:))
+and [completion notification](https://developer.apple.com/documentation/appkit/nswindowdelegate/windowdidenterfullscreen(_:)).
+The installed UIKit SDK's iOS scene geometry preferences expose orientation
+changes, with no corresponding native iPad full-screen request. Mac Catalyst's
+separate geometry preferences do not apply to this UIKit target. The inventory
+retains `fullscreen` as explicitly unavailable on iPad; this capability remains
+open instead of being omitted from the parity review.
+
+The direct Swift window check passes request/acknowledgement ordering, repeated
+requests, external changes, rapid observations, failed enter/exit, detachment,
+delegate forwarding and session isolation against actual serial Rust owners.
+Its invisible AppKit test window simulates OS notifications; it verifies our
+adapter and editor state, not system menu mechanics or full-screen rendering.
+The existing shared full-screen test additionally exercises the Mac availability
+and exit request, while retaining the iPad exclusion and browser F11 behavior.
+Both signed Apple builds and all 32 Apple bridge, 15 host and 221 UI tests pass
+(268 total; the existing host hardware-only test remains ignored). Incoming
+README changes through `5c94d3b` are integrated.
+The signed iPad build is installed and launches on the attached device. No new
+physical input or GUI workflow assertion is inferred from that launch.
+
+Local evidence is retained under `artifacts/apple-window-*`: command fixtures and
+audit, direct Swift check, both build logs and shared regression output. These
+private artifacts are excluded from Git. This checkpoint adds no new visual,
+physical Pencil, latency or sustained-performance evidence. Full-screen editor
+geometry/rendering, optional system-status parity, full feature workflow coverage,
+existing pixel-difference failures and the hardware targets remain open.
+
 The previous strict filter-reference failure, physical input/lifecycle matrix,
 physical iPad automation setup and sustained hardware performance gates remain
 open. Capture bundles, logs, device/signing data and pixel reports stay in ignored
