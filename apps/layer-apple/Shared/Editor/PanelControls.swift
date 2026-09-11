@@ -58,18 +58,42 @@ struct PanelControls: View {
         }
     }
     private var sizes: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 42), spacing: 2)], spacing: 4) {
+        let lineHeight = max(1, store.catalog["text_size_pt"].number * 4 / 3) * 1.42
+        return SizePresetsLayout(cellHeight: 42 + lineHeight) {
             ForEach(store.catalog["brush_sizes"].array.indices, id: \.self) { index in
                 let size = store.catalog["brush_sizes"][index].number
                 Button { store.dispatch(["type": "set_brush_size", "value": size]) } label: {
                     VStack(spacing: 4) {
                         Circle().frame(width: min(27, 2 + sqrt(size) * 1.2), height: min(27, 2 + sqrt(size) * 1.2)).frame(height: 28)
-                        Text(String(Int(size)))
-                    }.padding(5).frame(maxWidth: .infinity)
+                        Text(String(Int(size))).frame(height: lineHeight)
+                    }.padding(2).frame(maxWidth: .infinity).frame(height: 36 + lineHeight)
                         .background(size == store.state["brush"]["diameter"].number ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-                }.buttonStyle(.plain)
+                }.buttonStyle(.plain).padding(3)
             }
         }
     }
 
+}
+
+/// The same two/three/four-column breakpoints and cell spacing as the web and
+/// Android panels. Intrinsic font height is accounted for before Rust measures
+/// the surrounding panel; wide drawers keep four columns instead of adding more.
+private struct SizePresetsLayout: Layout {
+    let cellHeight: CGFloat
+    private func columns(_ width: CGFloat) -> Int { width < 130 ? 2 : width < 174 ? 3 : 4 }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let requested = proposal.width ?? 224
+        let width = requested.isFinite ? max(0, requested) : 224
+        let rows = (subviews.count + columns(width) - 1) / columns(width)
+        return CGSize(width: width, height: CGFloat(rows) * cellHeight + CGFloat(max(0, rows - 1)) * 4)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let count = columns(bounds.width)
+        let width = max(0, (bounds.width - CGFloat(count - 1) * 2) / CGFloat(count))
+        for (index, view) in subviews.enumerated() {
+            view.place(at: CGPoint(x: bounds.minX + CGFloat(index % count) * (width + 2),
+                y: bounds.minY + CGFloat(index / count) * (cellHeight + 4)), anchor: .topLeading,
+                proposal: ProposedViewSize(width: width, height: cellHeight))
+        }
+    }
 }
