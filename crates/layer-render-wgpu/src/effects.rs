@@ -520,6 +520,12 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     let x=clamp(value,0.,1.)*255.; let i=u32(x);
     return mix(effect_data[base+1u+offset+i],effect_data[base+1u+offset+min(i+1u,255u)],fract(x));
 }
+@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
+    // All effect targets are RGBA8 linear. Vulkan permits either neighboring
+    // integer on implicit UNORM conversion; choose nearest explicitly. Only
+    // physical pass boundaries quantize, never intermediate fused adjustments.
+    return round(clamp(effect_result(v),vec4<f32>(0.),vec4<f32>(1.))*255.)/255.;
+}
 
 "#,
     );
@@ -540,7 +546,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     if stage == Execution::Preview {
         let p = &programs[0];
         let base = offsets[0] + 1;
-        source.push_str("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);\n");
+        source.push_str("fn effect_result(v:Vertex)->vec4<f32> {let position=v.position.xy+settings.color.xy;let c=fx_sample(position);\n");
         for (j, pass) in p.passes.iter().enumerate() {
             source.push_str(&format!(
                 "if u32(settings.extent.w)=={j}u {{return {}(c,position,{base}u);}}\n",
@@ -554,7 +560,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
         let p = &programs[0];
         let entry = p.passes.get(stage).map_or(&p.entry, |p| &p.entry);
         let last = stage + 1 >= p.passes.len();
-        source.push_str(&format!("@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
+        source.push_str(&format!("fn effect_result(v:Vertex)->vec4<f32> {{ let position=v.position.xy+settings.color.xy; let adjusted={entry}(fx_sample(position),position,1u);\n"));
         if last && p.kind == EffectKind::Adjustment {
             source.push_str("let c=fx_original(position);let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {coverage=textureLoad(effect_mask_0,vec2<i32>(position),0).r;}let rgb=clamp(blend(adjusted.rgb/max(adjusted.a,.000001),c.rgb/max(c.a,.000001),u32(controls.y)),vec3<f32>(0.),vec3<f32>(1.));");
             if p.alpha == layer_core::EffectAlpha::Filter {
@@ -568,7 +574,7 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     }
     source.push_str(
         r#"
-@fragment fn effect_fragment(v:Vertex)->@location(0) vec4<f32> {
+fn effect_result(v:Vertex)->vec4<f32> {
     let local=v.position.xy-settings.rect.xy;
     var c=textureLoad(front,vec2<i32>(local),0);
     if settings.source_over.w>.5 {

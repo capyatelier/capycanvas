@@ -295,11 +295,11 @@ This has now been isolated using an independent pre-migration renderer:
 The baseline is commit `7719e6b`, before GPU preparation and runtime-definition
 migration. Only its asset texture format and import operation were changed.
 Filter algorithms, Rust-generated Gaussian coefficients, previews, masks,
-clipping, time and composition stayed unchanged. Its corrected output supplies
-`runtime-filters-v3.png`; the current implementation does not generate the
-expected image. See the [fixture provenance](../crates/layer-render-wgpu/tests/fixtures/README.md)
-for reproduction details and its digest. The obsolete v2 PNG is retained in Git
-history, not as a second incompatible active reference.
+clipping, time and composition stayed unchanged. Its corrected output supplied
+the then-current `runtime-filters-v3.png`; the current implementation did not
+generate that expected image. See the [fixture provenance](../crates/layer-render-wgpu/tests/fixtures/README.md)
+for reproduction details. V2 and v3 are now retained in Git history, not as
+additional active references; the later v4 correction is described below.
 
 The test still requires every compared channel to differ by at most one byte.
 It now independently checks the unfiltered input against the transfer curve
@@ -311,7 +311,7 @@ separate analytic, incremental, tile-edge, mask, clipping and preparation tests
 cover those behaviors. No production shader or execution path changed in this
 reconciliation, so there is no new renderer performance cost.
 
-The v3 reference passes on its original Vulkan validation host. Metal passes
+The v3 reference passed on its original Vulkan validation host. Metal passes
 the independent import oracle but fails v3: 22,616 sampled pixels exceed one
 byte, across 148 of 160 cases, with maximum channel error 255. The pre-migration
 Metal renderer with identical corrected imports produces exactly the same sheet
@@ -348,6 +348,74 @@ prints a warning, is compiled out of production hosts, and must never supply
 hardware performance evidence. Keep local loader paths and machine logs in
 ignored artifacts. No runtime dependency or default backend selection changes.
 
-The full strict v3 comparison remains a failing cross-backend gate. Its reference,
-one-byte tolerance and all channels remain intact. Browser WebGPU has not yet
-been checked against v3; no cross-backend pixel-parity claim is made.
+At that milestone the full strict v3 comparison remained a failing cross-backend
+gate. No tolerance or channels were relaxed. Browser WebGPU was not checked.
+
+### Explicit filter storage conversion
+
+Running the new independent scalar tests on the original hardware Vulkan host
+reproduces both failures: Curves loses a channel whose output is 0.5581 linear
+byte units; Halftone's green endpoint exports as 13 instead of 22. Vulkan's
+[fixed-point conversion rules](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fixedfpconv)
+permit either neighboring integer and only recommend nearest rounding. A
+reference captured on one device cannot define that choice for every device.
+
+The shared generated filter fragment now explicitly clamps and rounds its final
+RGBA value to the nearest eight-bit linear value. Preview, image stages and
+fused chains use this same wrapper. It adds no passes, resources, CPU readback,
+preparation work or per-filter branches. Intermediate fused values and lookup
+storage remain floating point. The existing render targets already impose this
+bit depth; the change selects the intended conversion instead of truncating a
+faint channel on some implementations.
+
+Both scalar tests now pass on the hardware Vulkan host and Mesa's software
+Vulkan backend. The tone test also covers six alpha levels (255, 192, 127, 64,
+1, 0), calculating premultiplication and storage independently from input bytes.
+Software results are numerical checks only, never performance evidence.
+
+The pre-migration renderer was independently rerun with just the corrected import
+and explicit filter-storage boundaries. Its original wrapper and Rust filter
+math were hash-checked against commit `7719e6b0ffa69e9aca1bf19acfedef9584d2fdad`
+before the boundary edit. This produces v4: current/old output differs in only
+four of 1,966,080 channels, each by one byte. The reference is still generated
+by the old renderer, never today's comparison test; its unchanged tolerance
+still tests all forty filters and four scopes. V3 is retained in Git history.
+See [reference provenance](../crates/layer-render-wgpu/tests/fixtures/README.md).
+
+This does **not** solve complete cross-backend parity. With explicit rounding,
+hardware Vulkan and Mesa software Vulkan still differ above one byte in 23,114
+sampled channels (maximum 188); their unfiltered exports differ by at most one.
+Spatial sampling, intermediate composition and numerical filter math need
+further isolation. Metal and browser WebGPU have not run v4. Do not treat the
+passing scalar or same-backend migration checks as complete backend acceptance.
+
+The hardware performance comparison uses the same release test and 2048×1536
+artwork, 64 warmup plus 256 measured edits, in three alternating implicit/rounded
+pairs. Values below are the median of the three runs' median/p95/p99 values,
+not percentiles pooled from raw samples. The five-filter case is Pencil, Soft
+Focus, Bloom, Gaussian Blur and Unsharp Mask. Relevant edits change preparation
+inputs; unrelated edits change only a consuming-pass parameter.
+
+| Workload | CPU before ms | CPU rounded ms | GPU before ms | GPU rounded ms |
+| --- | --- | --- | --- | --- |
+| Unsharp, paint | .058/.077/.175 | .057/.072/.135 | .034/.034/.034 | .034/.034/.034 |
+| Unsharp, relevant edit | .035/.052/.262 | .034/.058/.173 | .145/.202/.204 | .145/.202/.204 |
+| Unsharp, unrelated edit | .031/.036/.110 | .031/.053/.119 | .069/.069/.069 | .070/.070/.070 |
+| Five, paint | .116/.162/.217 | .115/.160/.257 | .087/.088/.088 | .087/.087/.087 |
+| Five, relevant edit | .094/.179/.303 | .106/.186/.209 | .576/.642/.652 | .581/.643/.667 |
+| Five, unrelated edit | .098/.185/.335 | .092/.171/.231 | .531/.540/.542 | .544/.553/.556 |
+
+The measurable full-image GPU increase is about 0.014ms median for the last
+case, approximately 2.6%; small dirty-region painting does not show that cost.
+CPU tails vary in both directions: five-filter paint p99 increased by 0.041ms
+in the paired summary, whereas the editing tails decreased. No CPU speedup or
+zero-cost claim follows. Rounded GPU p99 remains below 0.681ms in every paired
+run and explicit-wait completion p99 below 0.953ms. This is filter throughput,
+not compositor/physical-input latency. The earlier exploratory runs had wider
+CPU tails and are not silently pooled into these controlled pairs.
+
+With v4, the complete hardware Vulkan suite passes 112 tests with zero failures
+or exclusions; 17 hardware benchmarks remain separately ignored. This includes
+incremental/full equivalence, clipping, masks, preview crops, preparation
+invalidation/reuse, fusion, animation and the independent color checks. The v4
+sheet was visually inspected. The software alpha-oracle repeat also passes.
