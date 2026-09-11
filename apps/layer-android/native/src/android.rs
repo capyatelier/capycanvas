@@ -534,7 +534,7 @@ pub extern "system" fn Java_art_capycanvas_Native_importLayer(
         let name = read(&mut env, &name)?;
         let bytes = env.convert_byte_array(&rgba).map_err(error)?;
         let app = unsafe { app(handle) };
-        app.host.session.import_layer_image(
+        app.host.import_layer_image(
             &name,
             layer_render::HostImage {
                 width: width as u32,
@@ -544,7 +544,6 @@ pub extern "system" fn Java_art_capycanvas_Native_importLayer(
                 bytes: &bytes,
             },
         )?;
-        app.host.dirty = true;
         Ok(())
     })();
     fail(&mut env, result);

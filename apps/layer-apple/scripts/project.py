@@ -86,7 +86,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         test_name = scheme + "Tests"
         test_product = obj(test_name + "product", "PBXFileReference", explicitFileType="wrapper.cfbundle", path=test_name + ".xctest", sourceTree="BUILT_PRODUCTS_DIR")
         products.append(test_product)
-        test_builds = [obj(test_name + name, "PBXBuildFile", fileRef=ref) for name, ref in refs.items() if name.startswith(platform + "/Tests/")]
+        test_builds = [obj(test_name + name, "PBXBuildFile", fileRef=ref) for name, ref in refs.items()
+            if name.startswith(platform + "/Tests/") or name.startswith("Shared/Tests/")]
         test_phase = obj(test_name + "sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=test_builds, runOnlyForDeploymentPostprocessing=0)
         proxy = obj(test_name + "proxy", "PBXContainerItemProxy", containerPortal=ident("project"), proxyType=1, remoteGlobalIDString=target, remoteInfo=scheme)
         dependency = obj(test_name + "dependency", "PBXTargetDependency", target=target, targetProxy=proxy)

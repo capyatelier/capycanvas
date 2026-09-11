@@ -75,6 +75,24 @@ pen-up, and exact GPU document pixels through undo/redo. The GPU tests require
 hardware Metal access; they do not establish physical input or presentation timing.
 The staged-startup check also verifies pending ink survives the initial paper
 frame and stays undoable while document/brush shaders become ready.
+Layer checks cover checked selection versus the drawing target, mask targeting,
+hierarchy, rename, blend/opacity/locks/references, shared menu enablement, image
+import and GPU thumbnails. Imported pixels round-trip exactly through undo/redo.
+Numeric expressions and slider mapping use a stateless shared-policy entry point.
+
+Check the native image decoder without launching an app:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/JSON.swift \
+  apps/layer-apple/Shared/Bridge/LayerImageImport.swift \
+  apps/layer-apple/tests/image-import.swift -o /tmp/capy-image-import-tests
+/tmp/capy-image-import-tests
+```
+
+Synthetic images check EXIF orientation, sRGB channels, straight alpha, row order
+and rejection of dimensions beyond the shared import limit. File decoding runs
+off the UI and render-owner queues; document import runs on the serial owner.
 
 The shared Swift scheduler has a fast standalone check, with an asynchronous
 native-owner test double and no application launch:
@@ -104,7 +122,11 @@ a full-screen landscape screenshot with full-window canvas geometry checks.
 It does not measure drawable presentation or prove full visual/functional parity.
 Physical input and hardware performance acceptance are required on each platform.
 The optional Mac test exercises the app's full-window canvas, window-control
-clearance, mouse stroke termination and keyboard undo/redo:
+clearance, mouse stroke termination and keyboard undo/redo. Both launch tests
+also exercise the same small layer workflow: add a layer, check a different row
+without changing the drawing target, add a mask, switch content/mask targets,
+and delete the mask through its own context menu. Mac uses an in-app right click;
+iPad uses a long press. No system-menu clicks are required.
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -141,8 +163,13 @@ This is an editor-shell milestone, not a finished port. The simulator renders
 the live canvas; the iPad target builds, signs, installs and launches; the AppKit
 target builds and launches, with mouse drawing and keyboard undo/redo checked.
 Both targets share frame admission and per-window session ownership. Initial
-shared menus, tool buttons, brush/size presets, basic layer
-selection/visibility/opacity and ordinary native settings rows are wired.
+shared menus, tool buttons, brush/size presets and ordinary native settings rows
+are wired. The shared layer panel includes GPU thumbnails, checked selection,
+content/mask targets, blend/opacity/locks/clipping/references, groups, rename,
+reordering, image import and the Rust context-menu model. Thumbnail work is
+limited to visible rows and eight pending readbacks, with no idle polling once
+previews are current. Context gestures, dragging and all menu workflows still
+need complete acceptance on both platforms.
 
 Still required: complete panel/drawer/menu/dialog behavior and customization,
 filters/properties and other specialized controls, complete settings/shortcut

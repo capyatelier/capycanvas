@@ -58,10 +58,15 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     func submit(_ kind: UInt32, _ value: JSON, completion: (@Sendable (JSON?) -> Void)? = nil) {
-        perform { [self] in
-            let result = try request(kind, value)
-            try publish()
-            completion?(result)
+        queue.async { [self] in
+            do {
+                let result = try request(kind, value)
+                try publish()
+                completion?(result)
+            } catch {
+                receive(nil, error.localizedDescription)
+                completion?(nil)
+            }
         }
     }
     func attach(_ layer: CAMetalLayer, width: UInt32, height: UInt32, scale: Float) {
@@ -96,6 +101,23 @@ final class NativeOwner: @unchecked Sendable {
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
             try check(capy_apple_resize(handle, width, height, scale)); try publish()
+        }
+    }
+    func importLayer(_ url: URL) {
+        // File I/O and decode must not stall the UI or the render/input owner.
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            do {
+                let image = try LayerImagePixels.decode(url)
+                perform { [self] in
+                    try image.name.withCString { name in
+                        try image.rgba.withUnsafeBytes { bytes in
+                            try check(capy_apple_import_layer(handle, name, image.width, image.height,
+                                bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count))
+                        }
+                    }
+                    try publish()
+                }
+            } catch { receive(nil, error.localizedDescription) }
         }
     }
     func detach() {
