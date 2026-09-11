@@ -168,13 +168,13 @@ impl EffectPanels {
                 let Some(w) = weak.upgrade() else {
                     return glib::ControlFlow::Break;
                 };
-                let extra = w.drawer.effects();
+                let extra: Vec<_> = w.drawers().iter().filter_map(|d| d.effects()).collect();
                 for view in std::iter::once(&w.effects).chain(extra.iter()) {
                     if view.stats.is_mapped() {
                         view.refresh_stats(&w);
                     }
                 }
-                w.effects.refresh_previews(&w, extra.as_deref());
+                w.effects.refresh_previews(&w, &extra);
                 glib::ControlFlow::Continue
             });
         }
@@ -343,7 +343,7 @@ impl EffectPanels {
         }
         *self.picker_visible.borrow_mut() = ids;
     }
-    fn refresh_previews(&self, w: &Workspace, extra: Option<&Self>) {
+    fn refresh_previews(&self, w: &Workspace, extra: &[Rc<Self>]) {
         let mut gpu = w.gpu.borrow_mut();
         let Some(gpu) = gpu.as_mut() else {
             return;
@@ -382,7 +382,7 @@ impl EffectPanels {
             return;
         }
         let on_screen: Vec<_> = std::iter::once(self)
-            .chain(extra)
+            .chain(extra.iter().map(|v| v.as_ref()))
             .filter(|v| v.adjustments.is_mapped())
             .flat_map(|view| {
                 let rows = view.picker_rows.borrow();

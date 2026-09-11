@@ -199,6 +199,209 @@ fn assert_drawer_connected(w: &Workspace) {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_collapsed_columns() {
+    let app = native_test_app("art.capycanvas.CollapsedColumns");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(1800);
+    let original_workspace = state(&w).workspace.clone();
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let output = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(output).unwrap();
+    let press = |name: &str| {
+        let button = find_named(w.surface.upcast_ref(), name)
+            .unwrap_or_else(|| panic!("Missing {name}"))
+            .downcast::<gtk::Button>()
+            .unwrap();
+        assert!(button.is_mapped(), "{name} must be visible");
+        click(&button);
+        pump(280);
+    };
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original_workspace.clone(),
+        });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
+        let menu = w
+            .gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .context_menu(ContextTarget::Group { group: 8 })
+            .unwrap();
+        let collapse = menu
+            .sections
+            .iter()
+            .flatten()
+            .find(|i| i.label == "Collapse column")
+            .unwrap()
+            .action
+            .clone()
+            .unwrap();
+        w.dispatch(collapse);
+        pump(250);
+        assert_eq!(state(&w).workspace.layout.collapsed.len(), 2);
+        for col in w.resolved().collapsed {
+            let widget = find_named(
+                w.surface.upcast_ref(),
+                &format!("collapsed-column-{}", col.id),
+            )
+            .unwrap();
+            let b = widget.compute_bounds(&w.surface).unwrap();
+            assert!((b.width() - TILE_SIZE).abs() <= 1.);
+            assert!((b.y() - col.bounds.y).abs() <= 1.);
+            assert!((b.height() - col.bounds.height).abs() <= 1.);
+            for icon in col.groups.iter().flat_map(|g| &g.icons) {
+                let button = find_named(
+                    w.surface.upcast_ref(),
+                    &format!("column-icon-{:?}", icon.panel),
+                )
+                .unwrap();
+                let b = button.compute_bounds(&w.surface).unwrap();
+                assert!(
+                    (b.y() - icon.bounds.y).abs() <= 1.,
+                    "{:?}: {b:?} vs {:?}",
+                    icon.panel,
+                    icon.bounds
+                );
+                assert_eq!(b.width(), TILE_SIZE);
+                assert_eq!(b.height(), TILE_SIZE);
+            }
+        }
+        capture_reference(
+            &w,
+            &format!("{output}/columns-collapsed-{theme:?}.png"),
+            1.0,
+        );
+        press("column-icon-Brushes");
+        press("column-icon-Layers");
+        assert_eq!(state(&w).customization.column_drawers.len(), 2);
+        w.chrome_event(ChromeEvent::Contact {
+            position: [viewport[0] * 0.5, viewport[1] * 0.8],
+            canvas: true,
+        });
+        pump(50);
+        assert_eq!(state(&w).customization.column_drawers.len(), 2);
+        let width = find_named(w.surface.upcast_ref(), "column-drawer-8")
+            .unwrap()
+            .width();
+        press("column-drawer-tab-Properties");
+        assert_eq!(
+            find_named(w.surface.upcast_ref(), "column-drawer-8")
+                .unwrap()
+                .width(),
+            width
+        );
+        assert_eq!(
+            w.resolved()
+                .collapsed
+                .iter()
+                .flat_map(|c| &c.groups)
+                .find(|g| g.group == 8)
+                .map(|g| g.active),
+            Some(Panel::Properties)
+        );
+        press("column-drawer-tab-Adjustments");
+        pump(500);
+        assert_eq!(
+            find_named(w.surface.upcast_ref(), "column-drawer-8")
+                .unwrap()
+                .width(),
+            width
+        );
+        capture_reference(&w, &format!("{output}/columns-drawers-{theme:?}.png"), 1.0);
+        press("column-icon-Layers");
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+        press("column-icon-Sizes");
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+        let layout = w.resolved();
+        let grip = layout.collapsed.iter().find(|c| c.id == 4).unwrap().grip;
+        let point = [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5];
+        assert!(matches!(
+            w.drag_target_at(point),
+            Some(DragTarget::Dock(DockItem::Column { column: 4 }))
+        ));
+        let right = layout.collapsed.iter().find(|c| c.id == 8).unwrap().bounds;
+        let destination = [right.x - 2., right.y + 200.];
+        w.workspace_drag_input(ContactPhase::Down, point, None);
+        w.workspace_drag_input(ContactPhase::Move, destination, None);
+        assert!(w.drop_hint.borrow().is_some());
+        w.workspace_drag_input(ContactPhase::Up, destination, None);
+        pump(250);
+        assert!(state(&w).workspace.layout.floating.is_empty());
+        assert_eq!(state(&w).workspace.layout.collapsed.len(), 2);
+        let r = w.resolved();
+        assert!(r.collapsed.iter().find(|c| c.id == 4).unwrap().bounds.x > viewport[0] * 0.5);
+        press("expand-column-4");
+        press("expand-column-8");
+        assert!(state(&w).workspace.layout.collapsed.is_empty());
+        assert!(state(&w).customization.column_drawers.is_empty());
+    }
+    // Overflow is a native scroll area; the shared hit targets must follow it
+    // and retain its offset when a membership change rebuilds the widgets.
+    let mut workspace = original_workspace;
+    for i in 0..28 {
+        workspace
+            .layout
+            .add_toolbar(Some(8), &format!("Test toolbar {i}"), &[])
+            .unwrap();
+    }
+    workspace
+        .layout
+        .set_column_collapsed(8, true, viewport)
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(250);
+    let scrolling = || {
+        find_named(w.surface.upcast_ref(), "column-scroll-8")
+            .unwrap()
+            .downcast::<gtk::ScrolledWindow>()
+            .unwrap()
+    };
+    scrolling().vadjustment().set_value(280.);
+    pump(120);
+    assert_eq!(state(&w).workspace.layout.column_scroll, [(8, 280.)]);
+    let verify_scroll = || {
+        for c in &w.resolved().collapsed {
+            for icon in c.groups.iter().flat_map(|g| &g.icons) {
+                if icon.bounds.y + icon.bounds.height <= c.content.y
+                    || icon.bounds.y >= c.content.y + c.content.height
+                {
+                    continue;
+                }
+                let button = find_named(
+                    w.surface.upcast_ref(),
+                    &format!("column-icon-{:?}", icon.panel),
+                )
+                .unwrap();
+                let b = button.compute_bounds(&w.surface).unwrap();
+                assert!(
+                    (b.y() - icon.bounds.y).abs() <= 1.,
+                    "Scrolled {:?}: {b:?} vs {:?}",
+                    icon.panel,
+                    icon.bounds
+                );
+            }
+        }
+    };
+    verify_scroll();
+    w.dispatch(UiAction::Customize {
+        action: CustomizationAction::SetPanelVisible {
+            panel: Panel::Properties,
+            visible: false,
+        },
+    });
+    pump(250);
+    assert_eq!(scrolling().vadjustment().value(), 280.);
+    verify_scroll();
+    w.window.destroy();
+    pump(50);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_tool_drawers() {
     let app = native_test_app("art.capycanvas.ToolDrawers");
     let w = Workspace::new(&app);
@@ -4162,8 +4365,8 @@ fn native_zen_behaviors() {
                 Slot::Canvas
                     | Slot::ZenButton
                     | Slot::ZenToolbars
-                    | Slot::Drawer
-                    | Slot::DrawerConnection
+                    | Slot::Drawer(_)
+                    | Slot::DrawerConnection(_)
             );
             assert_eq!(!widget.has_css_class("zen-hidden"), visible);
             assert_eq!(widget.can_target(), visible);

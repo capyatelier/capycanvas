@@ -13,6 +13,8 @@ use std::{
     rc::Rc,
 };
 
+#[path = "workspace_columns.rs"]
+mod columns;
 #[path = "workspace_customization.rs"]
 mod customization;
 #[path = "workspace_drawer.rs"]
@@ -192,11 +194,17 @@ mod allocation {
                 .borrow()
                 .upgrade()
                 .and_then(|w| w.customization.geometry(&w));
-            let drawer = self
+            let drawers = self
                 .owner
                 .borrow()
                 .upgrade()
-                .and_then(|w| w.drawer.geometry(&w));
+                .map(|w| {
+                    w.drawers()
+                        .into_iter()
+                        .filter_map(|d| d.geometry(&w).map(|p| (d.id, p)))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             for (slot, child) in self.children.borrow().iter() {
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
@@ -219,10 +227,18 @@ mod allocation {
                         height: TILE_SIZE,
                     }),
                     Slot::Status => Some(resolved.status),
-                    Slot::Drawer => drawer.as_ref().map(|d| d.bounds),
-                    Slot::DrawerConnection => drawer
-                        .as_ref()
-                        .and_then(|d| d.connection().map(|c| c.bounds)),
+                    Slot::Drawer(id) => {
+                        drawers.iter().find(|(i, _)| i == id).map(|(_, d)| d.bounds)
+                    }
+                    Slot::DrawerConnection(id) => drawers
+                        .iter()
+                        .find(|(i, _)| i == id)
+                        .and_then(|(_, d)| d.connection().map(|c| c.bounds)),
+                    Slot::Column(id) => resolved
+                        .collapsed
+                        .iter()
+                        .find(|c| c.id == *id)
+                        .map(|c| c.bounds),
                     Slot::Group(id) => {
                         let expanded = expansion.filter(|e| e.group == *id);
                         child
@@ -291,12 +307,13 @@ mod allocation {
                 if expanded {
                     snapshot.pop();
                 }
-                if *slot == Slot::DrawerConnection
+                if let Slot::DrawerConnection(id) = *slot
                     && child.is_mapped()
                     && !child.has_css_class("zen-hidden")
                     && let Some(owner) = self.owner.borrow().upgrade()
+                    && let Some(drawer) = owner.drawers().into_iter().find(|d| d.id == id)
                 {
-                    owner.drawer.snapshot_origin(&owner, snapshot);
+                    drawer.snapshot_origin(&owner, snapshot);
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade()
@@ -381,8 +398,9 @@ enum Slot {
     Group(u32),
     Divider(u32),
     FloatingResize(u32, ResizeEdge),
-    Drawer,
-    DrawerConnection,
+    Drawer(u32),
+    DrawerConnection(u32),
+    Column(u32),
     ZenToolbars,
 }
 glib::wrapper! {
@@ -390,18 +408,18 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl DockSurface {
-    fn raise_drawer(&self) {
+    fn raise_drawer(&self, id: u32) {
         let mut children = self.imp().children.borrow_mut();
         if children
             .iter()
             .rev()
             .take(2)
             .map(|(slot, _)| *slot)
-            .eq([Slot::DrawerConnection, Slot::Drawer])
+            .eq([Slot::DrawerConnection(id), Slot::Drawer(id)])
         {
             return;
         }
-        for slot in [Slot::Drawer, Slot::DrawerConnection] {
+        for slot in [Slot::Drawer(id), Slot::DrawerConnection(id)] {
             if let Some(index) = children.iter().position(|(s, _)| *s == slot)
                 && index + 1 != children.len()
             {
@@ -442,8 +460,8 @@ impl DockSurface {
                     | Slot::Header
                     | Slot::ZenButton
                     | Slot::Status
-                    | Slot::Drawer
-                    | Slot::DrawerConnection
+                    | Slot::Drawer(_)
+                    | Slot::DrawerConnection(_)
                     | Slot::ZenToolbars
             )
         });
@@ -699,7 +717,8 @@ pub struct Workspace {
     status: gtk::Label,
     pub(crate) preferences: crate::preferences::Preferences,
     customization: customization::Customization,
-    pub(crate) drawer: drawers::Drawer,
+    pub(crate) drawer: Rc<drawers::Drawer>,
+    columns: columns::Columns,
     refreshing: Cell<bool>,
     ticking: Cell<bool>,
     frame_deadline: Cell<u64>,
@@ -850,7 +869,8 @@ impl Workspace {
             status,
             preferences: crate::preferences::Preferences::new(),
             customization: customization::Customization::new(),
-            drawer: drawers::Drawer::new(),
+            drawer: drawers::Drawer::new(0),
+            columns: columns::Columns::default(),
             refreshing: Cell::new(false),
             ticking: Cell::new(false),
             frame_deadline: Cell::new(0),
@@ -1401,7 +1421,8 @@ impl Workspace {
             if !matches!(slot, Slot::Canvas) {
                 let hidden = if *slot == Slot::ZenToolbars {
                     !partial_zen
-                } else if matches!(slot, Slot::Drawer | Slot::DrawerConnection) && partial_zen {
+                } else if matches!(slot, Slot::Drawer(0) | Slot::DrawerConnection(0)) && partial_zen
+                {
                     false
                 } else if *slot == Slot::ZenButton {
                     if hidden && keep_zen_button {
@@ -1768,7 +1789,9 @@ impl Workspace {
             != 0
         {
             self.customization.refresh(self);
-            self.drawer.refresh(self, &state, regions);
+            self.drawer
+                .refresh(self, &state, regions, state.customization.drawer.as_ref());
+            self.columns.refresh_drawers(self, &state, regions);
         }
         if regions & (regions::LAYOUT | regions::SETTINGS | regions::BRUSH | regions::COMMANDS) != 0
         {
@@ -2089,7 +2112,13 @@ impl Workspace {
             }
             view.tab_joins.queue_draw();
         }
+        self.columns.reconcile(self, layout, &resolved);
         self.surface.queue_allocate();
+    }
+    pub(crate) fn drawers(&self) -> Vec<Rc<drawers::Drawer>> {
+        std::iter::once(self.drawer.clone())
+            .chain(self.columns.drawers.borrow().iter().cloned())
+            .collect()
     }
     fn install_panel_drag(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, item: DockItem) {
         self.register_drag(widget, DragTarget::Dock(item));
