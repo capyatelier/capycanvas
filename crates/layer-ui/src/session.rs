@@ -19,11 +19,14 @@ pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, Re
 mod effects;
 #[path = "filter_loading.rs"]
 mod filter_loading;
+#[path = "project_files.rs"]
+mod project_files;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
     LayerPropertiesView, PropertyControl, PropertyKind,
 };
 pub use filter_loading::FilterLoadState;
+pub use project_files::{ProjectFileAction, ProjectFileState};
 
 const ZEN_CORNER_GUARD: f32 = 300.0;
 
@@ -142,6 +145,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 filter_load: FilterLoadState::default(),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
+                project_file: ProjectFileState::default(),
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
@@ -1075,6 +1079,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::NewDocument
+            | CommandId::OpenDocument
+            | CommandId::SaveDocument
+            | CommandId::SaveDocumentAs => {
+                self.state.project_file.supported
+                    && self.project_ready().is_ok()
+                    && !self
+                        .state
+                        .requests
+                        .iter()
+                        .any(|r| matches!(r.kind, HostRequestKind::ProjectFile { .. }))
+            }
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
                 idle && self.operation.active()
@@ -2397,6 +2413,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request(HostRequestKind::NewWindow)?;
                 Ok((HOST, false))
             }
+            CommandId::NewDocument
+            | CommandId::OpenDocument
+            | CommandId::SaveDocument
+            | CommandId::SaveDocumentAs => {
+                self.request(HostRequestKind::ProjectFile {
+                    action: match command {
+                        CommandId::NewDocument => ProjectFileAction::New,
+                        CommandId::OpenDocument => ProjectFileAction::Open,
+                        CommandId::SaveDocument => ProjectFileAction::Save,
+                        _ => ProjectFileAction::SaveAs,
+                    },
+                })?;
+                Ok((HOST, false))
+            }
             CommandId::ToggleTheme => {
                 self.state.settings.theme = Some(if self.state.theme == Theme::Dark {
                     Theme::Light
@@ -2814,11 +2844,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
-            title: "Untitled".into(),
+            title: self.state.project_file.title.clone(),
             active: true,
             width: doc.width,
             height: doc.height,
         }];
+        self.state.project_file.revision = doc.revision;
+        self.state.project_file.modified = doc.revision != self.state.project_file.saved_revision;
         self.refresh_tools();
     }
 }
@@ -8633,7 +8665,7 @@ mod tests {
         }
         assert_eq!(PRIMARY_MENU[0], &[CommandId::NewWindow]);
         assert_eq!(
-            PRIMARY_MENU[1],
+            *PRIMARY_MENU.last().unwrap(),
             &[
                 CommandId::Settings,
                 CommandId::KeyboardShortcuts,
@@ -8641,7 +8673,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            serde_json::to_value(MENUS).unwrap()[1]["sections"],
+            serde_json::to_value(MENUS.iter().find(|m| m.label == "View").unwrap()).unwrap()["sections"],
             serde_json::json!([
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],

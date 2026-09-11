@@ -13,7 +13,7 @@ mod color;
 mod tool_settings;
 mod tools;
 pub use color::{
-    ColorAction, ColorSlot, ColorSpace, ColorState, ColorPanelView, ColorComponentView,
+    ColorAction, ColorComponentView, ColorPanelView, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};
@@ -71,7 +71,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{LayerControls, UiSession};
+pub use session::{LayerControls, ProjectFileAction, ProjectFileState, UiSession};
 pub use settings::{
     ChoicePresentation, HostRequest, HostRequestKind, Platform, PreferenceAction, PreferenceGroup,
     PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
@@ -148,6 +148,8 @@ pub struct MenuSpec {
 }
 pub const PRIMARY_MENU: &[&[CommandId]] = &[
     &[CommandId::NewWindow],
+    &[CommandId::NewDocument, CommandId::OpenDocument],
+    &[CommandId::SaveDocument, CommandId::SaveDocumentAs],
     &[
         CommandId::Settings,
         CommandId::KeyboardShortcuts,
@@ -155,6 +157,14 @@ pub const PRIMARY_MENU: &[&[CommandId]] = &[
     ],
 ];
 pub const MENUS: &[MenuSpec] = &[
+    MenuSpec {
+        label: "File",
+        sections: &[
+            &[CommandId::NewDocument, CommandId::OpenDocument],
+            &[CommandId::SaveDocument, CommandId::SaveDocumentAs],
+            &[CommandId::NewWindow],
+        ],
+    },
     MenuSpec {
         label: "Edit",
         sections: &[&[CommandId::Undo, CommandId::Redo]],
@@ -378,6 +388,10 @@ pub enum CommandId {
     #[serde(alias = "toggle_panels")]
     ZenMode,
     NewWindow,
+    NewDocument,
+    OpenDocument,
+    SaveDocument,
+    SaveDocumentAs,
     KeyboardShortcuts,
     About,
 }
@@ -443,7 +457,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 52] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -490,6 +504,10 @@ impl CommandId {
         Self::ResetLayout,
         Self::ZenMode,
         Self::NewWindow,
+        Self::NewDocument,
+        Self::OpenDocument,
+        Self::SaveDocument,
+        Self::SaveDocumentAs,
         Self::KeyboardShortcuts,
         Self::About,
     ];
@@ -547,6 +565,10 @@ impl CommandId {
             Self::ResetLayout => "Reset layout",
             Self::ZenMode => "Zen mode",
             Self::NewWindow => "New Window",
+            Self::NewDocument => "New Drawing",
+            Self::OpenDocument => "Open…",
+            Self::SaveDocument => "Save",
+            Self::SaveDocumentAs => "Save As…",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
         }
@@ -636,6 +658,7 @@ pub struct UiState {
     pub filter_load: FilterLoadState,
     pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
+    pub project_file: ProjectFileState,
     pub commands: Vec<CommandState>,
     pub settings: Settings,
     /// Resolved appearance for widgets, previews and GPU canvas surround.

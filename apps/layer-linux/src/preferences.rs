@@ -1265,6 +1265,9 @@ impl Preferences {
                         break;
                     };
                     let result: Result<(), String> = match request.kind {
+                        HostRequestKind::ProjectFile { .. } => {
+                            Err("Project file services are not connected in this host".into())
+                        }
                         HostRequestKind::NewWindow => w
                             .window
                             .application()

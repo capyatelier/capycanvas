@@ -21,6 +21,7 @@ import SwiftUI
     var wake: (() -> Void)?
     private(set) var native: NativeOwner?
     lazy var layerThumbnails = LayerThumbnails(store: self)
+    lazy var projectFiles = ProjectFiles(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
 
@@ -55,6 +56,7 @@ import SwiftUI
                 currentState = next["state"]
                 structuralSnapshot = next
                 camera.value = state["camera"]
+                projectFiles.receive(state)
             }
             else if !next["camera"].isNull {
                 // Camera patches update the readout alone; dragging the canvas
@@ -80,6 +82,14 @@ import SwiftUI
                 if remaining == 0 { completion(succeeded) }
             }
         }
+    }
+    static func confirmCloseAll(_ completion: @escaping @MainActor (Bool) -> Void) {
+        var stores = instances.allObjects
+        func next() {
+            guard let store = stores.popLast() else { completion(true); return }
+            store.projectFiles.confirmClose { allowed in if allowed { next() } else { completion(false) } }
+        }
+        next()
     }
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }

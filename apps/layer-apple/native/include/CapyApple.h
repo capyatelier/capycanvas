@@ -13,6 +13,20 @@ CapyApple *capy_apple_create(uint32_t platform); /* 0 iPadOS, 1 macOS */
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
+typedef struct CapyProjectTask CapyProjectTask;
+/* Capture/context and adopt/saved run on the editor owner. read/write/free run
+   on the file worker. Jobs own immutable data, never an editor pointer. */
+CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t opening);
+int32_t capy_apple_project_ready(CapyApple *app);
+int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
+int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
+int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
+int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title);
+int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title);
+void capy_project_cancel(const CapyProjectTask *task);
+int32_t capy_project_begin_commit(const CapyProjectTask *task);
+char *capy_project_error(const CapyProjectTask *task); /* owned, NULL on success */
+void capy_project_free(CapyProjectTask *task);
 /* Stateless numeric policy; safe on the UI thread. Owned JSON result contains
    either the shared numeric response or {"error": ...}. */
 char *capy_apple_numeric(const char *json);

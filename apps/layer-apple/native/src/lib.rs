@@ -1,6 +1,8 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
+mod project;
+pub use project::*;
 #[cfg(test)]
 mod tests;
 use layer_host::{NativeHost, PointerBatch};
@@ -38,8 +40,10 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             1 => layer_ui::Platform::Mac,
             _ => return None,
         };
+        let mut host = NativeHost::new(platform).ok()?;
+        host.session.set_project_files_available(true);
         Some(Box::into_raw(Box::new(CapyApple {
-            host: NativeHost::new(platform).ok()?,
+            host,
             metal: metal::MetalHost::default(),
             error: None,
         })))

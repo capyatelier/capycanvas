@@ -5,6 +5,11 @@ struct EditorView<Canvas: View>: View {
     var showsApplicationMenus = true
     @ViewBuilder let canvas: () -> Canvas
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openWindow) private var openWindow
+    @State private var lastWindowRequest: UInt64 = 0
+    private var windowRequest: UInt64 {
+        store.state["requests"].array.first { $0["kind"]["type"].string == "new_window" }?["id"].uint ?? 0
+    }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var panels: [String: JSON] {
         Dictionary(uniqueKeysWithValues: store.snapshot["panels"].array.map { ($0["id"].string, $0) })
@@ -60,10 +65,17 @@ struct EditorView<Canvas: View>: View {
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255))
         .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))
+        .modifier(ProjectFilesModifier(files: store.projectFiles))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
             SettingsView(store: store).modifier(StorageAlert(store: store))
         }
         .onAppear { systemTheme() }
+        .onOpenURL { store.projectFiles.openURL($0) }
+        .onChange(of: windowRequest, initial: true) { _, id in
+            guard id > lastWindowRequest else { return }
+            lastWindowRequest = id; openWindow(id: "editor")
+            store.dispatch(["type": "complete_request", "id": id, "error": NSNull()])
+        }
         .onChange(of: colorScheme) { _, _ in systemTheme() }
     }
     private func systemTheme() { store.dispatch(["type": "system_theme_changed", "theme": colorScheme == .dark ? "dark" : "light"]) }

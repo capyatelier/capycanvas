@@ -28,7 +28,9 @@ private struct MacEditorScene: View {
 @MainActor private final class PersistenceTermination: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // AppKit must receive terminateLater before its eventual reply.
-        DispatchQueue.main.async { EditorStore.flushAll { saved in
+        DispatchQueue.main.async { EditorStore.confirmCloseAll { allowed in
+            guard allowed else { sender.reply(toApplicationShouldTerminate: false); return }
+            EditorStore.flushAll { saved in
             if saved { sender.reply(toApplicationShouldTerminate: true) }
             else {
                 let alert = NSAlert()
@@ -36,6 +38,7 @@ private struct MacEditorScene: View {
                 alert.informativeText = "You can return to the app or quit with the last saved settings."
                 alert.addButton(withTitle: "Return to App"); alert.addButton(withTitle: "Quit Anyway")
                 sender.reply(toApplicationShouldTerminate: alert.runModal() == .alertSecondButtonReturn)
+            }
             }
         } }
         return .terminateLater

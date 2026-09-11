@@ -167,6 +167,39 @@ final class NativeOwner: @unchecked Sendable {
             reportStorage()
         }
     }
+    func checkProjectReady(_ completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            do {
+                try check(capy_apple_project_ready(handle))
+                try publish(); completion(nil)
+            } catch { completion(error.localizedDescription) }
+        }
+    }
+    func projectTask(opening: Bool, expected: (UInt64, UInt64)? = nil,
+        completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+        queue.async { [self] in
+            guard let pointer = capy_apple_project_task(handle, opening ? 1 : 0) else {
+                completion(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Document is unavailable")
+                return
+            }
+            let task = NativeProjectTask(pointer)
+            if let expected, capy_project_matches(task.handle, expected.0, expected.1) == 0 {
+                completion(nil, "The document changed; review those changes before opening another drawing")
+            } else { completion(task, nil) }
+        }
+    }
+    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String,
+        completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            do {
+                try title.withCString { name in
+                    try check(opening ? capy_apple_project_adopt(handle, task.handle, name)
+                        : capy_apple_project_saved(handle, task.handle, name))
+                }
+                try publish(); completion(nil)
+            } catch { completion(error.localizedDescription) }
+        }
+    }
     private func applySharedSettings() throws {
         // A global notification must not roll back a newer local edit whose
         // write is still pending. Apply the newest committed settings once all
