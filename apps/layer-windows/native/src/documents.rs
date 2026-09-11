@@ -1,7 +1,7 @@
 //! Document jobs transfer immutable state; the live canvas remains on its owner.
 //! One job and one completion are bounded. GPU/session destruction stays on the worker.
 use crate::document_io::{Stream, atomic_write, check_cancelled, io_error, location};
-use layer_core::{Project, ProjectLimits};
+use layer_core::{Project, ProjectAsset, ProjectLimits};
 use layer_host::{NativeHost, Renderer};
 use layer_render::{CanvasRenderer, EffectValidationRequest};
 use layer_render_wgpu::{ExportReadback, WgpuRasterizer};
@@ -23,6 +23,12 @@ use std::{
 #[derive(Debug, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DocumentAction {
+    RequestImport,
+    /// Lossless request identity; a null path is ordinary picker cancellation.
+    ImportImage {
+        id: String,
+        path: Option<String>,
+    },
     Close,
     RespondClose {
         id: u32,
@@ -87,6 +93,11 @@ enum Source {
     Open(PathBuf),
 }
 enum Job {
+    ImportImage {
+        path: PathBuf,
+        limit: u32,
+        cancelled: Arc<AtomicBool>,
+    },
     Export {
         readback: ExportReadback,
         path: PathBuf,
@@ -101,6 +112,7 @@ enum Job {
     },
 }
 enum Completed {
+    Imported(ProjectAsset),
     Saved,
     Exported,
     Prepared(Box<UiSession<Renderer>>),
@@ -110,6 +122,7 @@ struct Mailbox {
     pending: Option<Job>,
     completed: Option<Result<Completed, String>>,
     retired: Option<Box<UiSession<Renderer>>>,
+    retired_image: Option<ProjectAsset>,
 }
 #[derive(Default)]
 struct Shared {
@@ -131,10 +144,11 @@ impl Worker {
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 loop {
-                    let (job, retired, stopping, completed) = {
+                    let (job, retired, retired_image, stopping, completed) = {
                         let mut mailbox = state.mailbox.lock().unwrap();
                         while mailbox.pending.is_none()
                             && mailbox.retired.is_none()
+                            && mailbox.retired_image.is_none()
                             && !state.stopping.load(Ordering::Acquire)
                         {
                             mailbox = state.ready.wait(mailbox).unwrap();
@@ -143,6 +157,7 @@ impl Worker {
                         (
                             mailbox.pending.take(),
                             mailbox.retired.take(),
+                            mailbox.retired_image.take(),
                             stopping,
                             if stopping {
                                 mailbox.completed.take()
@@ -153,6 +168,7 @@ impl Worker {
                     };
                     // Never destroy a candidate or retired GPU while holding the mailbox.
                     drop(retired);
+                    drop(retired_image);
                     if stopping {
                         drop(job);
                         drop(completed);
@@ -186,6 +202,12 @@ impl Worker {
         mailbox.retired = Some(session);
         self.shared.ready.notify_one();
     }
+    fn discard_image(&self, image: ProjectAsset) {
+        let mut mailbox = self.shared.mailbox.lock().unwrap();
+        assert!(mailbox.retired_image.is_none());
+        mailbox.retired_image = Some(image);
+        self.shared.ready.notify_one();
+    }
     fn stop(&mut self) -> Result<(), String> {
         self.shared.stopping.store(true, Ordering::Release);
         self.shared.ready.notify_one();
@@ -206,6 +228,11 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
+        Job::ImportImage {
+            path,
+            limit,
+            cancelled,
+        } => crate::image_import::decode(&path, limit, cancel, &cancelled).map(Completed::Imported),
         Job::Export { readback, path } => {
             // The ticket owns its GPU buffer; the live renderer stays on its owner.
             let image = readback.finish().map_err(|e| e.to_string())?;
@@ -307,7 +334,35 @@ struct Active {
     revision: u64,
     location: Option<DocumentLocation>,
 }
+struct ImageImport {
+    id: u64,
+    submitted: bool,
+    limit: u32,
+    epoch: u64,
+    revision: u64,
+    target: u64,
+    cancelled: Arc<AtomicBool>,
+}
+impl ImageImport {
+    fn check(&self, host: &NativeHost) -> Result<(), String> {
+        host.session.require_document_idle()?;
+        let file = &host.session.state().document_file;
+        let document = host.session.engine().document();
+        if file.epoch != self.epoch
+            || document.revision != self.revision
+            || document.active_layer.0 != self.target
+            || file.busy
+            || file.close_ready
+        {
+            Err("The drawing changed while importing. Import the image again.".into())
+        } else {
+            Ok(())
+        }
+    }
+}
 pub(crate) struct DocumentService {
+    import: Option<ImageImport>,
+    next_import: u64,
     worker: Worker,
     active: Option<Active>,
     export: Option<PathBuf>,
@@ -316,9 +371,98 @@ impl DocumentService {
     pub(crate) fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
         Ok(Self {
             worker: Worker::start(wake)?,
+            import: None,
+            next_import: 1,
             active: None,
             export: None,
         })
+    }
+    pub(crate) fn importing(&self) -> bool {
+        self.import.is_some()
+    }
+
+    pub(crate) fn import_request(&self) -> Option<serde_json::Value> {
+        self.import.as_ref().map(|request| {
+            serde_json::json!({
+                "id": request.id.to_string(), "picking": !request.submitted,
+            })
+        })
+    }
+    fn request_import(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        if self.active.is_some() || self.import.is_some() {
+            return Err("A document operation is already running".into());
+        }
+        let document = host.session.engine().document();
+        let mut import = ImageImport {
+            id: self.next_import,
+            submitted: false,
+            limit: 0,
+            epoch: host.session.state().document_file.epoch,
+            revision: document.revision,
+            target: document.active_layer.0,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        import.check(host)?;
+        import.limit = host
+            .session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .ok_or("Wait for the canvas to finish starting")?
+            .device()
+            .limits()
+            .max_texture_dimension_2d
+            .min(crate::image_import::MAX_DIMENSION);
+        self.next_import = self
+            .next_import
+            .checked_add(1)
+            .ok_or("Image request identity exhausted")?;
+        self.import = Some(import);
+        host.error = None;
+        host.invalidate_snapshot();
+        Ok(())
+    }
+    fn import_picked(
+        &mut self,
+        host: &mut NativeHost,
+        id: String,
+        path: Option<String>,
+    ) -> Result<(), String> {
+        let id = id
+            .parse::<u64>()
+            .map_err(|_| "Invalid image import identity")?;
+        if !self
+            .import
+            .as_ref()
+            .is_some_and(|r| r.id == id && !r.submitted)
+        {
+            return Ok(()); // An old picker may finish after close or another document request.
+        }
+        let mut import = self.import.take().unwrap();
+        host.invalidate_snapshot();
+        let Some(path) = path else {
+            return Ok(());
+        };
+        import.check(host)?;
+        location(&path)?;
+        self.worker.submit(Job::ImportImage {
+            path: PathBuf::from(path),
+            limit: import.limit,
+            cancelled: import.cancelled.clone(),
+        });
+        import.submitted = true;
+        self.import = Some(import);
+        Ok(())
+    }
+    fn cancel_import(&mut self, host: &mut NativeHost) {
+        if let Some(import) = &self.import {
+            import.cancelled.store(true, Ordering::Release);
+        }
+        if self.import.as_ref().is_some_and(|r| !r.submitted) {
+            self.import = None;
+            host.invalidate_snapshot();
+        }
     }
     fn request(host: &NativeHost, id: u32) -> Result<DocumentRequest, String> {
         host.session
@@ -356,7 +500,14 @@ impl DocumentService {
         host: &mut NativeHost,
         action: DocumentAction,
     ) -> Result<(), String> {
+        if let DocumentAction::RequestImport = action {
+            return self.request_import(host);
+        }
+        if let DocumentAction::ImportImage { id, path } = action {
+            return self.import_picked(host, id, path);
+        }
         if let DocumentAction::Close = action {
+            self.cancel_import(host);
             let previous = host.session.state().revision;
             let change = host.session.request_document_close()?;
             host.apply_change(previous, change);
@@ -394,7 +545,7 @@ impl DocumentService {
             return Ok(());
         }
         // Dialog responses cannot cancel/replace work that is already writing.
-        if self.active.is_some() {
+        if self.active.is_some() || self.import.is_some() {
             return Err("A document operation is already running".into());
         }
         let id = match &action {
@@ -560,11 +711,51 @@ impl DocumentService {
         Ok(())
     }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        // New/Open/Save/Export/Close supersede a pending import. Native dialogs
+        // wait for its bounded worker slot to drain before responding.
+        if host.session.state().document_file.busy || host.session.state().document_file.close_ready
+        {
+            self.cancel_import(host);
+        }
         let Some(completed) = self.worker.take() else {
             return Ok(());
         };
+        if let Some(import) = self.import.take() {
+            host.invalidate_snapshot();
+            let cancelled = import.cancelled.load(Ordering::Acquire);
+            let result = match completed {
+                Ok(Completed::Imported(image)) => {
+                    if cancelled {
+                        self.worker.discard_image(image);
+                        Ok(())
+                    } else if let Err(error) = import.check(host) {
+                        self.worker.discard_image(image);
+                        Err(error)
+                    } else {
+                        // The worker packed the source. Core retains an Arc and owns placement/Undo.
+                        let result = host
+                            .session
+                            .import_layer_asset("Imported image", image.clone());
+                        self.worker.discard_image(image);
+                        host.dirty |= result.is_ok();
+                        result
+                    }
+                }
+                Err(_) if cancelled => Ok(()),
+                Err(error) => Err(error),
+                _ => Err("Unexpected image import completion".into()),
+            };
+            if let Err(error) = result {
+                host.error = Some(error);
+            }
+            return Ok(());
+        }
         let active = self.active.take().ok_or("Unexpected document completion")?;
         let result = match completed {
+            Ok(Completed::Imported(image)) => {
+                self.worker.discard_image(image);
+                Err("Unexpected image import completion".into())
+            }
             Ok(Completed::Saved | Completed::Exported) => {
                 // Only Save reserves a checkpoint. Export completion never clears dirty state.
                 if active.epoch == host.session.state().document_file.epoch {
@@ -670,6 +861,105 @@ mod tests {
             }
             std::fs::remove_dir(&self.directory).unwrap();
         }
+    }
+
+    fn pending_import(f: &mut Fixture, id: u64, submitted: bool) {
+        let document = f.host.session.engine().document();
+        f.service.import = Some(ImageImport {
+            id,
+            submitted,
+            limit: 8192,
+            epoch: f.host.session.state().document_file.epoch,
+            revision: document.revision,
+            target: document.active_layer.0,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
+    }
+    #[test]
+    fn import_picker_identity_cancel_and_invalid_path_do_not_edit_or_stick_busy() {
+        let mut f = Fixture::new();
+        let before = f.host.session.engine().document().clone();
+        pending_import(&mut f, u64::MAX, false);
+        assert_eq!(
+            f.service.import_request().unwrap()["id"],
+            u64::MAX.to_string()
+        );
+        f.act(DocumentAction::ImportImage {
+            id: "1".into(),
+            path: None,
+        });
+        assert!(
+            f.service.importing(),
+            "an obsolete picker cannot cancel the new one"
+        );
+        f.act(DocumentAction::ImportImage {
+            id: u64::MAX.to_string(),
+            path: None,
+        });
+        assert!(!f.service.importing());
+        pending_import(&mut f, 2, false);
+        assert!(
+            f.service
+                .dispatch(
+                    &mut f.host,
+                    DocumentAction::ImportImage {
+                        id: "2".into(),
+                        path: Some("relative.png".into())
+                    }
+                )
+                .is_err()
+        );
+        assert!(!f.service.importing());
+        assert_eq!(f.host.session.engine().document(), &before);
+        assert!(!f.host.session.state().document_file.modified);
+    }
+    #[test]
+    fn import_completion_rejects_changed_document_target_and_close_and_keeps_undo() {
+        for change in 0..5 {
+            let mut f = Fixture::new();
+            pending_import(&mut f, 1, true);
+            match change {
+                0 => f.invoke(CommandId::AddLayer),
+                1 => f.service.import.as_mut().unwrap().epoch += 1,
+                2 => f.service.import.as_mut().unwrap().target += 1,
+                3 => {
+                    f.act(DocumentAction::Close);
+                }
+                _ => f.invoke(CommandId::SaveDocument),
+            }
+            let before = f.host.session.engine().document().clone();
+            let asset = ProjectAsset {
+                extent: [1, 1],
+                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+                bytes: Arc::from([255u8; 4]),
+            };
+            f.service.worker.shared.mailbox.lock().unwrap().completed =
+                Some(Ok(Completed::Imported(asset)));
+            f.service.poll(&mut f.host).unwrap();
+            assert!(!f.service.importing());
+            assert_eq!(f.host.session.engine().document(), &before);
+            assert_eq!(f.host.error.is_some(), change < 3);
+            if change == 0 {
+                f.invoke(CommandId::Undo);
+                assert_eq!(f.host.session.engine().document().layers.len(), 2);
+            }
+        }
+    }
+    #[test]
+    fn import_errors_recover_and_superseding_document_request_cancels_picker() {
+        let mut f = Fixture::new();
+        pending_import(&mut f, 1, true);
+        f.service.worker.shared.mailbox.lock().unwrap().completed =
+            Some(Err("Synthetic decoder failure".into()));
+        f.service.poll(&mut f.host).unwrap();
+        assert!(!f.service.importing());
+        assert_eq!(f.host.error.as_deref(), Some("Synthetic decoder failure"));
+        pending_import(&mut f, 2, false);
+        f.invoke(CommandId::SaveDocument);
+        f.service.poll(&mut f.host).unwrap();
+        assert!(!f.service.importing());
+        f.act(DocumentAction::Cancel { id: f.request() });
+        assert!(!f.host.session.state().document_file.busy);
     }
 
     #[test]
@@ -1213,19 +1503,6 @@ mod gpu_tests {
         host.session.set_platform(Platform::Gtk);
         host.session.set_document_replacement(true);
         host.resize(64, 48, 1.).unwrap();
-        host.import_layer_image(
-            "Source image",
-            layer_render::HostImage {
-                width: 4,
-                height: 3,
-                stride: 16,
-                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
-                bytes: &[210, 45, 83, 180].repeat(12),
-            },
-        )
-        .unwrap();
-        let expected = image(&mut host);
-        assert!(expected.bytes.as_chunks::<4>().0.iter().any(|p| p[3] != 0));
         let directory =
             std::env::temp_dir().join(format!("capy-document-gpu-test-{}", std::process::id()));
         std::fs::create_dir(&directory).unwrap();
@@ -1239,6 +1516,85 @@ mod gpu_tests {
             let _ = wake.send(());
         })
         .unwrap();
+        let source = directory.join("source.png");
+        let rgba = [210u8, 45, 83, 180].repeat(12);
+        {
+            let mut encoder = png::Encoder::new(File::create(&source).unwrap(), 4, 3);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&rgba)
+                .unwrap();
+        }
+        let clean = image(&mut host);
+        service
+            .dispatch(&mut host, DocumentAction::RequestImport)
+            .unwrap();
+        let id = service.import_request().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        service
+            .dispatch(
+                &mut host,
+                DocumentAction::ImportImage {
+                    id: id.clone(),
+                    path: Some(source.to_str().unwrap().into()),
+                },
+            )
+            .unwrap();
+        assert!(
+            service
+                .dispatch(&mut host, DocumentAction::RequestImport)
+                .is_err(),
+            "one decode at a time"
+        );
+        service
+            .dispatch(&mut host, DocumentAction::ImportImage { id, path: None })
+            .unwrap();
+        assert!(
+            service.importing(),
+            "duplicate picker reply cannot cancel a submitted decode"
+        );
+        finish(&mut service, &mut host, &done);
+        assert!(!service.importing());
+        assert!(host.error.is_none(), "{:?}", host.error);
+        assert_eq!(host.session.engine().document().layers.len(), 3);
+        let expected = image(&mut host);
+        assert_ne!(expected.bytes, clean.bytes);
+        invoke(&mut host, CommandId::Undo);
+        assert_eq!(image(&mut host).bytes, clean.bytes);
+        assert!(!host.session.state().document_file.modified);
+        invoke(&mut host, CommandId::Redo);
+        assert_eq!(image(&mut host).bytes, expected.bytes);
+
+        // A completed decode is still rejected if editing changed before adoption.
+        service
+            .dispatch(&mut host, DocumentAction::RequestImport)
+            .unwrap();
+        let id = service.import_request().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        service
+            .dispatch(
+                &mut host,
+                DocumentAction::ImportImage {
+                    id,
+                    path: Some(source.to_str().unwrap().into()),
+                },
+            )
+            .unwrap();
+        done.recv_timeout(Duration::from_secs(15)).unwrap();
+        invoke(&mut host, CommandId::AddLayer);
+        service.poll(&mut host).unwrap();
+        assert!(host.error.as_ref().unwrap().contains("changed"));
+        assert_eq!(host.session.engine().document().layers.len(), 4);
+        invoke(&mut host, CommandId::Undo);
+        assert_eq!(image(&mut host).bytes, expected.bytes);
+
         invoke(&mut host, CommandId::SaveDocument);
         let (id, _, _) = request(&host);
         service
@@ -1254,6 +1610,8 @@ mod gpu_tests {
         assert!(!host.session.state().document_file.modified);
         let saved = Project::read(File::open(&path).unwrap(), Default::default()).unwrap();
         assert_eq!(saved.assets.len(), 1);
+        assert_eq!(&*saved.assets.values().next().unwrap().bytes, &rgba);
+        std::fs::remove_file(&source).unwrap(); // Reopening must use the embedded source.
         assert_eq!(image(&mut host).bytes, expected.bytes);
         invoke(&mut host, CommandId::NewDocument);
         let (id, epoch, revision) = request(&host);

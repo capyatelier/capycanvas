@@ -1000,6 +1000,7 @@ dependencies = [
  "serde_json",
  "wgpu",
  "windows",
+ "windows-future",
 ]
 
 [[package]]

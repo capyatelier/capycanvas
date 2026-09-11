@@ -45,7 +45,9 @@ Shared snapshots drive tool, color, layer, Navigator and preference controls. Wi
 settings under `%LOCALAPPDATA%\CapyAtelier\CapyCanvas\settings.json`. The native File menu and pickers provide New, Open, Save, Save As and PNG Export.
 Layers uses virtualized native rows and bounded asynchronous GPU thumbnails.
 Layer menus and editing controls share their policy with the other ports.
-Image-as-layer import and the full editor docking layout remain in progress.
+The Layers image picker decodes oriented sRGB pixels on the document worker;
+shared Core owns insertion, Undo and embedded project assets. The full editor
+docking layout and runtime filter package import remain in progress.
 Project transport handles background work, save checkpoints and replacement of
 local files; export does not mark the editable project as saved.
 

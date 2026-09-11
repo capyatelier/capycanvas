@@ -95,7 +95,7 @@ struct WorkspaceData {
     std::function<void(bool)> popupChanged;
     int popupCount=0;
     void popup(bool open){popupCount=std::max(0,popupCount+(open?1:-1));if(popupChanged)popupChanged(popupCount>0);}
-    std::function<void(std::string)> send;
+    std::function<void(std::string)> send,document;
     bool updating=false;
     mutable std::map<std::wstring,SolidColorBrush> paletteBrushes;
     void refreshPalette(){

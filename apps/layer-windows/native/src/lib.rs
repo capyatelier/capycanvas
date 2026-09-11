@@ -9,6 +9,8 @@ mod document_io;
 mod documents;
 mod events;
 #[cfg(any(target_os = "windows", test))]
+mod image_import;
+#[cfg(any(target_os = "windows", test))]
 mod navigator;
 #[cfg(any(target_os = "windows", test))]
 mod previews;

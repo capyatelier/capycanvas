@@ -43,7 +43,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<uint64_t> popupGeneration=std::make_shared<uint64_t>(0);
     Bindings popupBindings;
     TextBlock camera;
-    Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged):overviews(std::move(report)){
+    Impl(Dispatch send,J catalog,Dispatch report,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document):overviews(std::move(report)){
+        data->document=std::move(document);
         data->popupChanged=std::move(popupChanged);
         data->thumbnails=CreateLayerThumbnailCache(previews);
         data->query=previews;data->previews=CreateFilterPreviewCache(std::move(previews));
@@ -274,7 +275,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             to_hstring(int(std::round(num(view,L"rotation")*180/3.141592653589793)))+L"°");
     }
 };
-WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews),std::move(popupChanged))){}
+WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document))){}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
 void WorkspaceView::Apply(Json const& snapshot){impl->apply(snapshot);}

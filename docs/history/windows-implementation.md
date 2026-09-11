@@ -892,3 +892,56 @@ the hardware D3D12 spatial-filter linear-sampling oracle, all native effects
 checks and startup, shader-warmup, minimized clean and dirty close lifecycle
 checks. The last incoming change affects shared column resize policy; all shared
 UI tests and the native Layers fixture pass again after that integration.
+
+## 2026-09-11: native image-as-layer import
+
+The Layers footer now opens the Windows App SDK image picker. Its request is
+created on the canvas owner after preceding native draft commits, capturing the
+document epoch, revision and editing layer without passing those identities
+through floating-point JSON. Only the request ID and picker/worker status are
+published to the UI; source paths stay inside the document job.
+
+The existing bounded document worker uses Windows BitmapDecoder to request
+straight RGBA8 pixels with EXIF orientation and conversion to sRGB. Source and
+oriented dimensions are checked before pixel decoding, against both 8192 pixels
+and the current device limit. A worker apartment owns all decoder objects.
+Cancellation and per-stage deadlines are checked while native async work runs.
+Packed pixels cross to Core as an immutable ProjectAsset; pixel copying and
+disposal of rejected images stay off the canvas owner. Core retains placement,
+selection, GPU asset upload, Undo and project embedding.
+
+Cancel and decode failure preserve the drawing. Changed documents or editing
+targets reject late completions. Duplicate and obsolete picker responses cannot
+replace or cancel another request. New/Open/Save/Export/Close supersede pending
+imports; their native dialogs wait for decoding to release the single worker
+slot. Import progress and recoverable errors use the existing status area.
+
+All 39 adapter unit checks pass, with two explicit GPU tests ignored by the
+ordinary command. Real Windows codec fixtures cover straight alpha, grayscale,
+16-bit PNG, EXIF-rotated TIFF, oversized/corrupt/missing files, private-path-free
+errors and cancellation between native async stages. Service checks cover
+lossless request IDs, cancellation, invalid destinations, changed revisions,
+epochs and editing targets, close, and subsequent document requests.
+
+The explicit hardware D3D12 document fixture now imports a generated PNG through
+the worker, verifies exact Undo/Redo pixels and rejection after intervening edits,
+and saves/reopens the drawing after deleting the source image. The native
+document fixture drives the real picker, a focused opacity draft, Cancel,
+corrupt-image recovery, selected image rows, ready thumbnails, Undo/Redo and
+embedded project reopening. Its existing New/Open/Save/Save As/PNG/Preferences
+and saved/untitled close checks also pass. Strict adapter Clippy and the native
+build pass. Temporary compiler diagnostics were removed before publication.
+
+One earlier untitled-close sample exceeded the five-second exit gate. Local
+lifecycle records place 5.7 seconds in the final retired shader-worker join,
+after the document worker and window had finished. An instrumented repeat and
+the final normal build's document and four lifecycle scenarios pass, but do not
+explain that intermittent sample. Cold-compilation close timing remains an open
+acceptance issue; the timeout was not increased and shutdown still joins work.
+
+Runtime filter package import, full editor columns/drawers/expansion/docking,
+remaining native panels/commands, physical input, full visual parity and release
+packaging remain open. The full Windows editor preset stays gated. Sustained
+120 Hz painting and physical input-to-present latency remain deferred until the
+application is otherwise complete. All generated images, projects, profiles and
+diagnostic output remain ignored and local.

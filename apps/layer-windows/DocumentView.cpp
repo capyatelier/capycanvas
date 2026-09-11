@@ -19,6 +19,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     ContentDialog dialog{nullptr};
     Windows::Foundation::IAsyncOperation<Pickers::PickFileResult> picker{nullptr};
     uint32_t handled=0;
+    hstring handledImport;
     bool showing=false,stopping=false;
 
     fire_and_forget show(J envelope) {
@@ -143,9 +144,40 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         showing=false;
         changed();
     }
+    fire_and_forget showImport(J request) {
+        auto lifetime=shared_from_this();
+        auto response=O({{L"operation",S(L"import_image")},{L"id",S(str(request,L"id"))},
+            {L"path",JsonValue::CreateNullValue()}});
+        showing=true;changed();
+        try {
+            Pickers::FileOpenPicker open(window.AppWindow().Id());
+            open.CommitButtonText(L"Import image");
+            for(auto extension:{L".png",L".jpg",L".jpeg",L".bmp",L".gif",L".tif",L".tiff",L".jxr",L".webp",L".heic",L".heif"})
+                open.FileTypeFilter().Append(extension);
+            picker=open.PickSingleFileAsync();
+            auto selected=co_await picker;
+            if(selected)response.Insert(L"path",S(selected.Path()));
+        } catch(hresult_canceled const&) {
+        } catch(hresult_error const& failure) {
+            if(!stopping)report("Windows could not show the image picker ("+std::to_string(failure.code().value)+").");
+        } catch(std::exception const&) {
+            if(!stopping)report("Windows could not show the image picker.");
+        }
+        picker=nullptr;
+        if(!stopping)send(to_string(response.Stringify()));
+        showing=false;changed();
+    }
     void apply(J const& snapshot,bool blocked) {
         model=snapshot;
         if(stopping||blocked||showing)return;
+        auto import=object(model,L"windows_image_import");
+        if(flag(import,L"picking")){
+            auto id=str(import,L"id");if(id!=handledImport){handledImport=id;showImport(import);}
+            return;
+        }
+        // Superseding file operations cancel decoding on the owner; wait for that
+        // worker slot to drain before presenting their dialog.
+        if(flag(model,L"windows_importing"))return;
         for(auto value:array(object(model,L"state"),L"requests")) {
             auto envelope=value.GetObject();
             if(str(object(envelope,L"kind"),L"type")!=L"document")continue;

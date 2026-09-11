@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Executable)
 $ErrorActionPreference='Stop'
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes,System.Drawing
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -32,6 +32,14 @@ $first=Join-Path $run 'Drawing one 日本語.capy'
 $second=Join-Path $run 'Drawing two.capy'
 $corrupt=Join-Path $run 'Corrupt.capy'
 [IO.File]::WriteAllText($corrupt,'synthetic invalid project')
+$imageSource=Join-Path $run 'Source image 日本語.png'
+$bitmap=[Drawing.Bitmap]::new(16,12,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+try{
+    for($y=0;$y -lt 12;$y++){for($x=0;$x -lt 16;$x++){
+        $bitmap.SetPixel($x,$y,[Drawing.Color]::FromArgb(180,210,45,83))
+    }}
+    $bitmap.Save($imageSource,[Drawing.Imaging.ImageFormat]::Png)
+}finally{$bitmap.Dispose()}
 $names=@('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY','CAPY_PRESENT_PROBE')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
@@ -146,11 +154,51 @@ Wait-Until {(Find-Id 'document-error').Current.Name} 'Invalid expression did not
 if((Model).state.document_file.epoch -ne 0){throw 'Invalid size replaced the drawing'}
 Set-Size '64*2' '96';Invoke-Control 'Create';Idle
 Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 96} 'New drawing did not use shared expressions'
+
+# Exercise the actual native image picker, including a focused numeric draft.
+$script:scope=$root
+if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke-Control 'Layers'}
+$paint=(Model).state.layer_tools.editing_layer.id
+function Import-Start {
+    $script:scope=$root
+    $hit=@{item=$null}
+    Wait-Until {$hit.item=Find-Id 'layer-import';$hit.item -and $hit.item.Current.IsEnabled} 'Import control stayed disabled'
+    $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Picker 'Open'
+}
+function Import-Idle {
+    Wait-Until {$current=Model;$current -and !$current.windows_importing} 'Image import did not finish' 30
+    $script:scope=$root
+}
+$opacity=Find-Id 'layer-opacity'
+$opacity.SetFocus();$opacity.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('55')
+Import-Start;Picker-Button '2';Import-Idle
+Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -lt .000001} 'Import picker lost the focused layer draft'
+if(@((Model).state.layers).Count -ne 2){throw 'Cancelling image import inserted a layer'}
+Invoke-Control 'Undo'
+Wait-Until {!(Model).state.document_file.modified} 'Undo did not restore the clean opacity checkpoint'
+$badImage=Join-Path $run 'Invalid image.png'
+[IO.File]::WriteAllText($badImage,'synthetic invalid image')
+Import-Start;Choose-Path $badImage;Import-Idle
+Wait-Until {(Model).error -like '*could not decode*'} 'Invalid image did not report a recoverable decoder error'
+if(@((Model).state.layers).Count -ne 2 -or (Model).state.document_file.modified){throw 'Invalid image changed the document'}
+Import-Start;Choose-Path $imageSource;Import-Idle
+Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.label -eq 'Imported image'} 'Image layer was not selected'
+if((Model).error){throw 'Successful import did not clear the previous decoder error'}
+$imported=(Model).state.layer_tools.editing_layer.id
+Wait-Until {(Find-Id "layer-$imported-thumbnail").Current.ItemStatus -eq 'Ready'} 'Imported image thumbnail did not arrive' 15
+Invoke-Control 'Undo'
+Wait-Until {@((Model).state.layers).Count -eq 2 -and !(Model).state.document_file.modified} 'Import Undo did not restore the clean document'
+Invoke-Control 'Redo'
+Wait-Until {@((Model).state.layers).Count -eq 3 -and (Model).state.layer_tools.editing_layer.id -eq $imported} 'Import Redo did not restore the image'
+
 File-Command 'save_document';Picker 'Save As';Picker-Button '2';Idle
 if((Model).state.document_file.location){throw 'Cancel acknowledged an unsaved drawing'}
 File-Command 'save_document';Picker 'Save As';Choose-Path $first;Idle
 Wait-Until {(Test-Path -LiteralPath $first) -and (Model).state.document_file.location.uri -eq $first} 'Save did not write the chosen Unicode path'
 $hash=(Get-FileHash -LiteralPath $first).Hash
+# This generated source is no longer needed; later Open must use embedded pixels.
+Remove-Item -LiteralPath $imageSource
 Draw
 $exported=Join-Path $run 'Export 日本語.png'
 File-Command 'export_document';Picker 'Save As';Picker-Button '2';Idle
@@ -224,6 +272,8 @@ Wait-Closed 'Discarded close exceeded five seconds'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reported stderr'}
 [PSCustomObject]@{
     shared_new_size_and_validation='passed'
+    image_picker_draft_cancel_and_error_recovery='passed'
+    image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'
     save_cancel_and_unicode_path='passed'
     png_export_cancel_dimensions_and_checkpoint='passed'
     save_existing_and_save_as='passed'

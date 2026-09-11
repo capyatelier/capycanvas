@@ -168,7 +168,11 @@ void CanvasWindow::Start() {
         if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Overviews);
     },[weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
         if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
-    },[weak=weak_from_this()](bool open){if(auto self=weak.lock()){self->workspacePopupOpen=open;self->UpdatePopup();}});
+    },[weak=weak_from_this()](bool open){if(auto self=weak.lock()){self->workspacePopupOpen=open;self->UpdatePopup();}},
+    [weak=weak_from_this()](std::string json){if(auto self=weak.lock()){
+        self->canvasFocus.Focus(FocusState::Programmatic);
+        self->Send(std::move(json),CanvasCommandKind::Document);
+    }});
     root.Children().InsertAt(1,workspace->Root());
     auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
@@ -725,6 +729,8 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");
         if(message.empty()&&!flag(model,L"brush_ready"))message=L"Preparing brushes…";
+        if(message.empty()&&flag(model,L"windows_importing")&&!flag(object(model,L"windows_image_import"),L"picking"))
+            message=L"Importing image…";
         status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
     }
     root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);

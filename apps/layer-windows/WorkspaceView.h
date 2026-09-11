@@ -9,7 +9,7 @@ class WorkspaceView {
 public:
     using Json = winrt::Windows::Data::Json::JsonObject;
     using Dispatch = std::function<void(std::string)>;
-    WorkspaceView(Dispatch dispatch, Json catalog, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged);
+    WorkspaceView(Dispatch dispatch, Json catalog, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document);
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
     void Apply(Json const& snapshot);

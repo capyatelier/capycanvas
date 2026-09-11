@@ -82,6 +82,13 @@ void LayersView::init(){
         auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(L"add_mask")},{L"id",layer.GetNamedValue(L"id")},{L"replace",B(false)}}));
     }});
     controls.emplace_back([mask](J,J capabilities){mask.IsEnabled(flag(capabilities,L"mask"));});
+    auto import=footerButton(L"image",L"Import image as layer",L"layer-import",[weak]{if(auto self=weak.lock()){
+        self->data->document(R"({"operation":"request_import"})");
+    }});
+    controls.emplace_back([data=data,import](J,J){
+        auto file=object(data->state,L"document_file");
+        import.IsEnabled(flag(data->model,L"brush_ready")&&!flag(data->model,L"windows_importing")&&!flag(file,L"busy")&&!flag(file,L"close_ready"));
+    });
     auto remove=footerButton(L"delete",L"Delete selected layers",L"layer-delete",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"delete_selected")}}));});
     controls.emplace_back([weak,remove](J,J){if(auto self=weak.lock())remove.IsEnabled(flag(self->view(),L"can_delete"));});
     auto more=footerButton(L"more",L"Layer actions",L"layer-actions",[weak]{if(auto self=weak.lock()){

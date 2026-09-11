@@ -536,6 +536,16 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     guard(host, |host| {
         if let Some(mut snapshot) = host.native.take_snapshot() {
             if snapshot.get("state").is_some() {
+                snapshot["windows_importing"] = serde_json::json!(
+                    host.documents
+                        .as_ref()
+                        .is_some_and(|service| service.importing())
+                );
+                snapshot["windows_image_import"] = host
+                    .documents
+                    .as_ref()
+                    .and_then(|service| service.import_request())
+                    .unwrap_or(serde_json::Value::Null);
                 snapshot["windows_isolated_settings"] = serde_json::json!(
                     std::env::var_os("CAPY_SETTINGS_DIRECTORY")
                         .map(std::path::PathBuf::from)

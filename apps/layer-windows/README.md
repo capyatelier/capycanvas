@@ -90,7 +90,7 @@ directory. No generated assets or captures need to be committed.
 The current web app has also been built and captured in local hardware-backed
 Chrome using tools/visual/chrome-capture.mjs. Comparison identified and corrected
 uniform spacing/corner construction, numeric units and track styling, and UTF-8
-source decoding. Full editor docking/customization, imports, remaining panels
+source decoding. Full editor docking/customization, runtime filter imports, remaining panels
 and matched-state visual parity are unfinished. Native frame accounting
 and presentation/input acceptance remain open.
 
@@ -287,6 +287,22 @@ edits after capture cannot change the exported snapshot. File replacement retrie
 brief Windows access or sharing failures on the worker for up to one second,
 with cancellation checks; persistent failure preserves the prior file.
 
+The Layers footer imports images through the Windows picker. The document
+worker uses Windows BitmapDecoder to produce straight RGBA8 in sRGB, respecting
+EXIF orientation. Source and oriented dimensions are checked before decoding
+pixels, with an 8192-pixel limit per dimension (or the device limit if smaller).
+PNG, JPEG, BMP, GIF, TIFF and JPEG XR use Windows codecs; WebP and HEIF depend on
+installed codec support. Animated and multi-frame sources import their first
+frame. Core owns placement, selection, Undo and embedding the pixels in saved
+projects, so later Open does not need the source file.
+
+The canvas owner captures the target after pending field edits and before
+opening the picker. Cancellation, failure and stale results preserve the
+drawing. A change to the document or editing target during decoding requires
+retrying import. Other file operations cancel a pending import and wait for its
+worker slot. Pixel decoding, orientation, color conversion and source copying
+run off the UI and canvas threads; Core performs the final GPU asset upload.
+
 Additional native windows remain pending, with New Window disabled. Full
 workspace, physical input, device recovery, presentation and release acceptance
 remain open.
@@ -296,8 +312,9 @@ remain open.
 ~~~
 
 This fixture uses isolated profiles and synthetic projects. It drives actual
-WinUI controls and native pickers, verifies Unicode paths, save checkpoints,
-corrupt-file recovery, PNG export and saved/untitled close decisions, and requires exit code
+WinUI controls and native pickers, verifies Unicode paths, image import and
+thumbnail readiness, focused drafts, import Undo/Redo, corrupt-file recovery,
+save checkpoints, PNG export and saved/untitled close decisions. It requires exit code
 zero within the original five-second close limit. Standard picker HWND controls
 are used where Windows exposes no UI Automation pattern. This is controlled
 automation, not evidence of physical pen delivery.
@@ -390,7 +407,10 @@ Debug builds optimize Naga, the WGSL compiler dependency, while retaining
 debuggable application Rust. Process exit joins retired shader workers after
 all canvas hosts are destroyed. The lifecycle fixture covers close before
 brush readiness, during shader warmup and from clean/dirty minimized windows;
-it retains the five-second zero-exit requirement.
+it retains the five-second zero-exit requirement. One image-import milestone
+review exceeded that limit in the final shader-worker join; subsequent document
+and lifecycle runs pass, but intermittent cold-compilation close timing remains
+an open acceptance issue.
 
 ## Native Layers editing checkpoint
 
@@ -423,6 +443,6 @@ duplication/deletion, grouping, collapsed editing targets, row virtualization,
 theme changes and document replacement. It does not measure presentation or
 physical input latency.
 
-Image-as-layer import and runtime filter package import remain pending. Full
-editor columns, drawers, panel expansion and docking also remain pending, so
+Image-as-layer import is covered by the native document fixture above. Runtime
+filter package import remains pending. Full editor columns, drawers, panel expansion and docking also remain pending, so
 the full Windows editor preset is still gated.

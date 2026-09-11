@@ -77,6 +77,10 @@ impl NativeHost {
             last_durable_workspace: None,
         })
     }
+    /// Republish host-owned service state without changing the shared document.
+    pub fn invalidate_snapshot(&mut self) {
+        self.last_snapshot = None;
+    }
     /// Invalidate host input and snapshot caches after shared document adoption.
     pub fn document_adopted(&mut self) {
         self.deferred_contacts.clear();
