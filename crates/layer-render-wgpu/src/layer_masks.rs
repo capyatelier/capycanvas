@@ -9,25 +9,30 @@ pub(super) struct MaskPage {
 pub(super) struct MaskRenderer {
     pub definitions: BTreeMap<LayerId, layer_core::LayerMask>,
     pub pages: BTreeMap<(LayerId, [u32; 2]), MaskPage>,
-    brush: [wgpu::RenderPipeline; 4],
-    initialize: wgpu::RenderPipeline,
+    pub(super) brush: [Deferred<wgpu::RenderPipeline>; 4],
+    pub(super) initialize: Deferred<wgpu::RenderPipeline>,
     init_layout: wgpu::BindGroupLayout,
     empty_selection: wgpu::Buffer,
 }
 impl MaskRenderer {
     pub fn new(
-        device: &wgpu::Device,
+        device: &PipelineDevice,
         style: &wgpu::BindGroupLayout,
         target: &wgpu::BindGroupLayout,
         texture: &wgpu::BindGroupLayout,
     ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("mask coverage brush"),
-            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                include_str!("brush.wgsl"),
-                include_str!("selection_clip.wgsl"),
-            ])),
-        });
+        let shader = {
+            let device = device.clone();
+            Deferred::new(move || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("mask coverage brush"),
+                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                        include_str!("brush.wgsl"),
+                        include_str!("selection_clip.wgsl"),
+                    ])),
+                })
+            })
+        };
         let analytic = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mask analytic layout"),
             bind_group_layouts: &[Some(style), Some(target)],
@@ -48,22 +53,30 @@ impl MaskRenderer {
                 dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                 operation: wgpu::BlendOperation::Add,
             };
-            brush_pipeline_format(
-                device,
-                if i < 2 { &analytic } else { &tip },
-                &shader,
-                if i < 2 {
-                    "analytic_fragment"
-                } else {
-                    "mask_fragment"
-                },
-                wgpu::BlendState {
-                    color: blend,
-                    alpha: blend,
-                },
-                wgpu::TextureFormat::R8Unorm,
-                "mask brush R8",
-            )
+            let (device, analytic, tip, shader) = (
+                device.clone(),
+                analytic.clone(),
+                tip.clone(),
+                shader.clone(),
+            );
+            Deferred::new(move || {
+                brush_pipeline_format(
+                    &device,
+                    if i < 2 { &analytic } else { &tip },
+                    &shader,
+                    if i < 2 {
+                        "analytic_fragment"
+                    } else {
+                        "mask_fragment"
+                    },
+                    wgpu::BlendState {
+                        color: blend,
+                        alpha: blend,
+                    },
+                    wgpu::TextureFormat::R8Unorm,
+                    "mask brush R8",
+                )
+            })
         });
         let init_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("selection coverage layout"),
@@ -90,27 +103,38 @@ impl MaskRenderer {
                 },
             ],
         });
-        let init_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("polygon selection coverage"),
-            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                include_str!("selection.wgsl"),
-                &include_str!("selection_clip.wgsl").replace("@group(1)", "@group(0)"),
-            ])),
-        });
+        let init_shader = {
+            let device = device.clone();
+            Deferred::new(move || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("polygon selection coverage"),
+                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                        include_str!("selection.wgsl"),
+                        &include_str!("selection_clip.wgsl").replace("@group(1)", "@group(0)"),
+                    ])),
+                })
+            })
+        };
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("selection initialization"),
             bind_group_layouts: &[Some(&init_layout)],
             immediate_size: 0,
         });
-        let initialize = fullscreen_pipeline(
-            device,
-            &layout,
-            &init_shader,
-            "fragment_main",
-            None,
-            wgpu::TextureFormat::R8Unorm,
-            "antialiased mask selection",
-        );
+        let initialize = {
+            let (device, layout, init_shader) =
+                (device.clone(), layout.clone(), init_shader.clone());
+            Deferred::new(move || {
+                fullscreen_pipeline(
+                    &device,
+                    &layout,
+                    &init_shader,
+                    "fragment_main",
+                    None,
+                    wgpu::TextureFormat::R8Unorm,
+                    "antialiased mask selection",
+                )
+            })
+        };
         Self {
             definitions: BTreeMap::new(),
             pages: BTreeMap::new(),
@@ -125,15 +149,27 @@ impl MaskRenderer {
             }),
         }
     }
+    pub fn compile_all(&self) {
+        self.initialize.compile();
+        for pipeline in &self.brush {
+            pipeline.compile();
+        }
+    }
+
     pub fn is_mask(layers: &[Layer], id: LayerId) -> bool {
-        layers
-            .iter()
-            .flat_map(|l| {
-                l.mask
+        Self::masks(layers).any(|m| m.id == id)
+    }
+    fn masks(layers: &[Layer]) -> impl Iterator<Item = &layer_core::LayerMask> {
+        layers.iter().flat_map(|l| {
+            l.mask.iter().chain(
+                l.operations
                     .iter()
-                    .chain(l.operations.iter().map(|o| &o.coverage))
-            })
-            .any(|m| m.id == id)
+                    // Transforms sample packed selection directly, without
+                    // duplicate R8 mask pages for that immutable selection.
+                    .filter(|o| !matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
+                    .map(|o| &o.coverage),
+            )
+        })
     }
     pub fn prepare(
         &mut self,
@@ -149,20 +185,10 @@ impl MaskRenderer {
             self.pages.clear();
         }
         self.pages.retain(|(id, _), _| Self::is_mask(layers, *id));
-        self.definitions = layers
-            .iter()
-            .flat_map(|l| {
-                l.mask
-                    .iter()
-                    .chain(l.operations.iter().map(|o| &o.coverage))
-            })
+        self.definitions = Self::masks(layers)
             .map(|m| (m.id, m.clone()))
             .collect();
-        for mask in layers.iter().flat_map(|l| {
-            l.mask
-                .iter()
-                .chain(l.operations.iter().map(|o| &o.coverage))
-        }) {
+        for mask in Self::masks(layers) {
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
                 needed.extend(page_coordinates(pixel_rect(selection.bounds(), extent)));

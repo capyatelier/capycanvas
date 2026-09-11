@@ -32,7 +32,12 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 
 impl App {
-    fn attach(&mut self, env: &JNIEnv, surface: JObject) -> Result<(), String> {
+    fn attach(
+        &mut self,
+        env: &JNIEnv,
+        surface: JObject,
+        cache_directory: &str,
+    ) -> Result<(), String> {
         self.surface = None;
         let window = NonNull::new(unsafe {
             ndk_sys::ANativeWindow_fromSurface(
@@ -62,6 +67,9 @@ impl App {
         .map_err(error)?;
         let [width, height] = self.host.session.state().camera.viewport;
         if self.host.session.engine().backend().0.is_none() {
+            // Readiness belongs to this GPU initialization, including hosts
+            // whose shared state otherwise defaults to eager rendering.
+            self.host.startup = Default::default();
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                     compatible_surface: Some(&surface),
@@ -74,13 +82,21 @@ impl App {
             let (device, queue) =
                 pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                     label: Some("Capy Canvas Android"),
-                    required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+                    required_features: adapter.features()
+                        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE),
                     required_limits: limits,
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            self.host.session.renderer_mut().0 =
-                Some(WgpuRasterizer::from_wgpu(adapter, device, queue).map_err(error)?);
+            self.host.session.renderer_mut().0 = Some(
+                WgpuRasterizer::from_wgpu_staged_cached(
+                    adapter,
+                    device,
+                    queue,
+                    std::path::Path::new(cache_directory),
+                )
+                .map_err(error)?,
+            );
         }
         let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let mut config = surface
@@ -102,7 +118,7 @@ impl App {
             config.format = format;
         }
         surface.configure(gpu.device(), &config);
-        let presenter = ViewportPresenter::new(gpu.device(), config.format);
+        let presenter = ViewportPresenter::for_renderer(gpu, config.format);
         self.surface = Some(Surface {
             surface,
             config,
@@ -116,15 +132,71 @@ impl App {
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
         self.frame_cost = [0; 5];
-        if !self.host.dirty || self.surface.is_none() {
+        if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
         }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
-        let previous = self.host.session.state().revision;
-        let change = self.host.session.frame(now, presentation)?;
-        self.host.dirty = change.canvas_wake;
-        self.host.apply_change(previous, change);
+        if self.blank_presented {
+            let engine = self.host.session.engine();
+            let gpu = engine.backend().0.as_ref().unwrap();
+            if gpu.startup_needs_update(engine.document(), engine.brush()) {
+                let (document, brush) = (engine.document().clone(), engine.brush().clone());
+                self.host
+                    .session
+                    .renderer_mut()
+                    .0
+                    .as_mut()
+                    .unwrap()
+                    .prepare_startup(&document, &brush)
+                    .map_err(error)?;
+            }
+            self.host.startup = self
+                .host
+                .session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .unwrap()
+                .poll_startup()
+                .map_err(error)?;
+            if self.host.startup.canvas_ready {
+                let previous = self.host.session.state().revision;
+                let change = self.host.session.frame(now, presentation)?;
+                self.host.dirty = change.canvas_wake;
+                self.host.apply_change(previous, change);
+            }
+        } else {
+            // Submit paper immediately without consuming the engine's pending
+            // document replay. The first real frame retains its reset/history.
+            let view = self.host.session.state().camera.view();
+            let document = self.host.session.engine().document();
+            let extent = [document.width, document.height];
+            let layers: Vec<_> = document
+                .layers
+                .iter()
+                .filter(|l| l.kind == layer_core::LayerKind::Background)
+                .cloned()
+                .collect();
+            self.host
+                .session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .unwrap()
+                .submit(layer_render::FramePacket {
+                    time_seconds: 0.,
+                    view,
+                    document_extent: extent,
+                    layers: &layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: true,
+                    composite_all: true,
+                })
+                .map_err(error)?;
+        }
+        self.host.dirty |= !self.host.startup.complete;
         let view = self.host.session.state().camera.view();
         let surround = self.host.session.state().palette.surround_linear;
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
@@ -172,6 +244,7 @@ impl App {
         );
         self.frame_cost[2] = elapsed() - self.frame_cost[0] - self.frame_cost[1];
         gpu.queue().present(target);
+        self.blank_presented = true;
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         self.frame_cost[4] = elapsed() - self.frame_cost[..4].iter().sum::<i64>();
@@ -250,13 +323,25 @@ pub extern "system" fn Java_art_capycanvas_Native_attach(
     _: JClass,
     handle: jlong,
     surface: JObject,
+    cache_directory: JString,
 ) {
     let app = unsafe { app(handle) };
-    let result = app.attach(&env, surface);
+    let result = read(&mut env, &cache_directory)
+        .and_then(|directory| app.attach(&env, surface, &directory));
     if let Err(e) = &result {
         app.host.error = Some(e.clone());
     }
     fail(&mut env, result);
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_finishStartupCache(
+    _: JNIEnv,
+    _: JClass,
+    handle: jlong,
+) {
+    if let Some(gpu) = &mut unsafe { app(handle) }.host.session.renderer_mut().0 {
+        gpu.finish_startup_cache();
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_detach(

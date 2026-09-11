@@ -60,6 +60,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var disposed = false
     private var frameInterval = 8_333_333L
     private var snapshotAt = 0L
+    private var lastCanvasReady = false
+    private var startupCacheFinished = false
+    private var lastStartupStage = -1
+    private val startupTimes = LongArray(4)
     private var savedWorkspace = ""
     private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 11) else null
     private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
@@ -178,12 +182,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         logicalWidth = width / density; logicalHeight = height / density; surfaceDensity = density
         frameInterval = (1_000_000_000.0 / refreshRate.coerceAtLeast(30f)).toLong()
         Native.resize(handle, width, height, density)
-        Native.attach(handle, surface)
+        Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
         attached = true
-        filterResources?.let { resources ->
-            attempt(canvas = false) { Native.query(handle, resources.toString()) }
-            filterResources = null
-        }
         main.post { failure = null }
         publish(true)
         wake()
@@ -262,6 +262,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             val publicationStart = if (measuredFrames != null) System.nanoTime() else 0L
             if (again) wake()
             publish(!again)
+            if (!startupCacheFinished && lastCanvasReady) {
+                val resources = filterResources
+                filterResources = null
+                if (resources != null) attempt(canvas = false) { Native.query(handle, resources.toString()) }
+                Native.finishStartupCache(handle)
+                startupCacheFinished = true
+                wake()
+            }
             if (measuredFrames != null && frameCount < 8192) {
                 val end = System.nanoTime()
                 val offset = frameCount++ * 11
@@ -281,7 +289,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         fun rows(data: LongArray?, count: Int, width: Int) = JSONArray().apply {
             if (data != null) repeat(count) { row -> put(JSONArray().apply { repeat(width) { col -> put(data[row * width + col]) } }) }
         }
-        val report = obj("frames" to rows(measuredFrames, frameCount, 11),
+        val report = obj("startup_boot_ns" to JSONArray(startupTimes.toList()),
+            "frames" to rows(measuredFrames, frameCount, 11),
             "inputs" to rows(measuredInputs, inputCount, 5),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
             "camera_updates_published" to cameraUpdatesPublished,
@@ -312,6 +321,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             return
         }
         if (BuildConfig.DEBUG) snapshotsPublished++
+        lastCanvasReady = next.optBoolean("canvas_ready")
+        val stage = when { next.optBoolean("shaders_ready") -> 3; next.optBoolean("brush_ready") -> 2; lastCanvasReady -> 1; next.optBoolean("gpu_ready") -> 0; else -> -1 }
+        if (stage > lastStartupStage) {
+            val now = SystemClock.elapsedRealtimeNanos()
+            for (index in (lastStartupStage + 1)..stage) startupTimes[index] = now
+            lastStartupStage = stage
+            Log.i("CapyStartup", "stage=$stage boot_ns=$now")
+        }
         val state = next.getJSONObject("state")
         val workspace = state.getJSONObject("workspace").toString()
         if (workspace != savedWorkspace) {

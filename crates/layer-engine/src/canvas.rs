@@ -1616,62 +1616,70 @@ mod tests {
 
     #[test]
     fn appended_raster_operations_are_incremental_ordered_and_replayed_after_undo() {
-        let (mut producer, consumer) = input_queue(32);
-        let mut engine = CanvasEngine::new(
-            RecordingRenderer::default(),
-            Document::new("gradient", 128, 128),
-            consumer,
-            view(128, 128),
-            ViewTransform {
-                revision: 1,
-                ..ViewTransform::IDENTITY
-            },
-        )
-        .unwrap();
-        let id = engine.document().active_layer;
-        engine.render_frame().unwrap();
-        engine.backend.saw_reset = false;
-        producer.push(event(1, PenPhase::Down, 20.0)).unwrap();
-        producer.push(event(2, PenPhase::Up, 80.0)).unwrap();
-        engine.render_frame().unwrap();
-        let count = engine.backend.persistent_dabs;
-        let coverage =
-            layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
-        let op = layer_core::LayerOperation {
-            after_stroke: 0,
-            coverage,
-            kind: layer_core::LayerOperationKind::Gradient {
+        for kind in [
+            layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
+                affine: layer_core::Affine::translation(Point { x: 10., y: 4. }),
+                ..Default::default()
+            }),
+            layer_core::LayerOperationKind::Gradient {
                 start: Point::default(),
                 end: Point { x: 128.0, y: 0.0 },
                 colors: [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
                 radial: false,
                 alpha_locked: false,
             },
-        };
-        engine.append_layer_operation(id, op).unwrap();
-        assert!(engine.has_pending_document_edits());
-        assert_eq!(
-            engine.document().layer(id).unwrap().operations[0].after_stroke,
-            1
-        );
-        assert!(matches!(
-            engine.batches[0].kind,
-            DabBatchKind::LayerOperation(0)
-        ));
-        engine.render_frame().unwrap();
-        assert!(!engine.backend.saw_reset);
-        assert_eq!(
-            engine.backend.persistent_dabs, count,
-            "must not replay old strokes for a fill"
-        );
-        assert!(!engine.has_pending_document_edits());
-        engine.undo().unwrap();
-        assert!(engine.document().layer(id).unwrap().operations.is_empty());
-        engine.render_frame().unwrap();
-        assert!(engine.backend.saw_reset);
-        engine.redo().unwrap();
-        engine.render_frame().unwrap();
-        assert_eq!(engine.document().layer(id).unwrap().operations.len(), 1);
+        ] {
+            let (mut producer, consumer) = input_queue(32);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("gradient", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            let id = engine.document().active_layer;
+            engine.render_frame().unwrap();
+            engine.backend.saw_reset = false;
+            producer.push(event(1, PenPhase::Down, 20.0)).unwrap();
+            producer.push(event(2, PenPhase::Up, 80.0)).unwrap();
+            engine.render_frame().unwrap();
+            let count = engine.backend.persistent_dabs;
+            let coverage =
+                layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
+            let op = layer_core::LayerOperation {
+                after_stroke: 0,
+                coverage,
+                kind,
+            };
+            engine.append_layer_operation(id, op).unwrap();
+            assert!(engine.has_pending_document_edits());
+            assert_eq!(
+                engine.document().layer(id).unwrap().operations[0].after_stroke,
+                1
+            );
+            assert!(matches!(
+                engine.batches[0].kind,
+                DabBatchKind::LayerOperation(0)
+            ));
+            engine.render_frame().unwrap();
+            assert!(!engine.backend.saw_reset);
+            assert_eq!(
+                engine.backend.persistent_dabs, count,
+                "must not replay old strokes when appending a raster operation"
+            );
+            assert!(!engine.has_pending_document_edits());
+            engine.undo().unwrap();
+            assert!(engine.document().layer(id).unwrap().operations.is_empty());
+            engine.render_frame().unwrap();
+            assert!(engine.backend.saw_reset);
+            engine.redo().unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.document().layer(id).unwrap().operations.len(), 1);
+        }
     }
 
     fn event(sequence: u64, phase: PenPhase, x: f32) -> PenEvent {

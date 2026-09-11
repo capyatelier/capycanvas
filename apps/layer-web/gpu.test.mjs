@@ -47,6 +47,7 @@ export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixe
     assert.equal(await evaluate("window.layoutChecks > 0"), mode !== "escaped-rejection");
     assert.equal(await evaluate("layerApp.app.gpu_ready()"), succeeds);
     if (succeeds) {
+      await waitFor("layerApp.app.brush_ready()");
       assert.ok(await evaluate("window.emptyBindings > 0"), "The empty layout has a matching binding when drawing");
       const before = await canvasPixels();
       await call("Input.dispatchMouseEvent", { type: "mousePressed", x: 650, y: 450, button: "left", buttons: 1, clickCount: 1 });
@@ -74,7 +75,7 @@ export async function checkGpuCompatibility({ call, evaluate, settle, canvasPixe
 
 // Failure injection happens at the browser API boundary, not in app code.
 // Every case executes the real packaged JS/Wasm and the actual native UI model.
-export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, url }) {
+export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, url, errors }) {
   const waitFor = (condition) => evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(${condition})resolve(true);else if(performance.now()-start>20000)reject(new Error('GPU test timed out: '+document.body.dataset.gpu));else setTimeout(check,50)}check()})`);
   const action = async (value) => { await evaluate(`layerApp.dispatch(${JSON.stringify(value)})`); await settle(); };
   const checkPanelStyle = async () => {
@@ -106,6 +107,7 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
     "firefox-no-adapter": "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
   };
   for (const mode of ["missing-api", "insecure", "no-adapter", "device-failure", "renderer-failure", "pending", ...Object.keys(browsers)]) {
+    assert.deepEqual(errors, [], "The preceding recovery has no unexpected browser errors");
     const browserList = ["unsupported-browser", "safari", "firefox", "firefox-linux", "firefox-no-adapter"].includes(mode);
     const missingApi = ["missing-api", "ios", "ios-chrome", "ipad-desktop"].includes(mode) || (browserList && mode !== "firefox-no-adapter");
     const chromeSteps = !browserList && !["insecure", "android", "ios", "ios-chrome", "ipad-desktop"].includes(mode);
@@ -294,7 +296,9 @@ export async function checkGpuStartup({ call, evaluate, settle, canvasPixels, ur
       await evaluate("window.releaseAdapter();window.restoreGpu()");
       await call("Page.removeScriptToEvaluateOnNewDocument", { identifier });
     }
-    await waitFor("document.body.dataset.gpu === 'ready'");
+    for (const error of errors.splice(0)) assert.match(error, /^GPU canvas unavailable:/,
+      "Only the injected initialization failures are expected");
+    await waitFor("document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()");
     if (mode === "pending") assert.equal(await evaluate("layerApp.state().brush.diameter"), 37);
     assert.equal(await evaluate("layerApp.state().layers.length"), layerCount + (mode === "pending" ? 1 : 0));
     assert.equal(await evaluate("document.querySelector('#gpu-notice').hidden"), true);

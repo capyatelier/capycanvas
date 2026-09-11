@@ -17,6 +17,7 @@ struct SnapshotKey {
     hide_floating_panels: bool,
     keep_zen_button: bool,
     gpu_ready: bool,
+    startup: layer_render_wgpu::StartupProgress,
     error: Option<String>,
 }
 
@@ -40,6 +41,8 @@ pub struct NativeHost {
     keep_zen_button: bool,
     pub error: Option<String>,
     pub sequence: u64,
+    pub startup: layer_render_wgpu::StartupProgress,
+    deferred_contacts: std::collections::BTreeSet<u64>,
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
     last_camera_revision: Option<u64>,
@@ -58,6 +61,13 @@ impl NativeHost {
             keep_zen_button: true,
             error: None,
             sequence: 0,
+            // Eager hosts are ready on GPU attachment; staged hosts reset this.
+            startup: layer_render_wgpu::StartupProgress {
+                canvas_ready: true,
+                brush_ready: true,
+                complete: true,
+            },
+            deferred_contacts: Default::default(),
             last_pen: None,
             last_snapshot: None,
             last_camera_revision: None,
@@ -236,7 +246,18 @@ impl NativeHost {
                 });
                 self.dirty = true;
             }
-            if paint && self.session.engine().backend().0.is_some() {
+            if phase == PenPhase::Down {
+                if self.paint_ready() {
+                    self.deferred_contacts.remove(&id);
+                } else {
+                    self.deferred_contacts.insert(id);
+                }
+            }
+            let preparing = self.deferred_contacts.contains(&id);
+            if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
+                self.deferred_contacts.remove(&id);
+            }
+            if paint && !preparing && self.session.engine().backend().0.is_some() {
                 self.sequence += 1;
                 self.enqueue(event)?;
                 if !predicted {
@@ -250,6 +271,12 @@ impl NativeHost {
         }
         Ok(())
     }
+    fn paint_ready(&self) -> bool {
+        let engine = self.session.engine();
+        engine.backend().0.as_ref().is_some_and(|gpu| {
+            self.startup.brush_ready && !gpu.startup_needs_update(engine.document(), engine.brush())
+        })
+    }
     /// Check the core revision before building any layout, panel models or JSON.
     /// Camera-only changes return a small patch, without constructing UI models.
     /// Presentation-only state is included because it is not part of UiState.
@@ -261,6 +288,7 @@ impl NativeHost {
             hide_floating_panels: self.hide_floating_panels,
             keep_zen_button: self.keep_zen_button,
             gpu_ready: self.session.engine().backend().0.is_some(),
+            startup: self.startup,
             error: self.error.clone(),
         };
         if self.last_snapshot.as_ref() == Some(&key) {
@@ -290,6 +318,9 @@ impl NativeHost {
             "panel_measurements": self.session.state().workspace.layout.measurements,
             "chrome_hidden": self.chrome_hidden, "gpu_ready": self.session.engine().backend().0.is_some(),
             "hide_floating_panels": self.hide_floating_panels, "keep_zen_button": self.keep_zen_button,
+            "canvas_ready": self.session.engine().backend().0.is_some() && self.startup.canvas_ready,
+            "brush_ready": self.session.engine().backend().0.is_some() && self.startup.brush_ready,
+            "shaders_ready": self.session.engine().backend().0.is_some() && self.startup.complete,
             "error": self.error})
     }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {

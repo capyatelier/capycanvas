@@ -439,6 +439,7 @@ pub struct LayerOperation {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerOperationKind {
     ApplyMask,
+    Transform(crate::ImageTransform),
     Figure(Figure),
     Fill {
         color: [f32; 4],
@@ -479,12 +480,28 @@ impl LayerOperation {
             bounds.max.x = bounds.max.x.min(selection.max.x);
             bounds.max.y = bounds.max.y.min(selection.max.y);
         }
-        bounds
+        if let LayerOperationKind::Transform(transform) = self.kind {
+            transform.affected_bounds(bounds)
+        } else {
+            bounds
+        }
     }
     fn validate(&self) -> Result<(), DocumentError> {
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v));
         let valid = match &self.kind {
             LayerOperationKind::ApplyMask => true,
+            LayerOperationKind::Transform(transform) => {
+                transform.affine.inverse().is_some()
+                    && self.coverage.strokes.is_empty()
+                    && self.coverage.offset == Point::default()
+                    && self.coverage.enabled
+                    && !self.coverage.inverted
+                    && if self.coverage.initial.is_some() {
+                        self.coverage.default_coverage == 0.
+                    } else {
+                        self.coverage.default_coverage == 1.
+                    }
+            }
             LayerOperationKind::Figure(figure) => figure.valid(),
             LayerOperationKind::Fill { color, .. } => color_ok(color),
             LayerOperationKind::Gradient {

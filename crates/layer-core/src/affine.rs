@@ -14,6 +14,32 @@ pub struct ImageTransform {
     pub affine: Affine,
     pub interpolation: Interpolation,
 }
+impl ImageTransform {
+    /// Conservative cut + placement footprint. Expand in source space before
+    /// mapping, since scaling also enlarges the interpolation support.
+    pub fn affected_bounds(self, source: Rect) -> Rect {
+        let [cut, placed] = self.affected_regions(source);
+        cut.union(placed)
+    }
+    /// Keep distant cut/placement regions separate for sparse allocation.
+    pub fn affected_regions(self, source: Rect) -> [Rect; 2] {
+        if source.is_empty() || self.affine == Affine::IDENTITY {
+            return [Rect::EMPTY; 2];
+        }
+        let padding = f32::from(self.interpolation == Interpolation::Linear);
+        let support = Rect {
+            min: Point {
+                x: source.min.x - padding,
+                y: source.min.y - padding,
+            },
+            max: Point {
+                x: source.max.x + padding,
+                y: source.max.y + padding,
+            },
+        };
+        [source, self.affine.bounds(support)]
+    }
+}
 
 /// Columns followed by translation: x'=a*x+c*y+tx, y'=b*x+d*y+ty.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -123,6 +149,40 @@ mod tests {
             (a.x - b.x).abs() < 0.002 && (a.y - b.y).abs() < 0.002,
             "{a:?} != {b:?}"
         );
+    }
+    #[test]
+    fn damage_keeps_cut_and_placement_separate_and_scales_filter_support() {
+        let source = Rect {
+            min: Point { x: 10., y: 20. },
+            max: Point { x: 30., y: 40. },
+        };
+        let mut transform = ImageTransform {
+            affine: Affine([4., 0., 0., 2., 300., 0.]),
+            interpolation: Interpolation::Nearest,
+        };
+        let [cut, moved] = transform.affected_regions(source);
+        assert_eq!(cut, source);
+        assert_eq!(
+            moved,
+            Rect {
+                min: Point { x: 340., y: 40. },
+                max: Point { x: 420., y: 80. }
+            }
+        );
+        transform.interpolation = Interpolation::Linear;
+        let moved = transform.affected_regions(source)[1];
+        assert_eq!(
+            moved,
+            Rect {
+                min: Point { x: 336., y: 38. },
+                max: Point { x: 424., y: 82. }
+            }
+        );
+        assert_eq!(
+            ImageTransform::default().affected_bounds(source),
+            Rect::EMPTY
+        );
+        assert_eq!(transform.affected_bounds(Rect::EMPTY), Rect::EMPTY);
     }
     #[test]
     fn affine_composition_pivots_bounds_and_inverse_agree() {

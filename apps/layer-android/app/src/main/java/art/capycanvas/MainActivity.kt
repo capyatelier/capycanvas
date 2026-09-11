@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -15,7 +16,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         updateTheme(resources.configuration)
-        setContent { CapyApp(host) }
+        setContent {
+            ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
+            CapyApp(host)
+        }
     }
     private fun updateTheme(config: Configuration) {
         host.dispatch(obj("type" to "system_theme_changed", "theme" to

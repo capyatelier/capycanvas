@@ -21,6 +21,15 @@ pub struct ViewportPresenter {
 
 impl ViewportPresenter {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_device(&device.clone().into(), format)
+    }
+
+    /// Shares the renderer's optional startup cache with presentation shaders.
+    pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
+        Self::with_device(&renderer.device, format)
+    }
+
+    fn with_device(device: &crate::PipelineDevice, format: wgpu::TextureFormat) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("viewport bindings"),
             entries: &[

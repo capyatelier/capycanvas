@@ -29,7 +29,7 @@ impl RegionRequests {
                 .as_ref()
                 .map_or(0, |r| r.coverage.size() + r.bounds.size())
     }
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &PipelineDevice) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             flood: Flood::new(device),

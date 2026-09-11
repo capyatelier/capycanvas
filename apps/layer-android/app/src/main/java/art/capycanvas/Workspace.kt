@@ -173,6 +173,11 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft }) {
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
         AndroidView(factory = { CanvasSurfaceView(it, host) }, modifier = Modifier.fillMaxSize())
+        if (snapshot != null && !snapshot.optBoolean("brush_ready") && host.failure == null) {
+            Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 48.dp), shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
+                Text(if (snapshot.optBoolean("canvas_ready")) "Preparing brush…" else "Preparing canvas…", Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
+        }
         host.failure?.let { message ->
             Surface(Modifier.align(Alignment.Center).widthIn(max = 440.dp).padding(24.dp), shape = RoundedCornerShape(16.dp), shadowElevation = 8.dp) {
                 Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

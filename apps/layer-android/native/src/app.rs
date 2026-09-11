@@ -1,6 +1,7 @@
 /// Android window state, owned exclusively by its render Looper.
 pub(crate) struct App {
     pub host: layer_host::NativeHost,
+    pub blank_presented: bool,
     pub profiling: bool,
     pub frame_cost: [i64; 5],
     pub pointer_records: Vec<f64>,
@@ -10,8 +11,11 @@ pub(crate) struct App {
 }
 impl App {
     pub fn new() -> Result<Self, String> {
+        let mut host = layer_host::NativeHost::new(layer_ui::Platform::Android)?;
+        host.startup = Default::default();
         Ok(Self {
-            host: layer_host::NativeHost::new(layer_ui::Platform::Android)?,
+            host,
+            blank_presented: false,
             profiling: false,
             frame_cost: [0; 5],
             pointer_records: Vec::new(),

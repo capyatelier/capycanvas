@@ -7,7 +7,8 @@ internal object Native {
     init { System.loadLibrary("layer_android") }
     @JvmStatic external fun create(profiling: Boolean): Long
     @JvmStatic external fun destroy(handle: Long)
-    @JvmStatic external fun attach(handle: Long, surface: Surface)
+    @JvmStatic external fun attach(handle: Long, surface: Surface, cacheDirectory: String)
+    @JvmStatic external fun finishStartupCache(handle: Long)
     @JvmStatic external fun detach(handle: Long)
     @JvmStatic external fun resize(handle: Long, width: Int, height: Int, density: Float)
     @JvmStatic external fun scroll(handle: Long, x: Float, y: Float, dx: Float, dy: Float, zoom: Boolean, horizontal: Boolean)

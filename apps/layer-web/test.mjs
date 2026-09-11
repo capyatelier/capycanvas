@@ -10,6 +10,7 @@ import { checkAdjustments, benchmarkFilters, checkRuntimeFilters } from "./effec
 import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
+import { checkStagedStartup } from "./startup.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
@@ -163,10 +164,13 @@ try {
     url: packageHost?.url || process.env.LAYER_WEB_URL || "http://127.0.0.1:4173",
   });
   await evaluate(
-    `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready') resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
+    `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--runtime-filters")) {
+  if (process.argv.includes("--staged-startup")) {
+    await checkStagedStartup({ call, evaluate, settle, canvasPixels });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--runtime-filters")) {
     assert.ok(packageHost,"Runtime package test requires --package");
     await checkRuntimeFilters({call,evaluate,settle,host:packageHost});
     assert.deepEqual(errors,[]);
@@ -203,7 +207,7 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--gpu-startup")) {
     assert.ok(packageHost, "Use --package --gpu-startup to test the built distribution");
-    await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url });
+    await checkGpuStartup({ call, evaluate, settle, canvasPixels, url: packageHost.url, errors });
     assert.deepEqual(errors, []);
   } else if (packageHost && !process.argv.includes("--preferences") && !process.argv.includes("--parity") && !process.argv.includes("--smoke")) {
     await checkPwa({ call, evaluate, settle, canvasPixels, host: packageHost });

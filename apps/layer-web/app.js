@@ -37,6 +37,10 @@ let app,
 let refreshPreferences, customization, layerPanel, effectPanels;
 let gpuStarting = false;
 let gpuReady = false;
+let compilerScheduled = false, compilerFailed = false;
+const startupTimes = { canvas: null, document: null, brush: null, complete: null };
+let startupNotice;
+let firstCanvasRendered = false;
 let servicingRequests = false;
 const settingsKey = "layer.preferences.v1";
 const pending = [];
@@ -324,11 +328,59 @@ function frame(now) {
       }
     }
     applyChange(app.frame(now, now + 1000 / 120));
+    refreshStartup();
+    scheduleCompiler();
     if (pending.length) wake();
   } catch (error) {
     message(error);
     console.error(error);
   }
+}
+function refreshStartup() {
+  if (!gpuReady || compilerFailed) return;
+  const [documentReady, brushReady, complete] = app.startup_progress();
+  const stages = { canvas: app.canvas_presented(), document: documentReady, brush: brushReady, complete };
+  for (const [name, ready] of Object.entries(stages)) {
+    if (ready && startupTimes[name] === null) {
+      startupTimes[name] = performance.now();
+      performance.mark(`capy.startup.${name}`);
+    }
+  }
+  if (!startupNotice) {
+    startupNotice = element("div", "startup-progress");
+    startupNotice.setAttribute("role", "status");
+    workspace.append(startupNotice);
+  }
+  startupNotice.hidden = !stages.canvas || app.brush_ready();
+  startupNotice.textContent = documentReady ? "Preparing brush…" : "Preparing canvas…";
+}
+function scheduleCompiler() {
+  if (!gpuReady || compilerScheduled || compilerFailed || !app.shader_work_pending()) return;
+  compilerScheduled = true;
+  // Start after this display callback can present. The next job is scheduled
+  // by a later frame, with input/UI opportunities between each GPU scope.
+  setTimeout(async () => {
+    try {
+      if (!firstCanvasRendered) {
+        // A display callback alone does not mean the GPU has rendered paper.
+        // Starting document compilation sooner can hold up Chrome's GPU-process
+        // command batch, including the pending first canvas presentation.
+        await gpuOperation(() => app.wait_for_canvas());
+        firstCanvasRendered = true;
+        await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
+      }
+      await gpuOperation(() => app.compile_startup_step());
+      refreshStartup();
+      wake();
+    } catch (error) {
+      compilerFailed = true;
+      if (startupNotice) startupNotice.hidden = true;
+      message("Shader preparation failed. Reload the page to retry.");
+      console.error(error);
+    } finally {
+      compilerScheduled = false;
+    }
+  }, 0);
 }
 function place(node, rect) {
   Object.assign(node.style, {
@@ -1125,7 +1177,7 @@ try {
   if (restoreError) message(restoreError);
   new ResizeObserver(arrange).observe(workspace);
   // Test harness accesses the actual Wasm instance and native widgets.
-  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters };
+  window.layerApp = { app, dispatch, state: () => app.state(), wake, canvas, loadFilters, startupTimes };
   await startGpu();
 } catch (error) {
   $("gpu-notice").replaceChildren(element("h1", "", "Capy Canvas could not load"),
@@ -1150,7 +1202,8 @@ async function startGpu() {
     wake();
     // Resource loading failure never disables the canvas or the working catalog.
     loadFilters(asset("filters/manifest.json"), "merge", name=>asset(`filters/${name}`))
-      .catch(error=>console.warn("Using bundled filters:",error));
+      .catch(error=>console.warn("Using bundled filters:",error))
+      .finally(() => { app.startup_catalog_submitted(); wake(); });
   } catch (error) {
     document.body.dataset.gpu = "unavailable";
     showGpuNotice({ container: notice, error, element, button });
@@ -1161,16 +1214,19 @@ async function startGpu() {
 }
 
 async function createGpu() {
+  return gpuOperation(() => WebGpu.create(canvas));
+}
+async function gpuOperation(operation) {
   // A browser API exception can escape a Wasm future without rejecting its
-  // Promise. Only during GPU creation, turn those errors into startup failure
-  // as well. Do not leave global handlers installed over the working editor.
+  // Promise. Scope these handlers to GPU creation or one compilation job so a
+  // browser exception becomes a visible error instead of a stuck startup.
   const events = new AbortController();
   try {
     const failure = new Promise((_, reject) => {
       window.addEventListener("error", e => reject(e.error || new Error(e.message)), { signal: events.signal });
       window.addEventListener("unhandledrejection", e => reject(e.reason), { signal: events.signal });
     });
-    return await Promise.race([failure, WebGpu.create(canvas)]);
+    return await Promise.race([failure, operation()]);
   } finally {
     events.abort();
   }

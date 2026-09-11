@@ -101,6 +101,7 @@ fn draw(
 ) {
     let v = t.create_view(&Default::default());
     let mut e = r.device().create_command_encoder(&Default::default());
+    p.begin_frame();
     p.encode(
         r.device(),
         r.queue(),
@@ -341,6 +342,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         })
         .collect();
     let mut e = r.device().create_command_encoder(&Default::default());
+    p.begin_frame();
     p.encode(r.device(), r.queue(), &mut e, &source, transform, &targets)
         .unwrap();
     r.queue().submit([e.finish()]);
@@ -364,6 +366,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     let partial = upload(&r, size, &sentinel);
     let view = partial.create_view(&Default::default());
     for i in 0..5 {
+        p.begin_frame();
         let mut e = r.device().create_command_encoder(&Default::default());
         p.encode(
             r.device(),
@@ -526,6 +529,7 @@ fn transform_latency() {
         let mut completed = Vec::new();
         let mut capacity = 0;
         for i in 0..160 {
+            p.begin_frame();
             let transform = ImageTransform {
                 affine: if identity {
                     Affine::IDENTITY
@@ -578,4 +582,86 @@ fn transform_latency() {
             "transform exceeds 120Hz budget: {name}"
         );
     }
+}
+
+#[test]
+fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
+    let r = WgpuRasterizer::new().unwrap();
+    let mut pass = PixelTransform::scalar(r.device());
+    let texture = |usage| {
+        r.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("scalar interpolation fixture"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage,
+            view_formats: &[],
+        })
+    };
+    let source = texture(wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+    r.queue().write_texture(
+        source.as_image_copy(),
+        &[64, 192, 128, 0],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: None,
+        },
+        source.size(),
+    );
+    let output = texture(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+    let output_view = output.create_view(&Default::default());
+    let coverage = mask(&r, [4, 1], [0, 0], &[4, 2, 0, 0], false);
+    let binding = pass
+        .source(r.device(), &source, [0, 0], Some(&coverage))
+        .unwrap();
+    let mut encoder = r.device().create_command_encoder(&Default::default());
+    pass.encode(
+        r.device(),
+        r.queue(),
+        &mut encoder,
+        &binding,
+        ImageTransform {
+            affine: Affine::translation(Point { x: 0.5, y: 0. }),
+            interpolation: Interpolation::Linear,
+        },
+        &[TransformTarget {
+            view: &output_view,
+            extent: [4, 1],
+            origin: [0, 0],
+            region: [0, 0, 4, 1],
+        }],
+    )
+    .unwrap();
+    let read = r.device().create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test scalar readback"),
+        size: 256,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        output.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &read,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: None,
+            },
+        },
+        output.size(),
+    );
+    r.queue().submit([encoder.finish()]);
+    read.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
+    wait(&r);
+    // Selected water [64,96,0,0] shifted by .5 -> [32,80,48,0].
+    // Unselected remainder [0,96,128,0]; wet union is max, never source-over.
+    assert_eq!(&read.get_mapped_range(..).unwrap()[..4], &[32, 96, 128, 0]);
+    read.unmap();
 }
