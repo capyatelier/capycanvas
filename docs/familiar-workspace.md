@@ -1091,9 +1091,10 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   preserved.
 - Native pipeline data uses a bounded, build/adapter/driver-keyed private cache.
   The old eager constructors are deprecated; tests and diagnostic bindings use
-  explicitly named headless constructors. The in-development Apple bridge still
-  needs to adopt the staged lifecycle; its old call now emits a deprecation
-  warning on an Apple build. No Apple runtime validation is claimed here.
+  explicitly named headless constructors. Incoming Apple-port work now also
+  uses the staged cached constructor and shares the native-host readiness gate
+  with Android. This source integration passes workspace/Wasm checks and eight
+  native-host unit tests; no physical Apple runtime validation is claimed here.
 - Representative startup measurements (milliseconds from workspace creation):
 
   | Measurement | Previous eager GTK | Staged, empty app cache | Staged, warm app cache |
