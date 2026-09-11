@@ -694,6 +694,7 @@ let workspaceGesture = null;
 function workspaceGestureEvent(phase, e) {
   const drag = workspaceGesture;
   if (!drag) return;
+  workspaceChrome?.measureColumnDrawers();
   dispatch({ ...drag.action, phase, position: [e.clientX, e.clientY],
     viewport: [workspace.clientWidth, workspace.clientHeight],
     ...(drag.action.type === "drag_workspace" ? { tabs: tabHits() } : {}),
@@ -738,7 +739,11 @@ workspace.addEventListener("pointermove", e => {
 }, { capture: true });
 workspace.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });
 workspace.addEventListener("pointercancel", e => endWorkspaceGesture(e, true), { capture: true });
-workspace.addEventListener("lostpointercapture", e => endWorkspaceGesture(e, true));
+workspace.addEventListener("lostpointercapture", e => {
+  // Touch starts with implicit capture on the tab. Transferring capture to the
+  // stable workspace releases that child; only losing our own capture cancels.
+  if (e.target === workspace) endWorkspaceGesture(e, true);
+});
 workspace.addEventListener("workspace-context-claimed", () => endWorkspaceGesture(null, true));
 workspace.addEventListener("dblclick", e => {
   if (e.target.closest(".dock-tab")) return;
@@ -1072,7 +1077,7 @@ function tabHits() {
         bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
       };
     }),
-  );
+  ).concat(workspaceChrome?.tabHits() ?? []);
 }
 function dropHint(e, item) {
   try {

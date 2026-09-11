@@ -26,6 +26,7 @@ internal class DockInteraction(val host: CanvasHost) {
     var drawerTileRevision by mutableIntStateOf(0)
         private set
     private val drawerTiles = mutableMapOf<String, JSONObject>()
+    private val columnDrawers = mutableMapOf<Int, JSONObject>()
     val anchors = mutableMapOf<String, Rect>()
     val tabs = mutableMapOf<String, JSONObject>()
     var origin = Offset.Zero
@@ -44,6 +45,19 @@ internal class DockInteraction(val host: CanvasHost) {
     private var position = Offset.Zero
     private var generation = 0
     private val measurements = mutableMapOf<String, Pair<Float, Float>>()
+
+    fun measureColumnDrawer(column: Int, group: Int?, bounds: Rect?) {
+        val next = bounds?.takeIf { group != null && it.width > 0f && it.height > 0f }?.let {
+            obj("group" to group, "bounds" to obj("x" to it.left / density, "y" to it.top / density,
+                "width" to it.width / density, "height" to it.height / density))
+        }
+        if (columnDrawers[column]?.toString() == next?.toString()) return
+        if (next == null) columnDrawers.remove(column) else columnDrawers[column] = next
+        publishColumnDrawers()
+    }
+    private fun publishColumnDrawers() {
+        host.dispatch(obj("type" to "measure_column_drawers", "measurements" to JSONArray(columnDrawers.values.toList())))
+    }
 
     fun clearDrawerTiles(column: Int) {
         if (drawerTiles.entries.removeAll { it.value.getInt("column") == column }) publishDrawerTiles()
@@ -99,6 +113,9 @@ internal class DockInteraction(val host: CanvasHost) {
     private fun send(phase: String) {
         val action = active ?: return
         if (action.getString("type") == "tile_drag") return
+        // Opening another tab can invalidate Rust's transient measurement even
+        // when the displayed rectangle is unchanged.
+        if (action.getString("type") == "drag_workspace") publishColumnDrawers()
         host.dispatch(JSONObject(action.toString()).put("phase", phase).put("viewport", viewport)
             .put("position", JSONArray(listOf(position.x, position.y))).apply {
                 if (action.getString("type") == "drag_workspace") put("tabs", JSONArray(tabs.values.toList()))
@@ -188,6 +205,9 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
                 do {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    // Compose represents ACTION_CANCEL as an already-consumed
+                    // release. Preserve the shared transaction before consuming it.
+                    if (!change.pressed && change.isConsumed) break
                     if (!started && (dock.popupOpen || dock.contextMenu != null || !dock.enabled)) break
                     if (!started && change.pressed && (change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
                         dock.start(source.action, down.position / dock.density); started = true
@@ -217,6 +237,30 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
 }
 internal val LocalDrawerColumn = staticCompositionLocalOf<Int?> { null }
 internal val LocalDrawerClip = staticCompositionLocalOf { Rect.Zero }
+
+@Composable internal fun Modifier.columnDrawerBounds(dock: DockInteraction, column: Int, group: Int?): Modifier {
+    var bounds by remember { mutableStateOf(Rect.Zero) }
+    SideEffect { dock.measureColumnDrawer(column, group, bounds) }
+    DisposableEffect(dock, column) { onDispose { dock.measureColumnDrawer(column, null, null) } }
+    return onGloballyPositioned { bounds = it.boundsInRoot().translate(-dock.origin) }
+}
+
+@Composable internal fun Modifier.drawerTabHit(dock: DockInteraction, column: Int, group: Int, index: Int,
+    panel: String, clip: Rect, active: Boolean): Modifier {
+    val key = "drawer:$column:$index"
+    var bounds by remember { mutableStateOf(Rect.Zero) }
+    SideEffect {
+        val r = bounds.intersect(clip)
+        if (active && r.width > 0f && r.height > 0f) {
+            dock.tabs[key] = obj("group" to group, "index" to index, "panel" to panel,
+                "bounds" to obj("x" to r.left / dock.density, "y" to r.top / dock.density,
+                    "width" to r.width / dock.density, "height" to r.height / dock.density))
+        } else dock.tabs.remove(key)
+    }
+    DisposableEffect(dock, key) { onDispose { dock.tabs.remove(key) } }
+    return onGloballyPositioned { bounds = it.boundsInRoot().translate(-dock.origin) }
+}
+
 @Composable internal fun Modifier.drawerTile(dock: DockInteraction, panel: String, tile: Int): Modifier {
     val column = LocalDrawerColumn.current ?: return this
     val clip = LocalDrawerClip.current

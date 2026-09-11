@@ -5,6 +5,29 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   let resolved,zenKey="",animating=false;
   const send=action=>dispatch({type:"customize",action});
   const local=(b,origin)=>({...b,x:b.x-origin.x,y:b.y-origin.y});
+  function intersect(a,b) {
+    const x=Math.max(a.x,b.x),y=Math.max(a.y,b.y),right=Math.min(a.right,b.right),bottom=Math.min(a.bottom,b.bottom);
+    return right>x&&bottom>y?{x,y,width:right-x,height:bottom-y}:null;
+  }
+  function measureColumnDrawers() {
+    const measurements=[];
+    for(const r of drawers.values())if(!r.closing&&r.drawer.tabs&&r.placement) {
+      const b=r.root.getBoundingClientRect();
+      if(b.width>0&&b.height>0)measurements.push({group:r.drawer.tabs.group,bounds:{x:b.x,y:b.y,width:b.width,height:b.height}});
+    }
+    dispatch({type:"measure_column_drawers",measurements});
+  }
+  function tabHits() {
+    return [...drawers.values()].filter(r=>!r.closing&&r.drawer.tabs&&r.placement).flatMap(r=>{
+      const strip=r.root.querySelector('.drawer-tab-strip');if(!strip)return[];
+      const clip=intersect(strip.getBoundingClientRect(),r.root.getBoundingClientRect());if(!clip)return[];
+      const rect={...clip,right:clip.x+clip.width,bottom:clip.y+clip.height};
+      return [...strip.children].flatMap((tab,index)=>{
+        const bounds=intersect(tab.getBoundingClientRect(),rect);
+        return bounds?[{group:r.drawer.tabs.group,index,bounds}]:[];
+      });
+    });
+  }
   function toolbar(panel,tiles) {
     const view=customization.view(panel),root=element("div","toolbar-controls");
     root.dataset.panel=panel;root.dataset.tileStyle=view.tile_style;
@@ -94,9 +117,11 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
         record={key,root,bodies,column,drawer,from,started:performance.now(),placement:from};drawers.set(id,record);
       }
       record.closing=false;
+      record.root.inert=false;
       for(const body of record.bodies)for(const child of body.children)child.refreshPanel?.();
     }
-    for(const[id,r]of drawers)if(!live.has(id)&&!r.closing){r.closing=true;r.from=r.placement;r.started=performance.now();}
+    for(const[id,r]of drawers)if(!live.has(id)&&!r.closing){r.closing=true;r.root.inert=true;r.from=r.placement;r.started=performance.now();}
+    measureColumnDrawers();
     if(!animating){animating=true;requestAnimationFrame(animate);}
   }
   function animate(now) {
@@ -131,8 +156,18 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       r.placement.columns.forEach((bounds,i)=>place(r.bodies[i],bounds));
       if(r.drawer.tabs) {
         let tabs=r.root.querySelector(":scope > .drawer-tabs");
-        if(!tabs){tabs=element("nav","drawer-tabs");r.root.append(tabs);
-          for(const panel of r.drawer.tabs.panels){const v=customization.view(panel),b=button(v.title,()=>dispatch({type:"select_panel_tab",group:r.drawer.tabs.group,panel}),"dock-tab");b.dataset.panel=panel;b.setAttribute("aria-selected",String(panel===r.drawer.tabs.active));customization.target(b,{kind:"panel",panel});tabs.append(b);}}
+        if(!tabs){
+          const item={kind:"group",group:r.drawer.tabs.group};
+          tabs=draggable(element("nav","drawer-tabs"),item);customization.target(tabs,item);r.root.append(tabs);
+          const strip=element("div","drawer-tab-strip");tabs.append(strip);
+          for(const panel of r.drawer.tabs.panels){
+            const v=customization.view(panel),b=button("",()=>dispatch({type:"select_panel_tab",group:r.drawer.tabs.group,panel}),"dock-tab");
+            if(v.tab.show_icon)b.append(icon(v.icon));if(v.tab.show_name)b.append(document.createTextNode(v.title));
+            b.dataset.panel=panel;b.setAttribute("aria-label",v.title);b.setAttribute("aria-selected",String(panel===r.drawer.tabs.active));
+            customization.target(b,{kind:"panel",panel});strip.append(draggable(b,{kind:"panel",panel}));
+          }
+          const handle=grip(item);handle.classList.add("column-drawer-grip");handle.setAttribute("aria-label","Move panel group");tabs.append(handle);
+        }
         // Shared placement includes tabs in the first column body.
         const body=r.bodies[0],b=r.placement.columns[0];place(tabs,{...b,height:resolved.tab_bar_height});
         place(body,{...b,y:b.y+resolved.tab_bar_height,height:Math.max(0,b.height-resolved.tab_bar_height)});
@@ -145,10 +180,11 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
       more ||= progress<1;
     }
     // Geometry is transient and Rust suppresses identical measurement updates.
-    if(measurements.length)dispatch({type:"measure_drawer_tiles",measurements});
+    dispatch({type:"measure_drawer_tiles",measurements});
+    measureColumnDrawers();
     editor.queuePositions();
     if(more&&!animating){animating=true;requestAnimationFrame(animate);}
   }
   workspace.addEventListener("scroll",()=>{if(drawers.size&&!animating){animating=true;requestAnimationFrame(animate);}},true);
-  return {arrange,refresh,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
+  return {arrange,refresh,tabHits,measureColumnDrawers,facts(){const r=drawers.get("tool");return{content_drawer:r?.placement?.bounds??null,drawer_connection:r?.connection?.bounds??null};}};
 }

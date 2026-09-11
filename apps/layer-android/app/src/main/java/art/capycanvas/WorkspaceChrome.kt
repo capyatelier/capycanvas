@@ -172,16 +172,38 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
         connection?.let { DrawerBridge(it, dock, z.toFloat()) }
         Box(Modifier.placed(placement.getJSONObject("bounds"), dock.density).zIndex(z.toFloat())
             .testTag(if (id == "tool") "tool-drawer" else "column-drawer-$id").chromeRegion(dock)
+            .then(if (columnId != null) Modifier.columnDrawerBounds(dock, columnId, if (current != null) tabs?.getInt("group") else null) else Modifier)
             .shadow(12.dp, shape).clip(shape).background(LocalPalette.current.panel)) {
             placement.array("columns").objects().forEachIndexed { index, bounds ->
                 Column(Modifier.placed(bounds, dock.density)) {
-                    if (tabs != null) Row(Modifier.fillMaxWidth().height(tabHeight.dp).background(LocalPalette.current.tabs).horizontalScroll(rememberScrollState())) {
-                        tabs.array("panels").values().forEach { panelId ->
-                            val panel = bodies[panelId.toString()] ?: return@forEach
-                            TextButton({ host.dispatch(obj("type" to "select_tab", "group" to tabs.getInt("group"), "panel" to panelId)) },
-                                modifier = Modifier.testTag("drawer-tab-$panelId")) {
-                                SharedIcon(panel.getString("icon"), null)
-                                if (panelId == tabs.getString("active")) Text(panel.getString("title"))
+                    if (tabs != null && columnId != null) {
+                        val group = tabs.getInt("group")
+                        val item = obj("kind" to "group", "group" to group)
+                        var tabClip by remember { mutableStateOf(Rect.Zero) }
+                        Row(Modifier.fillMaxWidth().height(tabHeight.dp).testTag("column-drawer-header-$id")
+                            .background(LocalPalette.current.tabs).then(if (current != null) Modifier.dragSource(dock, item) else Modifier),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.weight(1f).clipToBounds().onGloballyPositioned { tabClip = it.boundsInRoot().translate(-dock.origin) }) {
+                                Row(Modifier.horizontalScroll(rememberScrollState()).testTag("column-drawer-tabs-$id")) {
+                                    tabs.array("panels").values().forEachIndexed { tabIndex, panelId ->
+                                        val panel = bodies[panelId.toString()] ?: return@forEachIndexed
+                                        key(panelId.toString()) {
+                                            val presentation = panel.getJSONObject("tab")
+                                            TextButton({ host.dispatch(obj("type" to "select_panel_tab", "group" to group, "panel" to panelId)) },
+                                                enabled = current != null,
+                                                modifier = Modifier.height(tabHeight.dp).testTag("drawer-tab-$panelId")
+                                                    .then(if (current != null) Modifier.dragSource(dock, obj("kind" to "panel", "panel" to panelId)) else Modifier)
+                                                    .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null)) {
+                                                if (presentation.getBoolean("show_icon")) SharedIcon(panel.getString("icon"), null)
+                                                if (presentation.getBoolean("show_name")) Text(panel.getString("title"))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Box(Modifier.width(20.dp).fillMaxHeight().testTag("column-drawer-grip-$id")
+                                .then(if (current != null) Modifier.dragSource(dock, item) else Modifier), contentAlignment = Alignment.Center) {
+                                PanelGrip("Move panel group")
                             }
                         }
                     }

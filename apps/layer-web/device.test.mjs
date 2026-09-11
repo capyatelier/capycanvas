@@ -1,5 +1,6 @@
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
 // browser flags or device settings are changed by this harness.
+import {checkDrawerDragging} from "./drawers.test.mjs";
 import {checkEditor} from "./editor.test.mjs";
 import {checkDeviceFullscreen} from "./fullscreen.test.mjs";
 import {checkMediumTiles} from "./tiles.test.mjs";
@@ -47,7 +48,10 @@ try {
   await reload();
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if(process.argv.includes("--medium-tiles")) {
+  if (process.argv.includes("--drawer-drag")) {
+    await checkDrawerDragging({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if(process.argv.includes("--medium-tiles")) {
     await checkMediumTiles({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if(process.argv.includes("--fullscreen")) {

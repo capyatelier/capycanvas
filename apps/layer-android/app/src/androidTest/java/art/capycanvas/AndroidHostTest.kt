@@ -71,6 +71,130 @@ class AndroidHostTest {
         }
     }
     private fun state() = host.snapshot!!.getJSONObject("state")
+    @Test fun columnDrawersUseNativeMouseAndTouchDrag() {
+        val fixture = JSONObject(defaultWorkspace)
+        fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id, "panels" to JSONArray(panels.toList()), "active" to panels[0], "tab_style" to "icon")
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
+                obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties", "adjustments")))))
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("next_id", maxOf(44, getInt("next_id")))
+        }
+        fixture.put("zen_mode", false)
+        val root = compose.onNodeWithTag("workspace")
+        fun snapshot() = state().getJSONObject("workspace").toString()
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
+        fun panelGroup(panel: String): JSONObject {
+            fun find(node: JSONObject): JSONObject? = if (node.getString("kind") == "tabs") {
+                node.takeIf { panel in it.array("panels").values() }
+            } else find(node.getJSONObject("first")) ?: find(node.getJSONObject("second"))
+            val layout = state().getJSONObject("workspace").getJSONObject("layout")
+            return (layout.array("bands").objects() + layout.array("floating").objects()).firstNotNullOf { find(it.getJSONObject("root")) }
+        }
+        fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
+        fun history(before: String) {
+            val after = snapshot(); assertNotEquals(before, after)
+            action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, snapshot())
+            action(obj("type" to "invoke", "command" to "redo_workspace")); assertEquals(after, snapshot())
+        }
+        for (mouse in listOf(true, false)) {
+            fun press(point: androidx.compose.ui.geometry.Offset) {
+                if (mouse) root.performMouseInput { moveTo(point); press() } else root.performTouchInput { down(point) }
+            }
+            fun move(point: androidx.compose.ui.geometry.Offset) {
+                if (mouse) root.performMouseInput { moveTo(point, 160) } else root.performTouchInput { moveTo(point, 160) }
+                settle()
+            }
+            fun finishGesture(cancelled: Boolean = false) {
+                if (mouse) root.performMouseInput { if (cancelled) cancel() else release() }
+                else root.performTouchInput { if (cancelled) cancel() else up() }
+                settle(); assertNull(host.actionError)
+            }
+            fun open() {
+                action(obj("type" to "restore_workspace", "workspace" to fixture))
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                val point = bounds("column-icon-brushes").center
+                press(point); finishGesture()
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("column-drawer-grip-41").fetchSemanticsNodes().isNotEmpty() }
+                settle()
+            }
+            fun away() = root.fetchSemanticsNode().boundsInRoot.let { androidx.compose.ui.geometry.Offset(it.width * .5f, it.height * .55f) }
+            for (source in listOf("active", "inactive", "grip", "empty")) {
+                open()
+                val box = bounds("column-drawer-41"); val grip = bounds("column-drawer-grip-41")
+                assertEquals("Fixed top-right grip", box.right, grip.right, 2f)
+                val start = when (source) {
+                    "grip" -> grip.center
+                    "empty" -> androidx.compose.ui.geometry.Offset(grip.left - 12f, grip.center.y)
+                    "inactive" -> bounds("drawer-tab-sizes").center
+                    else -> bounds("drawer-tab-brushes").center
+                }
+                val before = snapshot()
+                press(start); move(start + androidx.compose.ui.geometry.Offset(20f, 0f)); assertEquals(before, snapshot())
+                move(away())
+                compose.waitUntil(10_000) { state().getJSONObject("workspace").getJSONObject("layout").array("floating").length() == 1 }
+                finishGesture()
+                assertEquals("$mouse $source", if (source in listOf("grip", "empty")) 3 else 1,
+                    panelGroup(if (source == "inactive") "sizes" else "brushes").array("panels").length())
+                history(before)
+            }
+            open()
+            var before = snapshot()
+            press(bounds("drawer-tab-tool_settings").center)
+            var box = bounds("column-drawer-41")
+            move(androidx.compose.ui.geometry.Offset(box.left + 4f, bounds("column-drawer-header-41").center.y)); finishGesture()
+            assertEquals(listOf("tool_settings", "brushes", "sizes"), panelGroup("brushes").array("panels").values())
+            history(before)
+            open(); before = snapshot()
+            press(bounds("drawer-tab-brushes").center); move(away()); finishGesture(true)
+            assertEquals(before, snapshot())
+            compose.onNodeWithTag("column-drawer-41").assertIsDisplayed()
+            // A mostly clipped tab must insert using its visible midpoint.
+            val overflow = JSONObject(fixture.toString())
+            overflow.getJSONObject("layout").array("bands").getJSONObject(0).getJSONObject("root").apply {
+                put("panels", JSONArray(listOf("brushes", "sizes", "tool_settings", "navigator", "stats")))
+                put("tab_style", "icon_name")
+            }
+            action(obj("type" to "restore_workspace", "workspace" to overflow))
+            customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            press(bounds("column-icon-brushes").center); finishGesture(); settle()
+            val gripBeforeScroll = bounds("column-drawer-grip-41")
+            val scrollBy = bounds("drawer-tab-brushes").width + bounds("drawer-tab-sizes").width * .75f
+            compose.onNodeWithTag("column-drawer-tabs-41").performSemanticsAction(SemanticsActions.ScrollBy) { it(scrollBy, 0f) }
+            settle()
+            assertEquals(gripBeforeScroll, bounds("column-drawer-grip-41"))
+            val clippedTab = bounds("drawer-tab-sizes")
+            assertTrue("Sizes is partially visible", clippedTab.width > 4f)
+            before = snapshot()
+            press(bounds("tab-layers").center); move(away())
+            move(androidx.compose.ui.geometry.Offset(clippedTab.left + 2f, clippedTab.center.y)); finishGesture()
+            assertEquals(listOf("brushes", "layers", "sizes", "tool_settings", "navigator", "stats"), panelGroup("layers").array("panels").values())
+            history(before)
+            for (zone in listOf("tab", "merge", "top", "bottom")) {
+                open(); before = snapshot()
+                press(bounds(if (zone == "merge") "group-grip-43" else "tab-layers").center); move(away())
+                box = bounds("column-drawer-41")
+                val header = bounds("column-drawer-header-41")
+                val destination = when (zone) {
+                    "tab" -> androidx.compose.ui.geometry.Offset(box.left + 4f, header.center.y)
+                    "top" -> androidx.compose.ui.geometry.Offset(box.center.x, header.bottom + 4f)
+                    "bottom" -> androidx.compose.ui.geometry.Offset(box.center.x, box.bottom - 4f)
+                    else -> box.center
+                }
+                move(destination)
+                compose.onNodeWithTag("workspace-drop-hint").assertExists()
+                finishGesture()
+                val target = panelGroup("layers")
+                if (zone in listOf("top", "bottom")) assertNotEquals(41, target.getInt("id")) else assertEquals(41, target.getInt("id"))
+                if (zone == "tab") assertEquals("layers", target.array("panels").getString(0))
+                if (zone == "merge") assertEquals(6, target.array("panels").length())
+                assertEquals(0, state().getJSONObject("workspace").getJSONObject("layout").array("floating").length())
+                history(before)
+            }
+            capture("column-drawer-drag-${if (mouse) "mouse" else "touch"}")
+        }
+    }
+
     @Test fun filterLayerIconsUsePackagedNames() {
         waitState { it.getLong("filter_catalog_revision") > 0 && !it.getJSONObject("filter_load").getBoolean("pending") }
         for (id in listOf("domain_warp", "curves", "color_balance")) {

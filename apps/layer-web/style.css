@@ -510,8 +510,10 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .drawer-column { position:absolute !important; overflow:auto; overscroll-behavior:contain; }
 .drawer-column > .panel { height:auto; overflow:visible; }
 .drawer-column > .toolbar-controls { position:relative; }
-.drawer-tabs { position:absolute; display:flex; overflow:auto; background:var(--panel); }
-.drawer-tabs .dock-tab { flex:1; white-space:nowrap; }
+.drawer-tabs { position:absolute; display:flex; overflow:hidden; background:var(--panel); touch-action:none; user-select:none; }
+.drawer-tab-strip { display:flex; flex:1; min-width:0; overflow:auto; scrollbar-width:none; touch-action:none; }
+.drawer-tabs .dock-tab { flex:none; white-space:nowrap; }
+.drawer-tabs .column-drawer-grip { position:static; flex:0 0 20px; width:20px; height:100%; }
 .document-dialog { width:min(440px,90vw); padding:18px; }
 .document-dialog form { display:flex; flex-direction:column; gap:14px; }
 .document-dialog h2 { margin:0; font-size:1.15em; }

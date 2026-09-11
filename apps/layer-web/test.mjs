@@ -1,4 +1,5 @@
 // Real Chrome + Wasm + WebGPU smoke/conformance test. No browser framework.
+import {checkDrawerDragging} from "./drawers.test.mjs";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -173,7 +174,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--medium-tiles")) {
+  if (process.argv.includes("--drawer-drag")) {
+    await checkDrawerDragging({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--medium-tiles")) {
     await checkMediumTiles({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--fullscreen")) {
