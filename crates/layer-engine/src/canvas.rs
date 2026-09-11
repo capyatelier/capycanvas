@@ -22,6 +22,9 @@ use layer_render::{
 };
 use std::{collections::VecDeque, fmt};
 
+#[path = "corrections.rs"]
+mod corrections;
+
 const TRANSFORM_HISTORY: usize = 16;
 const INPUT_BATCH: usize = 4096;
 // A small wet microbatch amortizes page ping-pong and reservoir passes while
@@ -66,6 +69,8 @@ pub struct EngineMetrics {
     pub maximum_tip_gap_surface_px: f32,
     pub last_endpoint_correction_surface_px: f32,
     pub maximum_endpoint_correction_surface_px: f32,
+    pub corrected_input_samples: u64,
+    pub expired_input_estimates: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +103,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     dab_generator: DabGenerator,
     finalized_real_points: usize,
     active_stroke: Option<ActiveStroke>,
+    estimates: std::collections::BTreeMap<(u64, u64), corrections::EstimatedPoint>,
     pending_smudge_dabs: Vec<Dab>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
@@ -152,6 +158,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             dab_generator: DabGenerator::default(),
             finalized_real_points: 0,
             active_stroke: None,
+            estimates: Default::default(),
             pending_smudge_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
             dabs: Vec::with_capacity(capacity.dabs_per_frame),
             batches: Vec::with_capacity(capacity.batches_per_frame),
@@ -539,6 +546,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// its own clock/view; neither may leak into the interactive session.
     pub fn start_document_view(&mut self, view: ViewState, input_transform: ViewTransform) {
         self.transforms.clear();
+        self.estimates.clear();
         self.document_view_revision = input_transform.revision;
         self.animation_origin_ns = None;
         self.set_view(view, input_transform);
@@ -701,10 +709,21 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if active.brush.path.continuous_rate_hz <= 0.0 {
             return;
         }
-        if let Some(point) = self.builder.append_stationary(timestamp_ns)
-            && !active.feedback.enabled
-        {
-            self.append_real_dab(point);
+        let feedback = active.feedback.enabled;
+        let id = active.id;
+        if let Some(point) = self.builder.append_stationary(timestamp_ns) {
+            let source = self.builder.last_real_source();
+            for estimate in self.estimates.values_mut().filter(|e| {
+                e.stroke == id
+                    && (e.index == source || e.copies.iter().any(|(index, _)| *index == source))
+            }) {
+                estimate
+                    .copies
+                    .push((self.builder.real_points().len() - 1, point));
+            }
+            if !feedback {
+                self.append_real_dab(point, self.builder.real_points().len() - 1);
+            }
         }
     }
 
@@ -716,7 +735,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return;
         }
         let end = if active.feedback.enabled {
-            self.finalized_real_points
+            // Sensor latency may hold back persistent ink, but must not
+            // change the watercolor update boundaries of the real samples.
+            finalized_count(
+                self.builder.real_points(),
+                self.finalized_real_points,
+                active.feedback.finalization_lag_micros,
+            )
         } else {
             self.builder.real_points().len()
         } as u32;
@@ -736,10 +761,18 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.builder.real_points(),
             self.finalized_real_points,
             active.feedback.finalization_lag_micros,
+        )
+        .min(
+            self.estimates
+                .values()
+                .filter(|e| e.stroke == active.id)
+                .map(|e| e.index)
+                .min()
+                .unwrap_or(usize::MAX),
         );
         while self.finalized_real_points < count {
             let point = self.builder.real_points()[self.finalized_real_points];
-            self.append_real_dab(point);
+            self.append_real_dab(point, self.finalized_real_points);
             self.finalized_real_points += 1;
         }
     }
@@ -747,7 +780,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn finalize_active_tail(&mut self) {
         while self.finalized_real_points < self.builder.real_points().len() {
             let point = self.builder.real_points()[self.finalized_real_points];
-            self.append_real_dab(point);
+            self.append_real_dab(point, self.finalized_real_points);
             self.finalized_real_points += 1;
         }
     }
@@ -767,6 +800,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return Ok(());
         }
         self.metrics.input_events = self.metrics.input_events.saturating_add(1);
+        if event.flags.contains(SampleFlags::CORRECTION) {
+            return self.correct_input(event);
+        }
         let mut transform = self
             .transforms
             .iter()
@@ -877,6 +913,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.pending_smudge_dabs.clear();
                 self.finalized_real_points = 0;
                 self.builder.begin(event, transform, self.pressure);
+                self.track_estimate(event, transform);
                 self.dab_generator
                     .reset_for_stroke(id, &self.active_stroke.as_ref().expect("set above").brush);
                 let point = *self
@@ -891,7 +928,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .feedback
                     .enabled
                 {
-                    self.append_real_dab(point);
+                    self.append_real_dab(point, self.builder.real_points().len() - 1);
                 }
             }
             PenPhase::Move => {
@@ -899,6 +936,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 self.builder.push(event, transform, self.pressure);
+                self.track_estimate(event, transform);
                 if !event.flags.contains(SampleFlags::PREDICTED)
                     && !self
                         .active_stroke
@@ -912,7 +950,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         .real_points()
                         .last()
                         .expect("real move adds a point");
-                    self.append_real_dab(point);
+                    self.append_real_dab(point, self.builder.real_points().len() - 1);
                 }
             }
             PenPhase::Up => {
@@ -920,6 +958,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     return Ok(());
                 }
                 self.builder.push(event, transform, self.pressure);
+                self.track_estimate(event, transform);
                 if !event.flags.contains(SampleFlags::PREDICTED) {
                     if self
                         .active_stroke
@@ -931,7 +970,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         self.finalize_active_tail();
                     } else {
                         let point = *self.builder.real_points().last().expect("up adds a point");
-                        self.append_real_dab(point);
+                        self.append_real_dab(point, self.builder.real_points().len() - 1);
                     }
                 }
                 self.flush_smudge_chunks(true);
@@ -969,7 +1008,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
-    fn append_real_dab(&mut self, point: layer_core::StrokePoint) {
+    fn append_real_dab(&mut self, point: layer_core::StrokePoint, point_index: usize) {
         let active = self.active_stroke.as_ref().expect("stroke is active");
         if active.style.execution == BrushExecution::Smudge {
             self.dab_generator
@@ -981,7 +1020,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let layer_id = active.layer_id;
         let style = active.style.clone();
         let stroke_start = !active.persistent_started;
-        let material_update = active.material_updates.len() as u32;
+        let material_update = active
+            .material_updates
+            .partition_point(|end| *end as usize <= point_index)
+            as u32;
         let start = self.dabs.len();
         let damage = self
             .dab_generator
@@ -1417,6 +1459,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn cancel_active(&mut self) {
+        if let Some(active) = &self.active_stroke {
+            self.estimates.retain(|_, e| e.stroke != active.id);
+        }
         self.builder.cancel();
         self.active_stroke = None;
         self.pending_smudge_dabs.clear();
@@ -2238,6 +2283,189 @@ mod tests {
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             background_rgba_linear: [1.0; 4],
         }
+    }
+
+    #[test]
+    fn estimated_samples_correct_original_transforms_and_survive_pen_up_and_redo() {
+        for feedback in [false, true] {
+            let (mut input, consumer) = input_queue(32);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("estimates", 64, 64),
+                consumer,
+                view(64, 64),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine.instant_feedback.enabled = feedback;
+            let mut down = event(1, PenPhase::Down, 8.);
+            down.pressure = 0.2;
+            down.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::ESTIMATED.0);
+            input.push(down).unwrap();
+            engine.render_frame().unwrap();
+            // Evict the original camera from the ordinary input history. Its
+            // captured transform must remain attached to the estimated point.
+            for revision in 2..32 {
+                engine.set_view(
+                    view(64, 64),
+                    ViewTransform {
+                        revision,
+                        surface_to_document: [1., 0., 0., 1., 500., 300.],
+                    },
+                );
+            }
+            engine.pressure.gamma = 3.;
+            let mut correction = down;
+            correction.flags = SampleFlags(SampleFlags::CORRECTION.0 | SampleFlags::ESTIMATED.0);
+            correction.surface_position.x = 12.;
+            correction.pressure = 0.9;
+            correction.tilt_radians = [0.2, -0.3];
+            correction.twist_radians = 1.7;
+            input.push(correction).unwrap();
+            engine.render_frame().unwrap();
+            let corrected = engine.builder.real_points()[0];
+            assert_eq!(corrected.position, Point { x: 12., y: 16. });
+            assert_eq!(corrected.pressure, 0.9);
+            assert_eq!(corrected.tilt, [0.2, -0.3]);
+            assert_eq!(corrected.twist, 1.7);
+            assert_eq!(engine.metrics.stale_transform_fallbacks, 0);
+            let mut up = event(3, PenPhase::Up, -480.);
+            up.surface_position.y = -284.;
+            up.view_revision = 31;
+            input.push(up).unwrap();
+            engine.render_frame().unwrap();
+            let id = engine.document().strokes().next().unwrap().id;
+            let snapshot = engine.document().clone();
+            let saved = engine.checkpoint();
+            engine.undo().unwrap();
+            engine.render_frame().unwrap();
+            assert!(engine.document().stroke(id).is_none());
+            // The correction belongs to redoable ink, not a new stroke.
+            correction.pressure = 0.7;
+            correction.twist_radians = 2.1;
+            correction.flags = SampleFlags::CORRECTION;
+            input.push(correction).unwrap();
+            engine.render_frame().unwrap();
+            assert!(engine.document().stroke(id).is_none());
+            engine.redo().unwrap();
+            engine.render_frame().unwrap();
+            let stroke = engine.document().stroke(id).unwrap();
+            assert_eq!(stroke.points.len(), 2);
+            assert_eq!(stroke.points[0].pressure, 0.7);
+            assert_eq!(stroke.points[0].twist, 2.1);
+            assert_eq!(snapshot.stroke(id).unwrap().points[0].pressure, 0.9);
+            assert_ne!(engine.checkpoint(), saved);
+            assert_eq!(engine.metrics.committed_strokes, 1);
+            assert!(engine.estimates.is_empty());
+            let truth = engine.document().clone();
+            let (_, consumer) = input_queue(4);
+            let mut replay = CanvasEngine::new(
+                RecordingRenderer::default(),
+                truth.clone(),
+                consumer,
+                view(64, 64),
+                ViewTransform::IDENTITY,
+            )
+            .unwrap();
+            replay.render_frame().unwrap();
+            assert_eq!(engine.backend.persistent, replay.backend.persistent);
+            correction.pressure = 0.1; // A duplicate final update is inert.
+            input.push(correction).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.document(), &truth);
+            engine.undo().unwrap();
+            assert_eq!(engine.document().strokes().count(), 0);
+            assert!(
+                !engine.undo().unwrap(),
+                "sensor updates must not add undo steps"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_terminal_estimates_correct_each_copy_without_adding_samples() {
+        let (mut input, consumer) = input_queue(32);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("duplicate-estimate", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        let mut down = event(1, PenPhase::Down, 8.);
+        down.flags = SampleFlags::ESTIMATED;
+        input.push(down).unwrap();
+        engine.render_frame().unwrap();
+        let mut up = down;
+        up.phase = PenPhase::Up;
+        up.pressure = 0.1;
+        input.push(up).unwrap();
+        engine.render_frame().unwrap();
+        let mut correction = down;
+        correction.flags = SampleFlags::CORRECTION;
+        input.push(correction).unwrap();
+        engine.render_frame().unwrap();
+        let stroke = engine.document().strokes().next().unwrap();
+        assert_eq!(stroke.points.len(), 2);
+        assert!(stroke.points.iter().all(|p| p.pressure == down.pressure));
+        assert_eq!(engine.metrics.committed_strokes, 1);
+        assert!(engine.estimates.is_empty());
+    }
+
+    #[test]
+    fn estimated_stationary_airbrush_samples_and_cancellation_keep_contact_ownership() {
+        let (mut input, consumer) = input_queue(32);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("stationary", 64, 64),
+            consumer,
+            view(64, 64),
+            ViewTransform {
+                revision: 1,
+                ..ViewTransform::IDENTITY
+            },
+        )
+        .unwrap();
+        engine.brush.path.continuous_rate_hz = 60.;
+        let mut down = event(1, PenPhase::Down, 8.);
+        down.flags = SampleFlags::ESTIMATED;
+        input.push(down).unwrap();
+        engine.render_frame_at(2_000_000).unwrap();
+        engine.render_frame_at(3_000_000).unwrap();
+        let mut correction = down;
+        correction.pressure = 0.3;
+        correction.flags = SampleFlags::CORRECTION;
+        input.push(correction).unwrap();
+        engine.render_frame_at(4_000_000).unwrap();
+        assert!(engine.builder.real_points().len() >= 4);
+        assert!(
+            engine
+                .builder
+                .real_points()
+                .iter()
+                .all(|p| p.pressure == 0.3)
+        );
+        input.push(event(5, PenPhase::Cancel, 8.)).unwrap();
+        engine.render_frame().unwrap();
+        input.push(event(6, PenPhase::Down, 30.)).unwrap();
+        input.push(correction).unwrap();
+        engine.render_frame().unwrap();
+        assert!(
+            engine
+                .builder
+                .real_points()
+                .iter()
+                .all(|p| p.pressure == 0.8)
+        );
+        assert_eq!(engine.document().strokes().count(), 0);
+        assert!(engine.estimates.is_empty());
     }
 
     #[test]

@@ -88,6 +88,9 @@ commands and review staged source before pushing.
   proxy**. The renderer may defer that input or consume only part of its queue.
   This association does not establish that those pixels were included, nor
   physical Pencil input-to-pixel latency. Prediction remains visual-only.
+  Corrections have separate batch counts, owner queue distributions and receipt
+  proxies. Their sample timestamps remain the original observation times;
+  correction delivery is measured from the new enqueue receipt.
 - The report includes p50/p95/p99/max, missing/invalid/overflow counts, display
   capabilities, memory footprint and thermal states. Empty measurements are
 null, not zero. Readiness requires canvas, shaders and bundled filter catalog.
@@ -114,7 +117,7 @@ queue's timestamp period, not compared as absolute CPU clock values.
 | --- | --- |
 | 0 tick | admission time, target time, admitted flag |
 | 1 frame | ID, target, owner start, owner end, five CPU stage durations, latest nonpredicted receipt ID |
-| 2 input | enqueue ID/time, owner start/end, oldest/newest sample time, count, predicted flag, last phase, tool, accepted flag |
+| 2 input | enqueue ID/time, owner start/end, oldest/newest sample time, count, kind (0 real, 1 predicted, 2 correction), original last phase, tool, accepted flag |
 | 3 drawable | frame ID, acquire start/end, drawable ID, acquired flag |
 | 4 presented | frame ID, actual presentation time, callback observation time, drawable ID |
 | 5 memory | observation time, physical footprint bytes, resident bytes, thermal state, Mach status |

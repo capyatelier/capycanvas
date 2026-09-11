@@ -360,6 +360,66 @@ pub unsafe extern "C" fn capy_apple_pointer(
     predicted: u32,
     view_revision: u64,
 ) -> i32 {
+    unsafe {
+        apple_pointer(
+            app,
+            id,
+            tool,
+            button,
+            records,
+            count,
+            predicted,
+            view_revision,
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+/// # Safety
+/// Records contain `count` doubles and updates contain `count / 9 * 2` u64s.
+/// Both arrays must remain alive for this call. Updates are token/expecting pairs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_pointer_updates(
+    app: *mut CapyApple,
+    id: u64,
+    tool: u32,
+    button: u32,
+    records: *const f64,
+    count: usize,
+    updates: *const u64,
+    correction: u32,
+    view_revision: u64,
+) -> i32 {
+    if updates.is_null() {
+        return -1;
+    }
+    unsafe {
+        apple_pointer(
+            app,
+            id,
+            tool,
+            button,
+            records,
+            count,
+            0,
+            view_revision,
+            updates,
+            correction,
+        )
+    }
+}
+unsafe fn apple_pointer(
+    app: *mut CapyApple,
+    id: u64,
+    tool: u32,
+    button: u32,
+    records: *const f64,
+    count: usize,
+    predicted: u32,
+    view_revision: u64,
+    updates: *const u64,
+    correction: u32,
+) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
@@ -371,6 +431,7 @@ pub unsafe extern "C" fn capy_apple_pointer(
             || tool > 3
             || button > 2
             || predicted > 1
+            || correction > 1
         {
             return Err("Invalid Apple pointer batch".into());
         }
@@ -386,12 +447,23 @@ pub unsafe extern "C" fn capy_apple_pointer(
             return Ok(());
         }
         if a.dismissed_contacts.contains(&id) {
-            if predicted == 0 && records.chunks_exact(9).any(|r| r[8] >= 3.) {
+            if correction == 0 && predicted == 0 && records.chunks_exact(9).any(|r| r[8] >= 3.) {
                 a.dismissed_contacts.remove(&id);
             }
             return Ok(());
         }
-        if predicted == 0 && records[8] == 1. {
+        let updates = if updates.is_null() {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(updates, count / 9 * 2) }
+        };
+        if updates
+            .chunks_exact(2)
+            .any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0) || (correction != 0 && u[0] == 0))
+        {
+            return Err("Invalid Apple input estimates".into());
+        }
+        if correction == 0 && predicted == 0 && records[8] == 1. {
             let viewport = a.host.logical;
             let physical = a.host.session.state().camera.viewport;
             let position = [
@@ -413,14 +485,18 @@ pub unsafe extern "C" fn capy_apple_pointer(
                 return Ok(());
             }
         }
-        a.host.pointer_batch(PointerBatch {
-            id,
-            tool: tool as u8,
-            button: button as u8,
-            records,
-            predicted: predicted != 0,
-            view_revision,
-        })
+        a.host.pointer_batch_updates(
+            PointerBatch {
+                id,
+                tool: tool as u8,
+                button: button as u8,
+                records,
+                predicted: predicted != 0,
+                view_revision,
+            },
+            updates,
+            correction != 0,
+        )
     })
     .map_or(-1, |_| 0)
 }

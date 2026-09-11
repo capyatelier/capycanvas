@@ -65,11 +65,13 @@ def analyze(header, events):
     continuous_intervals = [right[1] - left[1] for left, right in zip(shown, shown[1:])
                             if cycles.get(left[0]) is not None and cycles.get(left[0]) == cycles.get(right[0])]
     associations = {}
+    correction_associations = {}
     for event in visible.values():
         frame = frames.get(event[0])
         source = inputs.get(frame[9]) if frame else None
-        if source and not source[6] and source[9] and event[1] >= source[0]:
-            associations[source[0]] = min(associations.get(source[0], math.inf), event[1] - source[0])
+        if source and source[6] in (0, 2) and source[9] and event[1] >= source[0]:
+            target = correction_associations if source[6] == 2 else associations
+            target[source[0]] = min(target.get(source[0], math.inf), event[1] - source[0])
     def frame_metrics(records):
         return {
             "owner_queue_age_ms": distribution(r[2] - r[0] for r in records if r[2] >= r[0]),
@@ -106,6 +108,9 @@ def analyze(header, events):
         "schema": 1, "platform": "iPadOS" if header["platform"] == 0 else "macOS",
         "configuration": header.get("configuration"), "duration_seconds": header["duration_seconds"],
         "counts": {"events": len(events), "dropped_records": header.get("dropped_records", 0),
+                   "real_input_batches": sum(r[6] == 0 for r in inputs.values()),
+                   "predicted_input_batches": sum(r[6] == 1 for r in inputs.values()),
+                   "correction_input_batches": sum(r[6] == 2 for r in inputs.values()),
                    "ticks": len(ticks), "ticks_denied_admission": sum(not r[2] for r in ticks),
                    "frames": len(frames), "viewport_submissions": len(submitted), "acquired_drawables": len(drawables),
                    "presented_drawables": len(visible), "zero_time_presentations": sum(not r[1] for r in presented.values()),
@@ -128,8 +133,10 @@ def analyze(header, events):
             "positive_target_lateness_ms": distribution(max(0, r[1] - f[1]) for r, f in visible_frames if f[1]),
             "targets_exceeded_by_over_1ms": sum(r[1] > f[1] + NS_PER_MS for r, f in visible_frames if f[1]),
             "first_associated_present_per_owner_receipt_proxy_ms": distribution(associations.values()),
+            "first_associated_present_per_correction_receipt_proxy_ms": distribution(correction_associations.values()),
         },
         "input_owner_queue_ms": distribution(r[1] - r[0] for r in inputs.values() if r[1] >= r[0]),
+        "correction_owner_queue_ms": distribution(r[1] - r[0] for r in inputs.values() if r[6] == 2 and r[1] >= r[0]),
         "memory": {"samples": len(memory), "footprint_bytes": distribution([r[1] for r in memory], divisor=1),
                    "first_to_last_growth_bytes": memory[-1][1] - memory[0][1] if memory else None,
                    "thermal_states": sorted({r[3] for r in memory})},

@@ -19,6 +19,7 @@ import SwiftUI
     @Published var headerLeadingInset: CGFloat = 0
     var cameraRevision: UInt64 = 0
     var wake: (() -> Void)?
+    var interruptInput: (() -> Void)?
     private(set) var native: NativeOwner?
     lazy var layerThumbnails = LayerThumbnails(store: self)
     lazy var filterPreviews = FilterPreviews(store: self)
@@ -127,7 +128,10 @@ import SwiftUI
                 "viewport": self.snapshot["layout"]["viewport"].raw])
         }
     }
-    func input(_ value: [String: Any]) { native?.submit(1, JSON(value)); wake?() }
+    func input(_ value: [String: Any]) {
+        if value["type"] as? String == "blur" { interruptInput?() }
+        native?.submit(1, JSON(value)); wake?()
+    }
     /// A captured chord is a complete input pair; closing its sheet cannot leave
     /// a held key in the canvas interaction state.
     func captureShortcut(key: String, command: Bool, shift: Bool, alt: Bool) {

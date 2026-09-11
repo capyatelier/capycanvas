@@ -61,6 +61,18 @@ class ReportChecks(unittest.TestCase):
         self.assertEqual(result["frames_after_readiness"]["owner_service_ms"]["count"], 1)
         self.assertEqual(result["ready_seconds_from_start"], 30 / 1e9)
 
+    def test_corrections_have_separate_receipt_proxies_and_predictions_are_excluded(self):
+        events = []
+        for kind in (0, 1, 2):
+            time = (kind + 1) * 1_000_000
+            events += [record(2, time, time + 10, time + 20, 90, 95, 1, kind, 1, 0, 1),
+                       frame(time + 100, receipt=time), record(4, time + 100, time + 1_000_000)]
+        result = analyze(header(), events)
+        self.assertEqual(result["counts"]["correction_input_batches"], 1)
+        self.assertEqual(result["presentation"]["first_associated_present_per_owner_receipt_proxy_ms"]["count"], 1)
+        self.assertEqual(result["presentation"]["first_associated_present_per_correction_receipt_proxy_ms"]["count"], 1)
+        self.assertEqual(result["correction_owner_queue_ms"]["count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
