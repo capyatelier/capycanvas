@@ -3265,6 +3265,166 @@ fn native_navigation_tools() {
 }
 
 #[test]
+#[ignore = "private Wayland display and GPU"]
+fn native_navigator_column_resize() {
+    let app = native_test_app("art.capycanvas.NavigatorColumnResize");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    pump(1200);
+    let original = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let stats = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .backend()
+        .stats
+        .clone();
+    let assert_visible = |visible| {
+        assert_eq!(
+            !w.navigator_overviews.placements(&state(&w), 1.).is_empty(),
+            visible
+        );
+        assert_eq!(
+            !w.gpu
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .session
+                .engine()
+                .backend()
+                .overviews
+                .is_empty(),
+            visible,
+            "GPU placements must follow the panel while the resize is held, without canvas input"
+        );
+    };
+    for group in [5, 8] {
+        let mut workspace = original.clone();
+        workspace
+            .layout
+            .set_panel_visible(Panel::Navigator, true)
+            .unwrap();
+        workspace
+            .layout
+            .move_panel(
+                viewport,
+                Panel::Navigator,
+                DockTarget::Tab { group, index: None },
+            )
+            .unwrap();
+        workspace
+            .layout
+            .select_tab(group, Panel::Navigator)
+            .unwrap();
+        let root = workspace.layout.column_for_group(group).unwrap();
+        let band = workspace
+            .layout
+            .bands
+            .iter_mut()
+            .find(|b| b.root.id() == root)
+            .unwrap();
+        band.extent = 400.;
+        let id = band.id;
+        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        pump(400);
+        assert_visible(true);
+        let d = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.id == id)
+            .unwrap();
+        let handle = || {
+            w.surface
+                .imp()
+                .children
+                .borrow()
+                .iter()
+                .find(|(slot, _)| *slot == Slot::Divider(id))
+                .unwrap()
+                .1
+                .clone()
+        };
+        let minimum = if group == 5 {
+            192.
+        } else {
+            layer_ui::LAYERS_MIN_WIDTH
+        };
+        let outward = if d.reversed { -1. } else { 1. };
+        let center = d.bounds.x + d.bounds.width * 0.5;
+        let delta = |width| {
+            let x = if d.reversed {
+                d.parent.x + d.parent.width - width - WORKSPACE_SPACING * 0.5
+            } else {
+                d.parent.x + width + WORKSPACE_SPACING * 0.5
+            };
+            [(x - center) as f64, 0.]
+        };
+        let drag = begin_workspace_drag(&w, &handle(), 1., 20.);
+        // Settle at minimum width so reopening has the same projection as
+        // before collapse. No canvas hover, explicit wake, or capture is used.
+        drag.update(delta(minimum));
+        pump(300);
+        assert_visible(true);
+        for _ in 0..2 {
+            let (frames, previews) = {
+                let s = stats.lock().unwrap();
+                (s.cpu.len(), s.overview_frames)
+            };
+            drag.update(delta(minimum * 0.75 - 1.));
+            pump(200);
+            assert!(w.workspace_drag.borrow().is_some());
+            assert!(state(&w).workspace.layout.is_collapsed(root));
+            assert_visible(false);
+            {
+                let s = stats.lock().unwrap();
+                assert!(
+                    s.cpu.len() > frames,
+                    "collapse must present a frame without the overview"
+                );
+                assert_eq!(s.overview_frames, previews);
+            }
+            drag.update(delta(minimum * 0.75 + 1.));
+            pump(200);
+            assert_visible(true);
+            assert!(
+                stats.lock().unwrap().overview_frames > previews,
+                "reopening must present the overview before release"
+            );
+        }
+        drag.update(delta(minimum * 0.75 - 1.));
+        pump(200);
+        assert_visible(false);
+        drag.end();
+        pump(200);
+        // Opening a column that started collapsed has the same rendering lifecycle.
+        let drag = begin_workspace_drag(&w, &handle(), 1., 20.);
+        for (distance, visible) in [(36., true), (35., false), (36., true)] {
+            let previews = stats.lock().unwrap().overview_frames;
+            drag.update([outward * distance, 0.]);
+            pump(200);
+            assert_visible(visible);
+            if visible {
+                assert!(stats.lock().unwrap().overview_frames > previews);
+            }
+        }
+        // Holding the mouse stationary must not keep rendering after the update.
+        pump(250);
+        let frames = stats.lock().unwrap().cpu.len();
+        pump(250);
+        assert_eq!(stats.lock().unwrap().cpu.len(), frames);
+        drag.end();
+    }
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
 #[ignore = "requires a private Wayland display and GPU"]
 fn native_navigator() {
     let app = native_test_app("art.capycanvas.NavigatorReview");
