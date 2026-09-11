@@ -1976,3 +1976,18 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   Remaining performance work includes the driver-retirement trigger and the
   residual transform presentation misses; watercolor selection-edge behavior
   and final human GTK review remain separate goal gates.
+- Post-merge validation with the shared estimated-input correction work passes
+  all 306 core/engine/UI/host tests and strict GTK/UI/host Clippy. The release
+  application and test executable build. The native default-workspace workflow
+  passes again, including fresh dark/light and compact captures; the default
+  dark capture was visually inspected. The timer arithmetic regression passes.
+  A new timestamp-free seven-workload sweep delivers 119.80–120.01Hz for brushes
+  and navigation, and 118.50Hz for transforms (10 discarded presentations).
+  Transform worker elapsed median/p95/p99 is 1.649/2.286/2.618ms; GTK dispatch
+  p99 is 1.203ms. Pan has zero discarded presentations, 0.570ms worker p99,
+  0.078ms input-handler p99 and 0.070ms GTK-dispatch p99. These are synthetic
+  input runs with actual presentation feedback, not physical-input acceptance.
+  The incoming Apple report separately confirms that the sRGB import oracle
+  passes on Metal but the v3 filter-output reference fails (maximum channel
+  error 255); see [Apple acceptance](apple-acceptance.md). That cross-backend
+  failure is not waived by the passing Vulkan or GTK checks.
