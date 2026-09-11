@@ -1493,3 +1493,17 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - Remaining: final eight-menu/command-ribbon assembly, requested default layout,
   region refinements, historical filter-reference reconciliation, and the full
   integrated GTK validation/user-approval gate. The goal remains active.
+
+- Project-source integration: owned RGBA images and R8 brush masks now share
+  their immutable pixel allocation across the session, GTK worker queue and
+  renderer source cache. Borrowed imports use one common row-packing helper.
+  GPU tests assert allocation identity, reject malformed replacements without
+  losing the previous source, check padded rows, and still reproduce reopened
+  artwork exactly. No canvas readback or drawing-time work was added.
+- Post-merge validation passes 41 core, 31 engine, 213 shared UI and 10 host
+  tests, both GPU project tests, the native GTK document workflow, workspace
+  and WebAssembly compilation, and strict core/engine/render/UI/GTK Clippy.
+  Existing non-Metal Apple warnings remain. Panel-availability tests now check
+  the shared host policy rather than repeating a list that drifts as ports
+  implement their native controls. Concurrent Android presentation work remains
+  separately owned; no new device or frame-rate claim is made here.

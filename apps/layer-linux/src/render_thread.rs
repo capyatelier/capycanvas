@@ -66,7 +66,7 @@ enum Command {
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(layer_render::FilterPreviewRequest),
     Frame(Box<Frame>),
-    Asset(AssetId, [u32; 3], PixelFormat, Arc<[u8]>),
+    Asset(AssetId, layer_core::ProjectAsset),
     Release(AssetId),
     Readback(u64),
     Capture(mpsc::Sender<Result<ReadbackImage, String>>),
@@ -415,19 +415,10 @@ impl RenderWorker {
                                     count.fetch_sub(1, Ordering::Release);
                                 }
                             }
-                            Command::Asset(id, [width, height, stride], format, bytes) => {
+                            Command::Asset(id, asset) => {
                                 worker
                                     .renderer
-                                    .prepare_asset(
-                                        &id,
-                                        HostImage {
-                                            width,
-                                            height,
-                                            stride,
-                                            format,
-                                            bytes: &bytes,
-                                        },
-                                    )
+                                    .prepare_owned_asset(&id, &asset)
                                     .map_err(error)?;
                             }
                             Command::Selection(selection) => worker
@@ -719,18 +710,14 @@ impl CanvasRenderer for RenderWorker {
         Ok(())
     }
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
-        if image.format == PixelFormat::R8Unorm {
-            self.outlines.insert(
-                asset.clone(),
-                layer_render::mask_outline(image.width, image.height, image.stride, image.bytes),
-            );
-        }
-        self.send(Command::Asset(
-            asset.clone(),
-            [image.width, image.height, image.stride],
+        let source = layer_core::ProjectAsset::copy_rows(
+            [image.width, image.height],
             image.format,
-            Arc::from(image.bytes),
-        ))
+            image.stride as usize,
+            image.bytes,
+        )
+        .map_err(|_| BackendError("Invalid source image"))?;
+        self.prepare_owned_asset(asset, &source)
     }
     fn prepare_owned_asset(
         &mut self,
@@ -738,19 +725,13 @@ impl CanvasRenderer for RenderWorker {
         asset: &layer_core::ProjectAsset,
     ) -> Result<(), Self::Error> {
         let [width, height] = asset.extent;
-        let stride = width * asset.format.channels();
         if asset.format == PixelFormat::R8Unorm {
             self.outlines.insert(
                 id.clone(),
-                layer_render::mask_outline(width, height, stride, &asset.bytes),
+                layer_render::mask_outline(width, height, width, &asset.bytes),
             );
         }
-        self.send(Command::Asset(
-            id.clone(),
-            [width, height, stride],
-            asset.format,
-            asset.bytes.clone(),
-        ))
+        self.send(Command::Asset(id.clone(), asset.clone()))
     }
     fn release_asset(&mut self, asset: &AssetId) {
         self.outlines.remove(asset);

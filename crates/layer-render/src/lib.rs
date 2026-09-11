@@ -357,6 +357,11 @@ pub trait CanvasRenderer {
             },
         )
     }
+    /// Immutable imported/bundled source bytes for portable document storage.
+    /// Clones shared storage; never reads generated canvas pixels back from GPU.
+    fn source_asset(&self, _asset: &AssetId) -> Option<layer_core::ProjectAsset> {
+        None
+    }
     fn release_asset(&mut self, asset: &AssetId);
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error>;
     /// Small asynchronous UI previews, never full-resolution paint readback.

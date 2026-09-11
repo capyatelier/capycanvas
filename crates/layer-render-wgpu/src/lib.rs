@@ -539,7 +539,7 @@ impl LayerPage {
 
 struct MaskAsset {
     id: AssetId,
-    source: Vec<u8>,
+    source: std::sync::Arc<[u8]>,
     extent: [u32; 3],
     outline: std::sync::OnceLock<layer_render::TipOutline>,
     _texture: wgpu::Texture,
@@ -634,6 +634,7 @@ pub struct WgpuRasterizer {
     last_time_seconds: f32,
     filter_source_epoch: u64,
     images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
+    image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
     composite_bind_group: Option<wgpu::BindGroup>,
@@ -936,6 +937,7 @@ impl WgpuRasterizer {
             composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
             images: Default::default(),
+            image_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
             composite_texture: None,
             composite_view: None,
@@ -1094,13 +1096,21 @@ impl WgpuRasterizer {
         stride: u32,
         pixels: &[u8],
     ) -> Result<(), GpuRasterError> {
-        if width == 0
-            || height == 0
-            || stride < width
-            || pixels.len() < stride as usize * height as usize
-        {
-            return Err(GpuRasterError::InvalidImage);
-        }
+        self.prepare_asset(
+            id,
+            HostImage {
+                width,
+                height,
+                stride,
+                format: PixelFormat::R8Unorm,
+                bytes: pixels,
+            },
+        )
+    }
+
+    // Called only after the common owned-source validation.
+    fn upload_mask_source(&mut self, id: &AssetId, source: &layer_core::ProjectAsset) {
+        let [width, height] = source.extent;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("layer R8 brush tip"),
             size: wgpu::Extent3d {
@@ -1122,10 +1132,10 @@ impl WgpuRasterizer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            pixels,
+            &source.bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(stride),
+                bytes_per_row: Some(width),
                 rows_per_image: Some(height),
             },
             wgpu::Extent3d {
@@ -1144,8 +1154,8 @@ impl WgpuRasterizer {
         );
         let asset = MaskAsset {
             id: id.clone(),
-            source: pixels.to_vec(),
-            extent: [width, height, stride],
+            source: source.bytes.clone(),
+            extent: [width, height, width],
             outline: std::sync::OnceLock::new(),
             _texture: texture,
             view,
@@ -1158,7 +1168,6 @@ impl WgpuRasterizer {
         }
         // These bind groups retain views of the prior asset generation.
         self.texture_sets.clear();
-        Ok(())
     }
 
     fn mask(&self, id: &AssetId) -> Result<&MaskAsset, GpuRasterError> {
@@ -3810,24 +3819,45 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
-        if image.format == PixelFormat::Rgba8Srgb {
-            let limit = self.device.limits().max_texture_dimension_2d;
-            if image.width == 0
-                || image.height == 0
-                || image.width > limit
-                || image.height > limit
-                || image.stride < image.width * 4
-                || image.bytes.len() < image.stride as usize * image.height as usize
-            {
-                return Err(GpuRasterError::InvalidImage);
-            }
+        let limit = self.device.limits().max_texture_dimension_2d;
+        if image.width > limit || image.height > limit {
+            return Err(GpuRasterError::InvalidImage);
+        }
+        let source = layer_core::ProjectAsset::copy_rows(
+            [image.width, image.height],
+            image.format,
+            image.stride as usize,
+            image.bytes,
+        )
+        .map_err(|_| GpuRasterError::InvalidImage)?;
+        self.prepare_owned_asset(asset, &source)
+    }
+
+    fn prepare_owned_asset(
+        &mut self,
+        asset: &AssetId,
+        source: &layer_core::ProjectAsset,
+    ) -> Result<(), Self::Error> {
+        let [width, height] = source.extent;
+        let limit = self.device.limits().max_texture_dimension_2d;
+        let stride = width.checked_mul(source.format.channels());
+        let size = stride.and_then(|row| (row as usize).checked_mul(height as usize));
+        if width == 0
+            || height == 0
+            || width > limit
+            || height > limit
+            || size != Some(source.bytes.len())
+        {
+            return Err(GpuRasterError::InvalidImage);
+        }
+        if source.format == PixelFormat::Rgba8Srgb {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 // Preserve encoded bytes; scene initialization performs the
                 // shared sRGB-to-linear conversion once on the GPU.
                 label: Some("immutable encoded sRGB image"),
                 size: wgpu::Extent3d {
-                    width: image.width,
-                    height: image.height,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -3839,31 +3869,40 @@ impl CanvasRenderer for WgpuRasterizer {
             });
             self.queue.write_texture(
                 texture.as_image_copy(),
-                image.bytes,
+                &source.bytes,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(image.stride),
-                    rows_per_image: Some(image.height),
+                    bytes_per_row: stride,
+                    rows_per_image: Some(height),
                 },
                 texture.size(),
             );
             self.images.insert(
                 asset.clone(),
-                (
-                    texture.create_view(&Default::default()),
-                    [image.width, image.height],
-                ),
+                (texture.create_view(&Default::default()), [width, height]),
             );
-            return Ok(());
+            self.image_sources.insert(asset.clone(), source.clone());
+        } else {
+            self.upload_mask_source(asset, source);
         }
-        if image.format != PixelFormat::R8Unorm {
-            return Err(GpuRasterError::InvalidImage);
+        Ok(())
+    }
+
+    fn source_asset(&self, asset: &AssetId) -> Option<layer_core::ProjectAsset> {
+        if let Some(source) = self.image_sources.get(asset) {
+            return Some(source.clone());
         }
-        self.upload_mask(asset, image.width, image.height, image.stride, image.bytes)
+        let mask = self.mask(asset).ok()?;
+        Some(layer_core::ProjectAsset {
+            extent: [mask.extent[0], mask.extent[1]],
+            format: layer_core::ProjectAssetFormat::R8Unorm,
+            bytes: mask.source.clone(),
+        })
     }
 
     fn release_asset(&mut self, asset: &AssetId) {
         self.images.remove(asset);
+        self.image_sources.remove(asset);
         self.masks.retain(|stored| stored.id != *asset);
         self.texture_sets.clear();
     }

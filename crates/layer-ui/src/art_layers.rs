@@ -304,24 +304,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err("Import an image up to 8192 × 8192 pixels".into());
         }
-        let bytes = if image.stride == image.width * 4 {
-            std::sync::Arc::from(&image.bytes[..image.stride as usize * image.height as usize])
-        } else {
-            image
-                .bytes
-                .chunks_exact(image.stride as usize)
-                .take(image.height as usize)
-                .flat_map(|row| row[..image.width as usize * 4].iter().copied())
-                .collect()
-        };
-        self.import_layer_asset(
-            name,
-            layer_core::ProjectAsset {
-                extent: [image.width, image.height],
-                format: image.format,
-                bytes,
-            },
-        )
+        let asset = layer_core::ProjectAsset::copy_rows(
+            [image.width, image.height],
+            image.format,
+            image.stride as usize,
+            image.bytes,
+        )?;
+        self.import_layer_asset(name, asset)
     }
 
     pub fn import_layer_asset(

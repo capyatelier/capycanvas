@@ -20,6 +20,17 @@ Known versioned built-in brush assets may be resolved from the app; custom
 textures and imported images must be embedded. Source pixels are retained for
 replay, not rendered on the CPU. Saving needs no canvas readback.
 
+`CanvasRenderer::source_asset` exposes shared immutable storage for uploaded
+images and masks. `Project::snapshot_with` requests only reachable dependencies;
+when the renderer supplies a built-in mask, its exact bytes are embedded too.
+The wgpu backend retains packed sRGB imports (four bytes per pixel) and shares
+its existing mask source storage. Row padding is excluded, and releasing an
+asset releases the renderer's source reference. Archive snapshots keep their own
+Arc references. Owned uploads share that same allocation through GTK's worker
+queue and the wgpu source cache, rather than retaining a second pixel copy.
+Borrowed host rows are packed once at import. Import/save memory peaks and storage scheduling still need
+hardware measurement; no full-resolution generated canvas copy is retained.
+
 ## Container and validation
 
 Version one is `CAPYPROJECT` followed by byte `1`, then a gzip stream containing
@@ -82,7 +93,8 @@ encoding; malformed lengths never trigger an upfront allocation of that size.
 Host integration must perform validation/compression/file I/O off the input
 thread, use an atomic replacement for saves, and retain the existing document
 until opening has passed GPU resource and shader validation. Cancellation or
-failure must not clear the unsaved state. Those file workflows remain to build.
+failure must not clear the unsaved state. GTK implements these policies above;
+the other hosts' native file workflows need their own integration and validation.
 
 ## Stateful brush replay
 
@@ -120,6 +132,15 @@ dialogs, cancellation, malformed files, Save As, PNG export, fresh-window GPU
 reopening and close-after-save. It uses the toolkit's file-chooser fallback on
 an isolated Wayland display; desktop portal-provider interaction is not automated.
 Shared tests cover failed/overlapping writes, undo checkpoints and edits during
-save. Browser/Android/Apple project UI is a separate platform-validation gate.
-The independent historical filter-reference discrepancy remains
-open as documented in [runtime-filters.md](runtime-filters.md).
+save.
+
+The GPU project workload also passes on Metal. The Apple bridge suite separately
+checks both iPad and Mac session configurations: import, textured painting,
+applied mask, transform, project round trip, exact fresh-GPU pixels, then new
+painting and undo. Source access shares immutable storage. The fixture uses
+real editor actions, with no OS-menu automation.
+
+Apple file dialogs, save cancellation, unsaved-work behavior and physical
+iPad project UI/replay are not covered by those codec tests. Browser and Android
+project workflows also remain. The independent historical filter-reference
+discrepancy remains open as documented in [runtime-filters.md](runtime-filters.md).

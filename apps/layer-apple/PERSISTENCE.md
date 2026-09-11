@@ -2,8 +2,9 @@
 
 Settings and workspace persistence use the existing versioned Rust models and
 restore actions. Both native apps share storage and owner coordination.
-Editable document archives, artwork recovery and file menus are still required;
-this implementation does **not** save document pixels or stroke history.
+The shared editable `Project` codec and fresh Metal replay checks now exist.
+File menus and artwork recovery are still required; the running apps do **not**
+yet save artwork. See [the shared format](../../docs/project-format.md).
 
 ## Ownership and files
 
