@@ -4,6 +4,10 @@ Native UIKit/iPadOS and AppKit/macOS targets share Swift editor components and
 the Rust Metal bridge. The bridge uses `crates/layer-host`, also used by Android;
 the document, engine, UI policy, catalog and rendering remain in shared Rust.
 The full-window Metal layer stays behind editor controls and the header.
+Both platforms are required at every milestone, with separate functional,
+visual and hardware performance evidence. Shared changes must build on both.
+See [the Apple goal and acceptance tracker](../../docs/apple-acceptance.md)
+for the shared-code boundaries, milestone matrix and remaining work.
 
 ## Build
 
@@ -59,8 +63,13 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
 
 Choose a fresh result-bundle path for subsequent runs. The test waits for a
 successful Metal viewport submission, checks Zen-button dimensions, and retains
-a landscape screenshot. It does not measure drawable presentation or prove full
-visual/functional parity. Physical Pencil and performance acceptance are separate.
+a full-screen landscape screenshot with full-window canvas geometry checks.
+It does not measure drawable presentation or prove full visual/functional parity.
+Physical input and hardware performance acceptance are required on each platform.
+The macOS launch-test counterpart remains to be implemented.
+
+Use [the shared visual tools](../../tools/visual/README.md) for matching local
+Chrome captures and complete image differences for either native target.
 
 ## Implementation status
 
@@ -73,8 +82,7 @@ Still required: complete panel/drawer/menu/dialog behavior and customization,
 filters/properties and other specialized controls, complete settings/shortcut
 UI, document and preference/workspace persistence, Pencil estimated-property
 corrections, complete hover/sensor/shortcut routing, platform lifecycle coverage,
-full pixel-difference validation, and measured M4 iPad performance acceptance.
-The Mac target currently provides presentation and shared UI; its native input
-and platform services remain future work.
-
-Keep the complete acceptance scope in [the iPad acceptance tracker](../../docs/ipados-acceptance.md).
+full pixel-difference validation, and measured iPad and Mac hardware performance.
+The Mac target currently provides presentation and shared UI; native input,
+platform services and launch validation are required to bring its evidence up
+to the expanded milestone scope. Both platforms then advance together.

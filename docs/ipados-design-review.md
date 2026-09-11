@@ -1,5 +1,12 @@
 # iPadOS design review
 
+**Scope amendment:** the implementation now requires native **iPadOS and macOS
+at every milestone**, sharing the Rust behavior/rendering, Apple bridge and
+Swift editor components. [The Apple goal and acceptance tracker](apple-acceptance.md)
+is the current objective and evidence matrix. The review below records the
+original source analysis; its iPad-first development sequence and tool/device
+availability observations are historical, not the current acceptance scope.
+
 Reviewed September 10, 2026 against commit `e5669eb`. This is a source/design
 review and proposed development sequence. No iPad app, device build, or physical
 latency measurement was produced during this review. Android measurements below
@@ -30,6 +37,7 @@ crates/
   layer-render/               # Renderer contract
   layer-render-wgpu/          # Shared pixel engine, all GPU backends
   layer-ui/                   # Actions, layout, catalog and semantic state
+  layer-host/                 # Native session facade shared with Android
   layer-ffi/                  # Platform-neutral C canvas ABI
 apps/
   layer-apple/
@@ -75,7 +83,7 @@ through every shared view.
 
 The iOS directory names the SDK/API family and initially contains the iPadOS app;
 the macOS target is a native AppKit host. Shared code and tests can be exercised
-by both targets when each exists. Generated static libraries, XCFrameworks,
+by both targets at every milestone. Generated static libraries, XCFrameworks,
 derived build data, generated binding output and signing files stay outside
 tracked source. Package products go under ignored `dist/` and Rust products
 under `target/`.

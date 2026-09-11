@@ -16,7 +16,10 @@ final class EditorLaunchTests: XCTestCase {
         XCTAssertTrue(zen.exists)
         XCTAssertEqual(zen.frame.width, 36, accuracy: 1)
         XCTAssertEqual(zen.frame.height, 36, accuracy: 1)
-        let shot = XCTAttachment(screenshot: app.screenshot())
+        XCTAssertGreaterThan(app.frame.width, app.frame.height, "Landscape capture must use a settled landscape window")
+        XCTAssertEqual(canvas.frame.width, app.frame.width, accuracy: 1)
+        XCTAssertEqual(canvas.frame.height, app.frame.height, accuracy: 1)
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         shot.name = "ipad-editor-initial"
         shot.lifetime = .keepAlways
         add(shot)
