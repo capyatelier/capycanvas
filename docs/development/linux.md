@@ -2,8 +2,12 @@
 
 [Developer guide](README.md) · [Platform integration](../platforms/README.md)
 
-The Linux client uses GTK4/libadwaita for controls and the shared wgpu renderer
-through Vulkan. It currently runs on Wayland only.
+Linux with Wayland is the primary development target and receives new editor
+features first. The client uses GTK4/libadwaita for controls and the shared wgpu
+renderer through Vulkan. Coding agents use this implementation as the basis for
+the web UI, then adapt that reference to the other native toolkits. The
+[platform workflow](../platforms/README.md#development-workflow) explains how the
+ports are compared.
 
 ## Prerequisites
 
@@ -38,7 +42,8 @@ Use the release profile when judging responsiveness. The executable is normally
 
 [`main.rs`](../../apps/layer-linux/src/main.rs) creates the native application and
 workspace. [`canvas.rs`](../../apps/layer-linux/src/canvas.rs) adapts the shared
-session and prepares updates on an independent 120 Hz timer. A dedicated
+session and prepares updates on an independent timer aligned to Wayland
+presentation timing, with a 120 Hz fallback. A dedicated
 [render worker](../../apps/layer-linux/src/render_thread.rs) owns canvas GPU work
 and presents into an app-owned [Wayland subsurface](../../apps/layer-linux/src/wayland.rs)
 beneath the GTK controls. The timer target alone does not establish display latency.

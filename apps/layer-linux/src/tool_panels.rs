@@ -440,6 +440,7 @@ impl ColorWheel {
 
 pub struct ColorPanel {
     pub root: gtk::Box,
+    initialized: Cell<bool>,
     wheel: ColorWheel,
     swatches: Vec<(ColorSlot, gtk::Button, gtk::DrawingArea)>,
     components: [NumberControl; 3],
@@ -565,6 +566,7 @@ impl ColorPanel {
         Self {
             root,
             wheel,
+            initialized: Cell::new(false),
             swatches,
             components,
             labels,
@@ -661,11 +663,12 @@ impl ColorPanel {
         self.wheel.add_controller(drag);
     }
     pub fn refresh(&self, state: &ColorState) {
-        if *self.wheel.imp().color.borrow() != *state {
-            *self.wheel.imp().color.borrow_mut() = state.clone();
-            self.wheel.queue_draw();
-            self.mode.queue_draw();
+        if self.initialized.replace(true) && *self.wheel.imp().color.borrow() == *state {
+            return;
         }
+        *self.wheel.imp().color.borrow_mut() = state.clone();
+        self.wheel.queue_draw();
+        self.mode.queue_draw();
         for (slot, button, sample) in &self.swatches {
             if *slot == state.slot {
                 button.add_css_class("selected-tool");

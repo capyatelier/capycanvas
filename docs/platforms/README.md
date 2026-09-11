@@ -7,6 +7,23 @@ services around the shared editor. Every client uses the same document, brush
 and canvas-rendering implementation. Sharing that code does not eliminate native
 integration work or guarantee that every frontend exposes the same features yet.
 
+## Development workflow
+
+New editor features are developed first on Linux with Wayland. Coding agents
+adapt the GTK interface to DOM controls in the web client, using the shared Rust
+core compiled to WebAssembly. Further agents use the web implementation as a
+reference when adapting the interface to Android, Apple and Windows toolkits.
+Native clients compile the shared core for their own targets; they do not run the
+WebAssembly build or embed the browser interface.
+
+The web client provides a reference on each target platform through a browser
+with hardware WebGPU. Compare it with GTK on Linux, then compare each native
+client with that reference. Use the same document, workspace state, theme and
+viewport dimensions for screenshots,
+and repeat the same commands and interactions to check behavior. This supports
+detailed UI parity checks at each porting step. Pen input, window lifecycle and
+other OS integration still need tests on the actual host.
+
 ## Clients
 
 | Client | UI and canvas integration | Setup |

@@ -766,3 +766,10 @@ Its shared layout change enables the full preset for Apple platforms and leaves
 the Windows preset unchanged. The affected 245 UI/Windows unit checks, rebuilt
 native app and complete Navigator fixture pass after that merge; the additional
 owned review exits with code zero.
+
+The final publication also integrates the documentation update 77661f0 and
+GTK/watercolor milestone a70abfb. Its new selected-watercolor mixing test and
+existing unselected-wet-paint preservation regression both pass on hardware
+D3D12. The rebuilt native app again passes the complete Navigator fixture and
+exits cleanly. These targeted checks cover the incoming shader change without
+repeating unrelated rendering benchmarks.
