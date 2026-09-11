@@ -41,6 +41,19 @@ pub(crate) struct WorkspaceHistory {
     gesture: Option<WorkspaceState>,
 }
 impl WorkspaceHistory {
+    fn retain_measurements(target: &mut WorkspaceState, source: &WorkspaceState) {
+        target
+            .layout
+            .measurements
+            .clone_from(&source.layout.measurements);
+        target
+            .layout
+            .column_scroll
+            .clone_from(&source.layout.column_scroll);
+    }
+    pub fn gesture_start(&self) -> Option<&WorkspaceState> {
+        self.gesture.as_ref()
+    }
     pub fn can_undo(&self) -> bool {
         self.gesture.is_none() && !self.undo.is_empty()
     }
@@ -48,10 +61,7 @@ impl WorkspaceHistory {
         self.gesture.is_none() && !self.redo.is_empty()
     }
     pub fn record(&mut self, mut before: WorkspaceState, after: &WorkspaceState) {
-        before
-            .layout
-            .measurements
-            .clone_from(&after.layout.measurements);
+        Self::retain_measurements(&mut before, after);
         if before != *after {
             self.undo.push(before);
             self.redo.clear();
@@ -80,28 +90,19 @@ impl WorkspaceHistory {
     }
     pub fn cancel(&mut self, state: &mut WorkspaceState) {
         if let Some(mut before) = self.gesture.take() {
-            before
-                .layout
-                .measurements
-                .clone_from(&state.layout.measurements);
+            Self::retain_measurements(&mut before, state);
             *state = before;
         }
     }
     pub fn undo(&mut self, state: &mut WorkspaceState) {
         if let Some(mut before) = self.undo.pop() {
-            before
-                .layout
-                .measurements
-                .clone_from(&state.layout.measurements);
+            Self::retain_measurements(&mut before, state);
             self.redo.push(std::mem::replace(state, before));
         }
     }
     pub fn redo(&mut self, state: &mut WorkspaceState) {
         if let Some(mut after) = self.redo.pop() {
-            after
-                .layout
-                .measurements
-                .clone_from(&state.layout.measurements);
+            Self::retain_measurements(&mut after, state);
             self.undo.push(std::mem::replace(state, after));
         }
     }

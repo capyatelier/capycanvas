@@ -1310,8 +1310,50 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   undo/redo, insertion, pruning, sibling widths and small-view overflow. The
   complete shared UI suite passes 196 tests, with strict UI Clippy and
   workspace/Wasm compilation. These are core tests, not native UI validation.
-- Remaining for columns: shared action/gesture integration (context menu,
-  resize-to-collapse and header double-click), whole-column movement and
-  eligible drop targets, persistent tabbed content drawers, GTK rendering,
-  scrolling/animation and native validation. No feature-completion claim or GTK
-  review request is made at this foundation milestone.
+- This was a layout-only milestone. GTK integration follows below; the complete
+  workspace still requires its final validation and human approval.
+
+### Collapsed-column GTK interaction milestone
+
+- GTK now renders one-tile-wide collapsed strips, grouped panel icons, the
+  expand button and a bottom grip. Collapse from a group context menu, the
+  non-tab header double-click or a horizontal resize gesture. Resize collapse
+  latches until release and remembers the pre-gesture width; cancellation and
+  workspace undo restore the original layout. Standalone toolbar and floating
+  handle behavior is unchanged. New presentation remains GTK-first.
+- A grip moves the entire collapsed subtree through the ordinary dock tree.
+  Shared target validation permits side edges and positions beside columns,
+  never floats or tab merging of a whole column. Canvas release leaves the
+  column in place. Groups, tab choices, remembered widths and nested proportions
+  survive; source-width reclamation uses the existing recursive rules. Panel,
+  group and toolbar incoming drops use shared tab/gap/trailing insertion targets.
+- Column drawers reuse the tool drawer renderer and animation lifecycle, with
+  a tab header and the maximum declared width of their tabs. One drawer per
+  column can remain open independently. Outside canvas input does not dismiss
+  them; the originating icon closes its drawer even after a tab switch, and a
+  different group replaces it. Tool shortcuts remain available. An open drawer
+  pins revealed Total Zen controls, while explicitly entering Zen closes drawers.
+  Configure expands the ordinary column first and opens its existing configuration
+  view, instead of leaving an invisible expansion attached to a collapsed group.
+- Layer/filter preview producers serve dock, tool drawer and column drawer views
+  together; no separate GPU preview generator is added. Diagnostics in a closed
+  collapsed tab no longer enables telemetry. Native toolbar bodies reuse shared
+  tile layout and ordinary tile actions.
+- Native tests caught and fixed generic button padding shifting strip icons
+  nine pixels down, and fresh GTK scroll adjustments clamping restored positions
+  to zero. Native scroll offsets feed shared icon/drop geometry and survive
+  widget rebuilds. Transient measurements do not create workspace undo entries.
+- Validation: 205 shared UI tests; native GTK collapsed columns, existing tool
+  drawers, panel expansion, Zen and stacked-divider tests on the private Wayland
+  display, with GTK critical warnings treated as failures. The column test checks
+  dark/light pixel bounds, persistent drawers, tab switching, real grip routing,
+  column movement and a 31-tab overflowing strip before/after membership changes.
+  Dark/light captures were inspected under ignored
+  `artifacts/familiar-workspace/columns-*.png`. Workspace/Wasm compilation and
+  strict UI/GTK Clippy are checked separately. No new physical-device or frame-rate
+  claim is made by these UI tests.
+- Still required for columns: nested tool drawers opened from tiles inside a
+  collapsed toolbar drawer, final constrained-viewport and native incoming-drop/
+  resize interaction coverage, and the final presentation audit. This is not the
+  full GTK approval milestone. Region refinements, complete menus/file workflows,
+  final default layout and full workspace validation remain outstanding.

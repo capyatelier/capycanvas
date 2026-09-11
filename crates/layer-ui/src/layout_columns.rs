@@ -35,6 +35,32 @@ pub struct CollapsedColumnPlacement {
     pub groups: Vec<CollapsedGroup>,
 }
 impl CollapsedColumnPlacement {
+    pub fn expand_label(&self) -> &'static str {
+        "Expand column"
+    }
+    pub fn expand_action(&self) -> crate::UiAction {
+        crate::UiAction::Customize {
+            action: crate::CustomizationAction::SetColumnCollapsed {
+                group: self.id,
+                collapsed: false,
+            },
+        }
+    }
+    pub(super) fn scroll(&mut self, offset: f32) {
+        let bottom = self
+            .groups
+            .last()
+            .map_or(self.content.y, |g| g.bounds.y + g.bounds.height);
+        let offset = offset.clamp(0., (bottom - self.content.y - self.content.height).max(0.));
+        for g in &mut self.groups {
+            g.bounds.y -= offset;
+            for i in &mut g.icons {
+                i.bounds.y -= offset;
+            }
+        }
+        self.empty.y = (bottom - offset + WORKSPACE_SPACING).min(self.grip.y);
+        self.empty.height = (self.grip.y - self.empty.y).max(0.);
+    }
     /// Vertical strips insert tabs vertically; inter-group gaps create groups.
     /// Expand/grip controls and clipped overflow are never accidental targets.
     pub fn drop_hint(&self, point: [f32; 2]) -> Option<DropHint> {
@@ -172,6 +198,209 @@ impl DockLayout {
             .find_map(|c| self.node(c.root)?.find(group).map(|_| c.root))
     }
 
+    /// A column moves intact through the same dock tree, never through a float
+    /// or a tab merge. Detach first so the existing width-reclamation rules also
+    /// apply to nested source columns.
+    pub(super) fn move_column(
+        &mut self,
+        viewport: [f32; 2],
+        column: u32,
+        target: DockTarget,
+    ) -> Result<(), String> {
+        if !self.is_collapsed(column) {
+            return Err("Only collapsed columns move as a unit".into());
+        }
+        let moving = self.node(column).ok_or("Unknown column")?.clone();
+        let before = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        match target {
+            DockTarget::Edge {
+                edge: Edge::Left | Edge::Right,
+                ..
+            } => {}
+            DockTarget::BesideBand { band }
+                if self
+                    .bands
+                    .iter()
+                    .any(|b| b.id == band && matches!(b.edge, Edge::Left | Edge::Right)) =>
+            {
+                if self
+                    .bands
+                    .iter()
+                    .any(|b| b.id == band && b.root.id() == column)
+                {
+                    return Ok(());
+                }
+            }
+            DockTarget::Split {
+                group,
+                edge: Edge::Left | Edge::Right,
+            } if matches!(self.group_edge(group), Some(Edge::Left | Edge::Right)) => {
+                if moving.find(group).is_some() {
+                    return Ok(());
+                }
+            }
+            _ => return Err("Columns dock at side edges or beside other columns".into()),
+        }
+        let panels: Vec<_> = self
+            .panels
+            .iter()
+            .filter_map(|p| moving.group_for(p.id).map(|_| p.id))
+            .collect();
+        let collapsed: Vec<_> = self
+            .collapsed
+            .iter()
+            .filter(|c| moving.find(c.root).is_some())
+            .cloned()
+            .collect();
+        let mut next = self.clone();
+        next.detach(&panels);
+        next.reclaim_removed_columns(self, &before);
+        match target {
+            DockTarget::Edge { .. } | DockTarget::BesideBand { .. } => {
+                let (edge, index) = match target {
+                    DockTarget::Edge { edge, outer } => {
+                        (edge, if outer { 0 } else { next.bands.len() })
+                    }
+                    DockTarget::BesideBand { band } => {
+                        let index = next
+                            .bands
+                            .iter()
+                            .position(|b| b.id == band)
+                            .ok_or("The target column no longer exists")?;
+                        (next.bands[index].edge, index + 1)
+                    }
+                    _ => unreachable!(),
+                };
+                let id = next.allocate()?;
+                next.bands.insert(
+                    index,
+                    DockBand {
+                        id,
+                        edge,
+                        extent: TILE_SIZE + WORKSPACE_SPACING,
+                        root: moving,
+                    },
+                );
+            }
+            DockTarget::Split { group, edge } => {
+                let after = next.workspace(
+                    viewport[0],
+                    viewport[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                );
+                let width = subtree_bounds(
+                    next.node(group)
+                        .ok_or("The target column no longer exists")?,
+                    &after,
+                )
+                .ok_or("The target column is not visible")?
+                .width;
+                let band = next
+                    .bands
+                    .iter_mut()
+                    .find(|b| b.root.find(group).is_some())
+                    .ok_or("The target column is not docked")?;
+                band.extent = column_width(
+                    &mut band.root,
+                    group,
+                    width + TILE_SIZE + WORKSPACE_SPACING,
+                    &after,
+                )
+                .ok_or("Invalid target column")?
+                    + WORKSPACE_SPACING;
+                let id = next.allocate()?;
+                let node = next.node_mut(group).unwrap();
+                let (first, second, fraction) = if edge == Edge::Left {
+                    (moving, node.clone(), TILE_SIZE / (width + TILE_SIZE))
+                } else {
+                    (node.clone(), moving, width / (width + TILE_SIZE))
+                };
+                *node = DockNode::Split {
+                    id,
+                    axis: Axis::Horizontal,
+                    fraction,
+                    first: Box::new(first),
+                    second: Box::new(second),
+                };
+            }
+            _ => unreachable!(),
+        }
+        next.collapsed.extend(collapsed);
+        if self.same_placement(&next) {
+            return Ok(());
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
+    pub(crate) fn column_drop_hint(
+        &self,
+        resolved: &ResolvedLayout,
+        source: u32,
+        point: [f32; 2],
+    ) -> Option<DropHint> {
+        let moving = self.node(source)?;
+        // Only the visible outside of a column is eligible, not its internal
+        // stacked groups. The closest boundary wins in gaps between columns.
+        let mut roots: Vec<_> = resolved.collapsed.iter().map(|c| c.id).collect();
+        roots.extend(
+            resolved
+                .groups
+                .iter()
+                .filter(|g| !g.floating)
+                .filter_map(|g| {
+                    self.column_for_group(g.id).or_else(|| {
+                        matches!(self.group_edge(g.id), Some(Edge::Left | Edge::Right))
+                            .then_some(g.id)
+                    })
+                }),
+        );
+        roots.sort_unstable();
+        roots.dedup();
+        let mut nearest = None;
+        let mut distance = f32::INFINITY;
+        for root in roots {
+            if moving.find(root).is_some() {
+                continue;
+            }
+            let b = subtree_bounds(self.node(root)?, resolved)?;
+            if point[1] < b.y || point[1] > b.y + b.height {
+                continue;
+            }
+            for (edge, x) in [(Edge::Left, b.x), (Edge::Right, b.x + b.width)] {
+                let d = (point[0] - x).abs();
+                if d <= WORKSPACE_PROXIMITY && d < distance {
+                    distance = d;
+                    nearest = Some(DropHint {
+                        target: DockTarget::Split { group: root, edge },
+                        bounds: edge_line(b, edge),
+                    });
+                }
+            }
+        }
+        if nearest.is_some() {
+            return nearest;
+        }
+        resolved
+            .drop_hint(point[0], point[1], &[], true)
+            .filter(|h| {
+                matches!(
+                    h.target,
+                    DockTarget::Edge {
+                        edge: Edge::Left | Edge::Right,
+                        ..
+                    } | DockTarget::BesideBand { .. }
+                )
+            })
+    }
+
     /// `group` is any contained tab group when collapsing, or the strip's root
     /// when expanding. Only width outside the subtree changes; its internal
     /// split proportions remain the expanded layout's proportions.
@@ -184,7 +413,9 @@ impl DockLayout {
         if !viewport.into_iter().all(|v| v.is_finite() && v > 0.) {
             return Err("Invalid workspace size".into());
         }
-        let root = if self.is_collapsed(group) {
+        let root = if self.is_collapsed(group)
+            || matches!(self.node(group), Some(DockNode::Split { .. }))
+        {
             group
         } else {
             self.column_for_group(group)
@@ -192,6 +423,13 @@ impl DockLayout {
         };
         if self.is_collapsed(root) == collapsed {
             return Ok(());
+        }
+        if !self
+            .bands
+            .iter()
+            .any(|b| matches!(b.edge, Edge::Left | Edge::Right) && b.root.find(root).is_some())
+        {
+            return Err("This group has no collapsible column".into());
         }
         let before = self.workspace(
             viewport[0],
@@ -219,6 +457,56 @@ impl DockLayout {
         band.extent =
             column_width(&mut band.root, root, width, &before).unwrap() + WORKSPACE_SPACING;
         Ok(())
+    }
+    pub(crate) fn column_width_before_resize(&self, root: u32, viewport: [f32; 2]) -> Option<f32> {
+        let geometry = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        subtree_bounds(self.node(root)?, &geometry).map(|b| b.width)
+    }
+    pub(crate) fn collapse_at_divider(
+        &self,
+        id: u32,
+        position: [f32; 2],
+        viewport: [f32; 2],
+    ) -> Option<u32> {
+        let geometry = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        let divider = geometry
+            .dividers
+            .iter()
+            .find(|d| d.id == id && d.axis == Axis::Horizontal)?;
+        let left = position[0] - divider.parent.x - WORKSPACE_SPACING * 0.5;
+        let right = divider.parent.x + divider.parent.width - position[0] - WORKSPACE_SPACING * 0.5;
+        let root = if divider.band {
+            if (if divider.reversed { right } else { left }) > TILE_SIZE {
+                return None;
+            }
+            self.bands.iter().find(|b| b.id == id)?.root.id()
+        } else {
+            let DockNode::Split { first, second, .. } = self.node(id)? else {
+                return None;
+            };
+            if left <= TILE_SIZE {
+                first.id()
+            } else if right <= TILE_SIZE {
+                second.id()
+            } else {
+                return None;
+            }
+        };
+        if matches!(self.node(root)?, DockNode::Tabs { panels, active, .. } if panels.len() == 1 && active.kind() == PanelKind::Tiles)
+        {
+            return None;
+        }
+        Some(root)
     }
 
     pub(super) fn validate_columns(&self) -> Result<(), String> {
@@ -422,6 +710,155 @@ mod tests {
     const VIEW: [f32; 2] = [1600., 1000.];
     fn geometry(layout: &DockLayout) -> ResolvedLayout {
         layout.workspace(VIEW[0], VIEW[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
+    }
+    #[test]
+    fn whole_column_moves_preserve_subtree_and_neighbor_widths() {
+        for target in [
+            DockTarget::Edge {
+                edge: Edge::Right,
+                outer: true,
+            },
+            DockTarget::BesideBand { band: 7 },
+            DockTarget::Split {
+                group: 8,
+                edge: Edge::Left,
+            },
+            DockTarget::Split {
+                group: 8,
+                edge: Edge::Right,
+            },
+        ] {
+            let mut layout = DockLayout::default();
+            layout.set_column_collapsed(5, true, VIEW).unwrap();
+            let moving = layout.node(4).unwrap().clone();
+            let column = layout.collapsed[0].clone();
+            let before = geometry(&layout);
+            layout
+                .move_item(VIEW, DockItem::Column { column: 4 }, target)
+                .unwrap();
+            assert_eq!(layout.node(4), Some(&moving));
+            assert_eq!(layout.collapsed, [column]);
+            assert_eq!(layout.group_edge(5), Some(Edge::Right));
+            assert!(layout.floating.is_empty());
+            let after = geometry(&layout);
+            assert_eq!(after.collapsed[0].bounds.width, TILE_SIZE);
+            assert!(
+                (subtree_bounds(layout.node(8).unwrap(), &after)
+                    .unwrap()
+                    .width
+                    - subtree_bounds(layout.node(8).unwrap(), &before)
+                        .unwrap()
+                        .width)
+                    .abs()
+                    < 0.5
+            );
+            layout.validate().unwrap();
+            let saved = serde_json::to_string(&layout).unwrap();
+            let restored: DockLayout = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored, layout);
+        }
+    }
+    #[test]
+    fn column_moves_reject_float_merge_and_preserve_same_slot() {
+        let mut layout = DockLayout::default();
+        layout.set_column_collapsed(5, true, VIEW).unwrap();
+        let before = layout.clone();
+        for target in [
+            DockTarget::Float {
+                position: [600., 400.],
+            },
+            DockTarget::Tab {
+                group: 8,
+                index: None,
+            },
+            DockTarget::Edge {
+                edge: Edge::Top,
+                outer: true,
+            },
+            DockTarget::Split {
+                group: 8,
+                edge: Edge::Bottom,
+            },
+        ] {
+            assert!(
+                layout
+                    .move_item(VIEW, DockItem::Column { column: 4 }, target)
+                    .is_err()
+            );
+            assert_eq!(layout, before);
+        }
+        layout
+            .move_item(
+                VIEW,
+                DockItem::Column { column: 4 },
+                DockTarget::Edge {
+                    edge: Edge::Left,
+                    outer: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(layout, before);
+        let resolved = geometry(&layout);
+        assert!(
+            layout
+                .column_drop_hint(&resolved, 4, [800., 500.])
+                .is_none()
+        );
+        let right = subtree_bounds(layout.node(8).unwrap(), &resolved).unwrap();
+        let hint = layout
+            .column_drop_hint(&resolved, 4, [right.x - 2., right.y + 180.])
+            .unwrap();
+        assert_eq!(
+            hint.target,
+            DockTarget::Split {
+                group: 8,
+                edge: Edge::Left
+            }
+        );
+        layout
+            .move_item(VIEW, DockItem::Column { column: 4 }, hint.target)
+            .unwrap();
+    }
+    #[test]
+    fn moving_nested_column_reclaims_only_its_source_width() {
+        let mut layout = DockLayout::default();
+        layout
+            .move_panel(
+                VIEW,
+                Panel::Properties,
+                DockTarget::Split {
+                    group: 5,
+                    edge: Edge::Right,
+                },
+            )
+            .unwrap();
+        let id = layout.panel_group(Panel::Properties).unwrap();
+        layout.set_column_collapsed(id, true, VIEW).unwrap();
+        let before = geometry(&layout);
+        layout
+            .move_item(
+                VIEW,
+                DockItem::Column { column: id },
+                DockTarget::Edge {
+                    edge: Edge::Right,
+                    outer: true,
+                },
+            )
+            .unwrap();
+        let after = geometry(&layout);
+        let width = |r: &ResolvedLayout, group| {
+            r.groups
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .bounds
+                .width
+        };
+        assert!((width(&before, 5) - width(&after, 5)).abs() < 0.5);
+        assert!((width(&before, 6) - width(&after, 6) - TILE_SIZE - WORKSPACE_SPACING).abs() < 0.5);
+        assert!(layout.is_collapsed(id));
+        layout.set_column_collapsed(id, false, VIEW).unwrap();
+        layout.validate().unwrap();
     }
     #[test]
     fn collapse_preserves_groups_and_restores_exact_widths() {

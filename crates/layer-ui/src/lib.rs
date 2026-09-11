@@ -24,7 +24,10 @@ mod cursor;
 mod customization;
 mod drawers;
 mod zen;
-pub use drawers::{ContentDrawer, DrawerConnection, DrawerDismissal, DrawerPlacement, TileAnchor};
+pub use drawers::{
+    ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal, DrawerPlacement, DrawerTabs,
+    TileAnchor,
+};
 pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
 mod layout;
@@ -61,7 +64,8 @@ pub use layout::{
 };
 pub use layout::{
     DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,
-    TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_tile_layout,
+    TOOL_PANEL_MIN_WIDTH, TabHit, TileLayout, tile_layout, toolbar_content_height,
+    toolbar_tile_layout,
 };
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
@@ -667,6 +671,10 @@ pub enum UiAction {
     MeasurePanels {
         measurements: Vec<PanelMeasurement>,
     },
+    MeasureColumnScroll {
+        column: u32,
+        offset: f32,
+    },
     DragWorkspace {
         item: DockItem,
         phase: ContactPhase,
@@ -751,6 +759,11 @@ pub enum UiAction {
     },
     MoveGroup {
         group: u32,
+        target: DockTarget,
+        viewport: [f32; 2],
+    },
+    MoveColumn {
+        column: u32,
         target: DockTarget,
         viewport: [f32; 2],
     },

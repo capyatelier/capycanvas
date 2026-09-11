@@ -144,6 +144,22 @@ pub fn toolbar_tile_layout(
     }
 }
 
+/// Natural height for a padded toolbar body at a measured drawer/panel width.
+pub fn toolbar_content_height(width: f32, tiles: &[ToolbarTile], style: TileStyle) -> f32 {
+    toolbar_tile_layout(
+        width,
+        tiles.len().max(1) as f32 * (style.size()[1] + 2.) + 8.,
+        Axis::Vertical,
+        tiles,
+        false,
+        style,
+    )
+    .tiles
+    .iter()
+    .map(|b| b.y + b.height + 4.)
+    .fold(style.size()[1] + 8., f32::max)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TileLayout {
     pub tiles: Vec<Bounds>,
@@ -299,10 +315,12 @@ pub fn tile_layout(
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ResizeDrag {
     offset: [f32; 2],
+    pub collapsed: bool,
 }
 impl ResizeDrag {
     pub fn new(pointer: [f32; 2], divider: Bounds) -> Self {
         Self {
+            collapsed: false,
             offset: [
                 pointer[0] - divider.x - divider.width * 0.5,
                 pointer[1] - divider.y - divider.height * 0.5,
@@ -645,6 +663,8 @@ pub struct DockLayout {
     /// Collapsing preserves the underlying dock tree and its expanded width.
     #[serde(default)]
     pub collapsed: Vec<CollapsedColumn>,
+    #[serde(skip)]
+    pub column_scroll: Vec<(u32, f32)>,
     /// Adding tabs opts a group into natural width; manual width resize opts out.
     #[serde(default)]
     pub fit_tab_groups: Vec<u32>,
@@ -717,11 +737,17 @@ pub enum DockTarget {
 pub enum DockItem {
     Panel { panel: Panel },
     Group { group: u32 },
+    Column { column: u32 },
     Tile { panel: Panel, tile: u32 },
 }
 impl DockItem {
     pub fn move_action(self, target: DockTarget, viewport: [f32; 2]) -> crate::UiAction {
         match self {
+            Self::Column { column } => crate::UiAction::MoveColumn {
+                column,
+                target,
+                viewport,
+            },
             Self::Panel { panel } => crate::UiAction::MovePanel {
                 panel,
                 target,
@@ -1118,6 +1144,7 @@ impl Default for DockLayout {
             panels: PanelConfig::defaults(),
             floating: Vec::new(),
             collapsed: Vec::new(),
+            column_scroll: Vec::new(),
             fit_tab_groups: Vec::new(),
             measurements: Vec::new(),
             next_tile_id: initial_tile_id(),
@@ -1598,6 +1625,7 @@ impl DockLayout {
         next.bands = defaults.bands;
         next.floating.clear();
         next.collapsed.clear();
+        next.column_scroll.clear();
         next.fit_tab_groups.clear();
         let tools: Vec<_> = self
             .panels
@@ -1726,6 +1754,9 @@ impl DockLayout {
         if let DockItem::Tile { panel, tile } = item {
             return self.move_tile(panel, tile, target);
         }
+        if let DockItem::Column { column } = item {
+            return self.move_column(viewport, column, target);
+        }
         if matches!(target, DockTarget::Tile { .. }) {
             return Err("Only tools can be dropped inside a toolbar".into());
         }
@@ -1763,7 +1794,7 @@ impl DockLayout {
                 };
                 (panels.clone(), *active, group, 0, panels.len())
             }
-            DockItem::Tile { .. } => unreachable!(),
+            DockItem::Tile { .. } | DockItem::Column { .. } => unreachable!(),
         };
         let whole = moving.len() == source_len;
         if let DockTarget::Tab { group, index } = target
@@ -3422,7 +3453,15 @@ fn resolve_node(
     result: &mut ResolvedLayout,
 ) {
     if layout.is_collapsed(node.id()) {
-        result.collapsed.push(columns::resolve_column(node, bounds));
+        let mut column = columns::resolve_column(node, bounds);
+        column.scroll(
+            layout
+                .column_scroll
+                .iter()
+                .find(|(id, _)| *id == node.id())
+                .map_or(0., |(_, v)| *v),
+        );
+        result.collapsed.push(column);
         return;
     }
     match node {

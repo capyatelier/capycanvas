@@ -382,6 +382,14 @@ pub enum CustomizationAction {
     ToggleToolDrawer {
         anchor: TileAnchor,
     },
+    SetColumnCollapsed {
+        group: u32,
+        collapsed: bool,
+    },
+    ToggleColumnDrawer {
+        group: u32,
+        panel: Panel,
+    },
     CloseExpanded,
     SetControlVisible {
         panel: Panel,
@@ -494,7 +502,11 @@ impl DockLayout {
                 let p = self.panel(panel)?;
                 (
                     p.menu_name(),
-                    vec![self.hide_tab_items(target)?, self.panel_actions(p)],
+                    vec![
+                        self.hide_tab_items(target)?,
+                        self.column_items(self.panel_group(panel), platform),
+                        self.panel_actions(p),
+                    ],
                 )
             }
             ContextTarget::Group { group } => (
@@ -502,6 +514,7 @@ impl DockLayout {
                 vec![
                     self.tab_style_items(group)?,
                     self.hide_tab_items(target)?,
+                    self.column_items(Some(group), platform),
                     if let [panel] = self.group_panels(group)?
                         && let p = self.panel(*panel)?
                         && panel.kind() == PanelKind::Content
@@ -569,6 +582,29 @@ impl DockLayout {
             ),
             self.hide_item(panel.id),
         ]
+    }
+    fn column_items(&self, group: Option<u32>, platform: Platform) -> Vec<ContextMenuItem> {
+        let Some(group) = group.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic))
+        else {
+            return Vec::new();
+        };
+        if self.column_for_group(group).is_none()
+            && self.collapsed_column_for_group(group).is_none()
+        {
+            return Vec::new();
+        }
+        let column = self.collapsed_column_for_group(group);
+        vec![ContextMenuItem::edit(
+            if column.is_some() {
+                "Expand column"
+            } else {
+                "Collapse column"
+            },
+            CustomizationAction::SetColumnCollapsed {
+                group: column.unwrap_or(group),
+                collapsed: column.is_none(),
+            },
+        )]
     }
     fn hide_item(&self, panel: Panel) -> ContextMenuItem {
         ContextMenuItem::edit(
@@ -1238,6 +1274,7 @@ impl ToolbarManager {
 pub struct CustomizationState {
     pub expanded: Option<Panel>,
     pub drawer: Option<ContentDrawer>,
+    pub column_drawers: Vec<ContentDrawer>,
     pub picker: Option<ToolPicker>,
     pub control: Option<PanelControl>,
     pub toolbar_prompt: Option<ToolbarPrompt>,
@@ -1245,10 +1282,10 @@ pub struct CustomizationState {
 }
 impl CustomizationState {
     pub fn has_drawer(&self) -> bool {
-        self.expanded.is_some() || self.drawer.is_some()
+        self.expanded.is_some() || self.drawer.is_some() || !self.column_drawers.is_empty()
     }
     pub fn is_open(&self) -> bool {
-        self.drawer.is_some() || self.blocks_shortcuts()
+        self.has_drawer() || self.blocks_shortcuts()
     }
     pub(crate) fn blocks_shortcuts(&self) -> bool {
         self.expanded.is_some()
@@ -1406,6 +1443,11 @@ impl CustomizationState {
             ShowAllControls { panel } => {
                 layout.panel(panel)?;
                 let group = layout.panel_group(panel).ok_or("Panel is not docked")?;
+                // Configuration extends an ordinary panel, not the compact
+                // column's content drawer. Reveal its normal source first.
+                if let Some(column) = layout.collapsed_column_for_group(group) {
+                    layout.set_column_collapsed(column, false, viewport)?;
+                }
                 layout.select_tab(group, panel)?;
                 self.picker = None;
                 self.control = None;
@@ -1430,11 +1472,46 @@ impl CustomizationState {
                 {
                     return Err("The originating tile is not visible".into());
                 }
-                let close = self.drawer.as_ref().is_some_and(|d| d.anchor == anchor);
-                *self = Self {
-                    drawer: (!close).then_some(drawer),
-                    ..Self::default()
+                let close = self
+                    .drawer
+                    .as_ref()
+                    .is_some_and(|d| d.anchor.tile() == Some(anchor));
+                self.expanded = None;
+                self.drawer = (!close).then_some(drawer);
+            }
+            SetColumnCollapsed { group, collapsed } => {
+                if !matches!(platform, Platform::Gtk | Platform::Generic) {
+                    return Err("Collapsed columns are not available on this platform yet".into());
+                }
+                layout.set_column_collapsed(group, collapsed, viewport)?;
+                self.expanded = None;
+                changed |= regions::LAYOUT;
+            }
+            ToggleColumnDrawer { group, panel } => {
+                if !matches!(platform, Platform::Gtk | Platform::Generic) {
+                    return Err("Collapsed columns are not available on this platform yet".into());
+                }
+                let mut next = ContentDrawer::for_column(layout, group, panel)?;
+                let DrawerAnchor::Column { column, .. } = next.anchor else {
+                    unreachable!()
                 };
+                let existing = self.column_drawers.iter().position(
+                    |d| matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column),
+                );
+                let previous = existing.map(|i| self.column_drawers.remove(i));
+                let close = previous.as_ref().is_some_and(|d| matches!(d.anchor, DrawerAnchor::Column { group: id, origin, .. } if id == group && origin == panel));
+                if !close {
+                    layout.select_tab(group, panel)?;
+                    if let Some(old) =
+                        previous.filter(|d| d.tabs.as_ref().is_some_and(|t| t.group == group))
+                    {
+                        next.anchor = old.anchor;
+                    }
+                    self.column_drawers.push(next);
+                }
+                self.expanded = None;
+                self.drawer = None;
+                changed |= regions::LAYOUT;
             }
             CloseExpanded => {
                 self.expanded = None;
@@ -2002,7 +2079,13 @@ mod tests {
                 panel: Panel::Brushes,
             })
             .unwrap();
-        assert_eq!(panel.sections[1][0].label, "Configure Tool Set panel…");
+        assert!(
+            panel
+                .sections
+                .iter()
+                .flatten()
+                .any(|i| i.label == "Configure Tool Set panel…")
+        );
         assert!(!panel.sections.iter().flatten().any(|i| matches!(
             i.action,
             Some(UiAction::Customize {
