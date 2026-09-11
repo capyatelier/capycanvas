@@ -209,6 +209,152 @@ fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
     }
 }
 
+fn scalar_srgb_decode(v: f64) -> f64 {
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn scalar_srgb_encode(v: f64) -> f64 {
+    if v <= 0.0031308 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1. / 2.4) - 0.055
+    }
+}
+
+fn scalar_stored_srgb_byte(linear: f64) -> u8 {
+    let stored = (linear.clamp(0., 1.) * 255.).round() / 255.;
+    (scalar_srgb_encode(stored) * 255.).round() as u8
+}
+
+/// Opaque pointwise cases isolate filter math and eight-bit storage from
+/// spatial sampling, masks and partial-alpha composition in the full fixture.
+#[test]
+fn pointwise_tone_filters_match_scalar_color_oracles() {
+    fn lookup(data: &[[f32; 4]], offset: usize, v: f64) -> f64 {
+        let x = v.clamp(0., 1.) * 255.;
+        let i = x.floor() as usize;
+        f64::from(data[1 + offset + i][0]) * (1. - x.fract())
+            + f64::from(data[1 + offset + (i + 1).min(255)][0]) * x.fract()
+    }
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let extent = [256, 1];
+    let asset = AssetId("test:pointwise-tone-ramp".into());
+    let bytes: Vec<u8> = (0..=255u8)
+        .flat_map(|v| [v, 255 - v, v.wrapping_mul(137), 255])
+        .collect();
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: 256,
+            height: 1,
+            stride: 1024,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &bytes,
+        },
+    )
+    .unwrap();
+    let mut base = Layer::paint(LayerId(1), "Tone ramp");
+    base.asset = Some(asset);
+    for id in ["curves", "exposure"] {
+        let effect = filter(fixtures().iter().find(|p| p.id() == id).unwrap());
+        let values = effect.effect.as_ref().unwrap().gpu_parameters();
+        submit(
+            &mut r,
+            extent,
+            &[effect, base.clone()],
+            0.,
+            true,
+            true,
+            None,
+        );
+        let actual = image(&mut r);
+        for (index, (source, pixel)) in bytes
+            .chunks_exact(4)
+            .zip(actual.chunks_exact(4))
+            .enumerate()
+        {
+            assert_eq!(pixel[3], 255);
+            for channel in 0..3 {
+                // This oracle starts from the encoded input and does not use
+                // the renderer output or WGSL implementation to make expected
+                // pixels. Rust's curve table is public application data; the
+                // scalar transfer functions/interpolation use f64 arithmetic.
+                let linear =
+                    (scalar_srgb_decode(f64::from(source[channel]) / 255.) * 255.).round() / 255.;
+                let adjusted = if id == "curves" {
+                    let channel_value =
+                        lookup(&values, 256 * (channel + 1), scalar_srgb_encode(linear));
+                    scalar_srgb_decode(lookup(&values, 0, channel_value))
+                } else {
+                    ((linear * 2_f64.powf(f64::from(values[1][0])) + f64::from(values[2][0]))
+                        .clamp(0., 1.))
+                    .powf(1. / f64::from(values[3][0]))
+                };
+                let expected = scalar_stored_srgb_byte(adjusted);
+                assert!(
+                    pixel[channel].abs_diff(expected) <= 1,
+                    "{id} pixel {index} channel {channel}: source={source:?}, actual={pixel:?}, expected={expected}, linear_byte={}",
+                    adjusted * 255.
+                );
+            }
+        }
+    }
+}
+
+/// Pure black/white force complete ink/paper coverage, so expected colors
+/// depend only on the declared color parameters and the storage contract.
+#[test]
+fn halftone_endpoints_match_scalar_color_oracles() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let extent = [32, 32];
+    let effect = filter(fixtures().iter().find(|p| p.id() == "halftone").unwrap());
+    let parameters = effect.effect.as_ref().unwrap().gpu_parameters();
+    for (source, parameter) in [(0, 4), (255, 5)] {
+        let asset = AssetId(format!("test:halftone-endpoint-{source}").into());
+        let bytes = [source, source, source, 255].repeat((extent[0] * extent[1]) as usize);
+        r.prepare_asset(
+            &asset,
+            HostImage {
+                width: extent[0],
+                height: extent[1],
+                stride: extent[0] * 4,
+                format: PixelFormat::Rgba8Srgb,
+                bytes: &bytes,
+            },
+        )
+        .unwrap();
+        let mut base = Layer::paint(LayerId(1), "Halftone endpoint");
+        base.asset = Some(asset);
+        submit(
+            &mut r,
+            extent,
+            &[effect.clone(), base],
+            0.,
+            true,
+            true,
+            None,
+        );
+        let expected: [u8; 3] = std::array::from_fn(|channel| {
+            scalar_stored_srgb_byte(scalar_srgb_decode(f64::from(
+                parameters[parameter][channel],
+            )))
+        });
+        for (index, pixel) in image(&mut r).chunks_exact(4).enumerate() {
+            assert_eq!(pixel[3], 255);
+            for channel in 0..3 {
+                assert!(
+                    pixel[channel].abs_diff(expected[channel]) <= 1,
+                    "Halftone source={source}, pixel {index}: actual={pixel:?}, expected={expected:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Pre-migration filter algorithms with the corrected import contract. See
 /// fixtures/README.md for independent provenance; never update from this test.
 #[test]

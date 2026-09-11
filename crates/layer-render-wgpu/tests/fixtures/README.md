@@ -50,5 +50,11 @@ The reference was generated and validated on Vulkan. This does not establish
 Metal/WebGPU pixel parity: rerun the same strict test on those backends. Do not
 relax its tolerance or hide transparent channels to make another backend pass.
 
+Subsequent strict runs fail on both Metal and Vulkan SwiftShader. Independent
+opaque Curves/Exposure and Halftone endpoint scalar checks pass on those two
+backends, while the complete sheet still disagrees with this reference. See the
+[cross-backend investigation](../../../../docs/runtime-filters.md) for scope,
+counts and reproduction. This PNG has not been replaced to match either result.
+
 All artwork and the triangular preparation example in this folder are authored
 for this project and use its MIT OR Apache-2.0 source-code licenses.
