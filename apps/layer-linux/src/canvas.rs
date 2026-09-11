@@ -84,14 +84,15 @@ impl GpuCanvas {
         #[cfg(test)]
         let start = std::time::Instant::now();
         let engine = self.session.engine();
+        let transform = engine.transform_preview().is_some();
         if engine
             .backend()
-            .startup_needs_update(engine.document(), engine.brush())
+            .startup_needs_update(engine.document(), engine.brush(), transform)
         {
             let (document, brush) = (engine.document().clone(), engine.brush().clone());
             self.session
                 .renderer_mut()
-                .prepare_startup(document, brush)?;
+                .prepare_startup(document, brush, transform)?;
         }
         let renderer = self.session.renderer_mut();
         if !renderer.ready()? {

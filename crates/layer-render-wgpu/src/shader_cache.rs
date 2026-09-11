@@ -394,7 +394,7 @@ mod tests {
                 &temp.0,
             )
             .unwrap();
-            renderer.prepare_startup(&doc, &brush).unwrap();
+            renderer.prepare_startup(&doc, &brush, false).unwrap();
             assert!(!renderer.poll_startup().unwrap().complete);
             renderer.finish_startup_cache();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);

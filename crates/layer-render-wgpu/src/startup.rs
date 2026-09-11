@@ -105,6 +105,7 @@ pub(super) struct Startup {
     masks: builtin_masks::Masks,
     revision: Option<layer_core::Revision>,
     brush: Option<BrushSnapshot>,
+    transform: bool,
     document: Requirements,
     current: Requirements,
     effects: Option<mpsc::Receiver<Result<effects::Effects, String>>>,
@@ -127,6 +128,7 @@ impl Startup {
             masks: builtin_masks::Masks::new(),
             revision: None,
             brush: None,
+            transform: false,
             document: Requirements::default(),
             current: Requirements::default(),
             effects: None,
@@ -189,18 +191,27 @@ impl WgpuRasterizer {
             });
         }
     }
-    pub fn startup_needs_update(&self, document: &Document, brush: &BrushSnapshot) -> bool {
+    pub fn startup_needs_update(
+        &self,
+        document: &Document,
+        brush: &BrushSnapshot,
+        transform: bool,
+    ) -> bool {
         self.startup.as_ref().is_some_and(|s| {
             !s.finished
-                && (s.revision != Some(document.revision) || s.brush.as_ref() != Some(brush))
+                && (s.revision != Some(document.revision)
+                    || s.brush.as_ref() != Some(brush)
+                    || s.transform != transform)
         })
     }
-    /// Called after the blank canvas has been submitted. The document and brush
-    /// dependencies enter the queue before any speculative compilation starts.
+    /// Called after the blank canvas has been submitted. Document, brush and
+    /// live-transform dependencies precede speculative compilation. Hosts pass
+    /// the engine's preview presence before draining an interactive frame.
     pub fn prepare_startup(
         &mut self,
         document: &Document,
         brush: &BrushSnapshot,
+        transform: bool,
     ) -> Result<(), GpuRasterError> {
         let Some(mut startup) = self.startup.take() else {
             return Ok(());
@@ -300,9 +311,27 @@ impl WgpuRasterizer {
             startup.masks.style(&startup.compiler, &style, BRUSH);
             current.style(self, &style, document.active_mask, true);
         }
+        // Live transforms do not change document revision or brush settings.
+        // They still need their own shaders before an interactive frame runs.
+        if transform {
+            current.render.extend(
+                self.transforms
+                    .as_ref()
+                    .unwrap()
+                    .pipelines()
+                    .into_iter()
+                    .cloned(),
+            );
+            current.compute.extend([
+                self.selection_clip.crossings.clone(),
+                self.selection_clip.fill.clone(),
+                self.selection_clip.resample.clone(),
+            ]);
+        }
         current.enqueue(&startup.compiler, BRUSH);
         startup.current = current;
         startup.brush = Some(brush.clone());
+        startup.transform = transform;
         if !startup.others_queued {
             startup.masks.remaining(&startup.compiler);
             for p in self
@@ -386,6 +415,7 @@ impl WgpuRasterizer {
         let canvas_ready = startup.revision.is_some()
             && startup.effects_ready
             && startup.document.ready()
+            && (!startup.transform || startup.current.ready())
             && startup.masks.ready_through(DOCUMENT);
         #[cfg(target_arch = "wasm32")]
         let canvas_ready = canvas_ready && startup.compiler.ready_through(DOCUMENT);
@@ -463,6 +493,92 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod gpu_tests {
     use super::*;
+    #[test]
+    fn live_transform_promotes_dependencies_without_blocking_the_caller() {
+        let reference = WgpuRasterizer::new_headless().unwrap();
+        let mut renderer = WgpuRasterizer::from_wgpu_staged(
+            reference.adapter.clone(),
+            reference.device().clone(),
+            reference.queue.clone(),
+        )
+        .unwrap();
+        let (release, wait) = mpsc::channel();
+        let (entered, blocked) = mpsc::channel();
+        renderer
+            .startup
+            .as_ref()
+            .unwrap()
+            .compiler
+            .enqueue(OTHER, move || {
+                entered.send(()).map_err(|e| e.to_string())?;
+                wait.recv_timeout(Duration::from_secs(20))
+                    .map_err(|e| e.to_string())
+            });
+        let doc = Document::new("Live transform readiness", 128, 128);
+        let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
+        renderer.prepare_startup(&doc, &brush, false).unwrap();
+        blocked.recv_timeout(Duration::from_secs(20)).unwrap();
+        assert!(renderer.poll_startup().unwrap().brush_ready);
+        assert!(!renderer.startup_needs_update(&doc, &brush, false));
+        assert!(renderer.startup_needs_update(&doc, &brush, true));
+        let start = std::time::Instant::now();
+        renderer.prepare_startup(&doc, &brush, true).unwrap();
+        let progress = renderer.poll_startup().unwrap();
+        assert!(!progress.canvas_ready && !progress.brush_ready);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "Never join the compiler on the input/render thread"
+        );
+        assert!(
+            renderer
+                .transforms
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .iter()
+                .all(|p| !p.ready())
+        );
+        let pending = renderer.startup.as_ref().unwrap().compiler.pending();
+        renderer.prepare_startup(&doc, &brush, true).unwrap();
+        assert_eq!(
+            renderer.startup.as_ref().unwrap().compiler.pending(),
+            pending,
+            "Unchanged requirements must not enqueue duplicate preparation"
+        );
+        // Cancel while compilation is pending. The unchanged canvas can resume.
+        renderer.prepare_startup(&doc, &brush, false).unwrap();
+        assert!(renderer.poll_startup().unwrap().brush_ready);
+        renderer.prepare_startup(&doc, &brush, true).unwrap();
+        assert!(!renderer.poll_startup().unwrap().canvas_ready);
+        assert_eq!(
+            renderer.startup.as_ref().unwrap().compiler.pending(),
+            pending
+        );
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !renderer.poll_startup().unwrap().brush_ready {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            renderer
+                .transforms
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .iter()
+                .all(|p| p.ready())
+        );
+        assert!(renderer.selection_clip.crossings.ready());
+        assert!(renderer.selection_clip.fill.ready());
+        assert!(renderer.selection_clip.resample.ready());
+        while !renderer.poll_startup().unwrap().complete {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!renderer.startup_needs_update(&doc, &brush, false));
+        assert!(!renderer.startup_needs_update(&doc, &brush, true));
+    }
     #[test]
     fn loaded_filters_and_current_brush_render_before_unused_pipelines() {
         verify_document_startup(0);
@@ -570,7 +686,7 @@ mod gpu_tests {
             )
             .unwrap();
         }
-        renderer.prepare_startup(&doc, &brush).unwrap();
+        renderer.prepare_startup(&doc, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             let progress = renderer.poll_startup().unwrap();

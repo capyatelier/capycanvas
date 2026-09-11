@@ -371,6 +371,7 @@ impl WebApp {
                     !gpu.renderer.startup_needs_update(
                         self.session.engine().document(),
                         self.session.engine().brush(),
+                        self.session.engine().transform_preview().is_some(),
                     )
                 })
     }
@@ -521,9 +522,10 @@ impl WebApp {
         if !gpu.blank_presented {
             return Ok(());
         }
+        let transform = engine.transform_preview().is_some();
         if gpu
             .renderer
-            .startup_needs_update(engine.document(), engine.brush())
+            .startup_needs_update(engine.document(), engine.brush(), transform)
         {
             let (document, brush) = (engine.document().clone(), engine.brush().clone());
             self.session
@@ -532,7 +534,7 @@ impl WebApp {
                 .as_mut()
                 .unwrap()
                 .renderer
-                .prepare_startup(&document, &brush)
+                .prepare_startup(&document, &brush, transform)
                 .map_err(js)?;
         }
         Ok(())
