@@ -106,23 +106,27 @@ struct OverviewVertex {
     @location(2) @interpolate(flat) cd: vec4<f32>,
     @location(3) @interpolate(flat) outline: vec4<f32>,
     @location(4) @interpolate(flat) background_scale: vec4<f32>,
+    @location(5) @interpolate(flat) clip: vec4<f32>,
 };
 @vertex fn overview_vertex(@builtin(vertex_index) index: u32,
     @location(0) bounds: vec4<f32>, @location(1) ab: vec4<f32>, @location(2) cd: vec4<f32>,
-    @location(3) outline: vec4<f32>, @location(4) background_scale: vec4<f32>) -> OverviewVertex {
+    @location(3) outline: vec4<f32>, @location(4) background_scale: vec4<f32>,
+    @location(5) clip: vec4<f32>) -> OverviewVertex {
     let corners = array(vec2(0.,0.), vec2(1.,0.), vec2(0.,1.), vec2(0.,1.), vec2(1.,0.), vec2(1.,1.));
     let uv = corners[index];
     let point = bounds.xy + uv * bounds.zw;
-    return OverviewVertex(vec4(point / camera.viewport.xy * vec2(2.,-2.) + vec2(-1.,1.),0.,1.), uv, ab, cd, outline, background_scale);
+    return OverviewVertex(vec4(point / camera.viewport.xy * vec2(2.,-2.) + vec2(-1.,1.),0.,1.), uv, ab, cd, outline, background_scale, clip);
 }
 fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
     let d = b-a;
     return length(p-a-d*clamp(dot(p-a,d)/max(dot(d,d),.000001),0.,1.));
 }
 @fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {
-    let paint = sample_overview(canvas, canvas_sampler, v.uv, fwidth(v.uv));
-    var rgb = paint.rgb + v.background_scale.rgb * (1.-paint.a);
+    let footprint = fwidth(v.uv);
     let p = v.position.xy;
+    if any(p < v.clip.xy) || any(p >= v.clip.xy+v.clip.zw) { discard; }
+    let paint = sample_overview(canvas, canvas_sampler, v.uv, footprint);
+    var rgb = paint.rgb + v.background_scale.rgb * (1.-paint.a);
     let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
                    min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));
     let scale = v.background_scale.w;

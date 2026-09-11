@@ -9,6 +9,9 @@ use layer_render::{CursorSegment, ViewState};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverviewPlacement {
     pub bounds: [f32; 4],
+    /// Visible part of the image after native scrolling/overflow clipping.
+    /// None uses the complete image bounds without changing its UV mapping.
+    pub clip: Option<[f32; 4]>,
     pub work_area: [[f32; 2]; 4],
     pub outline_linear: [f32; 3],
     pub background_linear: [f32; 3],
@@ -17,19 +20,23 @@ pub struct OverviewPlacement {
 }
 
 impl OverviewPlacement {
-    fn packed(self) -> Option<[f32; 20]> {
+    fn packed(self) -> Option<[f32; 24]> {
         let [x, y, w, h] = self.bounds;
         let [[ax, ay], [bx, by], [cx, cy], [dx, dy]] = self.work_area;
         let [r, g, b] = self.outline_linear;
         let [br, bg, bb] = self.background_linear;
         let opacity = self.opacity.clamp(0., 1.);
+        let [clip_x, clip_y, clip_w, clip_h] = self.clip.unwrap_or(self.bounds);
         let data = [
             x, y, w, h, ax, ay, bx, by, cx, cy, dx, dy, r, g, b, opacity, br, bg, bb, self.scale,
+            clip_x, clip_y, clip_w, clip_h,
         ];
         (w > 0.
             && h > 0.
             && self.scale > 0.
             && self.opacity > 0.
+            && clip_w > 0.
+            && clip_h > 0.
             && data.iter().all(|v| v.is_finite()))
         .then_some(data)
     }
@@ -54,7 +61,7 @@ pub struct ViewportPresenter {
     format: wgpu::TextureFormat,
     overview_pipeline: Option<wgpu::RenderPipeline>,
     overview_buffer: Option<wgpu::Buffer>,
-    overviews: Vec<[f32; 20]>,
+    overviews: Vec<[f32; 24]>,
     overviews_changed: bool,
 }
 
@@ -231,9 +238,9 @@ impl ViewportPresenter {
                 entry_point: Some("overview_vertex"),
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: 80,
+                    array_stride: 96,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4],
                 })],
             },
             fragment: Some(wgpu::FragmentState {
@@ -498,6 +505,7 @@ mod tests {
     fn overview_records_reject_invalid_geometry() {
         let p = OverviewPlacement {
             bounds: [0., 0., 100., 75.],
+            clip: None,
             work_area: [[0.; 2]; 4],
             outline_linear: [0.; 3],
             background_linear: [0.; 3],
@@ -539,6 +547,7 @@ mod tests {
         assert!(presenter.overview_buffer.is_none());
         let mut p = OverviewPlacement {
             bounds: [0., 0., 100., 75.],
+            clip: None,
             work_area: [[0.; 2]; 4],
             outline_linear: [0.; 3],
             background_linear: [0.; 3],

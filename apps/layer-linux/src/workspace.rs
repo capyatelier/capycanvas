@@ -310,29 +310,65 @@ mod allocation {
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            for (slot, child) in self.children.borrow().iter() {
-                let expanded = child.has_css_class("expanded-panel");
-                if expanded {
-                    // One shadow around the complete stepped silhouette:
-                    // preview, tabs and drawer, with no shadow at their seam.
-                    snapshot.push_shadow(&[gtk::gsk::Shadow::new(
-                        gdk::RGBA::new(0.0, 0.0, 0.0, 0.4),
-                        0.0,
-                        8.0,
-                        24.0,
+            let owner = self.owner.borrow().upgrade();
+            let mut nodes = Vec::new();
+            let mut holes = Vec::new();
+            for (order, (slot, child)) in self.children.borrow().iter().enumerate() {
+                let native = gtk::Snapshot::new();
+                if child.has_css_class("expanded-panel") {
+                    native.push_shadow(&[gtk::gsk::Shadow::new(
+                        gdk::RGBA::new(0., 0., 0., 0.4),
+                        0.,
+                        8.,
+                        24.,
                     )]);
                 }
-                self.obj().snapshot_child(child, snapshot);
-                if expanded {
-                    snapshot.pop();
+                self.obj().snapshot_child(child, &native);
+                if child.has_css_class("expanded-panel") {
+                    native.pop();
+                }
+                let mut node = native.to_node();
+                if let Some(owner) = &owner {
+                    holes.extend(
+                        owner
+                            .navigator_overviews
+                            .project_child(self.obj().upcast_ref(), child, order, node.as_ref())
+                            .into_iter()
+                            .map(|hole| (order, hole)),
+                    );
                 }
                 if let Slot::DrawerConnection(id) = *slot
                     && child.is_mapped()
                     && !child.has_css_class("zen-hidden")
-                    && let Some(owner) = self.owner.borrow().upgrade()
+                    && let Some(owner) = &owner
                     && let Some(drawer) = owner.drawers().into_iter().find(|d| d.id == id)
                 {
-                    drawer.snapshot_origin(&owner, snapshot);
+                    let native = gtk::Snapshot::new();
+                    if let Some(node) = &node {
+                        native.append_node(node);
+                    }
+                    drawer.snapshot_origin(owner, &native);
+                    node = native.to_node();
+                }
+                nodes.push((*slot, node));
+            }
+            for (order, (slot, node)) in nodes.iter().enumerate() {
+                let Some(node) = node else {
+                    continue;
+                };
+                // The canvas already contains the GPU overviews. In explicit
+                // screenshots it is represented by a native texture: don't cut it.
+                if matches!(slot, Slot::Canvas) {
+                    snapshot.append_node(node);
+                } else {
+                    crate::navigator::Overviews::append_clipped(
+                        snapshot,
+                        node,
+                        holes
+                            .iter()
+                            .filter(|(above, _)| *above >= order)
+                            .map(|(_, r)| *r),
+                    );
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade()
@@ -721,7 +757,7 @@ pub struct Workspace {
     tool_settings: crate::tool_panels::ToolSettings,
     color_panel: crate::tool_panels::ColorPanel,
     navigator: crate::navigator::Navigator,
-    navigator_images: Rc<crate::navigator::Images>,
+    navigator_overviews: Rc<crate::navigator::Overviews>,
     pub(crate) layer_panel: crate::layers::LayerPanel,
     pub(crate) effects: Rc<crate::effects::EffectPanels>,
     tab: gtk::Label,
@@ -819,8 +855,8 @@ impl Workspace {
         let tool_set = crate::tool_panels::ToolSet::new();
         let tool_settings = crate::tool_panels::ToolSettings::new();
         let color_panel = crate::tool_panels::ColorPanel::new();
-        let navigator_images = Rc::new(crate::navigator::Images::default());
-        let navigator = crate::navigator::Navigator::new(&navigator_images);
+        let navigator_overviews = Rc::new(crate::navigator::Overviews::default());
+        let navigator = crate::navigator::Navigator::new(&navigator_overviews);
         let sizes = gtk::Box::new(gtk::Orientation::Vertical, 12);
         let layer_panel = crate::layers::LayerPanel::new();
         let effects = Rc::new(crate::effects::EffectPanels::new());
@@ -882,7 +918,7 @@ impl Workspace {
             tool_settings,
             color_panel,
             navigator,
-            navigator_images,
+            navigator_overviews,
             layer_panel,
             effects,
             tab,
@@ -912,7 +948,7 @@ impl Workspace {
         this.build_controls(&brushes, &sizes);
         this.color_panel.bind(&this);
         this.navigator.bind(&this);
-        this.navigator_images.bind(&this);
+        this.navigator_overviews.bind(&this);
         this.customization.bind(&this);
         this.preferences.bind(&this);
         this.install_chrome();
@@ -1588,7 +1624,13 @@ impl Workspace {
                         };
                         this.frame_deadline.set(next);
                         this.input.flush(&this);
-                        let result = this.gpu.borrow_mut().as_mut().map(|g| g.render(area, now));
+                        let result = this.gpu.borrow_mut().as_mut().map(|g| {
+                            let overviews = this
+                                .navigator_overviews
+                                .placements(g.session.state(), area.scale_factor() as f32);
+                            g.session.renderer_mut().overviews = overviews;
+                            g.render(area, now)
+                        });
                         match result {
                             Some(Ok(change)) => this.changed(Ok(change)),
                             Some(Err(error)) => {

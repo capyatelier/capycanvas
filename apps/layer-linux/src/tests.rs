@@ -3028,10 +3028,23 @@ fn native_navigator() {
     }
     pump(400);
     let original = w
-        .navigator_images
-        .texture()
-        .expect("live document overview");
-    assert_eq!([original.width(), original.height()], [256, 192]);
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .backend()
+        .stats
+        .lock()
+        .unwrap()
+        .overview_revisions
+        .clone();
+    assert!(
+        !original.is_empty(),
+        "live document overview must be presented by the worker"
+    );
+    assert_eq!(w.navigator_overviews.placements(&state(&w), 1.).len(), 1);
     let doc_revision = w
         .gpu
         .borrow()
@@ -3058,9 +3071,19 @@ fn native_navigator() {
     assert_eq!(state(&w).camera.flipped, [true, false]);
     assert!(button(CommandId::FlipHorizontal).has_css_class("selected-tool"));
     assert_eq!(
-        w.navigator_images.texture(),
-        Some(original.clone()),
-        "camera-only commands reuse the exact texture"
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .backend()
+            .stats
+            .lock()
+            .unwrap()
+            .overview_revisions,
+        original,
+        "camera-only commands reuse the exact document composition"
     );
     assert_eq!(
         w.gpu
@@ -3146,8 +3169,103 @@ fn native_navigator() {
             .unwrap()
             .is_mapped()
     );
-    assert_eq!(w.navigator_images.texture(), Some(original));
+    assert_eq!(
+        w.navigator_overviews.placements(&state(&w), 1.).len(),
+        2,
+        "drawer and dock share the live composition"
+    );
     capture_reference(&w, &format!("{dir}/navigator-drawer.png"), 1.0);
+    click(
+        &find_named(w.surface.upcast_ref(), &format!("tile-{tile}"))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap(),
+    );
+    pump(300);
+    assert_eq!(w.navigator_overviews.placements(&state(&w), 1.).len(), 1);
+    // CSS opacity is separate from Widget::opacity. The GPU image must disappear
+    // with the docked panel, then return without exporting any image pixels.
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
+    pump(300);
+    assert!(w.navigator_overviews.placements(&state(&w), 1.).is_empty());
+    capture_reference(&w, &format!("{dir}/navigator-zen.png"), 1.0);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ZenMode,
+    });
+    pump(300);
+    assert_eq!(w.navigator_overviews.placements(&state(&w), 1.).len(), 1);
+    w.dispatch(UiAction::SetTheme {
+        theme: Some(Theme::Dark),
+    });
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Navigator,
+        viewport,
+        target: DockTarget::Float {
+            position: [20., 180.],
+        },
+    });
+    pump(350);
+    let p = w.navigator_overviews.placements(&state(&w), 1.)[0];
+    let sample = [p.bounds[0] + 8., p.bounds[1] + 8.];
+    let brushes = w
+        .panel_widget(Panel::Brushes)
+        .compute_bounds(&w.surface)
+        .unwrap();
+    assert!(
+        brushes.contains_point(&gtk::graphene::Point::new(sample[0], sample[1])),
+        "floating image must overlap an actual native panel"
+    );
+    let texture = crate::snapshot(&w);
+    let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
+    texture.download(&mut pixels, texture.width() as usize * 4);
+    let offset = (sample[1] as usize * texture.width() as usize + sample[0] as usize) * 4;
+    assert!(
+        pixels[offset..offset + 3].iter().all(|v| *v > 240),
+        "the floating overview's white paper must cover the native panel below: {:?}",
+        &pixels[offset..offset + 4]
+    );
+    capture_reference(&w, &format!("{dir}/navigator-over-panel.png"), 1.0);
+    // Reversing the overlap must preserve native controls above the image.
+    w.dispatch(UiAction::MovePanel {
+        panel: Panel::Sizes,
+        viewport,
+        target: DockTarget::Float {
+            position: [20., 180.],
+        },
+    });
+    pump(350);
+    let texture = crate::snapshot(&w);
+    texture.download(&mut pixels, texture.width() as usize * 4);
+    assert!(
+        pixels[offset..offset + 3].iter().all(|v| *v < 160),
+        "a later native panel must cover the overview: {:?}",
+        &pixels[offset..offset + 4]
+    );
+    capture_reference(&w, &format!("{dir}/navigator-under-panel.png"), 1.0);
+    // No preview timer or GTK frame clock should keep an idle window rendering.
+    pump(500);
+    let frames = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .backend()
+            .stats
+            .lock()
+            .unwrap()
+            .overview_frames
+    };
+    let before_idle = frames();
+    pump(250);
+    assert_eq!(
+        frames(),
+        before_idle,
+        "idle Navigator must not schedule frames"
+    );
     assert!(!w.status.is_visible(), "{}", w.status.text());
     w.window.close();
     pump(80);
@@ -9522,7 +9640,7 @@ fn native_frame_pacing() {
             },
         });
         pump(300);
-        assert!(w.navigator_images.texture().is_some());
+        assert!(!w.navigator_overviews.placements(&state(&w), 1.).is_empty());
     }
     if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("0") {
         // Isolate live-thumbnail work without changing the saved dock geometry.
@@ -9716,7 +9834,6 @@ fn native_frame_pacing() {
         let navigator_visible = w.navigator.root.is_mapped()
             && w.navigator.root.opacity() > 0.
             && !w.header.has_css_class("zen-hidden");
-        let previews_before = w.navigator_images.updates();
         let clock = w.area.frame_clock().unwrap();
         let paint_start = Rc::new(Cell::new(None::<Instant>));
         let paint_cpu = Rc::new(RefCell::new(Vec::with_capacity(800)));
@@ -9826,7 +9943,7 @@ fn native_frame_pacing() {
         }
         clock.disconnect(before_paint);
         clock.disconnect(after_paint);
-        let preview_updates = w.navigator_images.updates() - previews_before;
+        let preview_updates = worker_stats.lock().unwrap().overview_revisions.len();
         if navigator_visible && preset.is_some() {
             assert!(
                 preview_updates >= 20,
@@ -9835,15 +9952,9 @@ fn native_frame_pacing() {
         }
         if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("0") {
             assert_eq!(w.navigator.root.opacity(), 0.);
-            assert!(!w.navigator_images.updating());
+            assert_eq!(worker_stats.lock().unwrap().overview_frames, 0);
         }
         if preset.is_some() || name == "Transform" {
-            if std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1") {
-                assert!(
-                    w.navigator_images.updating(),
-                    "live preview retains GTK timing"
-                );
-            }
             w.input.send(
                 &w,
                 PenEvent {
@@ -9889,10 +10000,6 @@ fn native_frame_pacing() {
                 );
             }
         }
-        assert!(
-            !w.navigator_images.updating(),
-            "idle preview releases GTK timing"
-        );
         let stats = worker_stats.lock().unwrap();
         assert!(
             stats.cpu.len() > 100,
@@ -9918,6 +10025,7 @@ fn native_frame_pacing() {
             "cursor": std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0"),
             "navigator": navigator_visible,
             "navigator_updates": preview_updates,
+            "navigator_frames": stats.overview_frames,
             "transform_mask": std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default(),
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,
@@ -9925,7 +10033,8 @@ fn native_frame_pacing() {
             "gtk_paint_cpu": *paint_cpu.borrow(),
             "main_dispatch_cpu": dispatch_cpu,
             "wake_lateness": stats.wake_lateness,
-            "worker_cpu": stats.cpu, "worker_gpu": stats.gpu, "canvas_presentation": stats.presented,
+            "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
+            "worker_gpu": stats.gpu, "canvas_presentation": stats.presented,
         });
         eprintln!(
             "{name}: {} canvas frames, {} GPU timings, {} presentation feedbacks",
@@ -10210,7 +10319,8 @@ fn native_compositor_input() {
     let stats = stats.lock().unwrap();
     let report = serde_json::json!({
         "events": &*events.borrow(), "input_cpu": stats.input_cpu, "input_handler_cpu": stats.input_handler_cpu,
-        "wake_lateness": stats.wake_lateness, "worker_cpu": stats.cpu, "worker_gpu": stats.gpu,
+        "wake_lateness": stats.wake_lateness, "worker_cpu": stats.cpu,
+        "worker_cpu_stages": stats.cpu_stages, "worker_gpu": stats.gpu,
         "frame_handler_cpu": stats.frame_handler_cpu,
         "canvas_presentation": stats.presented,
     });

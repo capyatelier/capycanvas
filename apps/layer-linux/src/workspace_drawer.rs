@@ -231,7 +231,7 @@ impl View {
                     }
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
                     Panel::Navigator => {
-                        let v = crate::navigator::Navigator::new(&w.navigator_images);
+                        let v = crate::navigator::Navigator::new(&w.navigator_overviews);
                         v.bind(w);
                         Body::Navigator(v)
                     }

@@ -1672,7 +1672,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   Apple-device validation. The temporary Vulkan tracing source and binary were
   removed; only test-only timing/preview assertions remain in the application.
 
-### GPU overview presentation foundation (GTK connection still pending)
+### GPU overview presentation foundation
 
 - Tested a bounded four-buffer GBM/DMA-buffer preview transport locally. Buffers
   were reused only after GDK's texture-release callback; steady mapped writes
@@ -1722,10 +1722,69 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   Strict renderer Clippy, workspace/all-targets and WebAssembly checks pass;
   the native GTK Navigator interaction/capture test passes. Existing non-Metal
   Apple build warnings remain; no new device validation on other hosts is claimed.
-- **Not connected to GTK yet.** The remaining integration is to leave a native
-  panel's image rectangle transparent while preserving controls, panel stacking,
-  scroll clipping, drawers and fades; send its placement with the existing frame
-  handoff; remove GTK's exported-image polling; and rerun full-window drawing/
-  panning tests with proof that the overview stays live. Renderer-only timing
-  does not close the 120Hz goal. Selection refinements, watercolor boundaries,
-  the historical filter-reference mismatch and final GTK approval remain open.
+- This foundation's renderer-only timing did not prove complete GTK delivery.
+  The following milestone connects it to the native workspace and measures that
+  integration. Selection refinements, watercolor boundaries, the historical
+  filter-reference mismatch and final GTK approval remain separate open work.
+
+### GTK in-surface Navigator integration
+
+- GTK now supplies native image geometry, clipping and opacity with the existing
+  canvas frame. The GPU worker prewarms the optional overview pipeline during
+  startup, then draws the image and camera outline from the current composition
+  in its existing presentation pass. Painting and camera changes no longer
+  redraw GTK's Navigator. The GTK exported-preview transport, polling timer and
+  preview-specific frame-clock lifecycle are removed; other hosts' exported
+  preview API is unchanged.
+- A rectangular clip preserves image coordinates when native ancestors scroll
+  or crop content. Each placement is now 96 bytes; the one-overview GPU buffer
+  remains 128 bytes. No image allocation, pixel upload/readback or additional
+  surface/submission is required. This does not mean all per-frame CPU metadata
+  is allocation-free: bounded placement records accompany existing frame data.
+- Native snapshots retain panels, controls and shadows, but leave transparent
+  rectangles for their GPU images. Image holes also cut native panels lower in
+  stacking order, so a floating Navigator can cover another panel; later native
+  panels still cover the image. The canvas itself is never cut. Native CSS fade
+  opacity is read from the snapshot rather than inferred from widget opacity,
+  which does not include CSS transitions. Hidden/unmapped views submit nothing.
+- GPU tests verify partial clipping against the uncropped image, including its
+  camera outline and both output transfer formats. Native regressions cover
+  camera-only composition reuse, docked and drawer overviews together, drawer
+  closing, Zen hiding/reopening, both overlapping panel orders, and stopping
+  presentation while idle. Rectangular subtraction has exact partition/no-
+  overdraw coverage. Review images stay in ignored
+  `artifacts/familiar-workspace/`; no machine-specific reports are committed.
+- Final full-default-workspace release runs on the same private 120Hz Wayland
+  compositor (six seconds of synthetic input each, real GPU painting and actual
+  canvas-surface presentation feedback; not physical stylus-to-display latency):
+
+  | Workload | Worker CPU median/p95/p99 ms | GPU median/p95/p99 ms | Presented Hz | Discarded |
+  | --- | --- | --- | ---: | ---: |
+  | G-Pen | .227 / .547 / .702 | .113 / .252 / .384 | 119.958 | 0 |
+  | Watercolor | 1.040 / 1.743 / 2.347 | 1.200 / 2.146 / 2.575 | 119.958 | 1 |
+  | Pan | .220 / .433 / .529 | .067 / .591 / 1.700 | 119.568 | 1 |
+
+- The live Navigator was drawn in all 723/722/720 canvas frames respectively.
+  Its input composition changed 721/720/1 times: panning correctly reused the
+  image. GTK painted only twice per drawing run and zero times during panning.
+  Main-context dispatch p99/max was .016/1.141ms, .061/1.657ms and .049/.103ms.
+  The previous 23–34ms GTK preview-allocation stalls did not recur.
+- Do not interpret these averages as a no-spike guarantee: that pan run had one
+  33.10ms worker outlier and a 30.21ms presentation interval despite the fast
+  main loop. Test-only timings now separate composition, encoding, queue submit,
+  feedback and present. Three subsequent pan runs delivered
+  120.016/120.005/120.015Hz with zero discarded frames; combined worker CPU p99
+  .569ms, GPU p99 .231ms and main-dispatch max .085ms. Their slowest frame was
+  2.06ms, principally in queue presentation. The original 33ms event predates
+  phase timing, so its exact cause is not established. The additional measurements
+  remain test-only; no production timers or alternate preview path were added.
+- Validation passes: native Navigator and complete default workspace, GPU
+  overview/clipping/resource reuse, existing exported overview and transformed
+  selection-outline tests, 217 shared UI and 12 host tests, strict GTK/UI/renderer
+  Clippy, workspace/all-targets and WebAssembly checks. The only workspace
+  warnings are existing non-Metal Apple unused items. Dark/light, compact,
+  drawer, Zen and overlap captures were visually inspected. Remaining overall
+  work is region gap closing/expansion/antialiasing, watercolor selection edges,
+  the historical filter-reference mismatch, final integrated validation and
+  human GTK review; low-frequency worker presentation outliers still warrant
+  investigation rather than an unconditional latency claim.

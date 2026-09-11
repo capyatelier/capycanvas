@@ -1,105 +1,216 @@
-//! Native Navigator projection; camera policy and preview scheduling live in Rust UI.
+//! Native Navigator geometry; camera policy and input behavior live in Rust UI.
 use crate::workspace::{Workspace, selected};
-use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
+use gtk::{glib, prelude::*, subclass::prelude::*};
 use layer_ui::{Camera, CommandId, ContactPhase, NavigatorGeometry, UiAction, UiState};
 use std::{cell::RefCell, rc::Rc};
 
+/// Native geometry only. The document image and outline are drawn by the
+/// existing canvas worker; GTK never imports an overview texture.
 #[derive(Default)]
-pub struct Images {
-    texture: RefCell<Option<gdk::Texture>>,
+pub struct Overviews {
     views: RefCell<Vec<glib::WeakRef<Overview>>>,
-    update_clock: RefCell<Option<gdk::FrameClock>>,
-    #[cfg(test)]
-    updates: std::cell::Cell<u64>,
+    owner: RefCell<std::rc::Weak<Workspace>>,
+    wake_pending: std::cell::Cell<bool>,
 }
-impl Drop for Images {
-    fn drop(&mut self) {
-        if let Some(clock) = self.update_clock.get_mut().take() {
-            clock.end_updating();
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Projection {
+    image: gtk::graphene::Rect,
+    clip: gtk::graphene::Rect,
+    origin: [f32; 2],
+    opacity: f32,
+    order: usize,
+}
+impl Overviews {
+    pub fn bind(self: &Rc<Self>, w: &Rc<Workspace>) {
+        *self.owner.borrow_mut() = Rc::downgrade(w);
+    }
+    fn wake(self: &Rc<Self>) {
+        if self.wake_pending.replace(true) {
+            return;
+        }
+        let this = self.clone();
+        // Snapshot can run during a native allocation or explicit capture.
+        // Defer session access rather than reentering its RefCell borrow.
+        glib::idle_add_local_once(move || {
+            this.wake_pending.set(false);
+            if let Some(w) = this.owner.borrow().upgrade() {
+                w.wake();
+            }
+        });
+    }
+    pub fn placements(
+        &self,
+        state: &UiState,
+        scale: f32,
+    ) -> Vec<layer_render_wgpu::OverviewPlacement> {
+        let Some(tab) = state.tabs.first() else {
+            return Vec::new();
+        };
+        let bg = state.palette.panel.linear();
+        let fg = state.palette.text.linear();
+        let mut views: Vec<_> = self
+            .views
+            .borrow()
+            .iter()
+            .filter_map(|v| v.upgrade())
+            .filter_map(|v| {
+                if !v.is_mapped() {
+                    return None;
+                }
+                let p = v.imp().projection.get()?;
+                let g = NavigatorGeometry::new(
+                    &state.camera,
+                    [tab.width, tab.height],
+                    [v.width() as f32, v.height() as f32],
+                )?;
+                let rect = |r: gtk::graphene::Rect| {
+                    [
+                        r.x() * scale,
+                        r.y() * scale,
+                        r.width() * scale,
+                        r.height() * scale,
+                    ]
+                };
+                Some((
+                    p.order,
+                    layer_render_wgpu::OverviewPlacement {
+                        bounds: rect(p.image),
+                        clip: Some(rect(p.clip)),
+                        work_area: g
+                            .work_area
+                            .map(|[x, y]| [(p.origin[0] + x) * scale, (p.origin[1] + y) * scale]),
+                        outline_linear: [fg[0], fg[1], fg[2]],
+                        background_linear: [bg[0], bg[1], bg[2]],
+                        opacity: p.opacity,
+                        scale,
+                    },
+                ))
+            })
+            .collect();
+        views.sort_by_key(|(order, _)| *order);
+        views.into_iter().map(|(_, view)| view).collect()
+    }
+    pub fn project_child(
+        self: &Rc<Self>,
+        parent: &gtk::Widget,
+        child: &gtk::Widget,
+        order: usize,
+        node: Option<&gtk::gsk::RenderNode>,
+    ) -> Vec<gtk::graphene::Rect> {
+        self.views.borrow_mut().retain(|v| v.upgrade().is_some());
+        let views: Vec<_> = self
+            .views
+            .borrow()
+            .iter()
+            .filter_map(|v| v.upgrade())
+            .filter(|v| v.is_ancestor(child))
+            .collect();
+        let mut holes = Vec::new();
+        for view in views {
+            let projection = node.and_then(|node| view.projection(parent, child, node, order));
+            if view.imp().projection.replace(projection) != projection {
+                self.wake();
+            }
+            if let Some(p) = projection {
+                holes.push(p.clip);
+            }
+        }
+        holes
+    }
+    pub fn append_clipped(
+        target: &gtk::Snapshot,
+        node: &gtk::gsk::RenderNode,
+        holes: impl Iterator<Item = gtk::graphene::Rect>,
+    ) {
+        let holes: Vec<_> = holes
+            .filter(|h| node.bounds().intersection(h).is_some())
+            .collect();
+        if holes.is_empty() {
+            target.append_node(node);
+            return;
+        }
+        // Rectangular subtraction preserves the native group's shadow/background
+        // without a mask texture or offscreen render target. Holes include
+        // overviews in later panels, so their images can cover this panel too.
+        let mut pieces = vec![node.bounds()];
+        for hole in holes {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|rect| subtract(rect, hole))
+                .collect();
+        }
+        for piece in pieces {
+            target.push_clip(&piece);
+            target.append_node(node);
+            target.pop();
         }
     }
 }
-impl Images {
-    #[cfg(test)]
-    pub fn updates(&self) -> u64 {
-        self.updates.get()
+fn subtract(rect: gtk::graphene::Rect, hole: gtk::graphene::Rect) -> Vec<gtk::graphene::Rect> {
+    let Some(c) = rect.intersection(&hole) else {
+        return vec![rect];
+    };
+    [
+        gtk::graphene::Rect::new(rect.x(), rect.y(), rect.width(), c.y() - rect.y()),
+        gtk::graphene::Rect::new(
+            rect.x(),
+            c.y() + c.height(),
+            rect.width(),
+            rect.y() + rect.height() - c.y() - c.height(),
+        ),
+        gtk::graphene::Rect::new(rect.x(), c.y(), c.x() - rect.x(), c.height()),
+        gtk::graphene::Rect::new(
+            c.x() + c.width(),
+            c.y(),
+            rect.x() + rect.width() - c.x() - c.width(),
+            c.height(),
+        ),
+    ]
+    .into_iter()
+    .filter(|r| r.width() > 0. && r.height() > 0.)
+    .collect()
+}
+fn node_opacity(node: &gtk::gsk::RenderNode) -> f32 {
+    if let Some(n) = node.downcast_ref::<gtk::gsk::OpacityNode>() {
+        n.opacity() * node_opacity(&n.child())
+    } else if let Some(n) = node.downcast_ref::<gtk::gsk::TransformNode>() {
+        node_opacity(&n.child())
+    } else if let Some(n) = node.downcast_ref::<gtk::gsk::DebugNode>() {
+        node_opacity(&n.child())
+    } else if let Some(n) = node.downcast_ref::<gtk::gsk::ShadowNode>() {
+        node_opacity(&n.child())
+    } else {
+        1.
     }
-    #[cfg(test)]
-    pub fn updating(&self) -> bool {
-        self.update_clock.borrow().is_some()
-    }
-    #[cfg(test)]
-    pub fn texture(&self) -> Option<gdk::Texture> {
-        self.texture.borrow().clone()
-    }
-    pub fn bind(self: &Rc<Self>, w: &Rc<Workspace>) {
-        let weak = Rc::downgrade(w);
-        let images = self.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(67), move || {
-            let Some(w) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            images.views.borrow_mut().retain(|v| v.upgrade().is_some());
-            let visible = images
-                .views
-                .borrow()
-                .iter()
-                .filter_map(|v| v.upgrade())
-                .any(|v| {
-                    if !v.is_mapped() {
-                        return false;
-                    }
-                    let mut parent = v.parent();
-                    while let Some(widget) = parent {
-                        if widget.has_css_class("zen-hidden") || widget.opacity() == 0.0 {
-                            return false;
-                        }
-                        parent = widget.parent();
-                    }
-                    true
-                });
-            let live = visible
-                && w.gpu
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|g| g.session.navigator_updates_continuously());
-            // Intermittent (15Hz) thumbnails must not restart GTK's idle clock
-            // for each image: that missed compositor deadlines while painting.
-            // Keep update timing alive, not redraws; release it as soon as idle.
-            if live && images.update_clock.borrow().is_none() {
-                if let Some(clock) = w.area.frame_clock() {
-                    clock.begin_updating();
-                    *images.update_clock.borrow_mut() = Some(clock);
-                }
-            } else if !live && let Some(clock) = images.update_clock.borrow_mut().take() {
-                clock.end_updating();
-            }
-            let image = w.gpu.borrow_mut().as_mut().and_then(|g| {
-                g.session
-                    .poll_navigator_preview(glib::monotonic_time().max(0) as u64 * 1000, visible)
-                    .ok()
-                    .flatten()
-            });
-            if let Some(image) = image {
-                #[cfg(test)]
-                images.updates.set(images.updates.get() + 1);
-                let bytes = glib::Bytes::from_owned(image.bytes);
-                *images.texture.borrow_mut() = Some(
-                    gdk::MemoryTexture::new(
-                        image.width as i32,
-                        image.height as i32,
-                        gdk::MemoryFormat::R8g8b8a8,
-                        &bytes,
-                        image.stride as usize,
-                    )
-                    .upcast(),
-                );
-                for view in images.views.borrow().iter().filter_map(|v| v.upgrade()) {
-                    view.queue_draw();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overview_holes_partition_the_native_panel_without_overdraw() {
+        use gtk::graphene::{Point, Rect};
+        let panel = Rect::new(10., 20., 40., 30.);
+        for hole in [
+            Rect::new(20., 25., 10., 10.),
+            Rect::new(0., 0., 100., 100.),
+            Rect::new(0., 0., 15., 28.),
+            Rect::new(70., 80., 10., 10.),
+            Rect::new(45., 22., 40., 15.),
+        ] {
+            let pieces = subtract(panel, hole);
+            for y in 0..100 {
+                for x in 0..100 {
+                    let point = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+                    let count = pieces.iter().filter(|r| r.contains_point(&point)).count();
+                    assert_eq!(
+                        count,
+                        usize::from(panel.contains_point(&point) && !hole.contains_point(&point))
+                    );
                 }
             }
-            glib::ControlFlow::Continue
-        });
+        }
     }
 }
 
@@ -108,7 +219,7 @@ mod imp {
     #[derive(Default)]
     pub struct Overview {
         pub view: RefCell<Option<(Camera, [u32; 2])>>,
-        pub images: RefCell<Option<Rc<Images>>>,
+        pub(super) projection: std::cell::Cell<Option<Projection>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Overview {
@@ -121,58 +232,75 @@ mod imp {
         fn measure(&self, orientation: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
             match orientation {
                 gtk::Orientation::Horizontal => (0, 220, -1, -1),
-                // Keep the controls reachable when the default stacked dock
-                // becomes short; the GPU overview scales into the remaining area.
                 _ => (0, 164, -1, -1),
             }
         }
-        fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let widget = self.obj();
-            let Some((camera, document)) = self.view.borrow().clone() else {
-                return;
-            };
-            let size = [widget.width() as f32, widget.height() as f32];
-            let Some(g) = NavigatorGeometry::new(&camera, document, size) else {
-                return;
-            };
-            let b = g.image;
-            let bounds = gtk::graphene::Rect::new(b.x, b.y, b.width, b.height);
-            if let Some(images) = self.images.borrow().as_ref()
-                && let Some(texture) = images.texture.borrow().as_ref()
-            {
-                // The overview is already downsampled on the canvas GPU. Do not
-                // generate a new mipmapped GTK image for every live thumbnail.
-                snapshot.append_scaled_texture(texture, gtk::gsk::ScalingFilter::Linear, &bounds);
-            }
-            // Eight tiny GPU scene rectangles, not a new Cairo bitmap per pan.
-            snapshot.push_clip(&bounds);
-            for (color, thickness) in [(gdk::RGBA::WHITE, 3.0), (widget.color(), 1.5)] {
-                for i in 0..4 {
-                    let [x, y] = g.work_area[i];
-                    let [nx, ny] = g.work_area[(i + 1) % 4];
-                    let (dx, dy) = (nx - x, ny - y);
-                    snapshot.save();
-                    snapshot.translate(&gtk::graphene::Point::new(x, y));
-                    snapshot.rotate(dy.atan2(dx).to_degrees());
-                    snapshot.append_color(
-                        &color,
-                        &gtk::graphene::Rect::new(
-                            -thickness * 0.5,
-                            -thickness * 0.5,
-                            dx.hypot(dy) + thickness,
-                            thickness,
-                        ),
-                    );
-                    snapshot.restore();
-                }
-            }
-            snapshot.pop();
-        }
+        // Native hit testing/layout only; pixels live on the canvas surface.
     }
 }
 glib::wrapper! {
     pub struct Overview(ObjectSubclass<imp::Overview>) @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+impl Overview {
+    fn projection(
+        &self,
+        root: &gtk::Widget,
+        panel: &gtk::Widget,
+        node: &gtk::gsk::RenderNode,
+        order: usize,
+    ) -> Option<Projection> {
+        if !self.is_mapped() {
+            return None;
+        }
+        let (camera, extent) = self.imp().view.borrow().clone()?;
+        let g =
+            NavigatorGeometry::new(&camera, extent, [self.width() as f32, self.height() as f32])?;
+        let origin = self.compute_point(root, &gtk::graphene::Point::new(0., 0.))?;
+        let image = gtk::graphene::Rect::new(
+            origin.x() + g.image.x,
+            origin.y() + g.image.y,
+            g.image.width,
+            g.image.height,
+        );
+        let mut clip = image.intersection(&gtk::graphene::Rect::new(
+            0.,
+            0.,
+            root.width() as f32,
+            root.height() as f32,
+        ))?;
+        let mut opacity = node_opacity(node);
+        let mut ancestor: Option<gtk::Widget> = Some(self.clone().upcast());
+        while let Some(widget) = ancestor {
+            if !widget.is_mapped() {
+                return None;
+            }
+            // Root panel opacity is already represented by its native snapshot.
+            if widget != *panel {
+                opacity *= widget.opacity() as f32;
+            }
+            if widget.overflow() == gtk::Overflow::Hidden {
+                let p = widget.compute_point(root, &gtk::graphene::Point::new(0., 0.))?;
+                clip = clip.intersection(&gtk::graphene::Rect::new(
+                    p.x(),
+                    p.y(),
+                    widget.width() as f32,
+                    widget.height() as f32,
+                ))?;
+            }
+            if widget == *root {
+                break;
+            }
+            ancestor = widget.parent();
+        }
+        (opacity > 0. && clip.width() > 0. && clip.height() > 0.).then_some(Projection {
+            image,
+            clip,
+            origin: [origin.x(), origin.y()],
+            opacity,
+            order,
+        })
+    }
 }
 pub struct Navigator {
     pub root: gtk::Box,
@@ -180,7 +308,7 @@ pub struct Navigator {
     buttons: Vec<(CommandId, gtk::Button)>,
 }
 impl Navigator {
-    pub fn new(images: &Rc<Images>) -> Self {
+    pub fn new(images: &Rc<Overviews>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 2);
         root.set_widget_name("navigator-panel");
         root.set_margin_start(8);
@@ -193,7 +321,6 @@ impl Navigator {
         overview.set_hexpand(true);
         overview.set_vexpand(true);
         overview.set_cursor_from_name(Some("grab"));
-        *overview.imp().images.borrow_mut() = Some(images.clone());
         images.views.borrow_mut().push(overview.downgrade());
         root.append(&overview);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
@@ -281,9 +408,18 @@ impl Navigator {
     }
     pub fn refresh(&self, state: &UiState) {
         if let Some(tab) = state.tabs.first() {
+            let changed = self
+                .overview
+                .imp()
+                .view
+                .borrow()
+                .as_ref()
+                .is_none_or(|(_, size)| *size != [tab.width, tab.height]);
             *self.overview.imp().view.borrow_mut() =
                 Some((state.camera.clone(), [tab.width, tab.height]));
-            self.overview.queue_draw();
+            if changed {
+                self.overview.queue_draw();
+            }
         }
         for (id, button) in &self.buttons {
             if let Some(command) = state.commands.iter().find(|c| c.id == *id) {

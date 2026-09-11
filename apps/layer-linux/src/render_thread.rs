@@ -33,6 +33,7 @@ struct Frame {
     geometry: Geometry,
     surround: [f32; 4],
     cursor: Vec<CursorSegment>,
+    overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     #[cfg(test)]
     queued_ns: u64,
 }
@@ -62,7 +63,6 @@ enum Command {
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
     Thumbnail(u64, layer_core::LayerId),
-    CanvasPreview(Option<u64>),
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(layer_render::FilterPreviewRequest),
     Frame(Box<Frame>),
@@ -82,7 +82,6 @@ enum Reply {
     Region(Result<layer_render::RegionResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
-    CanvasPreview(Result<layer_render::CanvasPreview, String>),
     ColorSample(Result<layer_render::ColorSample, String>),
     FilterPreviews(Result<layer_render::FilterPreviewImage, String>),
     Error(String),
@@ -111,8 +110,6 @@ pub struct RenderWorker {
     outlines: HashMap<AssetId, TipOutline>,
     readbacks: VecDeque<ReadbackImage>,
     thumbnails: VecDeque<ReadbackImage>,
-    canvas_preview: Option<Result<layer_render::CanvasPreview, String>>,
-    canvas_preview_pending: bool,
     color_sample: Option<Result<layer_render::ColorSample, String>>,
     color_sample_pending: bool,
     filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
@@ -122,6 +119,7 @@ pub struct RenderWorker {
     pub(super) geometry: Option<Geometry>,
     pub(super) surround: [f32; 4],
     pub(super) cursor: Vec<CursorSegment>,
+    pub(super) overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     #[cfg(test)]
     pub stats: Arc<std::sync::Mutex<crate::timing::Stats>>,
 }
@@ -232,11 +230,6 @@ impl RenderWorker {
                                 .send(Reply::Thumbnail(image.map_err(error)?))
                                 .map_err(error)?;
                         }
-                        if let Some(image) = worker.renderer.take_canvas_preview() {
-                            reply
-                                .send(Reply::CanvasPreview(image.map_err(error)))
-                                .map_err(error)?;
-                        }
                         if let Some(color) = worker.renderer.take_color_sample() {
                             reply
                                 .send(Reply::ColorSample(color.map_err(error)))
@@ -263,7 +256,6 @@ impl RenderWorker {
                             || worker.renderer.filter_previews_pending()
                             || worker.pending_present
                             || worker.renderer.thumbnails_pending()
-                            || worker.renderer.canvas_preview_pending()
                             || worker.renderer.color_sample_pending()
                             || worker.renderer.region_pending()
                             || worker.child.feedback_pending()
@@ -295,7 +287,6 @@ impl RenderWorker {
                                 command,
                                 Command::Region(_)
                                     | Command::Thumbnail(..)
-                                    | Command::CanvasPreview(_)
                                     | Command::ColorSample(_)
                                     | Command::FilterPreviews(_)
                                     | Command::Readback(_)
@@ -366,19 +357,6 @@ impl RenderWorker {
                                 .renderer
                                 .request_thumbnail(id, target)
                                 .map_err(error)?,
-                            Command::CanvasPreview(known) => {
-                                let result = worker.renderer.request_canvas_preview(known);
-                                if !matches!(result, Ok(true)) {
-                                    reply
-                                        .send(Reply::CanvasPreview(Err(result
-                                            .err()
-                                            .map(error)
-                                            .unwrap_or_else(|| {
-                                                "Canvas preview is not ready".into()
-                                            }))))
-                                        .map_err(error)?;
-                                }
-                            }
                             Command::ColorSample(request) => {
                                 let result = worker.renderer.request_color_sample(request);
                                 if !matches!(result, Ok(true)) {
@@ -462,8 +440,6 @@ impl RenderWorker {
             outlines: HashMap::new(),
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
-            canvas_preview: None,
-            canvas_preview_pending: false,
             color_sample: None,
             color_sample_pending: false,
             filter_previews: VecDeque::new(),
@@ -473,6 +449,7 @@ impl RenderWorker {
             geometry: None,
             surround: [0.033; 4],
             cursor: Vec::new(),
+            overviews: Vec::new(),
             #[cfg(test)]
             stats,
         })
@@ -541,10 +518,6 @@ impl RenderWorker {
                     self.effect_validation = Some(result);
                 }
                 Reply::Thumbnail(image) => self.thumbnails.push_back(image),
-                Reply::CanvasPreview(image) => {
-                    self.canvas_preview = Some(image);
-                    self.canvas_preview_pending = false;
-                }
                 Reply::ColorSample(color) => {
                     self.color_sample = Some(color);
                     self.color_sample_pending = false;
@@ -648,20 +621,6 @@ impl CanvasRenderer for RenderWorker {
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
         self.thumbnails.pop_front().map(Ok)
-    }
-    fn request_canvas_preview(&mut self, known_revision: Option<u64>) -> Result<bool, Self::Error> {
-        if self.canvas_preview_pending {
-            return Ok(false);
-        }
-        self.send(Command::CanvasPreview(known_revision))?;
-        self.canvas_preview_pending = true;
-        Ok(true)
-    }
-    fn take_canvas_preview(&mut self) -> Option<Result<layer_render::CanvasPreview, Self::Error>> {
-        self.ready().ok()?;
-        self.canvas_preview
-            .take()
-            .map(|result| result.map_err(|_| BackendError("Canvas preview unavailable")))
     }
     fn request_color_sample(
         &mut self,
@@ -778,6 +737,7 @@ impl CanvasRenderer for RenderWorker {
             geometry,
             surround: self.surround,
             cursor: self.cursor.clone(),
+            overviews: self.overviews.clone(),
             #[cfg(test)]
             queued_ns: gtk::glib::monotonic_time().max(0) as u64 * 1000,
         };
@@ -811,6 +771,7 @@ struct Worker {
     area: gtk::glib::SendWeakRef<gtk::Picture>,
     cursor: Vec<CursorSegment>,
     cursor_scale: f32,
+    overviews: Vec<layer_render_wgpu::OverviewPlacement>,
     pending_present: bool,
 }
 impl Worker {
@@ -889,7 +850,8 @@ impl Worker {
             .join("shaders");
         let renderer = WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, &cache)
             .map_err(error)?;
-        let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
+        let mut presenter = ViewportPresenter::for_renderer(&renderer, config.format);
+        presenter.prepare_overviews(&renderer);
         Ok(Self {
             paper_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),
@@ -903,6 +865,7 @@ impl Worker {
             area,
             cursor: Vec::new(),
             cursor_scale: 1.0,
+            overviews: Vec::new(),
             pending_present: false,
         })
     }
@@ -963,7 +926,12 @@ impl Worker {
         } else {
             self.renderer.submit(frame.packet()).map_err(error)?;
         }
+        #[cfg(test)]
+        timing.mark(0);
         self.cursor.clone_from(&frame.cursor);
+        self.overviews.clone_from(&frame.overviews);
+        self.presenter
+            .set_overviews(&self.renderer, &self.overviews);
         self.cursor_scale = frame.geometry.scale as f32;
         self.presenter
             .set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
@@ -1021,13 +989,31 @@ impl Worker {
             .encode(&self.renderer, &mut encoder, &view, camera, surround);
         #[cfg(test)]
         if let Some(timing) = &timing {
+            timing
+                .overview((!self.overviews.is_empty()).then(|| self.renderer.composite_revision()));
+        }
+        #[cfg(test)]
+        if let Some(timing) = &timing {
             timing.encoded(&mut encoder);
         }
-        self.renderer.queue().submit([encoder.finish()]);
+        let commands = encoder.finish();
+        #[cfg(test)]
+        if let Some(timing) = &timing {
+            timing.mark(1);
+        }
+        self.renderer.queue().submit([commands]);
+        #[cfg(test)]
+        if let Some(timing) = &timing {
+            timing.mark(2);
+        }
         #[cfg(test)]
         self.child.feedback(timing.as_ref().map_or(0, |t| t.id()));
         #[cfg(not(test))]
         self.child.feedback(0);
+        #[cfg(test)]
+        if let Some(timing) = &timing {
+            timing.mark(3);
+        }
         self.renderer.queue().present(target);
         if !self.paper_ready.load(Ordering::Acquire) {
             let ready = self.paper_ready.clone();
@@ -1063,6 +1049,7 @@ impl Worker {
             });
         let mut presenter = ViewportPresenter::new(self.renderer.device(), texture.format());
         presenter.set_cursor(self.renderer.device(), &self.cursor, self.cursor_scale);
+        presenter.set_overviews(&self.renderer, &self.overviews);
         let mut encoder = self
             .renderer
             .device()

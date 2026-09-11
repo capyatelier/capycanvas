@@ -20,6 +20,7 @@ fn target(r: &WgpuRasterizer, size: [u32; 2], format: wgpu::TextureFormat) -> wg
 fn placement() -> OverviewPlacement {
     OverviewPlacement {
         bounds: [8., 8., 48., 48.],
+        clip: None,
         work_area: [[18., 18.], [46., 18.], [46., 46.], [18., 46.]],
         outline_linear: [0.03, 0.04, 0.05],
         background_linear: [0.2, 0.3, 0.4],
@@ -51,6 +52,31 @@ fn overview_presents_transparency_live_paint_and_camera_without_image_exports() 
         presenter.set_overviews(&r, &[inset]);
         presenter.present(&r, &surface, view(), [0.; 4]);
         let rendered = page_bytes(&r, &target);
+        // Native scrolling crops pixels, not image coordinates. In particular,
+        // clipping cannot stretch the remaining image or move its camera outline.
+        presenter.set_overviews(
+            &r,
+            &[OverviewPlacement {
+                clip: Some([23., 12., 17., 30.]),
+                ..inset
+            }],
+        );
+        presenter.present(&r, &surface, view(), [0.; 4]);
+        let clipped = page_bytes(&r, &target);
+        for y in 0..128 {
+            for x in 0..128 {
+                let expected = if (23..40).contains(&x) && (12..42).contains(&y) {
+                    &rendered
+                } else {
+                    &baseline
+                };
+                assert_eq!(
+                    pixel(&clipped, x, y),
+                    pixel(expected, x, y),
+                    "native clip {x},{y}"
+                );
+            }
+        }
         for y in 0..128 {
             for x in 0..128 {
                 if !(8..56).contains(&x) || !(8..56).contains(&y) {

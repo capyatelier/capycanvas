@@ -14,10 +14,14 @@ pub struct Stats {
     pub wake_lateness: Vec<f64>,
     /// Frame id, acquire/configure ms, render+present CPU ms, total ms, enqueue ns.
     pub cpu: Vec<[f64; 5]>,
+    /// Frame id, composition, encode, queue submit, feedback, present ms.
+    pub cpu_stages: Vec<[f64; 6]>,
     /// Frame id, GPU elapsed ms (timestamps, not callback arrival time).
     pub gpu: Vec<[f64; 2]>,
     /// Frame id, presentation ns, refresh ns, presented=1/discarded=0.
     pub presented: Vec<[u64; 4]>,
+    pub overview_revisions: Vec<u64>,
+    pub overview_frames: usize,
 }
 struct Slot {
     query: wgpu::QuerySet,
@@ -33,8 +37,18 @@ pub struct Timing {
     start: Instant,
     acquired: Instant,
     queued_ns: u64,
+    stages: std::cell::Cell<[f64; 4]>,
 }
 impl Timing {
+    pub fn overview(&self, revision: Option<u64>) {
+        if let Some(revision) = revision {
+            let mut stats = self.stats.lock().unwrap();
+            stats.overview_frames += 1;
+            if stats.overview_revisions.last() != Some(&revision) {
+                stats.overview_revisions.push(revision);
+            }
+        }
+    }
     pub fn new(device: &wgpu::Device, stats: Arc<Mutex<Stats>>) -> Self {
         let enabled = device
             .features()
@@ -69,6 +83,7 @@ impl Timing {
             start: Instant::now(),
             acquired: Instant::now(),
             queued_ns: 0,
+            stages: Default::default(),
         }
     }
     pub fn id(&self) -> u64 {
@@ -78,6 +93,12 @@ impl Timing {
         self.id += 1;
         self.start = Instant::now();
         self.queued_ns = queued_ns;
+        self.stages.set([0.; 4]);
+    }
+    pub fn mark(&self, stage: usize) {
+        let mut stages = self.stages.get();
+        stages[stage] = self.acquired.elapsed().as_secs_f64() * 1000.;
+        self.stages.set(stages);
     }
     pub fn acquired(&mut self, renderer: &WgpuRasterizer) {
         self.acquired = Instant::now();
@@ -102,13 +123,25 @@ impl Timing {
         }
     }
     pub fn end(&self, renderer: &WgpuRasterizer) {
-        self.stats.lock().unwrap().cpu.push([
+        let end = self.acquired.elapsed().as_secs_f64() * 1000.;
+        let [compose, encode, submit, feedback] = self.stages.get();
+        let mut stats = self.stats.lock().unwrap();
+        stats.cpu_stages.push([
+            self.id as f64,
+            compose,
+            encode - compose,
+            submit - encode,
+            feedback - submit,
+            end - feedback,
+        ]);
+        stats.cpu.push([
             self.id as f64,
             self.acquired.duration_since(self.start).as_secs_f64() * 1000.0,
-            self.acquired.elapsed().as_secs_f64() * 1000.0,
+            end,
             self.start.elapsed().as_secs_f64() * 1000.0,
             self.queued_ns as f64,
         ]);
+        drop(stats);
         if let Some(index) = self.active {
             let slot = &self.slots[index];
             let buffer = slot.readback.clone();
