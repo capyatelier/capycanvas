@@ -21,6 +21,7 @@ import SwiftUI
     var wake: (() -> Void)?
     private(set) var native: NativeOwner?
     lazy var layerThumbnails = LayerThumbnails(store: self)
+    lazy var filterPreviews = FilterPreviews(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
@@ -55,6 +56,7 @@ import SwiftUI
             if !next["state"].isNull {
                 currentState = next["state"]
                 structuralSnapshot = next
+                filterPreviews.refresh()
                 camera.value = state["camera"]
                 projectFiles.receive(state)
             }

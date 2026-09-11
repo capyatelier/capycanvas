@@ -496,6 +496,7 @@ impl NativeHost {
             .filter_map(|p| self.session.panel_view(p).ok())
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
+            "filter_preview_revision": self.session.filter_preview_revision(),
             "partial_zen": state.partial_zen(), "zen_toolbars": zen,
             "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id": menu, "label": menu.label(), "model": self.session.application_menu(menu)})),
             "color_panel": self.session.state().colors.view(),

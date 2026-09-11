@@ -11,7 +11,7 @@ const width = Number(widthArg), height = Number(heightArg), scale = Number(scale
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'layer-added'].includes(scenario));
+assert(['initial', 'layer-added', 'filter-properties'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -69,6 +69,14 @@ try {
   for (const selectedTheme of [theme]) {
     await evaluate(`layerApp.dispatch({type:'system_theme_changed',theme:'${selectedTheme}'}); layerApp.dispatch({type:'invoke',command:'fit_canvas'});`);
     if (scenario === 'layer-added') await evaluate(`layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});`);
+    if (scenario === 'filter-properties') await evaluate(`
+      layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:true}});
+      layerApp.dispatch({type:'effect',action:{op:'insert',effect:'gaussian_blur'}});
+      layerApp.dispatch({type:'effect',action:{op:'set',layer:layerApp.state().layer_properties.layer,key:'sigma',value:{kind:'number',value:5}}});
+      layerApp.dispatch({type:'effect',action:{op:'insert',effect:'curves'}});
+      layerApp.dispatch({type:'effect',action:{op:'insert',effect:'gradient_map'}});
+      layerApp.dispatch({type:'filter_picker',action:{op:'search',query:'Gradient Map'}});
+    `);
     await evaluate(`document.fonts.ready.then(()=>Promise.all([...document.images].map(i=>i.decode())))`);
     // GPU attachment precedes staged compilation and thumbnail readback. A
     // fixed delay can capture empty previews and produce a misleading diff.

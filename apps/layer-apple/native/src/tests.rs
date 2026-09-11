@@ -4,6 +4,195 @@ use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
+
+#[test]
+fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let mut kinds = std::collections::BTreeSet::new();
+        for (effect, key, value) in [
+            (None, "blend", json!({"kind":"choice","value":2})),
+            (
+                Some("gaussian_blur"),
+                "sigma",
+                json!({"kind":"number","value":7}),
+            ),
+            (
+                Some("black_white"),
+                "tint",
+                json!({"kind":"toggle","value":true}),
+            ),
+            (
+                None,
+                "tint_color",
+                json!({"kind":"color","value":[0.7,0.2,0.3,0.6]}),
+            ),
+            (
+                Some("curves"),
+                "curve_0",
+                json!({"kind":"curve","value":[[0,0],[0.5,0.75],[1,1]]}),
+            ),
+            (
+                Some("gradient_map"),
+                "gradient",
+                json!({"kind":"gradient","value":[{"position":0,"color":[0,0,0,1]},
+                {"position":0.3,"color":[1,0,0,1]},{"position":1,"color":[1,1,1,1]}]}),
+            ),
+        ] {
+            if let Some(effect) = effect {
+                app.action(json!({"type":"effect","action":{"op":"insert","effect":effect}}));
+            }
+            let state = app.state();
+            let properties = &state["layer_properties"];
+            assert_eq!(properties["enabled"], true);
+            let layer = properties["layer"].as_u64().unwrap();
+            let control = properties["controls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["key"] == key)
+                .unwrap();
+            let before = control["value"].clone();
+            let default = control["default"].clone();
+            kinds.insert(control["kind"]["kind"].as_str().unwrap().to_string());
+            let current = || {
+                app.state()["layer_properties"]["controls"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c["key"] == key)
+                    .unwrap()["value"]
+                    .clone()
+            };
+            app.action(json!({"type":"effect","action":{"op":"set","layer":layer,"key":key,"value":value}}));
+            let edited = current();
+            assert_ne!(edited, before);
+            app.invoke("undo");
+            assert_eq!(current(), before);
+            app.invoke("redo");
+            assert_eq!(current(), edited);
+            app.action(json!({"type":"effect","action":{"op":"reset","layer":layer,"key":key}}));
+            assert_eq!(current(), default);
+            if key == "curve_0" {
+                app.action(json!({"type":"effect","action":{"op":"curve_point","layer":layer,"key":key,"index":null,"point":[0.5,0.8],"remove":false}}));
+                assert_eq!(current()["value"].as_array().unwrap().len(), 3);
+                let state = app.state();
+                let plot = state["layer_properties"]["controls"][0]["plot"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(plot.len(), 129);
+                assert!((plot[64][1].as_f64().unwrap() - 0.8).abs() < 0.0001);
+                app.action(json!({"type":"effect","action":{"op":"curve_point","layer":layer,"key":key,"index":1,"point":[0,0],"remove":true}}));
+                assert_eq!(current(), default);
+            }
+            if key == "gradient" {
+                app.action(json!({"type":"effect","action":{"op":"gradient_stop","layer":layer,"key":key,"index":null,"position":0.5,"color":null,"remove":false}}));
+                assert_eq!(current()["value"][1]["color"], json!([0.5, 0.5, 0.5, 1.0]));
+                app.action(json!({"type":"effect","action":{"op":"gradient_stop","layer":layer,"key":key,"index":1,"position":0.25,"color":null,"remove":false}}));
+                assert_eq!(current()["value"][1]["position"], 0.25);
+            }
+        }
+        assert_eq!(
+            kinds,
+            ["choice", "color", "curve", "gradient", "number", "toggle"]
+                .map(String::from)
+                .into()
+        );
+    }
+}
+
+#[test]
+fn property_number_edits_change_metal_pixels_and_undo_exactly_on_both_platforms() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        app.action(json!({"type":"effect","action":{"op":"insert","effect":"gaussian_blur"}}));
+        app.draw_frame();
+        let before = app.pixels();
+        let layer = app.state()["layer_properties"]["layer"].clone();
+        app.action(
+            json!({"type":"effect","action":{"op":"set","layer":layer,"key":"sigma",
+            "value":{"kind":"number","value":12}}}),
+        );
+        app.draw_frame();
+        let edited = app.pixels();
+        assert_ne!(edited, before);
+        app.invoke("undo");
+        app.draw_frame();
+        assert_eq!(app.pixels(), before);
+        app.invoke("redo");
+        app.draw_frame();
+        assert_eq!(app.pixels(), edited);
+    }
+}
+
+#[test]
+fn filter_preview_abi_keeps_owned_pixels_after_editor_teardown_without_document_edits() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let before = app.pixels();
+        let revision = unsafe { &*app.0 }.host.session.filter_preview_revision();
+        let status = app
+            .request(
+                2,
+                json!({"type":"filter_previews","request":73,"revision":revision,
+            "filters":["curves","gradient_map"],"size":[96,40]}),
+            )
+            .unwrap();
+        assert_eq!(status["accepted"], true);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let atlas = loop {
+            let atlas = unsafe { capy_apple_take_filter_previews(app.0) };
+            assert!(unsafe { capy_apple_error(app.0) }.is_null());
+            if !atlas.is_null() {
+                break atlas;
+            }
+            assert!(std::time::Instant::now() < end, "GPU preview timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        assert_eq!(
+            unsafe { &*app.0 }.host.session.filter_preview_revision(),
+            revision
+        );
+        assert_eq!(app.pixels(), before);
+        drop(app);
+        let pointer = atlas as usize;
+        std::thread::spawn(move || unsafe {
+            let atlas = pointer as *mut CapyFilterPreviews;
+            let mut info = std::mem::MaybeUninit::<CapyFilterPreviewInfo>::uninit();
+            capy_filter_previews_read(atlas, info.as_mut_ptr());
+            let info = info.assume_init();
+            assert_eq!(
+                (
+                    info.request,
+                    info.width,
+                    info.height,
+                    info.stride,
+                    info.count
+                ),
+                (73, 96, 80, 384, 30720)
+            );
+            let filters: Value =
+                serde_json::from_slice(CStr::from_ptr(info.filters).to_bytes()).unwrap();
+            assert_eq!(filters, json!(["curves", "gradient_map"]));
+            let pixels = std::slice::from_raw_parts(info.pixels, info.count);
+            assert!(pixels.chunks_exact(4).any(|p| p[3] != 0));
+            capy_filter_previews_free(atlas);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
 struct ProjectJob(*mut CapyProjectTask);
 impl Drop for ProjectJob {
     fn drop(&mut self) {

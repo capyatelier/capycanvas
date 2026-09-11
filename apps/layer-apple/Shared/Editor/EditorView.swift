@@ -148,6 +148,7 @@ struct EditorView<Canvas: View>: View {
                             }.padding(.horizontal, 8).frame(height: 36)
                                 .background(tab["id"].string == panel["id"].string ? palette["panel"] : Color.clear)
                         }.buttonStyle(.plain).accessibilityLabel(tab["title"].string)
+                            .accessibilityIdentifier("panel-tab-" + tab["id"].string)
                     }
                     Spacer(minLength: 0)
                     SharedIcon(name: "grip").opacity(0.65).frame(width: 20, height: 36)

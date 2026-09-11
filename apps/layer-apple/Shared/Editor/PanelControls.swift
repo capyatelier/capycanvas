@@ -6,6 +6,11 @@ struct PanelControls: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
+        else if panel["id"].string == "adjustments" {
+            if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
+                AdjustmentPanel(store: store)
+            }
+        }
         else { controls }
     }
     private var controls: some View {
@@ -23,6 +28,7 @@ struct PanelControls: View {
         case "brushes": ToolSetControls(store: store)
         case "tool_settings": ToolSettingsControls(store: store)
         case "color_wheel": ColorPanel(store: store)
+        case "properties": LayerPropertiesPanel(store: store)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes

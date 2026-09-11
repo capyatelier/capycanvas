@@ -586,7 +586,7 @@ selection, a locked target, shortcut editing and a conflicting captured chord
 on each Apple platform.
 
 This closes the missing top-level menu projection and basic shortcut editor gaps.
-Complete action/customization workflows, filter/property controls, recovery,
+Complete action/customization workflows, filter/property visual acceptance, recovery,
 physical input/lifecycle coverage, full visual parity and sustained performance
 remain required. In particular, the current shared capability policy still omits
 New Window on iPad; enabling multi-scene support alone does not verify that flow.
@@ -597,3 +597,56 @@ workflows and all 244 affected regression tests pass again. Both signed builds
 pass; the final app installs and launches on the attached iPad, and the Mac app
 launches normally. WebAssembly compilation also passes. Private screenshots,
 logs, device/signing details and test artifacts remain outside version control.
+
+## Shared filter picker and properties
+
+Both Apple targets now project shared filter categories, search, empty state,
+insertion actions and the live Properties schema. Number, toggle, choice,
+straight sRGB color/alpha, curve and gradient controls use shared editing/reset
+actions. Curve plots come from Rust's sampled interpolation; point ordering,
+endpoint protection, gradient insertion colors, validation and undo stay in Rust.
+Numeric fields retain drafts across ordinary updates, with a stable schema key
+to reset them when their target/schema changes. Locked properties disable native
+controls and graph hit testing.
+
+One preview cache per editor combines visible rows across panel projections.
+Requests contain at most eight rows, bounded to 512 by 128 pixels each. Painting
+and pending document edits defer new requests through shared policy. The C ABI
+transfers an owned straight-RGBA atlas independently of the editor; Swift image
+creation runs on a utility worker. Polling is nonblocking, stops when visible
+rows are current, and does not run on zoom-only snapshots. Document epoch,
+paint/active-layer/catalog revision and pixel size reject stale results. These
+bounds do not establish hardware performance acceptance.
+
+Filter search exposed iPad keyboard avoidance translating the fixed dock layout
+above the screen. The scene now retains full-window geometry while the keyboard
+covers its lower region. The focused iPad test verifies stable canvas position
+and height plus an onscreen search field, then exercises GPU preview loading,
+radius expression input, curve insertion/reset and gradient insertion/position/
+reset. It passes with the final graph gesture handling. Lower controls, floating
+keyboards and the full input/lifecycle matrix remain open.
+
+After integrating the GTK workspace milestone, all 249 affected tests pass:
+217 shared UI, 12 native host and 20 Apple bridge tests. Apple checks cover all
+six property kinds, reset and undo/redo on both platform policies; actual Metal
+radius changes with exact undo/redo pixels; and preview buffer ownership after
+editor teardown without changing document pixels. Signed builds for both targets
+and the WebAssembly build pass. The updated physical iPad installs and launches.
+
+Mac filter search, preview loading and insertion reached Properties during UI
+runs. Subsequent complete runs stopped before assertions while macOS displayed
+the XCTest Touch ID/password prompt to enable UI automation. The direct control
+utility also reports missing Accessibility access for its launching session.
+Full Mac gesture-workflow evidence remains open; these setup failures are not
+passing tests. Independent bridge/Metal results still cover Mac.
+
+The Chrome `filter-properties` fixture matches the tested stack and viewport.
+The first valid full iPad capture differs at 8.2396% of pixels at zero tolerance.
+After removing the redundant gradient label and adding inline stop opacity, a
+direct final simulator capture differs at 7.9577%. Its portrait raster is rotated
+90 degrees counterclockwise without resampling, then every pixel is compared.
+Header, control and styling differences remain. Raw images, full difference,
+heatmap and overlay stay local. The Mac capture is obstructed by the
+pending permission dialog and is rejected as a comparison fixture. Full visual
+parity, all panel projections/customization, recovery, physical input and
+sustained hardware performance remain required; this is a partial milestone.

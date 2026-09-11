@@ -41,6 +41,20 @@ uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t space);
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);
+/* Nonblocking owner poll. The owned atlas is independent of the editor; decode
+   and free on a worker. All info pointers are borrowed until previews_free.
+   Pixels are straight sRGB RGBA8, with equal-height rows in filters JSON order. */
+typedef struct CapyFilterPreviews CapyFilterPreviews;
+typedef struct {
+    uint64_t request;
+    uint32_t width, height, stride;
+    const uint8_t *pixels;
+    size_t count;
+    const char *filters;
+} CapyFilterPreviewInfo;
+CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app);
+void capy_filter_previews_read(const CapyFilterPreviews *previews, CapyFilterPreviewInfo *output);
+void capy_filter_previews_free(CapyFilterPreviews *previews);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
                          const char *cache_directory);
