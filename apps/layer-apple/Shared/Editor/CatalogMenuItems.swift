@@ -5,7 +5,7 @@ struct CatalogMenuItems: View {
     @ObservedObject var store: EditorStore
     let label: String
     var body: some View {
-        let menu = store.catalog["menus"].array.first { $0["label"].string == label } ?? JSON()
+        let menu = label == "File" ? store.catalog["file_menu"] : store.catalog["menus"].array.first { $0["label"].string == label } ?? JSON()
         if menu["sections"].array.isEmpty {
             MenuItems(store: store, sections: store.snapshot["workspace_menu"]["sections"])
         } else {

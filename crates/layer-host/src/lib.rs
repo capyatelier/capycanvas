@@ -46,6 +46,7 @@ pub struct NativeHost {
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
     last_camera_revision: Option<u64>,
+    document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
 }
 
@@ -72,8 +73,18 @@ impl NativeHost {
             last_pen: None,
             last_snapshot: None,
             last_camera_revision: None,
+            document_view_revision: 0,
             last_durable_workspace: None,
         })
+    }
+    /// Invalidate host input and snapshot caches after shared document adoption.
+    pub fn document_adopted(&mut self) {
+        self.deferred_contacts.clear();
+        self.last_pen = None;
+        self.last_snapshot = None;
+        self.last_camera_revision = None;
+        self.document_view_revision = self.session.state().camera.revision;
+        self.dirty = true;
     }
     pub fn resize(&mut self, width: u32, height: u32, density: f32) -> Result<(), String> {
         if width == 0 || height == 0 || !density.is_finite() || density <= 0.0 {
@@ -290,6 +301,11 @@ impl NativeHost {
                 .any(|r| r[7] < 0.0 || r[8] < 0.0 || r[8] > 4.0 || r[8].fract() != 0.0)
         {
             return Err("Invalid native pointer batch".into());
+        }
+        if view_revision < self.document_view_revision
+            || self.session.state().document_file.close_ready
+        {
+            return Ok(());
         }
         for sample in records.chunks_exact(9) {
             let phase = match sample[8] as u8 {

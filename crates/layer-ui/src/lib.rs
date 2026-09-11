@@ -216,6 +216,7 @@ pub struct UiCatalog {
     pub panels: Vec<PanelChoice>,
     pub toolbar: &'static [ToolbarControl],
     pub menus: &'static [MenuSpec],
+    pub file_menu: MenuSpec,
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
     pub brush_sizes: &'static [f32],
@@ -334,6 +335,7 @@ pub fn ui_catalog() -> UiCatalog {
             .collect(),
         toolbar: TOOLBAR_CONTROLS,
         menus: MENUS,
+        file_menu: FILE_MENU,
         layer_commands: &CommandId::LAYERS,
         brush_categories: brush_categories().collect(),
         brush_sizes: BRUSH_SIZES,
@@ -410,12 +412,11 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::NewDocument
-            | Self::OpenDocument
-            | Self::SaveDocument
-            | Self::SaveDocumentAs
-            | Self::ExportDocument
-            | Self::CloseDocument => platform == Platform::Gtk,
+            Self::NewDocument | Self::OpenDocument | Self::SaveDocument | Self::SaveDocumentAs => {
+                matches!(platform, Platform::Gtk | Platform::Mac | Platform::Ios)
+            }
+            Self::CloseDocument => matches!(platform, Platform::Gtk | Platform::Mac),
+            Self::ExportDocument => platform == Platform::Gtk,
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }

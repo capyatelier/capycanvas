@@ -13,8 +13,13 @@ import CoreGraphics
     private var pending: [UInt64: Request] = [:]
     private var next: UInt64 = 0
     private var task: Task<Void, Never>?
+    private var generation: UInt64 = 0
 
     init(store: EditorStore) { self.store = store }
+    func reset() {
+        generation &+= 1; task?.cancel(); task = nil
+        images.removeAll(); completed.removeAll(); pending.removeAll(); refresh()
+    }
     static func key(_ id: UInt64, _ mask: Bool) -> String { "\(id):\(mask)" }
     func show(_ id: UInt64) { visible.insert(id); refresh() }
     func hide(_ id: UInt64) { visible.remove(id) }
@@ -24,7 +29,9 @@ import CoreGraphics
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
                 guard let self else { return }
-                if !(await self.poll()) { self.task = nil; return }
+                let more = await self.poll()
+                if Task.isCancelled { return }
+                if !more { self.task = nil; return }
             }
         }
     }
@@ -41,6 +48,7 @@ import CoreGraphics
         return result
     }
     private func poll() async -> Bool {
+        let generation = generation
         guard let store else { return false }
         let wanted = desired()
         var requests: [UInt64: Request] = [:]
@@ -59,6 +67,7 @@ import CoreGraphics
                 continuation.resume(returning: $0)
             }
         }
+        guard generation == self.generation else { return false }
         if reply.isNull { pending.removeAll(); return false }
         for token in reply["accepted"].array { if let request = requests[token.uint] { pending[token.uint] = request } }
         let current = desired()

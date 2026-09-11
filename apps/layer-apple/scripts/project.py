@@ -76,7 +76,7 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
             "TARGETED_DEVICE_FAMILY": "2", "IPHONEOS_DEPLOYMENT_TARGET": "18.0",
             "INFOPLIST_FILE": "iOS/App/Info.plist", "SUPPORTS_MACCATALYST": "NO"})
     else:
-        settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0", "GENERATE_INFOPLIST_FILE": "YES"})
+        settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0", "INFOPLIST_FILE": "macOS/App/Info.plist"})
     target = obj(scheme, "PBXNativeTarget", buildConfigurationList=configs(scheme, settings),
         buildPhases=phases, buildRules=[], dependencies=[], name=scheme, productName=scheme,
         productReference=product, productType="com.apple.product-type.application")

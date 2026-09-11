@@ -21,6 +21,8 @@ mod document_files;
 mod effects;
 #[path = "filter_loading.rs"]
 mod filter_loading;
+#[path = "project_files.rs"]
+mod project_files;
 pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
@@ -1062,7 +1064,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn command_flags(&self, id: CommandId) -> (bool, bool) {
-        if !id.available_on(self.state.platform) {
+        if !id.available_on(self.state.platform) || self.state.document_file.close_ready {
             return (false, false);
         }
         let document = self.engine.document();
@@ -2243,11 +2245,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         use regions::*;
         match command {
             CommandId::NewDocument | CommandId::OpenDocument => {
-                self.request_document(if command == CommandId::NewDocument {
-                    DocumentRequest::New
-                } else {
-                    DocumentRequest::Open
-                })?;
+                self.request_document_open(command == CommandId::OpenDocument)?;
                 Ok((DOCUMENT | HOST, false))
             }
             CommandId::SaveDocument | CommandId::SaveDocumentAs => {
@@ -3049,6 +3047,59 @@ mod tests {
         assert!(!reopened.state.document_file.modified);
         assert_eq!(reopened.files.assets, project.assets);
         assert_eq!(reopened.engine.document(), &project.document);
+    }
+
+    #[test]
+    fn in_place_new_and_open_share_unsaved_and_save_completion_policy() {
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.set_document_replacement(true);
+            invoke(&mut s, CommandId::AddLayer);
+            invoke(&mut s, CommandId::NewDocument);
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+            assert!(s.files.pending.is_none());
+            assert!(s.state.document_file.modified);
+            invoke(&mut s, CommandId::OpenDocument);
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Save).unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.capture_project_save(
+                id,
+                DocumentLocation {
+                    uri: "file:///fixture.capy".into(),
+                    name: "fixture.capy".into(),
+                },
+            )
+            .unwrap();
+            s.complete_document_request(id, Ok(true)).unwrap();
+            assert!(!s.state.document_file.modified);
+            assert!(!s.state.document_file.close_ready);
+            assert!(matches!(
+                s.state.requests.last().unwrap().kind,
+                HostRequestKind::Document {
+                    request: DocumentRequest::Open
+                }
+            ));
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.complete_document_request(id, Ok(false)).unwrap();
+            invoke(&mut s, CommandId::AddLayer);
+            invoke(&mut s, CommandId::NewDocument);
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Discard)
+                .unwrap();
+            assert!(
+                s.state.document_file.modified,
+                "The host has not replaced the document yet"
+            );
+            assert!(matches!(
+                s.state.requests.last().unwrap().kind,
+                HostRequestKind::Document {
+                    request: DocumentRequest::New
+                }
+            ));
+        }
     }
 
     #[test]

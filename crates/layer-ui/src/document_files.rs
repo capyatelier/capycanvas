@@ -11,7 +11,7 @@ pub struct DocumentLocation {
     pub name: String,
 }
 impl DocumentLocation {
-    fn validate(&self) -> Result<(), String> {
+    pub(super) fn validate(&self) -> Result<(), String> {
         if self.uri.is_empty()
             || self.uri.len() > 16_384
             || self.uri.contains('\0')
@@ -28,6 +28,8 @@ impl DocumentLocation {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct DocumentFileState {
+    pub epoch: u64,
+    pub revision: u64,
     pub location: Option<DocumentLocation>,
     pub modified: bool,
     pub busy: bool,
@@ -119,7 +121,9 @@ pub fn new_drawing(width: u32, height: u32) -> Result<Project, String> {
 #[derive(Default)]
 pub(super) struct DocumentFiles {
     pub assets: BTreeMap<AssetId, ProjectAsset>,
-    saved_checkpoint: u64,
+    pub(super) saved_checkpoint: u64,
+    replace_in_place: bool,
+    replace_after: Option<bool>,
     pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
     close_after: bool,
 }
@@ -150,6 +154,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn refresh_file_state(&mut self) {
+        self.state.document_file.revision = self.engine.document().revision;
         self.state.document_file.modified = self.engine.checkpoint() != self.files.saved_checkpoint;
         self.state.document_file.busy = self.files.pending.is_some();
     }
@@ -179,6 +184,57 @@ impl<R: CanvasRenderer> UiSession<R> {
                 _ => None,
             })
             .ok_or("Unknown document request".into())
+    }
+
+    pub fn set_document_replacement(&mut self, enabled: bool) {
+        self.files.replace_in_place = enabled;
+    }
+    pub(super) fn request_document_open(&mut self, opening: bool) -> Result<(), String> {
+        if self.files.replace_in_place {
+            self.require_document_idle()?;
+            if self.files.pending.is_some() {
+                return Err("A file operation is already in progress".into());
+            }
+            self.files.replace_after = Some(opening);
+            self.request_document_close()?;
+            Ok(())
+        } else {
+            self.request_document(if opening {
+                DocumentRequest::Open
+            } else {
+                DocumentRequest::New
+            })
+        }
+    }
+    fn finish_close_or_replace(&mut self) -> Result<(), String> {
+        if let Some(opening) = self.files.replace_after.take() {
+            self.request_document(if opening {
+                DocumentRequest::Open
+            } else {
+                DocumentRequest::New
+            })
+        } else {
+            self.state.document_file.close_ready = true;
+            Ok(())
+        }
+    }
+    /// A cancelled application termination can keep an already approved window.
+    pub fn reset_document_close(&mut self) {
+        self.state.document_file.close_ready = false;
+        self.refresh_commands();
+        self.changed(regions::DOCUMENT | regions::COMMANDS, false);
+    }
+    /// Export pickers may select a location only after the archive is ready.
+    pub fn retarget_project_save(
+        &mut self,
+        id: u32,
+        location: DocumentLocation,
+    ) -> Result<(), String> {
+        location.validate()?;
+        self.document_request(id)?;
+        let (_, snapshot) = self.files.pending.as_mut().unwrap();
+        snapshot.as_mut().ok_or("Save has not been captured")?.1 = location;
+        Ok(())
     }
 
     pub(super) fn request_save(&mut self, save_as: bool) -> Result<(), String> {
@@ -248,6 +304,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.refresh_file_state();
         self.files.close_after &= success;
+        if !success {
+            self.files.replace_after = None;
+        }
         self.poll_document_close();
         self.refresh_document();
         self.refresh_commands();
@@ -284,7 +343,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 title: format!("Save changes to “{}”?", self.state.document_file.title()),
             })?;
         } else {
-            self.state.document_file.close_ready = true;
+            self.finish_close_or_replace()?;
         }
         self.refresh_commands();
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::HOST, false))
@@ -305,8 +364,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.files.close_after = false;
         self.state.requests.retain(|r| r.id != id);
         match decision {
-            CloseDecision::Cancel => (),
-            CloseDecision::Discard => self.state.document_file.close_ready = true,
+            CloseDecision::Cancel => self.files.replace_after = None,
+            CloseDecision::Discard => self.finish_close_or_replace()?,
             CloseDecision::Save => {
                 self.request_save(false)?;
                 self.files.close_after = true;
@@ -317,7 +376,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::HOST, false))
     }
 
-    pub(super) fn require_document_idle(&self) -> Result<(), String> {
+    pub fn require_document_idle(&self) -> Result<(), String> {
         self.require_idle()?;
         if self.operation.active() || self.region_tools.busy() || self.pending_filters.is_some() {
             Err("Finish the current canvas operation first".into())
