@@ -68,7 +68,7 @@ function Close-Preferences {
 function Start-App {
     $script:launch++
     $script:stderr=Join-Path $run ("launch-$launch.stderr.log")
-    $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError $stderr
+    $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     Write-Output "Review process $($review.Id), launch $launch"
     Wait-Until {
         $review.Refresh()
@@ -84,6 +84,7 @@ function Close-App {
     if((Get-Item -LiteralPath $stderr).Length -ne 0){throw 'Review runtime stderr requires inspection'}
     $script:review=$null
 }
+$fixtureSucceeded=$false
 try {
     foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$null,'Process')}
     $env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
@@ -123,6 +124,11 @@ try {
     $null=Control $message ([System.Windows.Automation.ControlType]::Text)
     if((Saved).dark_base -ne '#203040'){throw 'Failed replacement damaged the last saved file'}
     Close-Preferences
+    Wait-Until {
+        $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
+        $canvas -and $canvas.Current.IsEnabled
+    } 'Preferences did not release canvas input'
     if((Control 'Undo').Current.IsEnabled){throw 'The isolated document already has undo history'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action 'Test stroke'
     Wait-Until {(Control 'Undo').Current.IsEnabled} 'The controlled stroke did not reach the shared undo history'
@@ -166,8 +172,18 @@ try {
         unreadable_file_recovery='passed'
         scope='isolated native UI Automation; not OS pen delivery or a performance benchmark'
     } | ConvertTo-Json
+    $fixtureSucceeded=$true
 } finally {
-    if($locked){$locked.Dispose()}
-    if($review){$review.Refresh();if(!$review.HasExited){& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close}}
-    foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    try {
+        if($locked){$locked.Dispose()}
+        if($review){
+            $review.Refresh()
+            if(!$review.HasExited){
+                try {& (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved}
+                catch {if($fixtureSucceeded){throw};Write-Warning ("Review cleanup: "+$_.Exception.Message)}
+            }
+        }
+    } finally {
+        foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
+    }
 }

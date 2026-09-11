@@ -46,9 +46,10 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     std::map<std::wstring,FrameworkElement> rows;
     Key key;
     Dispatch report;
+    std::function<void()> changed;
     XamlRoot xamlRoot{nullptr};
     hstring theme,editorKey,shortcutKey,resultsKey,revealed;
-    bool showing=false,closing=false,built=false,stopping=false;
+    bool showing=false,closing=false,built=false,stopping=false,showFailed=false;
     void init(){
         dialog.XamlRoot(xamlRoot);dialog.Title(box_value(L"Preferences"));dialog.CloseButtonText(L"Close");
         dialog.Resources().Insert(box_value(L"ContentDialogMaxWidth"),box_value(920.));
@@ -264,24 +265,27 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         }
     }
     fire_and_forget show(){
-        auto lifetime=shared_from_this();showing=true;closing=false;
+        auto lifetime=shared_from_this();showing=true;closing=false;changed();
         try{co_await dialog.ShowAsync();}
         catch(hresult_error const& failure){
-            showing=false;closing=false;
-            data->dispatch(O({{L"type",S(L"close_settings")}}));
-            report(to_string(failure.message()));
-            co_return;
+            showing=false;closing=false;showFailed=true;
+            if(!stopping){
+                data->dispatch(O({{L"type",S(L"close_settings")}}));
+                report(to_string(failure.message()));
+            }
+            changed();co_return;
         }
         // The popup disappears before ShowAsync completes. A new shared open
         // request may arrive during that closing animation; reconcile it only
         // after the previous operation releases the window's dialog slot.
         showing=false;closing=false;
-        if(!stopping&&preferences(data).Size())show();
+        changed();
     }
     void apply(J const& snapshot){
         if(!snapshot.HasKey(L"state"))return;
         data->state=object(snapshot,L"state");data->refreshPalette();data->model=snapshot;auto model=preferences(data);
-        if(!model.Size()){if(showing&&!closing)dialog.Hide();return;}
+        if(!model.Size()){showFailed=false;if(showing&&!closing)dialog.Hide();return;}
+        if(showFailed)return;
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};
         if(!built||theme!=data->theme()){theme=data->theme();build(model);}
         dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
@@ -308,8 +312,8 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         if(!showing)show();
     }
 };
-SettingsView::SettingsView(Dispatch dispatch,Json catalog,XamlRoot root,Key key,Dispatch report):impl(std::make_shared<Impl>()){
-    impl->data->send=std::move(dispatch);impl->data->catalog=catalog;impl->xamlRoot=root;impl->key=std::move(key);impl->report=std::move(report);impl->init();
+SettingsView::SettingsView(Dispatch dispatch,Json catalog,XamlRoot root,Key key,Dispatch report,std::function<void()> changed):impl(std::make_shared<Impl>()){
+    impl->data->send=std::move(dispatch);impl->data->catalog=catalog;impl->xamlRoot=root;impl->key=std::move(key);impl->report=std::move(report);impl->changed=std::move(changed);impl->init();
 }
 SettingsView::~SettingsView()=default;
 void SettingsView::Apply(Json const& snapshot){impl->apply(snapshot);}

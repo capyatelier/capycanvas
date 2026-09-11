@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][int]$ProcessId,
       [ValidateSet('Stroke','Undo','Redo','Resize','Close','Test stroke','Test pan','Test backlog')][string]$Action='Stroke',
-      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000)
+      [int]$X=400,[int]$Y=400,[int]$Width=1500,[int]$Height=1000,[switch]$DiscardUnsaved)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
@@ -32,14 +32,42 @@ public static class CapyWindowExercise {
 }
 '@
 $p=Get-Process -Id $ProcessId
+# Retain a queryable process handle before the HWND and process disappear.
+$null=$p.Handle
 $handle=$p.MainWindowHandle
 if(!$handle){throw 'The app has no main window.'}
 [CapyWindowExercise]::SetThreadDpiAwarenessContext([IntPtr](-4)) | Out-Null
 $rect=New-Object CapyWindowExercise+Rect
 [CapyWindowExercise]::GetWindowRect($handle,[ref]$rect)|Out-Null
 if($Action -eq 'Close') {
+    $dirty=$false
+    if($DiscardUnsaved){
+        if($p.ProcessName -ne 'CapyCanvas'){throw 'Discard requires a controlled CapyCanvas review.'}
+        $stateFile=Join-Path (Split-Path -Parent $p.Path) 'ui-state.json'
+        $snapshot=Get-Content -LiteralPath $stateFile -Raw|ConvertFrom-Json
+        if($snapshot.process_id -ne $ProcessId -or !$snapshot.model.windows_isolated_settings){
+            throw 'Discard is only available for an isolated review with a matching trace.'
+        }
+        $dirty=$snapshot.model.state.document_file.modified
+    }
     $p.CloseMainWindow()|Out-Null
-    if(!$p.WaitForExit(5000)){throw 'Close exceeded five seconds.'}
+    if($dirty){
+        $watch=[Diagnostics.Stopwatch]::StartNew();$discard=$null
+        $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+        do {
+            $discard=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.AndCondition]::new(
+                    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Discard Changes'),
+                    [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
+            if($discard){break};Start-Sleep -Milliseconds 75
+        }while($watch.Elapsed.TotalSeconds -lt 5)
+        if(!$discard){throw 'Unsaved review did not present a discard decision.'}
+        $discard.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    }
+    if(!$p.WaitForExit(5000)){throw 'Close exceeded five seconds after authorization.'}
+    $code=$p.ExitCode
+    if($null -eq $code){throw "Native review exit status is unavailable"}
+    if($code -ne 0){throw ("Native review exit code: 0x{0:X8}" -f [uint32]($code -band 0xffffffffL))}
 } elseif($Action -eq 'Resize') {
     if(![CapyWindowExercise]::MoveWindow($handle,$rect.left,$rect.top,$Width,$Height,$true)){throw 'Resize failed.'}
 } elseif($Action -in @('Undo','Redo','Test stroke','Test pan','Test backlog')) {

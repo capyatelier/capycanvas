@@ -9,10 +9,11 @@ transport, and presentation acceptance remain open; this is not a release packag
 
 ## Milestone integration
 
-Windows implementation work lives on `ports/windows`. At each milestone, merge
+Windows implementation work lives on `ports/windows`. At each major milestone, merge
 the latest `origin/main` into that branch, resolve conflicts with the shared
 behavior intact, run the affected checks and record any remaining acceptance
-gaps. Commit and push the reviewed milestone to `ports/windows`, then integrate
+gaps. Keep related implementation, fixes and validation together. Commit and push the
+reviewed major milestone to `ports/windows`, then integrate
 and push it to `main` so other port agents can use it. If another port advances
 `main` during validation, merge that update and check the affected code before
 retrying the push. Never force-push over another port's work.
@@ -282,9 +283,37 @@ separate renderer on the same D3D12 device, and retires replaced GPU resources
 off the canvas owner. Shared checkpoints and document generations protect newer
 edits during save, open and close decisions.
 
-The typed capy_document_action entry is ready for the native dialog presenter.
-File menu actions, pickers, the New drawing dialog, unsaved-close interception
-and PNG export are still pending in the Windows UI.
+The native File menu now provides New, Open, Save, Save As and Close. New drawing
+uses shared size limits and numeric expressions. Open and Save use the Windows
+App SDK desktop pickers; disk work and GPU preparation remain on the document
+worker. A modified drawing presents Save, Discard Changes and Cancel before
+replacement or close. Cancelling a picker preserves the current drawing.
+
+Preferences and document prompts share the window's dialog slot. The canvas is
+disabled until a modal dialog fully finishes. Closing commits Preferences drafts,
+waits for document authorization and outstanding dialog callbacks, and releases
+retained XAML controls before closing their window context. The opt-in UI trace
+also writes local lifecycle.log stage timings.
+
+PNG export and multiple native windows remain pending; their menu commands stay
+disabled until connected. Full workspace, physical input, device recovery,
+presentation and release acceptance remain open.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-documents.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+This fixture uses isolated profiles and synthetic projects. It drives actual
+WinUI controls and native pickers, verifies Unicode paths, save checkpoints,
+corrupt-file recovery and saved/untitled close decisions, and requires exit code
+zero within the original five-second close limit. Standard picker HWND controls
+are used where Windows exposes no UI Automation pattern. This is controlled
+automation, not evidence of physical pen delivery.
+
+To explicitly discard a synthetic dirty review during cleanup, pass
+`-DiscardUnsaved` to `exercise-window.ps1 -Action Close`. The option requires a
+matching trace from an isolated profile. Ordinary Close never selects Discard
+automatically.
 
 ~~~powershell
 cargo test --locked -p layer-windows --lib

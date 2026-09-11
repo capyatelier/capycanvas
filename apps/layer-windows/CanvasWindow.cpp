@@ -22,6 +22,13 @@ static uint64_t Now() {
     return uint64_t(ticks.QuadPart / frequency.QuadPart) * 1000000000ULL
         + uint64_t(ticks.QuadPart % frequency.QuadPart) * 1000000000ULL / uint64_t(frequency.QuadPart);
 }
+void CapyLifecycle(char const* event) {
+    if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
+    static std::mutex logMutex;
+    std::lock_guard lock(logMutex);
+    std::ofstream("lifecycle.log",std::ios::app)
+        << GetCurrentProcessId() << " " << Now() << " " << event << "\n";
+}
 CanvasWindow::~CanvasWindow() {
     { std::lock_guard lock(mutex); closing=true; paused=false; }
     wake.notify_all();space.notify_all();
@@ -47,10 +54,10 @@ void CanvasWindow::Open() {
     Automation::AutomationProperties::SetName(canvasFocus,L"Drawing canvas");
     root.Children().Append(canvasFocus);
     root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->settings||!self->settings->IsOpen())self->Key(e,true);
+        if(auto self=weak.lock())if(!self->dialogOpen.load())self->Key(e,true);
     });
     root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())if(!self->settings||!self->settings->IsOpen())self->Key(e,false);
+        if(auto self=weak.lock())if(!self->dialogOpen.load())self->Key(e,false);
     });
     root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
         if(auto self=weak.lock())self->ChromeMotion(e);
@@ -86,7 +93,7 @@ void CanvasWindow::Open() {
     });
     window.AppWindow().Closing([weak=weak_from_this()](auto&&,AppWindowClosingEventArgs const& e) {
         if(auto self=weak.lock()) {
-            if(!self->closed) {e.Cancel(true);self->Stop();}
+            if(!self->closed) {e.Cancel(true);self->RequestClose();}
         }
     });
     window.AppWindow().Changed([weak=weak_from_this()](auto&&,AppWindowChangedEventArgs const& e){
@@ -112,6 +119,7 @@ void CanvasWindow::Open() {
     window.Activate();
 }
 void CanvasWindow::Resize() {
+    if(closing||closed)return;
     float scale=panel.CompositionScaleX();
     Size next{uint32_t(std::max(1L, std::lround(panel.ActualWidth()*scale))),
               uint32_t(std::max(1L, std::lround(panel.ActualHeight()*scale))),scale};
@@ -157,7 +165,12 @@ void CanvasWindow::Start() {
     root.Children().Append(header->Root());
     settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
         [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
-        [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail("Cannot open Preferences: "+error);});
+        [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail("Cannot open Preferences: "+error);},
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
+    documents=std::make_unique<DocumentView>(
+        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),false,true);},
+        model,window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
+        [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
     if(auto snapshot=capy_snapshot(host)){
         std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
         ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
@@ -168,12 +181,12 @@ void CanvasWindow::Start() {
     inputDispatcher=inputController.DispatcherQueue();
     renderer=std::jthread([this]{Run();});
 }
-void CanvasWindow::Send(std::string json, bool input) {
+void CanvasWindow::Send(std::string json, bool input, bool document) {
     bool overflow=false;
     {
         std::lock_guard lock(mutex);
         if(closing||!host||rendererDone.load()||transportFailed)return;
-        if(!work.Push(CanvasCommand{input,std::move(json)}))overflow=transportFailed=true;
+        if(!work.Push(CanvasCommand{input,std::move(json),document}))overflow=transportFailed=true;
     }
     // UI callbacks never wait for the render worker. An exhausted command
     // channel fails explicitly, drains accepted work and cancels active input.
@@ -303,6 +316,7 @@ void CanvasWindow::Wheel(Microsoft::UI::Input::PointerEventArgs const& e) {
     if(SendIndependent(scroll))e.Handled(true);
 }
 void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
+    if(closing||closed)return;
     using VirtualKey=Windows::System::VirtualKey;
     auto key=e.Key();
     std::wstring name;
@@ -440,6 +454,11 @@ void CanvasWindow::Run() {
                 if(auto points=std::get_if<std::vector<CapyPointer>>(&item)){
                     if(points->empty())continue;
                     auto const& first=points->front();auto const& last=points->back();
+                    if(dialogOpen.load()){
+                        consumedContacts.insert(first.id);
+                        if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
+                        continue;
+                    }
                     result=capy_chrome(host,first.phase==1?2:first.phase==4?3:1,
                         first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load(),first.tool==3);
                     if(result>=0){
@@ -449,10 +468,11 @@ void CanvasWindow::Run() {
                     }
                 }
                 else if(auto scroll=std::get_if<CanvasScroll>(&item))
-                    result=capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
+                    result=dialogOpen.load()?0:capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
                 else {
                     auto& command=std::get<CanvasCommand>(item);
-                    result=command.input?capy_input(host,command.json.c_str()):capy_action(host,command.json.c_str());
+                    result=command.document?capy_document_action(host,command.json.c_str()):
+                        command.input?capy_input(host,command.json.c_str()):capy_action(host,command.json.c_str());
                     if(result>0)Fail(capy_error()); // A rejected UI action leaves the canvas running.
                 }
                 if(result<0) {Fail(capy_error());failed=true;break;}
@@ -497,19 +517,24 @@ void CanvasWindow::Run() {
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
       catch(std::exception const& error) {Fail(error.what());}
       catch(...) {Fail("Unexpected render worker failure");}
+    CapyLifecycle("render_loop_stopped");
     // UI close commits drafts before rejecting new work. Drain accepted commands
     // so a final preferences edit reaches storage even when no next frame runs.
     std::deque<CanvasWork> finalWork;
     {std::lock_guard lock(mutex);finalWork=work.Take();}
     space.notify_all();
     for(auto& item:finalWork)if(auto command=std::get_if<CanvasCommand>(&item)){
-        auto result=command->input?capy_input(host,command->json.c_str()):capy_action(host,command->json.c_str());
+        auto result=command->document?capy_document_action(host,command->json.c_str()):
+            command->input?capy_input(host,command->json.c_str()):capy_action(host,command->json.c_str());
         if(result!=0)Fail(capy_error());
         if(result<0)break;
     }
     capy_suspend(host);
+    CapyLifecycle("services_finishing");
     if(capy_finish_services(host)<0)Fail(capy_error());
+    CapyLifecycle("services_finished");
     rendererDone.store(true);
+    CapyLifecycle("renderer_done");
     space.notify_all();
     dispatcher.TryEnqueue([weak=weak_from_this()] {
         if(auto self=weak.lock()) { if(self->closing) self->Finish(); }
@@ -525,14 +550,25 @@ void CanvasWindow::ApplyResize() {
 }
 void CanvasWindow::Fail(std::string message) {
     dispatcher.TryEnqueue([weak=weak_from_this(),message=std::move(message)] {
-        if(auto self=weak.lock()){self->statusFailed=true;self->status.Text(to_hstring(message));self->status.Visibility(Visibility::Visible);}
+        if(auto self=weak.lock();self&&!self->closed&&self->status){self->statusFailed=true;self->status.Text(to_hstring(message));self->status.Visibility(Visibility::Visible);}
     });
+}
+void CanvasWindow::RequestClose() {
+    {std::lock_guard lock(mutex);if(closing||closed)return;}
+    if(!host||!renderer.joinable()||rendererDone.load()){Stop();return;}
+    if(documents&&documents->IsOpen())return;
+    if(settings)settings->CommitEdits();
+    Send(R"({"type":"close_settings"})");
+    CapyLifecycle("close_requested");
+    Send(R"({"operation":"close"})",false,true);
 }
 void CanvasWindow::Stop() {
     {std::lock_guard lock(mutex);if(closing)return;}
     if(settings)settings->CommitEdits();
     {std::lock_guard lock(mutex);closing=true;}
+    CapyLifecycle("close_authorized");
     if(settings)settings->Hide();
+    if(documents)documents->Hide();
     wake.notify_all();space.notify_all();
     if(inputController) {
         inputDispatcher.TryEnqueue([weak=weak_from_this()]{
@@ -540,19 +576,34 @@ void CanvasWindow::Stop() {
         });
         inputController.ShutdownQueueAsync().Completed([weak=weak_from_this()](auto&&,auto&&){
             if(auto self=weak.lock())self->dispatcher.TryEnqueue([weak]{
-                if(auto self=weak.lock()){self->inputDone=true;self->Finish();}
+                if(auto self=weak.lock()){CapyLifecycle("input_dispatcher_done");self->inputDone=true;self->Finish();}
             });
         });
     } else inputDone=true;
     if(!renderer.joinable()||rendererDone.load()) Finish();
 }
 void CanvasWindow::Finish() {
-    if(closed||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
+    if(closed||finishing||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
+    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen()))return;
+    finishing=true;
+    CapyLifecycle("join_renderer");
     if(renderer.joinable()) renderer.join();
+    CapyLifecycle("detach_surface");
     // The worker no longer owns any acquired image; detach on the XAML thread.
     panel.as<ISwapChainPanelNative>()->SetSwapChain(nullptr);
+    CapyLifecycle("destroy_host");
     capy_destroy(host);host=nullptr;
+    CapyLifecycle("host_destroyed");
+    // XAML controls and their retained bindings must be released while this
+    // window still owns a live XAML context, not later from App destruction.
+    settings.reset();documents.reset();header.reset();workspace.reset();
+    root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
+    window.Content(nullptr);
+    canvasFocus=nullptr;panel=nullptr;status=nullptr;toolbar=nullptr;root=nullptr;
+    inputController=nullptr;inputDispatcher=nullptr;
+    CapyLifecycle("views_released");
     closed=true;window.Close();
+    CapyLifecycle("window_closed");
 }
 
 void CanvasWindow::Publish(std::string snapshot,bool full) {
@@ -578,12 +629,36 @@ void CanvasWindow::ApplyPending() {
     }
     try {
         if(!full.empty())ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(full)));
-        if(!camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(camera)));
+        if(!closing&&!camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(camera)));
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
 
+void CanvasWindow::ApplyDialogs() {
+    if(closing){
+        // Let the coroutine release its final dialog reference before tearing
+        // down XAML. Completion callbacks may run before ShowAsync unwinds.
+        dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->Finish();});
+        return;
+    }
+    if(applyingDialogs||!settings||!documents||!lastModel.Size())return;
+    applyingDialogs=true;
+    struct Reset{bool& flag;~Reset(){flag=false;}}reset{applyingDialogs};
+    if(!documents->IsOpen())settings->Apply(lastModel);
+    documents->Apply(lastModel,settings->IsOpen());
+    UpdatePopup();
+}
 void CanvasWindow::Popup(bool open) {
-    menuOpen.store(open);
+    headerPopupOpen=open;UpdatePopup();
+}
+void CanvasWindow::UpdatePopup() {
+    if(closing||closed)return;
+    bool blocked=(settings&&settings->IsOpen())||(documents&&documents->IsOpen());
+    canvasFocus.IsEnabled(!blocked);
+    if(dialogOpen.exchange(blocked)!=blocked&&blocked){
+        heldKeys.clear();Send(R"({"type":"blur"})",true);
+    }
+    bool open=headerPopupOpen||blocked;
+    if(menuOpen.exchange(open)==open)return;
     using namespace CapyUi;
     A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));
     Send(to_string(O({{L"type",S(L"chrome")},{L"event",O({{L"kind",S(L"refresh")}})},
@@ -591,6 +666,7 @@ void CanvasWindow::Popup(bool open) {
         {L"viewport",viewport}}).Stringify()),true);
 }
 void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
+    if(closing||closed)return;
     auto point=e.GetCurrentPoint(root);auto position=point.Position();
     if(leave&&position.X>=0&&position.Y>=0&&position.X<root.ActualWidth()&&position.Y<root.ActualHeight())return;
     {
@@ -602,6 +678,7 @@ void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
     wake.notify_one();
 }
 void CanvasWindow::Fullscreen() {
+    if(closing||closed)return;
     auto app=window.AppWindow();
     app.SetPresenter(app.Presenter().Kind()==AppWindowPresenterKind::FullScreen?
         AppWindowPresenterKind::Overlapped:AppWindowPresenterKind::FullScreen);
@@ -609,7 +686,9 @@ void CanvasWindow::Fullscreen() {
 }
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
+    lastModel=model;
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
+    if(flag(object(state,L"document_file"),L"close_ready")){Stop();return;}
     if(!statusFailed){
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");
@@ -622,5 +701,5 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
     auto tabs=array(state,L"tabs");
     if(tabs.Size())window.Title(str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
-    workspace->Apply(model);header->Apply(model);settings->Apply(model);
+    workspace->Apply(model);header->Apply(model);ApplyDialogs();
 }

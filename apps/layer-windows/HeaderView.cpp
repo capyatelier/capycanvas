@@ -34,11 +34,13 @@ void menuItems(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> con
                     ToggleMenuFlyoutItem item;item.Text(text);item.IsChecked(checked.GetBoolean());
                     item.IsEnabled(flag(spec,L"enabled",true));item.FontSize(data->textSize());item.MinHeight(34);
                     item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));
+                    AutomationProperties::SetAutomationId(item,str(action,L"command"));
                     item.Click([data,action](auto&&,auto&&){if(action.Size())data->dispatch(action);});target.Append(item);
                 } else {
                     MenuFlyoutItem item;item.Text(text);item.IsEnabled(flag(spec,L"enabled",true));
                     item.FontSize(data->textSize());item.MinHeight(34);
                     item.KeyboardAcceleratorTextOverride(str(spec,L"hint"));
+                    AutomationProperties::SetAutomationId(item,str(action,L"command"));
                     item.Click([data,action](auto&&,auto&&){if(action.Size())data->dispatch(action);});target.Append(item);
                 }
             }
@@ -98,7 +100,9 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         Border spacer;spacer.Width(36);spacer.Height(36);start.Children().Append(spacer);
         auto layout=[weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->reflow();};
         start.SizeChanged(layout);end.SizeChanged(layout);
-        for(auto value:array(data->catalog,L"menus")) {
+        A menus;menus.Append(object(data->catalog,L"file_menu"));
+        for(auto value:array(data->catalog,L"menus"))menus.Append(value);
+        for(auto value:menus) {
             auto spec=value.GetObject();auto item=button(data,str(spec,L"label"),[]{});style(item,data);
             MenuFlyout flyout;
             flyout.Opening([data=data,spec](Windows::Foundation::IInspectable const& sender,auto&&){

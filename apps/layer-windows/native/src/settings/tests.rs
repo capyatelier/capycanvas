@@ -206,7 +206,7 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
     };
     let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     host.dispatch(UiAction::Invoke {
-        command: layer_ui::CommandId::NewWindow,
+        command: layer_ui::CommandId::OpenDocument,
     })
     .unwrap();
     host.dispatch(UiAction::OpenSettings {
@@ -228,7 +228,7 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
         assert_eq!(
             host.session.state().requests.len(),
             2,
-            "one save plus the unrelated NewWindow request"
+            "one settings save plus the unrelated Open document request"
         );
     }
     release.send(()).unwrap();
@@ -236,7 +236,9 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
     assert_eq!(host.session.state().requests.len(), 1);
     assert!(matches!(
         host.session.state().requests[0].kind,
-        HostRequestKind::NewWindow
+        HostRequestKind::Document {
+            request: layer_ui::DocumentRequest::Open
+        }
     ));
     assert_eq!(directory.file().load().unwrap().unwrap().pressure_gamma, 2.);
     assert!(host.session.state().host_error.is_none());

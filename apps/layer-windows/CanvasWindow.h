@@ -3,6 +3,7 @@
 #include "WorkspaceView.h"
 #include "HeaderView.h"
 #include "SettingsView.h"
+#include "DocumentView.h"
 #include "CanvasWorkBuffer.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
@@ -16,6 +17,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <optional>
+
+// Opt-in, local lifecycle diagnostics; never used on the presentation hot path.
+void CapyLifecycle(char const* event);
 
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
@@ -40,7 +44,10 @@ private:
     std::unique_ptr<WorkspaceView> workspace;
     std::unique_ptr<HeaderView> header;
     std::unique_ptr<SettingsView> settings;
-    std::atomic<bool> menuOpen{false};
+    std::unique_ptr<DocumentView> documents;
+    winrt::Windows::Data::Json::JsonObject lastModel;
+    bool applyingDialogs=false,headerPopupOpen=false;
+    std::atomic<bool> menuOpen{false},dialogOpen{false};
     struct Hover {float x,y;bool leave,touch;};
     std::optional<Hover> pendingHover;
     std::unordered_set<uint64_t> consumedContacts; // render thread
@@ -52,6 +59,9 @@ private:
     void ApplyPending();
     void ApplyModel(winrt::Windows::Data::Json::JsonObject const&);
     void Popup(bool open);
+    void UpdatePopup();
+    void ApplyDialogs();
+    void RequestClose();
     void ChromeMotion(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,bool leave=false);
     void Fullscreen();
     std::jthread renderer;
@@ -62,7 +72,7 @@ private:
     bool transportFailed=false;
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
-    bool closing=false, closed=false, resize=false, paused=false, servicesReady=false;
+    bool closing=false, closed=false, finishing=false, resize=false, paused=false, servicesReady=false;
     std::atomic<bool> rendererDone{false};
     uint64_t sequence=0;
     void Start();
@@ -72,7 +82,7 @@ private:
     void Stop();
     void Finish();
     void Fail(std::string message);
-    void Send(std::string json, bool input=false);
+    void Send(std::string json, bool input=false, bool document=false);
     bool SendIndependent(CanvasWork item);
     void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);

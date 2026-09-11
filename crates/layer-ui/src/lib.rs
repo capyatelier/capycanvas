@@ -436,13 +436,21 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::NewDocument | Self::OpenDocument | Self::SaveDocument | Self::SaveDocumentAs => {
+            Self::NewDocument
+            | Self::OpenDocument
+            | Self::SaveDocument
+            | Self::SaveDocumentAs
+            | Self::CloseDocument => {
                 matches!(
                     platform,
-                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                    Platform::Gtk
+                        | Platform::Mac
+                        | Platform::Ios
+                        | Platform::Android
+                        | Platform::Windows
                 )
             }
-            Self::CloseDocument | Self::ExportDocument => {
+            Self::ExportDocument => {
                 matches!(
                     platform,
                     Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
@@ -454,7 +462,8 @@ impl CommandId {
                     Platform::Gtk | Platform::Ios | Platform::Mac | Platform::Android
                 )
             }
-            Self::NewWindow => platform.native_windows(),
+            // Windows currently replaces documents in its single native window.
+            Self::NewWindow => platform.native_windows() && platform != Platform::Windows,
             _ => true,
         }
     }

@@ -66,8 +66,8 @@
   <ItemGroup>
 
 
-    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" /><ClInclude Include="CanvasWorkBuffer.h" /><ClInclude Include="WorkspaceView.h" /><ClInclude Include="UiControls.h" /><ClInclude Include="ColorView.h" /><ClInclude Include="ToolView.h" /><ClInclude Include="HeaderView.h" /><ClInclude Include="SettingsView.h" />
-    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" /><ClCompile Include="WorkspaceView.cpp" /><ClCompile Include="ColorView.cpp" /><ClCompile Include="ToolView.cpp" /><ClCompile Include="HeaderView.cpp" /><ClCompile Include="SettingsView.cpp" />
+    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" /><ClInclude Include="CanvasWorkBuffer.h" /><ClInclude Include="WorkspaceView.h" /><ClInclude Include="UiControls.h" /><ClInclude Include="ColorView.h" /><ClInclude Include="ToolView.h" /><ClInclude Include="HeaderView.h" /><ClInclude Include="SettingsView.h" /><ClInclude Include="DocumentView.h" />
+    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" /><ClCompile Include="WorkspaceView.cpp" /><ClCompile Include="ColorView.cpp" /><ClCompile Include="ToolView.cpp" /><ClCompile Include="HeaderView.cpp" /><ClCompile Include="SettingsView.cpp" /><ClCompile Include="DocumentView.cpp" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

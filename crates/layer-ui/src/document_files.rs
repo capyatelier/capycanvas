@@ -107,6 +107,7 @@ pub struct NewDocumentSpec {
     pub title: &'static str,
     pub labels: [&'static str; 2],
     pub extent: [u32; 2],
+    pub numeric: NumericControl,
     pub minimum: u32,
     pub maximum: u32,
     pub accept: &'static str,
@@ -117,6 +118,10 @@ pub fn new_document_spec() -> NewDocumentSpec {
         title: "New drawing",
         labels: [DOCUMENT_WIDTH_LABEL, DOCUMENT_HEIGHT_LABEL],
         extent: DEFAULT_DOCUMENT_EXTENT,
+        numeric: NumericControl {
+            kind: NumericKind::Number,
+            ..NumericControl::number(1., f64::from(MAX_NEW_DOCUMENT_DIMENSION), 1., 0)
+        },
         minimum: 1,
         maximum: MAX_NEW_DOCUMENT_DIMENSION,
         accept: "Create",

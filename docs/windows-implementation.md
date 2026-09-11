@@ -603,3 +603,42 @@ Native document dialogs and File menu wiring are the next implementation
 milestone. Full workspace parity, physical input, shutdown cost, device recovery,
 release packaging and the deferred 120 Hz benchmark remain open. This integration
 does not add a new native UI or physical-device acceptance claim.
+
+### Native Windows document workflow milestone
+
+The native File menu now supports New, Open, Save, Save As and Close. New uses
+the shared numeric expression and dimension policy; Open and Save use Windows
+desktop file pickers. Shared request IDs and document generations guard every
+replacement and unsaved approval. Picker cancellation, corrupt input and failed
+operations preserve the current drawing and its save checkpoint.
+
+Preferences and document dialogs share a single modal slot. Canvas input stays
+disabled until the dialog operation finishes, including its closing animation.
+Closing from either the File menu or the window caption follows the shared
+Save/Discard/Cancel policy, and pending Preferences drafts are committed first.
+
+The document fixture passes expression validation, Unicode file paths, existing
+file saves, Save As, picker cancellation, corrupt-open preservation, save before
+open, cancelled replacement, and saved/discarded/cancelled window close. Both
+owned document launches exit with code zero within the existing five-second
+bound. The native build, bounded C++ input test, 254 host/UI/Windows unit tests,
+all five isolated settings-storage launches, and header/Preferences and workspace
+fixtures pass before upstream integration.
+
+The earlier notes describing delayed review exits as normal were incomplete.
+Native debugging identified an integer-divide fault in Microsoft.UI.Xaml during
+late destruction of retained Preferences controls. Shutdown now waits for dialog
+coroutines to unwind and releases all retained views while the window's XAML
+context is still alive. The fixtures retain the process handle and require a
+zero exit status; empty stderr or disappearance of a process is insufficient.
+Opt-in local lifecycle traces also reach the normal application return.
+
+Related fixes and checks are kept together and published only at major
+milestones, to both `ports/windows` and `main`. Local profiles, synthetic project
+files, traces, dumps and binaries remain excluded from GitHub.
+
+PNG export and additional native windows remain disabled until implemented.
+Full workspace parity, physical pen validation, broader lifecycle/DPI/device
+recovery and release packaging remain open. The previously measured strict v4
+filter-sheet difference of 30 bytes remains unresolved; its one-byte tolerance
+is unchanged. No 120 Hz benchmark or input-latency acceptance is added here.

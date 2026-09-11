@@ -37,6 +37,7 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     try {
         winrt::Microsoft::UI::Xaml::Application::Start([](auto&&){winrt::make<App>();});
+        CapyLifecycle("application_returned");
         return 0;
     } catch(winrt::hresult_error const& error) {
         MessageBoxW(nullptr,error.message().c_str(),L"Capy Canvas could not start",MB_OK|MB_ICONERROR);
