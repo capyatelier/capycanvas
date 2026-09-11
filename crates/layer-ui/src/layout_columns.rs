@@ -481,6 +481,49 @@ impl DockLayout {
         );
         subtree_bounds(self.node(root)?, &geometry).map(|b| b.width)
     }
+
+    /// Collapsed columns touching the left and right sides of a width divider.
+    /// Follow horizontal splits so a band's outside handle can also open its
+    /// outermost collapsed subcolumn. A partially collapsed vertical stack
+    /// still resizes as a whole through its ordinary band handle.
+    pub(crate) fn collapsed_divider_columns(&self, divider: &Divider) -> [Option<u32>; 2] {
+        fn edge_column(layout: &DockLayout, node: &DockNode, right: bool) -> Option<u32> {
+            if layout.is_collapsed(node.id()) {
+                return Some(node.id());
+            }
+            if let DockNode::Split {
+                axis: Axis::Horizontal,
+                first,
+                second,
+                ..
+            } = node
+            {
+                edge_column(layout, if right { second } else { first }, right)
+            } else {
+                None
+            }
+        }
+        if divider.axis != Axis::Horizontal {
+            return [None; 2];
+        }
+        if divider.band {
+            let Some(band) = self.bands.iter().find(|b| b.id == divider.id) else {
+                return [None; 2];
+            };
+            let mut columns = [None; 2];
+            columns[usize::from(divider.reversed)] =
+                edge_column(self, &band.root, !divider.reversed);
+            columns
+        } else if let Some(DockNode::Split { first, second, .. }) = self.node(divider.id) {
+            [
+                edge_column(self, first, true),
+                edge_column(self, second, false),
+            ]
+        } else {
+            [None; 2]
+        }
+    }
+
     pub(crate) fn collapse_at_divider(
         &self,
         id: u32,
@@ -500,6 +543,9 @@ impl DockLayout {
         let left = position[0] - divider.parent.x - WORKSPACE_SPACING * 0.5;
         let right = divider.parent.x + divider.parent.width - position[0] - WORKSPACE_SPACING * 0.5;
         let should_collapse = |node: &DockNode, width: f32| {
+            if self.is_collapsed(node.id()) {
+                return false;
+            }
             let minimum = tab_min_width(node, self).max(ribbon_cross_min(
                 node,
                 Axis::Vertical,
