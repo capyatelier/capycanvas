@@ -455,35 +455,44 @@ impl Scene {
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             let offset = world_offset(packet.layers, layer.id, false);
             if let Some(stored) = r.paint_layers.iter().find(|l| l.id == layer.id) {
-                // Resolve watercolor in its native page coordinates before translating.
-                let mut coordinates: std::collections::BTreeSet<_> =
-                    stored.pages.iter().map(|p| p.coordinate).collect();
-                if r.preview_layer_id == Some(layer.id) {
-                    coordinates.extend(r.preview_pages.iter().map(|p| p.coordinate));
-                }
-                if stored.watercolor.is_some() {
-                    let previous = coordinates.clone();
-                    for c in previous {
-                        for y in c[1].saturating_sub(1)..=c[1] + 1 {
-                            for x in c[0].saturating_sub(1)..=c[0] + 1 {
-                                coordinates.insert([x, y]);
-                            }
-                        }
-                    }
-                }
-                for c in coordinates {
-                    if c[0] * PAGE_SIZE >= r.document_extent[0]
-                        || c[1] * PAGE_SIZE >= r.document_extent[1]
-                    {
-                        continue;
-                    }
+                // A translated output tile intersects at most four native
+                // source tiles. Watercolor samples its halo from their bindings;
+                // never scan/expand every page in the layer for every output tile.
+                let origin = layer_core::Point {
+                    x: (tile[0] * PAGE_SIZE) as f32 - offset.x,
+                    y: (tile[1] * PAGE_SIZE) as f32 - offset.y,
+                };
+                let region = pixel_rect(
+                    layer_core::Rect {
+                        min: origin,
+                        max: layer_core::Point {
+                            x: origin.x + PAGE_SIZE as f32,
+                            y: origin.y + PAGE_SIZE as f32,
+                        },
+                    },
+                    r.document_extent,
+                );
+                for c in page_coordinates(region) {
                     let rect = local_rect(c, offset, tile);
                     if !intersects(rect) {
                         continue;
                     }
                     let preview = r.preview_layer_id == Some(layer.id)
                         && !r.preview_damage.intersect(page_rect(c)).is_empty();
-                    if stored.watercolor.is_some() {
+                    let wet_nearby = stored.watercolor.is_some()
+                        && stored
+                            .watercolor_wetness_pages
+                            .iter()
+                            .chain(
+                                r.preview_watercolor_wetness_pages
+                                    .iter()
+                                    .filter(|_| preview),
+                            )
+                            .any(|p| {
+                                p.coordinate[0].abs_diff(c[0]) <= 1
+                                    && p.coordinate[1].abs_diff(c[1]) <= 1
+                            });
+                    if wet_nearby {
                         if let Some(binding) =
                             r.watercolor_neighborhood_bind_group(stored, c, preview)
                         {
@@ -1122,7 +1131,7 @@ impl Scene {
             }
             match job {
                 Job::Clear(target, color) => {
-                    if self.jobs.get(i+1).is_some_and(|next|matches!(next,Job::Draw{target:next,..}|Job::Effect{target:next,..} if next==target)) {continue;}
+                    if self.jobs.get(i+1).is_some_and(|next|matches!(next,Job::Draw{target:next,..}|Job::Effect{target:next,..}|Job::Watercolor{target:next,..} if next==target)) {continue;}
                     let attachments = [Some(attachment(target, wgpu::LoadOp::Clear(*color)))];
                     let _pass = encoder.begin_render_pass(&descriptor(&attachments));
                 }
@@ -1236,7 +1245,13 @@ impl Scene {
                     record,
                     coordinate,
                 } => {
-                    let attachments = [Some(attachment(target, wgpu::LoadOp::Load))];
+                    let load = match i.checked_sub(1).and_then(|j| self.jobs.get(j)) {
+                        Some(Job::Clear(previous, color)) if previous == target => {
+                            wgpu::LoadOp::Clear(*color)
+                        }
+                        _ => wgpu::LoadOp::Load,
+                    };
+                    let attachments = [Some(attachment(target, load))];
                     let mut pass = encoder.begin_render_pass(&descriptor(&attachments));
                     pass.set_pipeline(&r.pipelines.watercolor_composite);
                     pass.set_bind_group(0, &r.style_bind_group, &[*record * r.style_stride as u32]);
@@ -1283,10 +1298,12 @@ impl Pipelines {
         });
         let shader = Deferred::new({
             let device = device.clone();
-            move || device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("layer scene"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
-            })
+            move || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("layer scene"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+                })
+            }
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene composition"),
@@ -1294,16 +1311,19 @@ impl Pipelines {
             immediate_size: 0,
         });
         let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)].map(|blend| {
-            let (device, pipeline_layout, shader) = (device.clone(), pipeline_layout.clone(), shader.clone());
-            Deferred::new(move || fullscreen_pipeline(
-                &device,
-                &pipeline_layout,
-                &shader,
-                "fragment_main",
-                blend,
-                COLOR_FORMAT,
-                "tile layer composition",
-            ))
+            let (device, pipeline_layout, shader) =
+                (device.clone(), pipeline_layout.clone(), shader.clone());
+            Deferred::new(move || {
+                fullscreen_pipeline(
+                    &device,
+                    &pipeline_layout,
+                    &shader,
+                    "fragment_main",
+                    blend,
+                    COLOR_FORMAT,
+                    "tile layer composition",
+                )
+            })
         });
         Self {
             uniforms,
@@ -1318,7 +1338,13 @@ fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
     let r = WgpuRasterizer::new_headless().unwrap();
     let a = Scene::new(&r);
     let b = Scene::new(&r);
-    assert_eq!(a.pipeline, r.scene_pipelines.pipeline.clone().map(|p| p.compile().clone()));
+    assert_eq!(
+        a.pipeline,
+        r.scene_pipelines
+            .pipeline
+            .clone()
+            .map(|p| p.compile().clone())
+    );
     assert_eq!(a.pipeline, b.pipeline);
     assert_eq!(a.uniforms, b.uniforms);
     assert_eq!(a.layout, b.layout);

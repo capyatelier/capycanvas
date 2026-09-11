@@ -4,7 +4,30 @@ use std::collections::BTreeMap;
 use wgpu::util::DeviceExt;
 
 pub(super) struct MaskPage {
+    pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+}
+impl MaskPage {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sparse layer mask R8 page"),
+            size: wgpu::Extent3d {
+                width: PAGE_SIZE,
+                height: PAGE_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        Self { texture, view }
+    }
 }
 pub(super) struct MaskRenderer {
     pub definitions: BTreeMap<LayerId, layer_core::LayerMask>,
@@ -160,16 +183,7 @@ impl MaskRenderer {
         Self::masks(layers).any(|m| m.id == id)
     }
     fn masks(layers: &[Layer]) -> impl Iterator<Item = &layer_core::LayerMask> {
-        layers.iter().flat_map(|l| {
-            l.mask.iter().chain(
-                l.operations
-                    .iter()
-                    // Transforms sample packed selection directly, without
-                    // duplicate R8 mask pages for that immutable selection.
-                    .filter(|o| !matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
-                    .map(|o| &o.coverage),
-            )
-        })
+        layers.iter().flat_map(Layer::masks)
     }
     pub fn prepare(
         &mut self,
@@ -185,9 +199,7 @@ impl MaskRenderer {
             self.pages.clear();
         }
         self.pages.retain(|(id, _), _| Self::is_mask(layers, *id));
-        self.definitions = Self::masks(layers)
-            .map(|m| (m.id, m.clone()))
-            .collect();
+        self.definitions = Self::masks(layers).map(|m| (m.id, m.clone())).collect();
         for mask in Self::masks(layers) {
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
@@ -219,23 +231,7 @@ impl MaskRenderer {
                 &self.empty_selection
             };
             for coordinate in missing {
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("sparse layer mask R8 page"),
-                    size: wgpu::Extent3d {
-                        width: PAGE_SIZE,
-                        height: PAGE_SIZE,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                });
-                let view = texture.create_view(&Default::default());
+                let MaskPage { texture, view } = MaskPage::new(device);
                 let data = [
                     coordinate[0] as f32 * PAGE_SIZE as f32,
                     coordinate[1] as f32 * PAGE_SIZE as f32,
@@ -282,7 +278,8 @@ impl MaskRenderer {
                 pass.set_bind_group(0, &binding, &[]);
                 pass.draw(0..3, 0..1);
                 drop(pass);
-                self.pages.insert((mask.id, coordinate), MaskPage { view });
+                self.pages
+                    .insert((mask.id, coordinate), MaskPage { texture, view });
             }
         }
         Ok(())
@@ -295,12 +292,36 @@ impl WgpuRasterizer {
         encoder: &mut wgpu::CommandEncoder,
         layers: &[Layer],
         batches: &[DabBatch],
+        committed: &[(LayerId, u32)],
     ) -> Result<(), GpuRasterError> {
         for (index, batch) in batches
             .iter()
             .enumerate()
-            .filter(|(_, b)| MaskRenderer::is_mask(layers, b.layer_id) && b.dab_count > 0)
+            .filter(|(_, b)| MaskRenderer::is_mask(layers, b.layer_id))
         {
+            if let DabBatchKind::LayerOperation(op) = batch.kind {
+                if !committed.contains(&(batch.layer_id, op)) {
+                    let operation = &layers
+                        .iter()
+                        .find_map(|l| l.target_history(batch.layer_id))
+                        .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?
+                        .1[op as usize];
+                    let mut transforms = self.transforms.take().unwrap();
+                    let result = transforms.apply(
+                        self,
+                        encoder,
+                        batch.layer_id,
+                        operation,
+                        self.document_extent,
+                    );
+                    self.transforms = Some(transforms);
+                    result?;
+                }
+                continue;
+            }
+            if batch.dab_count == 0 {
+                continue;
+            }
             self.prepare_selection(encoder, &batch.style)?;
             let damage = batch_pixel_rect(batch, self.document_extent);
             for coordinate in page_coordinates(damage) {

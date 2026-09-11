@@ -1,9 +1,103 @@
 //! Layer ownership and coverage, independent of UI widgets and GPU storage.
 use super::*;
 
+/// World translation of a paint target or its independently placed mask.
+pub fn target_offset(layers: &[Layer], id: LayerId) -> Point {
+    let Some(owner) = layers
+        .iter()
+        .find(|l| l.id == id || l.mask.as_ref().is_some_and(|m| m.id == id))
+    else {
+        return Point::default();
+    };
+    let mut offset = if owner.id == id {
+        owner.properties.offset
+    } else {
+        owner.mask.as_ref().unwrap().offset
+    };
+    let mut parent = owner.properties.parent;
+    for _ in 0..layers.len() {
+        let Some(layer) = parent.and_then(|id| layers.iter().find(|l| l.id == id)) else {
+            break;
+        };
+        offset.x += layer.properties.offset.x;
+        offset.y += layer.properties.offset.y;
+        parent = layer.properties.parent;
+    }
+    offset
+}
+
+impl Layer {
+    /// Coverage snapshots remain replayable after Apply mask removes the live mask.
+    pub fn masks(&self) -> impl Iterator<Item = &LayerMask> {
+        self.mask.iter().chain(
+            self.operations
+                .iter()
+                .filter(|op| !matches!(op.kind, LayerOperationKind::Transform(_)))
+                .map(|op| &op.coverage),
+        )
+    }
+    pub fn target_history(&self, id: LayerId) -> Option<(&[StrokeId], &[LayerOperation])> {
+        if id == self.id {
+            return Some((&self.strokes, &self.operations));
+        }
+        self.masks()
+            .find(|m| m.id == id)
+            .map(|m| (m.strokes.as_slice(), m.operations.as_slice()))
+    }
+    /// Only editable targets, never immutable operation coverage snapshots.
+    pub fn target_history_mut(
+        &mut self,
+        id: LayerId,
+    ) -> Option<(&mut Vec<StrokeId>, &mut Vec<LayerOperation>)> {
+        if id == self.id {
+            return Some((&mut self.strokes, &mut self.operations));
+        }
+        self.mask.as_mut().filter(|m| m.id == id).map(|m| {
+            (
+                Arc::make_mut(&mut m.strokes),
+                Arc::make_mut(&mut m.operations),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod organization_tests {
     use super::*;
+    #[test]
+    fn mask_history_is_bounded_ordered_and_retained_only_by_apply_mask() {
+        let op = LayerOperation {
+            after_stroke: 0,
+            coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
+            kind: LayerOperationKind::Transform(ImageTransform::default()),
+        };
+        let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+        mask.operations = Arc::new(vec![op.clone()]);
+        assert!(mask.validate().is_ok());
+        let mut snapshot = LayerOperation {
+            after_stroke: 0,
+            coverage: mask.clone(),
+            kind: LayerOperationKind::ApplyMask,
+        };
+        assert!(snapshot.validate().is_ok());
+        snapshot.kind = op.kind.clone();
+        assert!(
+            snapshot.validate().is_err(),
+            "transform coverage must not recursively contain transforms"
+        );
+        Arc::make_mut(&mut mask.operations)[0].after_stroke = 1;
+        assert!(mask.validate().is_err());
+        mask.strokes = Arc::new(vec![StrokeId(1)]);
+        assert!(mask.validate().is_ok());
+        Arc::make_mut(&mut mask.operations).push(op);
+        assert!(mask.validate().is_err(), "replay order is monotonic");
+        mask.operations = Arc::default();
+        mask.default_coverage = f32::NAN;
+        assert!(mask.validate().is_err());
+        mask.default_coverage = 1.;
+        mask.offset.x = f32::INFINITY;
+        assert!(mask.validate().is_err());
+    }
     #[test]
     fn references_preserve_objects_and_ancestors_not_unrelated_siblings() {
         let mut doc = Document::new("references", 128, 128);
@@ -465,6 +559,9 @@ pub struct LayerMask {
     pub default_coverage: f32,
     pub inverted: bool,
     pub strokes: Arc<Vec<StrokeId>>,
+    /// Ordered raster edits share the paint-layer operation format. Apply mask
+    /// retains this history; transform selections cannot contain nested edits.
+    pub operations: Arc<Vec<LayerOperation>>,
     /// Inspection only; never participates in exported color.
     pub show_area: bool,
 }
@@ -528,6 +625,12 @@ impl LayerOperation {
         }
     }
     fn validate(&self) -> Result<(), DocumentError> {
+        if !self.coverage.operations.is_empty() && self.kind != LayerOperationKind::ApplyMask {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Nested coverage operations",
+            ));
+        }
+        self.coverage.validate()?;
         if self
             .coverage
             .initial
@@ -579,6 +682,35 @@ impl LayerOperation {
     }
 }
 impl LayerMask {
+    fn validate(&self) -> Result<(), DocumentError> {
+        if !self.default_coverage.is_finite()
+            || !(0.0..=1.0).contains(&self.default_coverage)
+            || !self.offset.x.is_finite()
+            || !self.offset.y.is_finite()
+            || self
+                .initial
+                .as_ref()
+                .is_some_and(|s| s.affine.inverse().is_none())
+        {
+            return Err(DocumentError::InvalidLayerOperation("Invalid mask value"));
+        }
+        let mut previous = 0;
+        for op in self.operations.iter() {
+            if !matches!(op.kind, LayerOperationKind::Transform(_)) {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Unsupported mask operation",
+                ));
+            }
+            if op.after_stroke < previous || op.after_stroke > self.strokes.len() {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Invalid mask operation order",
+                ));
+            }
+            op.validate()?;
+            previous = op.after_stroke;
+        }
+        Ok(())
+    }
     pub fn reveal_all(id: LayerId, offset: Point) -> Self {
         Self {
             id,
@@ -589,6 +721,7 @@ impl LayerMask {
             default_coverage: 1.0,
             inverted: false,
             strokes: Arc::default(),
+            operations: Arc::default(),
             show_area: false,
         }
     }
@@ -931,24 +1064,7 @@ impl Document {
             .map_or(self.active_layer, |m| m.id)
     }
     pub fn layer_offset(&self, id: LayerId) -> Point {
-        let Some(owner) = self.target_owner(id) else {
-            return Point::default();
-        };
-        let mut offset = if owner.id == id {
-            owner.properties.offset
-        } else {
-            owner.mask.as_ref().unwrap().offset
-        };
-        let mut parent = owner.properties.parent;
-        for _ in 0..self.layers.len() {
-            let Some(layer) = parent.and_then(|id| self.layer(id)) else {
-                break;
-            };
-            offset.x += layer.properties.offset.x;
-            offset.y += layer.properties.offset.y;
-            parent = layer.properties.parent;
-        }
-        offset
+        target_offset(&self.layers, id)
     }
     pub fn is_locked(&self, id: LayerId) -> bool {
         let mut target = self.target_owner(id);
@@ -966,6 +1082,9 @@ impl Document {
     pub fn validate_layer(&self, layer: &Layer) -> Result<(), DocumentError> {
         for op in &layer.operations {
             op.validate()?;
+        }
+        if let Some(mask) = &layer.mask {
+            mask.validate()?;
         }
         if (layer.kind == LayerKind::Effect) != layer.effect.is_some() {
             return Err(DocumentError::InvalidLayerOperation("Invalid effect layer"));

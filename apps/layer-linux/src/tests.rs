@@ -1187,6 +1187,72 @@ fn native_operation_tool() {
     native_pen_path(&w, &[[700., 750.], [700., 750.]]);
     let c = state(&w).colors.foreground;
     assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");
+    // A selected mask uses the same native controls. By default the linked
+    // artwork travels with it, and one undo restores both targets.
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::AddMask {
+            id: original.active_layer.0,
+            replace: false,
+        },
+    });
+    pump(150);
+    let masked = document();
+    assert!(masked.active_mask);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ScaleRotate,
+    });
+    pump(100);
+    assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
+    edit_number(&number("transform_x"), "240");
+    pump(150);
+    capture_reference(&w, &format!("{dir}/operation-linked-mask.png"), 1.);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ApplyTransform,
+    });
+    pump(150);
+    let transformed = document();
+    assert_eq!(
+        transformed.layers[0]
+            .mask
+            .as_ref()
+            .unwrap()
+            .operations
+            .len(),
+        1
+    );
+    assert_eq!(
+        transformed.layers[0].operations.len(),
+        masked.layers[0].operations.len() + 1
+    );
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    pump(150);
+    assert_eq!(document().layers, masked.layers);
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::LinkMask {
+            id: original.active_layer.0,
+            value: false,
+        },
+    });
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ScaleRotate,
+    });
+    pump(100);
+    edit_number(&number("transform_x"), "240");
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::ApplyTransform,
+    });
+    pump(150);
+    assert_eq!(
+        document().layers[0].operations.len(),
+        masked.layers[0].operations.len()
+    );
+    assert_eq!(
+        document().layers[0].mask.as_ref().unwrap().operations.len(),
+        1
+    );
+    capture_reference(&w, &format!("{dir}/operation-unlinked-mask.png"), 1.);
     assert!(!w.status.is_visible(), "{}", w.status.text());
     w.window.destroy();
     pump(50);
@@ -8251,9 +8317,51 @@ fn native_frame_pacing() {
                 },
             });
             native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
+            let mask_mode = std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default();
+            if mask_mode == "watercolor" {
+                w.dispatch(UiAction::Layer {
+                    action: LayerAction::Tool {
+                        tool: LayerCanvasTool::Paint,
+                    },
+                });
+                w.dispatch(UiAction::SelectBrush {
+                    id: DefaultBrushPreset::WatercolorWash as u32,
+                });
+                w.dispatch(UiAction::SetBrushSize { value: 600. });
+                native_pen_path(&w, &[[900., 650.], [1100., 800.]]);
+            }
+            if !mask_mode.is_empty() {
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::Lasso,
+                });
+                native_pen_path(
+                    &w,
+                    &[
+                        [160., 128.],
+                        [1888., 128.],
+                        [1888., 1408.],
+                        [160., 1408.],
+                        [160., 128.],
+                    ],
+                );
+                let id = w
+                    .gpu
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .engine()
+                    .document()
+                    .active_layer
+                    .0;
+                w.dispatch(UiAction::Layer {
+                    action: LayerAction::AddMask { id, replace: false },
+                });
+            }
             w.dispatch(UiAction::Invoke {
                 command: CommandId::ScaleRotate,
             });
+            assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Transform);
         }
         pump(300);
         *worker_stats.lock().unwrap() = Default::default();
@@ -8372,6 +8480,7 @@ fn native_frame_pacing() {
             "path": "app-owned Wayland Vulkan subsurface",
             "cursor": std::env::var("LAYER_PACING_CURSOR").as_deref() != Ok("0"),
             "navigator": std::env::var("LAYER_PACING_NAVIGATOR").as_deref() == Ok("1"),
+            "transform_mask": std::env::var("LAYER_PACING_TRANSFORM_MASK").unwrap_or_default(),
             "input_cpu": stats.input_cpu,
             "input_handler_cpu": stats.input_handler_cpu,
             "frame_handler_cpu": stats.frame_handler_cpu,

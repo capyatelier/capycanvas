@@ -19,7 +19,12 @@ fn upload(r: &WgpuRasterizer, size: [u32; 2], pixels: &[u8]) -> wgpu::Texture {
     t
 }
 fn read(r: &WgpuRasterizer, t: &wgpu::Texture) -> Vec<u8> {
-    let pitch = (t.width() * 4).div_ceil(256) * 256;
+    let channels = if t.format() == wgpu::TextureFormat::R8Unorm {
+        1
+    } else {
+        4
+    };
+    let pitch = (t.width() * channels).div_ceil(256) * 256;
     let b = r.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("test pixel readback"),
         size: u64::from(pitch) * u64::from(t.height()),
@@ -46,7 +51,7 @@ fn read(r: &WgpuRasterizer, t: &wgpu::Texture) -> Vec<u8> {
         .get_mapped_range(..)
         .unwrap()
         .chunks_exact(pitch as usize)
-        .flat_map(|row| row[..t.width() as usize * 4].iter().copied())
+        .flat_map(|row| row[..(t.width() * channels) as usize].iter().copied())
         .collect();
     b.unmap();
     pixels
@@ -117,6 +122,157 @@ fn draw(
     )
     .unwrap();
     r.queue().submit([e.finish()]);
+}
+
+#[test]
+fn visibility_transform_matches_scalar_replacement_oracle() {
+    let r = WgpuRasterizer::new_headless().unwrap();
+    let mut pass = PixelTransform::staged_visibility(&r.device().clone().into());
+    let size = [17, 13];
+    let origin = [257, 259];
+    let pixels: Vec<_> = (0..size[0] * size[1])
+        .map(|i| ((i * 73) % 256) as u8)
+        .collect();
+    let texture = |size: [u32; 2]| {
+        r.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("visibility transform oracle"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    };
+    let input = texture(size);
+    r.queue().write_texture(
+        input.as_image_copy(),
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(size[0]),
+            rows_per_image: Some(size[1]),
+        },
+        input.size(),
+    );
+    let output = texture([35, 31]);
+    let output_origin = [250, 252];
+    let values: Vec<u32> = (0..size[0] * size[1]).map(|i| i % 5).collect();
+    for background in [0., 0.4, 1.] {
+        for mode in 0..3 {
+            let buffer = mask(&r, size, origin, &values, mode == 2);
+            let mut source = pass
+                .source(r.device(), &input, origin, (mode != 0).then_some(&buffer))
+                .unwrap();
+            source.background = background;
+            let coverage = |x: i32, y: i32| -> f64 {
+                if mode == 0 {
+                    return 1.;
+                }
+                let (x, y) = (x - origin[0], y - origin[1]);
+                let value = if x >= 0 && y >= 0 && x < size[0] as i32 && y < size[1] as i32 {
+                    values[(y * size[0] as i32 + x) as usize] as f64 / 4.
+                } else {
+                    0.
+                };
+                if mode == 2 { 1. - value } else { value }
+            };
+            let pixel = |x: i32, y: i32| -> f64 {
+                let (x, y) = (x - origin[0], y - origin[1]);
+                if x >= 0 && y >= 0 && x < size[0] as i32 && y < size[1] as i32 {
+                    pixels[(y * size[0] as i32 + x) as usize] as f64 / 255.
+                } else {
+                    background as f64
+                }
+            };
+            for interpolation in [Interpolation::Nearest, Interpolation::Linear] {
+                for affine in [
+                    Affine::IDENTITY,
+                    Affine::translation(Point { x: 4., y: -3. }),
+                    Affine::translation(Point { x: 0.25, y: 0.6 }),
+                    Affine::around(
+                        Point { x: 265.5, y: 265.5 },
+                        [-1.7, 0.7],
+                        0.31,
+                        Point::default(),
+                    ),
+                    Affine::translation(Point { x: 1e20, y: -1e20 }),
+                ] {
+                    draw(
+                        &r,
+                        &mut pass,
+                        &source,
+                        &output,
+                        output_origin,
+                        ImageTransform {
+                            affine,
+                            interpolation,
+                        },
+                    );
+                    let actual = read(&r, &output);
+                    let [a, b, c, d, tx, ty] = affine.0.map(f64::from);
+                    let det = a * d - b * c;
+                    for y in 0..output.height() {
+                        for x in 0..output.width() {
+                            let (gx, gy) =
+                                (x as i32 + output_origin[0], y as i32 + output_origin[1]);
+                            let (dx, dy) = (gx as f64 + 0.5 - tx, gy as f64 + 0.5 - ty);
+                            let (u, v) = ((d * dx - c * dy) / det, (-b * dx + a * dy) / det);
+                            let (mut moved, mut area) = (0., 0.);
+                            if u.abs() < 1e9 && v.abs() < 1e9 {
+                                let mut sample = |ix, iy, w| {
+                                    let w = w * coverage(ix, iy);
+                                    moved += pixel(ix, iy) * w;
+                                    area += w;
+                                };
+                                if interpolation == Interpolation::Nearest {
+                                    sample(u.floor() as i32, v.floor() as i32, 1.);
+                                } else {
+                                    let (left, top) =
+                                        ((u - 0.5).floor() as i32, (v - 0.5).floor() as i32);
+                                    for iy in top..=top + 1 {
+                                        for ix in left..=left + 1 {
+                                            sample(
+                                                ix,
+                                                iy,
+                                                (1. - (u - 0.5 - ix as f64).abs())
+                                                    * (1. - (v - 0.5 - iy as f64).abs()),
+                                            );
+                                        }
+                                    }
+                                }
+                            } else if mode != 1 {
+                                moved = background as f64;
+                                area = 1.;
+                            }
+                            let base = pixel(gx, gy);
+                            let expected = if affine == Affine::IDENTITY {
+                                base
+                            } else {
+                                let m = coverage(gx, gy);
+                                moved + (base * (1. - m) + background as f64 * m) * (1. - area)
+                            };
+                            let expected = (expected.clamp(0., 1.) * 255.).round() as u8;
+                            let actual = actual[(y * output.width() + x) as usize];
+                            assert!(
+                                actual.abs_diff(expected) <= 2,
+                                "background={background} mode={mode} {interpolation:?} {affine:?} at {gx},{gy}: {actual} != {expected}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(read(&r, &input), pixels);
 }
 
 #[test]

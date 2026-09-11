@@ -1188,10 +1188,82 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   0.151/0.289/0.430ms; GTK handler is 0.015/0.040/0.056ms. Medians are slightly
   higher than the previous startup milestone's run; these separate short runs
   do not isolate driver/timing variation from code cost. The frame budget holds.
-- Still outstanding for Operation: active/linked-mask transforms and a readiness
+- Outstanding at this milestone: active/linked-mask transforms and a readiness
   gate if interaction begins before optional transform compilation finishes.
   Until mask support is implemented, Scale / rotate is unavailable for an active
   mask or paint with a linked mask; unlinked masks remain stationary. Bounds are
   conservative document-history bounds rather than a pixel-tight GPU reduction.
   Collapsible columns, region refinements, complete menus/file workflows, the
   final default layout, final validation and human approval remain required.
+
+### Active and linked mask transforms
+
+- Operation now accepts the active mask as well as paint with a linked mask.
+  The shared controller uses each target's own origin and conservative content
+  bounds; the renderer captures each target once. A linked pair shares the same
+  canvas-space transform and selection even with different layer/mask offsets.
+  Unlinked targets remain stationary. Apply commits both histories and the moved
+  selection as one undo entry, retaining the displayed GPU result without another
+  capture or resample. Masks on non-paint owners transform their mask only.
+- Mask edits reuse ordered layer operations. Replay interleaves transforms with
+  mask strokes, and Apply Mask retains that history after removing the live mask.
+  Validation rejects invalid defaults, unordered edits and recursive transform
+  coverage. R8 visibility uses replacement with selection coverage and its implicit
+  background value, not pigment accumulation or wetness's maximum operation.
+  Inversion remains a composition property. No CPU pixel rasterization/readback
+  enters the interactive transform path.
+- Cancellation now restores both targets before allocating pages for a new
+  contact. This fixes newly allocated paint/mask tiles being discarded as preview
+  tiles. Damage from a mask preview invalidates its owning layer and dependent
+  cached/clipped filters. Saved mask transforms promote their shader dependencies
+  into the document startup stage.
+- The large linked-watercolor benchmark exposed avoidable scene work. Composition
+  now queries only the at-most-four native tiles intersecting an output tile,
+  instead of expanding/scanning the entire layer page set for every tile. Pigment
+  and scalar fields capture their own bounds, and transformed wetness stays sparse.
+  Guaranteed-dry neighborhoods bypass watercolor edge resolution. Watercolor
+  scratch clears are folded into their render pass, like ordinary scene draws.
+- Validation: 33 core, 30 engine, 3 render-contract and 187 shared UI tests;
+  101 GPU correctness tests (16 hardware benchmarks excluded). Independent pixel
+  oracles cover visibility defaults, fractional/inverted selections, crop,
+  reflection, interpolation and distant transforms. Twelve linked/unlinked mask
+  scenarios cover preview/replay equivalence, exact cancellation, atomic commit,
+  subsequent ink and Apply Mask. Cached filter tests include mask-only transforms.
+  GTK native controls, Apply/Cancel/undo and linked/unlinked mask screenshots pass.
+  Workspace/Wasm checks and strict core/engine/render/UI/GTK Clippy pass. Shared
+  UI tests cover host profiles; no new native web/Android/Apple UI run is claimed.
+- Final renderer-only release timings, 2048×1536 imported artwork, last 120 of
+  160 live updates, median/p95/p99 milliseconds:
+
+  | Artwork | CPU submit | GPU | GPU completion included |
+  | --- | --- | --- | --- |
+  | Selected G pen | 0.188 / 0.205 / 0.241 | 0.109 / 0.112 / 0.116 | 0.345 / 0.388 / 0.439 |
+  | Selected wet round | 0.305 / 0.461 / 1.269 | 0.172 / 0.185 / 0.204 | 0.549 / 0.744 / 1.473 |
+  | Selected watercolor | 0.456 / 0.622 / 0.945 | 0.193 / 0.210 / 0.258 | 0.730 / 0.952 / 1.335 |
+  | Selected G pen + linked mask | 0.645 / 0.737 / 0.865 | 0.525 / 0.530 / 0.553 | 1.263 / 1.393 / 1.579 |
+  | Selected watercolor + linked mask | 2.459 / 4.084 / 4.904 | 1.385 / 1.455 / 1.643 | 4.077 / 5.835 / 6.731 |
+
+  Before these scene/sparsity fixes, the isolated linked-watercolor run measured
+  CPU 3.165/5.180/5.734, GPU 1.509/1.641/1.788 and completed
+  4.938/7.345/7.867ms. An earlier run overlapped compilation and exceeded 8.33ms;
+  it is not used as the isolated baseline. These short runs have timing variance,
+  but deterministic work/memory reductions and pixel equivalence are verified.
+  Linked-watercolor capture/uniform storage fell from 21,231,344 to 19,134,192
+  bytes (about 2MiB); without the mask it is 14,456,512 bytes. This excludes scene
+  caches and persistent layer pages. First-use linked-watercolor completion was
+  8.608ms in the final run; steady-state percentiles do not cover that first use.
+- Six-second GTK linked-watercolor transform drag: 721 submitted, 717 presented,
+  four discarded; 119.51Hz real Wayland presentation. Worker CPU
+  3.745/5.111/6.025ms, GPU 5.092/6.455/7.584ms, GTK frame handler
+  0.117/0.248/0.308ms, shared frame processing 0.010/0.025/0.029ms. The first two
+  frames exceeded the budget; this is not uninterrupted 120Hz. Ordinary 384px
+  G-Pen regression: 119.96Hz, zero discarded, CPU 0.273/0.634/0.719ms,
+  GPU 0.141/0.321/0.479ms and GTK frame handler 0.014/0.038/0.049ms. Synthetic
+  input, real presentation; not physical pen-to-photon latency. Use
+  `LAYER_PACING_BRUSH=Transform LAYER_PACING_TRANSFORM_MASK=watercolor` with
+  `native_frame_pacing` to reproduce the linked scenario.
+- Local review images: `artifacts/familiar-workspace/operation-linked-mask.png`
+  and `operation-unlinked-mask.png`; screenshots, traces and caches remain ignored.
+  Next: early optional-pipeline readiness/first-use responsiveness, collapsible
+  columns, region refinements, complete menus/file workflows, final default layout
+  and the complete GTK validation/human approval gate. The goal remains active.
