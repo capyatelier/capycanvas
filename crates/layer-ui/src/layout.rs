@@ -420,7 +420,8 @@ pub enum PanelKind {
 impl Panel {
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if matches!(self, Self::ToolSettings | Self::Color) && platform == crate::Platform::Windows
+        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
+            && platform == crate::Platform::Windows
         {
             return true;
         }

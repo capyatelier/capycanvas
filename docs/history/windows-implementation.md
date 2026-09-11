@@ -711,3 +711,65 @@ hardware D3D12 document tests, strict Windows Clippy and the native WinUI build.
 Two consecutive native document/export fixture runs pass all nine checks each;
 their four owned launches exit with code zero within the existing shutdown
 bound. The full renderer suite and presentation probes were not repeated.
+
+### Live Windows Navigator and minimized-window decisions
+
+Navigator now projects native WinUI camera controls and pointer capture while
+sampling the live composition in the canvas's existing GPU presentation pass.
+Shared geometry drives both the XAML image cutout and the GPU image/outline,
+including document aspect changes, camera rotation/reflection and display scale.
+Placements are bounded and validated atomically; unchanged layout stays idle.
+Overview resources are prepared before painting becomes available and reused
+across updates. No preview bitmap or CPU canvas readback is added.
+
+The native panel retains controls during camera updates, document replacement
+and resize. Preview height and control spacing follow Android's panel, with
+shared palette colors in both themes. A light-theme surround mismatch found by
+visual review is covered by an app-only pixel assertion. Windows still uses its
+existing dock preset until Properties, Filters, columns and drawers are complete.
+
+Minimized close decisions now restore the owner before showing UI. Actual native
+testing found that OverlappedPresenter.Restore lost the previous maximized state;
+SW_RESTORE preserves it. The fix is limited to operations requiring a decision
+or picker, leaving existing-path background saves undisturbed. Clean minimized
+close already worked on the tested hardware; no speculative render-loop rewrite
+was made.
+
+This milestone integrates main through 5f0cddd, preserving the full web editor,
+Apple independent windows, Android header status and reorganized documentation.
+The combined tree passes 337 core/engine/host/UI/Windows unit checks, the bounded
+native queue test and strict Windows adapter Clippy with --no-deps. The three
+shared overview checks pass on hardware D3D12, including live paint, alpha,
+clipping and GPU resource reuse. The hardware PNG export regression also passes
+after upstream's shared readback changes.
+
+Native fixtures pass all six Navigator commands, preserved document state,
+retained controls, visible stroke pixels with exact Undo restoration, adoption
+of a different-aspect document, resize, hide/reopen and both themes. Minimized
+lifecycle checks cover visible unsaved decisions, Cancel, maximized-state
+preservation and Discard. The document/export picker regression also passes.
+All five owned launches exit with code zero within the unchanged shutdown bound.
+
+The updated web application builds and runs in local Windows Chrome with hardware
+WebGPU. Fresh 1200 by 900 references in both themes complete without runtime
+errors. These are runnable comparison references, not a full workspace visual
+parity pass. The capture helper validates the canonical owned temporary profile
+before recursive cleanup. Profiles, images and diagnostics remain local.
+
+The full editor workspace, physical input (including Navigator gestures),
+mixed-DPI/device recovery, additional native windows, packaging and release
+acceptance remain open. The strict v4 filter-sheet difference and deferred
+120 Hz/input-to-present gates are unchanged; no presentation benchmark ran here.
+
+Before publication, the Apple editor-preset milestone 9a752ea was also merged.
+Its shared layout change enables the full preset for Apple platforms and leaves
+the Windows preset unchanged. The affected 245 UI/Windows unit checks, rebuilt
+native app and complete Navigator fixture pass after that merge; the additional
+owned review exits with code zero.
+
+The final publication also integrates the documentation update 77661f0 and
+GTK/watercolor milestone a70abfb. Its new selected-watercolor mixing test and
+existing unselected-wet-paint preservation regression both pass on hardware
+D3D12. The rebuilt native app again passes the complete Navigator fixture and
+exits cleanly. These targeted checks cover the incoming shader change without
+repeating unrelated rendering benchmarks.

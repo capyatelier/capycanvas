@@ -318,3 +318,44 @@ creates a new document, reopens with exact pixels, and rejects corrupt files,
 invalid sizes and stale adoption. It drives the old renderer while the worker
 prepares the candidate. This is functional coverage, not frame-cadence or input
 latency acceptance. Local test files and reports are not committed.
+
+## GPU Navigator and window lifecycle
+
+The Window menu's Navigator panel reveals the live composition through a native
+XAML cutout. Its document image and camera outline draw in the main canvas's
+existing GPU presentation pass. There is no preview bitmap, CPU image readback,
+second swap chain, or camera-triggered document repaint. The overview pipeline
+is prepared during GPU startup; unchanged placements do not request another frame.
+
+Native zoom, rotation and reflection buttons use shared command labels and state.
+Pointer capture routes Navigator gestures to the shared camera. The image uses
+shared aspect-fit geometry, follows document replacement and display density,
+and retains its native controls during camera updates and resize. The preview
+height and button spacing follow the Android panel; both themes use shared colors.
+The full editor dock preset, columns and drawers remain pending on Windows.
+
+A minimized window is restored when an unsaved decision or picker needs to be
+shown. Native SW_RESTORE preserves a previously maximized window. Existing-path
+background saves do not restore the owner unnecessarily.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-navigator.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-lifecycle.ps1 -Executable artifacts/windows/Debug/CapyCanvas.exe
+cargo test --locked -p layer-ui --lib
+cargo test --locked -p layer-windows --lib
+cargo clippy --locked -p layer-windows --all-targets --no-deps -- -D warnings
+$env:LAYER_GPU_INDEX='<hardware-D3D12-adapter-index>'
+cargo test --locked -p layer-render-wgpu overview -- --test-threads=1
+~~~
+
+The Navigator fixture owns an isolated review, checks all six camera commands,
+retained controls, actual preview pixels after a controlled stroke and Undo,
+document aspect changes, resize, hide/reopen, theme colors and zero exit.
+The lifecycle fixture checks clean and dirty minimized close, visible decisions,
+Cancel preservation, maximized-state preservation and explicit Discard.
+Captures and profiles remain under ignored artifacts/windows.
+
+These are functional checks. Physical Navigator pointer gestures, full workspace
+visual parity, mixed-DPI movement, device recovery, painting cadence and
+input-to-present latency still require acceptance. The overview performance test
+remains ignored during these checks.

@@ -74,7 +74,6 @@ struct ToolbarBody {
     strip: TileStrip,
     key: RefCell<Option<PanelConfig>>,
     buttons: RefCell<Vec<gtk::Button>>,
-    palette: gtk::CssProvider,
 }
 impl ToolbarBody {
     fn new(panel: Panel) -> Self {
@@ -86,7 +85,6 @@ impl ToolbarBody {
             strip,
             key: RefCell::default(),
             buttons: RefCell::default(),
-            palette: gtk::CssProvider::new(),
         }
     }
     fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
@@ -99,7 +97,7 @@ impl ToolbarBody {
                 .tiles()
                 .iter()
                 .map(|t| {
-                    let b = customization::tile_button(w, config, t, &self.palette);
+                    let b = customization::tile_button(w, config, t);
                     self.strip.append(&b);
                     b
                 })
@@ -119,7 +117,6 @@ impl ToolbarBody {
                 button.set_tooltip_text(Some(&tile.tooltip));
             }
         }
-        customization::refresh_color_palette(&self.palette, w);
     }
 }
 impl Body {

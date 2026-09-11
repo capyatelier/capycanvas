@@ -15,7 +15,7 @@ int main() {
     assert(!queue.Push(std::move(rejected)));
     assert(std::get<std::vector<CapyPointer>>(rejected)[0].phase==3);
     // Pointer saturation must leave room for UI actions, especially Blur.
-    assert(queue.Push(CanvasCommand{true,"blur"}));
+    assert(queue.Push(CanvasCommand{CanvasCommandKind::Input,"blur"}));
     auto batch=queue.Take();
     assert(batch.size()==CanvasWorkBuffer::MaxItems-CanvasWorkBuffer::CommandSlots+1);
     for(size_t i=0;i+1<batch.size();i++) {
@@ -25,7 +25,7 @@ int main() {
     }
     assert(std::get<CanvasCommand>(batch.back()).json=="blur");
     assert(queue.Empty());
-    assert(queue.Push(CanvasCommand{false,"undo"}));
+    assert(queue.Push(CanvasCommand{CanvasCommandKind::Action,"undo"}));
     CapyPointer up{};up.phase=3;
     assert(queue.Push(std::vector<CapyPointer>{up}));
     batch=queue.Take();
@@ -33,15 +33,15 @@ int main() {
     assert(std::get<std::vector<CapyPointer>>(batch[1])[0].phase==3);
     assert(queue.Push(std::move(rejected)));
     queue.Take();
-    for(size_t i=0;i<CanvasWorkBuffer::MaxItems;i++)assert(queue.Push(CanvasCommand{false,"fit"}));
-    CanvasWork refused=CanvasCommand{false,"undo"};
+    for(size_t i=0;i<CanvasWorkBuffer::MaxItems;i++)assert(queue.Push(CanvasCommand{CanvasCommandKind::Action,"fit"}));
+    CanvasWork refused=CanvasCommand{CanvasCommandKind::Action,"undo"};
     assert(!queue.Push(std::move(refused)));
     assert(std::get<CanvasCommand>(refused).json=="undo");
     queue.Take();
 
     // Byte limits also apply to a single allocation and retained spare
     // capacity: shrinking a string/vector cannot bypass the memory bound.
-    CanvasWork huge=CanvasCommand{false,std::string(CanvasWorkBuffer::MaxBytes,'x')};
+    CanvasWork huge=CanvasCommand{CanvasCommandKind::Action,std::string(CanvasWorkBuffer::MaxBytes,'x')};
     assert(!queue.Push(std::move(huge)));
     std::get<CanvasCommand>(huge).json.resize(1);
     assert(!queue.Push(std::move(huge)));
@@ -51,7 +51,7 @@ int main() {
     assert(queue.Empty());
     // Payload exhaustion must be possible before item exhaustion.
     size_t accepted=0;
-    while(queue.Push(CanvasCommand{false,std::string(16384,'x')}))++accepted;
+    while(queue.Push(CanvasCommand{CanvasCommandKind::Action,std::string(16384,'x')}))++accepted;
     assert(accepted>0&&accepted<CanvasWorkBuffer::MaxItems);
     queue.Take();
     assert(queue.Push(CanvasScroll{1,2,3,4,2,true,false}));

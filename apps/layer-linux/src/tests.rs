@@ -1747,6 +1747,54 @@ fn native_selected_brushes() {
         pump(150);
         capture_reference(&w, &format!("{dir}/selected-brushes-{theme:?}.png"), 1.);
     }
+    // Selection limits stored paint; a layer mask clips the composed appearance,
+    // including watercolor's live outside band. Creating/removing it must not
+    // bake the effect or change the existing strokes.
+    let (before_mask, id, selection) = {
+        let gpu = w.gpu.borrow();
+        let engine = gpu.as_ref().unwrap().session.engine();
+        (
+            engine.checkpoint(),
+            engine.document().active_layer.0,
+            engine.document().selection.clone(),
+        )
+    };
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::MaskSelection { id, hide: false },
+    });
+    {
+        let gpu = w.gpu.borrow();
+        let doc = gpu.as_ref().unwrap().session.engine().document();
+        let mask = doc.layer(doc.active_layer).unwrap().mask.as_ref().unwrap();
+        assert_eq!(mask.initial, selection);
+        assert!(
+            doc.selection.is_none(),
+            "mask creation consumes the selection"
+        );
+        assert_eq!(doc.strokes().count(), 3);
+    }
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(150);
+        capture_reference(
+            &w,
+            &format!("{dir}/selected-brushes-masked-{theme:?}.png"),
+            1.,
+        );
+    }
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    assert_eq!(
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .checkpoint(),
+        before_mask
+    );
     w.dispatch(UiAction::Layer {
         action: LayerAction::InvertSelection,
     });

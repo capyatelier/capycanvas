@@ -41,7 +41,7 @@ worker owns GPU and engine work, keeping UI controls independent of GPU waits.
 Attaching or reconfiguring the swap chain requires coordination with the UI thread;
 the worker pauses for that surface operation, not for ordinary widget updates.
 
-Shared snapshots drive tool, color, layer and preference controls. Windows persists
+Shared snapshots drive tool, color, layer, Navigator and preference controls. Windows persists
 settings under `%LOCALAPPDATA%\CapyAtelier\CapyCanvas\settings.json`. The native File menu and pickers provide New, Open, Save, Save As and PNG Export.
 Project transport handles background work, save checkpoints and replacement of
 local files; export does not mark the editable project as saved.

@@ -79,6 +79,13 @@ request it.
 - Clamp diameter, aspect, scatter, spacing, and mappings before loop bounds.
 - Save real samples only; predicted samples remain visual-only.
 - Never perform an implicit GPU readback for drawing or presentation.
+- Capture drawing selection coverage per stroke. It limits stored pigment and
+  water; watercolor capillary transport applies the same coverage to donor
+  wetness and color mixing. Changing the selection does not rewrite old paint.
+- Watercolor edges remain a live effect of the combined wet layer, not of each
+  stroke's past selection. The outside band may extend beyond deposited paint.
+  Use **Mask: reveal selection** for a strict final-appearance boundary; the
+  layer mask clips pigment and its halo without baking or drying either field.
 
 ## Performance rules
 

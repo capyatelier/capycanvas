@@ -50,6 +50,7 @@ pub struct CapyHost {
     native: NativeHost,
     instance: wgpu::Instance,
     cursor: CanvasCursor,
+    navigator: crate::navigator::Navigator,
     scale: f32,
     blank_presented: bool,
     services: Option<crate::settings::SettingsService>,
@@ -86,6 +87,7 @@ impl CapyHost {
             native,
             instance,
             cursor: CanvasCursor::default(),
+            navigator: Default::default(),
             scale,
             blank_presented: false,
             services: None,
@@ -134,8 +136,10 @@ impl CapyHost {
         config.present_mode = wgpu::PresentMode::Fifo;
         config.desired_maximum_frame_latency = 1;
         config.alpha_mode = wgpu::CompositeAlphaMode::Opaque;
-        let presenter = ViewportPresenter::new(&device, config.format);
+        let mut presenter = ViewportPresenter::new(&device, config.format);
         let renderer = WgpuRasterizer::from_wgpu_staged(adapter, device, queue).map_err(err)?;
+        // Prepare the optional overview pipeline during GPU startup, before input is live.
+        presenter.prepare_overviews(&renderer);
         self.native.session.renderer_mut().0 = Some(renderer);
         self.native.startup = Default::default();
         self.presenter = Some(presenter);
@@ -166,6 +170,7 @@ impl CapyHost {
             .as_mut()
             .ok_or("Viewport presenter is not prepared")?;
         presenter.set_cursor(gpu.device(), &self.cursor.segments, self.scale);
+        presenter.set_overviews(gpu, self.navigator.placements(&self.native, self.scale));
         presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),
@@ -659,4 +664,24 @@ fn set_composition_scale(surface: &wgpu::Surface<'_>, scale: f32) -> Result<(), 
         ..Default::default()
     };
     unsafe { swapchain.SetMatrixTransform(&transform) }.map_err(err)
+}
+
+/// Native overview geometry, serialized on the same owner as canvas actions.
+/// # Safety
+/// `host` must be null or a live exclusively accessed host. `json` must be null
+/// or a readable, unchanged NUL-terminated buffer throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_overviews(host: *mut CapyHost, json: *const c_char) -> i32 {
+    guard(host, |host| {
+        match host.navigator.set(unsafe { read_json(json) }?) {
+            Ok(changed) => {
+                host.native.dirty |= changed;
+                Ok(0)
+            }
+            Err(error) => {
+                fail(error);
+                Ok(1)
+            }
+        }
+    })
 }

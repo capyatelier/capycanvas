@@ -7255,6 +7255,7 @@ mod tests {
                     Panel::Navigator => matches!(
                         platform,
                         Platform::Gtk
+                            | Platform::Windows
                             | Platform::Android
                             | Platform::Web
                             | Platform::Ios
@@ -9962,7 +9963,7 @@ mod tests {
             assert!(app.state.customization.control.is_none());
         }
         assert!(Panel::Navigator.available_on(Platform::Android));
-        assert!(!Panel::Navigator.available_on(Platform::Windows));
+        assert!(Panel::Navigator.available_on(Platform::Windows));
     }
 
     #[test]

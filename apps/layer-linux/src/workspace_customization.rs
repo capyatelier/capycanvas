@@ -21,7 +21,6 @@ pub(super) fn tile_button(
     w: &Rc<Workspace>,
     config: &PanelConfig,
     tile: &ToolbarTile,
-    palette: &gtk::CssProvider,
 ) -> gtk::Button {
     let choice = tool_choice(tile.control);
     let panel = config.id;
@@ -72,9 +71,10 @@ pub(super) fn tile_button(
     if tile.control == ToolbarControl::Color {
         button.add_css_class("brush-color");
         #[allow(deprecated)]
-        button
-            .style_context()
-            .add_provider(palette, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        button.style_context().add_provider(
+            &w.customization.palette,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
     }
     if tile.control == ToolbarControl::Divider {
         let line = gtk::Separator::new(gtk::Orientation::Horizontal);
@@ -86,24 +86,11 @@ pub(super) fn tile_button(
     button
 }
 
-pub(super) fn refresh_color_palette(palette: &gtk::CssProvider, w: &Workspace) {
-    if let Some(gpu) = w.gpu.borrow().as_ref() {
-        let colors = &gpu.session.state().colors;
-        let rgba = |[r, g, b, a]: [f32; 4]| gdk::RGBA::new(r, g, b, a);
-        palette.load_from_string(&format!(
-            ".brush-color {{ -gtk-icon-palette: success {}, warning {}; }}",
-            rgba(colors.foreground),
-            rgba(colors.background)
-        ));
-    }
-}
-
 pub(super) struct ToolbarView {
     pub id: Panel,
     pub strip: TileStrip,
     tiles: Vec<ToolbarTile>,
     buttons: Vec<gtk::Button>,
-    palette: gtk::CssProvider,
     style: TileStyle,
 }
 
@@ -284,6 +271,8 @@ impl ToolbarManagerUi {
 
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
+    palette: gtk::CssProvider,
+    palette_colors: Cell<Option<[[f32; 4]; 2]>>,
     context: gtk::PopoverMenu,
     popup: gtk::Popover,
     popup_control: Cell<Option<PanelControl>>,
@@ -326,6 +315,8 @@ impl Customization {
         picker.add_css_class("layer-preferences");
         Self {
             toolbars: RefCell::new(Vec::new()),
+            palette: gtk::CssProvider::new(),
+            palette_colors: Cell::new(None),
             context: gtk::PopoverMenu::from_model(None::<&gtk::gio::Menu>),
             popup: gtk::Popover::new(),
             popup_control: Cell::new(None),
@@ -821,7 +812,6 @@ impl Customization {
                         strip,
                         tiles: Vec::new(),
                         buttons: Vec::new(),
-                        palette: gtk::CssProvider::new(),
                         style: TileStyle::Small,
                     });
                     toolbars.len() - 1
@@ -838,7 +828,7 @@ impl Customization {
             for tile in config.tiles() {
                 let panel = config.id;
                 let id = tile.id;
-                let button = tile_button(w, config, tile, &toolbar.palette);
+                let button = tile_button(w, config, tile);
                 // The wrapper stays targetable even when the command button is
                 // disabled, so an unavailable command can still be moved/removed.
                 let tile_root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -887,9 +877,26 @@ impl Customization {
         }
     }
 
+    fn refresh_color_palette(&self, colors: &layer_ui::ColorState) -> bool {
+        let next = [colors.foreground, colors.background];
+        if self.palette_colors.replace(Some(next)) == Some(next) {
+            return false;
+        }
+        // All toolbar projections in this window share these colors. Reloading
+        // unchanged CSS invalidates GTK styling during unrelated tool updates.
+        let rgba = |[r, g, b, a]: [f32; 4]| gdk::RGBA::new(r, g, b, a);
+        self.palette.load_from_string(&format!(
+            ".brush-color {{ -gtk-icon-palette: success {}, warning {}; }}",
+            rgba(colors.foreground),
+            rgba(colors.background)
+        ));
+        true
+    }
+
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
         let Some((views, picker, control, prompt, manager)) = w.gpu.borrow().as_ref().map(|g| {
+            self.refresh_color_palette(&g.session.state().colors);
             (
                 g.session
                     .state()
@@ -916,7 +923,6 @@ impl Customization {
                     button.set_tooltip_text(Some(&tile.tooltip));
                 }
             }
-            refresh_color_palette(&toolbar.palette, w);
         }
         self.refresh_expansion(w, &views);
         let brush = w
@@ -1526,4 +1532,38 @@ fn owns_context(widget: &gtk::Widget, x: f64, y: f64) -> bool {
         child = current.parent();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "native GTK palette: requires a Wayland display"]
+    fn toolbar_palette_changes_only_with_paint_colors() {
+        adw::init().unwrap();
+        let view = Customization::new();
+        let mut colors = layer_ui::ColorState::default();
+        assert!(view.refresh_color_palette(&colors));
+        assert!(!view.refresh_color_palette(&colors));
+        let initial_css = view.palette.to_str();
+        colors.slot = layer_ui::ColorSlot::Background;
+        colors.space = layer_ui::ColorSpace::Hls;
+        assert!(!view.refresh_color_palette(&colors));
+        assert_eq!(view.palette.to_str(), initial_css);
+        colors.foreground = [0.8, 0.2, 0.4, 1.];
+        assert!(view.refresh_color_palette(&colors));
+        assert_ne!(view.palette.to_str(), initial_css);
+        assert!(!view.refresh_color_palette(&colors));
+        colors.background = [0.1, 0.3, 0.9, 0.5];
+        assert!(view.refresh_color_palette(&colors));
+        assert!(!view.refresh_color_palette(&colors));
+        // Each window owns its own provider, including first initialization
+        // when every channel happens to be zero.
+        let other = Customization::new();
+        colors.foreground = [0.; 4];
+        colors.background = [0.; 4];
+        assert!(other.refresh_color_palette(&colors));
+        assert_ne!(other.palette.to_str(), view.palette.to_str());
+    }
 }

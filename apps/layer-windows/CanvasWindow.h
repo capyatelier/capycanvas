@@ -82,7 +82,7 @@ private:
     void Stop();
     void Finish();
     void Fail(std::string message);
-    void Send(std::string json, bool input=false, bool document=false);
+    void Send(std::string json, CanvasCommandKind kind=CanvasCommandKind::Action);
     bool SendIndependent(CanvasWork item);
     void Key(winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&, bool pressed);
     void Wheel(winrt::Microsoft::UI::Input::PointerEventArgs const&);

@@ -8,11 +8,11 @@ class WorkspaceView {
 public:
     using Json = winrt::Windows::Data::Json::JsonObject;
     using Dispatch = std::function<void(std::string)>;
-    WorkspaceView(Dispatch dispatch, Json catalog);
+    WorkspaceView(Dispatch dispatch, Json catalog, Dispatch overviews);
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
     void Apply(Json const& snapshot);
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl;
+    std::shared_ptr<Impl> impl;
 };
