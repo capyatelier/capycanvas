@@ -322,6 +322,18 @@ impl Navigator {
         overview.set_vexpand(true);
         overview.set_cursor_from_name(Some("grab"));
         images.views.borrow_mut().push(overview.downgrade());
+        overview.connect_unmap(glib::clone!(
+            #[weak]
+            images,
+            move |view| {
+                // A detached/hidden view is no longer visited by project_child.
+                // Remove its GPU image now, and invalidate the cached projection
+                // so reopening at the same size also schedules a fresh frame.
+                if view.imp().projection.take().is_some() {
+                    images.wake();
+                }
+            }
+        ));
         root.append(&overview);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         row.set_homogeneous(true);
