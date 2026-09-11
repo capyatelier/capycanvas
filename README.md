@@ -22,15 +22,15 @@ photographers and comic artists. It is built for Linux first, where artists have
 long had fewer choices in professional software, but also works on Android, iPad,
 Windows, Mac, and the web.
 
-Painting, photo editing and comic work share many of the same building blocks:
-brushes, layers, masks and image effects. Capy Canvas implements them in a common
-GPU-accelerated core, with an interface that can be arranged to suit different
-workflows. Artists should be able to keep familiar layouts and shortcuts, drawing
-on the muscle memory they have built in other apps.
+We built Capy Canvas to support the different workflows of comic artists, digital
+painters and photo editors. Its GPU-accelerated brush and compositing engines are
+designed to improve performance and battery life, particularly on mobile devices.
+A fully customizable interface lets artists adapt layouts and shortcuts to match
+the muscle memory they have developed in other apps.
 
-The code is available under MIT or Apache-2.0, and the app requires no account,
-subscription or central server. Artists can modify it for their own work or reuse
-the core to build new tools, including with the help of coding agents.
+This project is fully free and open source, and keeps artists in control of their
+own data. There are no accounts, subscriptions or tracking. Drawing and editing
+happen locally on your device, and the code is licensed under MIT or Apache-2.0.
 
 ## Overall architecture
 
