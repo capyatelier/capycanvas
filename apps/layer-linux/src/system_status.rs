@@ -105,19 +105,19 @@ impl SystemStatus {
                 cr.scale(u, u);
                 let body = || {
                     cr.new_sub_path();
-                    cr.arc(19., 3., 3., -std::f64::consts::FRAC_PI_2, 0.);
-                    cr.arc(19., 11., 3., 0., std::f64::consts::FRAC_PI_2);
+                    cr.arc(18., 4., 4., -std::f64::consts::FRAC_PI_2, 0.);
+                    cr.arc(18., 10., 4., 0., std::f64::consts::FRAC_PI_2);
                     cr.arc(
-                        3.,
-                        11.,
-                        3.,
+                        4.,
+                        10.,
+                        4.,
                         std::f64::consts::FRAC_PI_2,
                         std::f64::consts::PI,
                     );
                     cr.arc(
-                        3.,
-                        3.,
-                        3.,
+                        4.,
+                        4.,
+                        4.,
                         std::f64::consts::PI,
                         3. * std::f64::consts::FRAC_PI_2,
                     );
@@ -145,8 +145,9 @@ impl SystemStatus {
                     cr.set_line_width(1.75);
                     cr.set_line_join(gtk::cairo::LineJoin::Miter);
                     cr.set_miter_limit(4.);
+                    color(if dark { 0x202226 } else { track });
                     let _ = cr.stroke_preserve();
-                    color(ink);
+                    color(if dark { 0xe5e7eb } else { ink });
                     let _ = cr.fill();
                 } else {
                     cr.new_sub_path();
