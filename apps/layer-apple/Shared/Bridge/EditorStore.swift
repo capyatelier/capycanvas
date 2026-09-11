@@ -11,6 +11,10 @@ import SwiftUI
     @Published var catalog = JSON()
     @Published var failure: String?
     @Published var canvasSubmitted = false
+    @Published var storageFailure: String?
+    @Published var storagePending = true
+    @Published var canRetryStorage = false
+    private static let instances = NSHashTable<EditorStore>.weakObjects()
     /// Measured native window controls; editor geometry otherwise comes from Rust.
     @Published var headerLeadingInset: CGFloat = 0
     var cameraRevision: UInt64 = 0
@@ -20,9 +24,9 @@ import SwiftUI
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
 
-    init(platform: UInt32) {
+    init(platform: UInt32, scene: String = UUID().uuidString) {
         do {
-            native = try NativeOwner(platform: platform) { [weak self] snapshot, failure in
+            native = try NativeOwner(platform: platform, scene: scene) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
@@ -36,10 +40,17 @@ import SwiftUI
             }
             #endif
         } catch { failure = error.localizedDescription }
+        Self.instances.add(self)
     }
     private func receive(_ next: JSON?, _ error: String?) {
         if let error { failure = error }
         if let next {
+            if !next["persistence"].isNull {
+                storagePending = next["persistence"]["pending"].uint != 0
+                canRetryStorage = next["persistence"]["can_retry"].bool
+                storageFailure = next["persistence"]["error"].isNull ? nil : next["persistence"]["error"].string
+                return
+            }
             if !next["state"].isNull {
                 currentState = next["state"]
                 structuralSnapshot = next
@@ -54,6 +65,21 @@ import SwiftUI
             cameraRevision = state["camera"]["revision"].uint
         }
         wake?()
+    }
+    func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
+        guard let native else { completion(false); return }
+        native.flushPersistence { succeeded in DispatchQueue.main.async { completion(succeeded) } }
+    }
+    static func flushAll(_ completion: @escaping @MainActor (Bool) -> Void) {
+        let stores = instances.allObjects
+        guard !stores.isEmpty else { completion(true); return }
+        var remaining = stores.count, succeeded = true
+        for store in stores {
+            store.flushPersistence { result in
+                succeeded = succeeded && result; remaining -= 1
+                if remaining == 0 { completion(succeeded) }
+            }
+        }
     }
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }

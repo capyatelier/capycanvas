@@ -1,0 +1,27 @@
+import XCTest
+
+@MainActor func editorTestApplication() -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["CAPY_DISABLE_PERSISTENCE"] = "1"
+    return app
+}
+
+extension XCTestCase {
+    @MainActor func checkSettingsAndWorkspaceRestart(in app: XCUIApplication) {
+        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
+        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
+        app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}}]"#
+        for launch in 0..<2 {
+            if launch == 1 { app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS") }
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["color-wheel"].firstMatch.waitForExistence(timeout: 15),
+                "The restored workspace must retain the Color panel")
+            let status = app.staticTexts["persistence-status"]
+            expectation(for: NSPredicate(format: "label == %@ AND value == %@", "Saved", "dark"), evaluatedWith: status)
+            waitForExpectations(timeout: 15)
+            XCTAssertFalse(app.alerts.firstMatch.exists, "Valid saved state must restore without errors")
+            app.terminate()
+        }
+    }
+}

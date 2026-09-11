@@ -99,6 +99,11 @@ key and a profile covering the selected device. A first Personal Team installati
 may also require trusting the developer account in the device's Settings.
 Team IDs, keys and provisioning profiles are not stored in this repository.
 
+Settings and committed workspace layouts now persist in private Application
+Support files. Settings propagate across live owners; each restored scene keeps
+its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
+failure/retry behavior and fast tests. Artwork save/open/recovery remains pending.
+
 Launch a local Mac build with:
 
 ```sh
@@ -221,7 +226,7 @@ need complete acceptance on both platforms.
 
 Still required: complete panel/drawer/menu/dialog behavior and customization,
 filters/properties and other specialized controls, complete settings/shortcut
-UI, document and preference/workspace persistence, Pencil estimated-property
+UI, document persistence and complete settings/workspace lifecycle coverage, Pencil estimated-property
 corrections, complete hover/sensor/shortcut routing, platform lifecycle coverage,
 full pixel-difference validation, and measured iPad and Mac hardware performance.
 Mac tablet/proximity, mouse, wheel, trackpad and keyboard adapters are present;
