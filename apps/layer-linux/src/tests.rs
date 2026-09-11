@@ -1214,7 +1214,7 @@ fn native_collapsed_drop_and_resize() {
             };
             [(x - b.x - b.width * 0.5) as f64, 0.]
         };
-        for requested in [minimum, minimum * 0.75 + 1.] {
+        for requested in [minimum, minimum - TILE_SIZE + 1.] {
             drag.update(delta_for_width(requested));
             pump(80);
             assert!(!state(&w).workspace.layout.is_collapsed(root));
@@ -1223,11 +1223,11 @@ fn native_collapsed_drop_and_resize() {
                 "minimum width stays clamped"
             );
         }
-        drag.update(delta_for_width(minimum * 0.75 - 1.));
+        drag.update(delta_for_width(minimum - TILE_SIZE - 1.));
         pump(150);
         assert!(state(&w).workspace.layout.is_collapsed(root));
         let collapsed = state(&w).workspace;
-        drag.update(delta_for_width(minimum * 0.75 - 2.));
+        drag.update(delta_for_width(minimum - TILE_SIZE - 2.));
         pump(80);
         assert_eq!(state(&w).workspace, collapsed, "hold below the threshold");
         drag.end();
@@ -1240,6 +1240,242 @@ fn native_collapsed_drop_and_resize() {
         assert!(!state(&w).workspace.layout.is_collapsed(root));
         assert!((width() - before_width).abs() < 1.);
     }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
+fn native_column_width_double_click() {
+    let app = native_test_app("art.capycanvas.ColumnWidthDoubleClick");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    pump(1000);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let original = state(&w).workspace;
+    let controllers = w.surface.observe_controllers();
+    let click = (0..controllers.n_items())
+        .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureClick>())
+        .find(|g| g.name().as_deref() == Some("panel-handle-double-click"))
+        .unwrap();
+    for (band, group, expected) in [(3, 5, 242.), (7, 8, 254.)] {
+        for (nested, collapsed) in [(false, false), (false, true), (true, false)] {
+            let mut workspace = original.clone();
+            let b = workspace
+                .layout
+                .bands
+                .iter_mut()
+                .find(|b| b.id == band)
+                .unwrap();
+            b.extent = 400.;
+            if nested {
+                if let layer_ui::DockNode::Split { axis, fraction, .. } = &mut b.root {
+                    *axis = layer_ui::Axis::Horizontal;
+                    *fraction = 0.7;
+                } else {
+                    continue;
+                }
+            }
+            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            if collapsed {
+                w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+            }
+            pump(150);
+            let before = state(&w).workspace;
+            let d = w
+                .resolved()
+                .dividers
+                .into_iter()
+                .find(|d| d.id == band)
+                .unwrap();
+            let point = [d.bounds.x + d.bounds.width * 0.5, d.bounds.y + 80.];
+            assert!(matches!(w.drag_target_at(point), Some(DragTarget::Divider(id)) if id == band));
+            // Model the pending second press as well as the GTK signal.
+            w.workspace_drag_input(ContactPhase::Down, point, None);
+            click.emit_by_name::<()>("pressed", &[&2i32, &(point[0] as f64), &(point[1] as f64)]);
+            pump(200);
+            let after = state(&w).workspace;
+            let b = after.layout.bands.iter().find(|b| b.id == band).unwrap();
+            let width = if nested {
+                2. * expected + WORKSPACE_SPACING
+            } else {
+                expected
+            };
+            assert_eq!(b.extent, width + WORKSPACE_SPACING);
+            assert!(!after.layout.is_collapsed(b.root.id()));
+            assert!(w.workspace_drag.borrow().is_none());
+            assert!(!w.workspace_drag_input(ContactPhase::Move, [point[0] + 20., point[1]], None));
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&after).unwrap()
+            );
+            for id in if nested { vec![5, 6] } else { vec![group] } {
+                let g = w
+                    .resolved()
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == id)
+                    .unwrap();
+                assert!((g.bounds.width - expected).abs() < 0.01);
+            }
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&before).unwrap()
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&after).unwrap()
+            );
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "native GTK display required"]
+fn native_collapsed_canvas_side_drop() {
+    let app = native_test_app("art.capycanvas.CollapsedCanvasSideDrop");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    pump(1200);
+    let mut original = state(&w).workspace;
+    original
+        .layout
+        .add_panel_to_group(Panel::ToolSettings, 5)
+        .unwrap();
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    for right in [false, true] {
+        for whole in [false, true] {
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: original.clone(),
+            });
+            let (target, source, panel) = if right {
+                (8, 5, Panel::Brushes)
+            } else {
+                (5, 8, Panel::Properties)
+            };
+            w.dispatch(UiAction::DoubleClickPanelHandle {
+                group: target,
+                viewport,
+            });
+            pump(200);
+            let before = state(&w).workspace;
+            let root = before.layout.column_for_group(target).unwrap();
+            let band = before
+                .layout
+                .bands
+                .iter()
+                .find(|b| b.root.id() == root)
+                .unwrap();
+            let item = if whole {
+                DockItem::Group { group: source }
+            } else {
+                DockItem::Panel { panel }
+            };
+            let moved = if whole {
+                before.layout.group_panels(source).unwrap().to_vec()
+            } else {
+                vec![panel]
+            };
+            let start = if whole {
+                let g = w
+                    .resolved()
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == source)
+                    .unwrap();
+                [
+                    g.bounds.x + g.bounds.width - 10.,
+                    g.bounds.y + TAB_BAR_HEIGHT * 0.5,
+                ]
+            } else {
+                let groups = w.groups.borrow();
+                let view = groups.iter().find(|g| g.id == source).unwrap();
+                let tab = &view.tabs.iter().find(|(p, _)| *p == panel).unwrap().1;
+                let b = tab.compute_bounds(&w.surface).unwrap();
+                [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]
+            };
+            assert!(
+                matches!(w.drag_target_at(start), Some(DragTarget::Dock(found)) if found == item)
+            );
+            w.workspace_drag_input(ContactPhase::Down, start, None);
+            w.workspace_drag_input(ContactPhase::Move, [700., 400.], None);
+            pump(80);
+            let c = w
+                .resolved()
+                .collapsed
+                .into_iter()
+                .find(|c| c.id == root)
+                .unwrap();
+            let point = [
+                if right {
+                    c.bounds.x - 20.
+                } else {
+                    c.bounds.x + c.bounds.width + 20.
+                },
+                c.bounds.y + c.bounds.height * 0.5,
+            ];
+            w.workspace_drag_input(ContactPhase::Move, point, None);
+            assert_eq!(
+                w.drop_hint.borrow().as_ref().unwrap().target,
+                DockTarget::BesideBand { band: band.id }
+            );
+            w.workspace_drag_input(ContactPhase::Up, point, None);
+            pump(200);
+            let after = state(&w).workspace;
+            after.validate().unwrap();
+            assert!(after.layout.floating.is_empty());
+            assert_eq!(after.layout.collapsed, before.layout.collapsed);
+            let index = after
+                .layout
+                .bands
+                .iter()
+                .position(|b| b.id == band.id)
+                .unwrap();
+            assert_eq!(after.layout.bands[index], *band);
+            let new_column = &after.layout.bands[index + 1];
+            assert_eq!(new_column.edge, band.edge);
+            assert_eq!(
+                after.layout.group_panels(new_column.root.id()).unwrap(),
+                moved
+            );
+            let r = w.resolved();
+            let c = r.collapsed.iter().find(|c| c.id == root).unwrap();
+            let g = r
+                .groups
+                .iter()
+                .find(|g| g.id == new_column.root.id())
+                .unwrap();
+            assert!(if right {
+                g.bounds.x + g.bounds.width <= c.bounds.x
+            } else {
+                g.bounds.x >= c.bounds.x + c.bounds.width
+            });
+            assert!(
+                find_named(w.surface.upcast_ref(), &format!("collapsed-column-{root}"))
+                    .unwrap()
+                    .is_mapped()
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            pump(100);
+            assert_eq!(state(&w).workspace, before);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            });
+            pump(100);
+            assert_eq!(state(&w).workspace, after);
+        }
+    }
+    assert!(!w.status.is_visible(), "{}", w.status.text());
     w.window.destroy();
     pump(100);
 }
@@ -1364,7 +1600,7 @@ fn native_collapsed_divider_expansion() {
         update(edge);
         update(edge + 40.);
         assert!((width() - minimum - 40.).abs() < 1.);
-        let threshold = minimum * 0.75 - TILE_SIZE;
+        let threshold = minimum - TILE_SIZE - TILE_SIZE;
         for _ in 0..3 {
             update(threshold - 1.);
             assert!(state(&w).workspace.layout.is_collapsed(root));
@@ -3375,7 +3611,7 @@ fn native_navigator_column_resize() {
                 let s = stats.lock().unwrap();
                 (s.cpu.len(), s.overview_frames)
             };
-            drag.update(delta(minimum * 0.75 - 1.));
+            drag.update(delta(minimum - TILE_SIZE - 1.));
             pump(200);
             assert!(w.workspace_drag.borrow().is_some());
             assert!(state(&w).workspace.layout.is_collapsed(root));
@@ -3388,7 +3624,7 @@ fn native_navigator_column_resize() {
                 );
                 assert_eq!(s.overview_frames, previews);
             }
-            drag.update(delta(minimum * 0.75 + 1.));
+            drag.update(delta(minimum - TILE_SIZE + 1.));
             pump(200);
             assert_visible(true);
             assert!(
@@ -3396,7 +3632,7 @@ fn native_navigator_column_resize() {
                 "reopening must present the overview before release"
             );
         }
-        drag.update(delta(minimum * 0.75 - 1.));
+        drag.update(delta(minimum - TILE_SIZE - 1.));
         pump(200);
         assert_visible(false);
         drag.end();
@@ -10710,7 +10946,7 @@ fn native_divider_cursor_input() {
         } else {
             layer_ui::LAYERS_MIN_WIDTH
         };
-        let threshold = minimum * 0.75 - TILE_SIZE;
+        let threshold = minimum - TILE_SIZE - TILE_SIZE;
         for (distance, collapsed) in [
             (minimum - TILE_SIZE + 20., false),
             (threshold - 2., true),
@@ -10731,6 +10967,52 @@ fn native_divider_cursor_input() {
             cursor().as_deref(),
             Some("col-resize"),
             "release restores the hovered widget's cursor"
+        );
+
+        // Exercise real GTK double-click recognition after the held resize.
+        let before = state(&w).workspace;
+        let d = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.id == band)
+            .unwrap();
+        let point = [d.bounds.x + d.bounds.width * 0.5, d.bounds.y + 80.];
+        perform(serde_json::json!([
+            { "point": point }, { "down": true }, { "down": false },
+            { "down": true }, { "down": false }
+        ]));
+        let after = state(&w).workspace;
+        let expected = if group == 5 { 242. } else { 254. };
+        assert_eq!(
+            after
+                .layout
+                .bands
+                .iter()
+                .find(|b| b.id == band)
+                .unwrap()
+                .extent,
+            expected + WORKSPACE_SPACING
+        );
+        assert!(w.workspace_drag.borrow().is_none());
+        perform(serde_json::json!([{ "point": [point[0] + outward * 20., point[1]] }]));
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(&after).unwrap()
+        );
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::UndoWorkspace,
+        });
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::RedoWorkspace,
+        });
+        assert_eq!(
+            serde_json::to_value(state(&w).workspace).unwrap(),
+            serde_json::to_value(&after).unwrap()
         );
     }
     std::fs::write(dir.join("finished"), "done").unwrap();

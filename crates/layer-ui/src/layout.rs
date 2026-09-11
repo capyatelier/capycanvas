@@ -347,7 +347,9 @@ impl ResizeCollapse {
         } else {
             x - self.origin
         };
-        width < self.minimum * 0.75 || width <= TILE_SIZE
+        // Match the 36px opening distance, measured inward from the minimum
+        // edge. Narrow columns retain the existing icon-strip width trigger.
+        width <= self.minimum - TILE_SIZE || width <= TILE_SIZE
     }
 }
 
@@ -457,6 +459,18 @@ pub enum PanelKind {
 }
 
 impl Panel {
+    /// Normal starting column width, excluding its divider. Allocation may
+    /// raise this to a measured minimum or fit it into a smaller viewport.
+    pub fn default_width(self) -> f32 {
+        match self {
+            Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
+            Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator => {
+                254.
+            }
+            Self::Toolbar | Self::Commands | Self::CustomToolbar(_) => TILE_SIZE,
+        }
+    }
+
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
         if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
@@ -1163,7 +1177,7 @@ impl DockLayout {
             DockBand {
                 id: 3,
                 edge: Edge::Left,
-                extent: 248.,
+                extent: Panel::Brushes.default_width() + WORKSPACE_SPACING,
                 root: stack(
                     4,
                     // Tool Set takes Brush size's former space; Settings and
@@ -1181,7 +1195,7 @@ impl DockLayout {
             DockBand {
                 id: 11,
                 edge: Edge::Right,
-                extent: 260.,
+                extent: Panel::Layers.default_width() + WORKSPACE_SPACING,
                 root: stack(
                     12,
                     // Navigator gains five percent of the column from Layers;
@@ -3406,7 +3420,8 @@ impl ResolvedLayout {
             return None;
         }
         // Beyond an individual panel's 40px reach, the next 40px selects the
-        // whole sidebar. Its complete inner divider is the insertion line.
+        // whole sidebar. Collapsed sidebars have no expanded panel targets but
+        // still expose this full insertion line on their canvas-facing side.
         let sidebar = self
             .dividers
             .iter()
@@ -3425,13 +3440,17 @@ impl ResolvedLayout {
                         body.y = d.bounds.y + d.bounds.height;
                     }
                 }
-                self.groups.iter().any(|g| {
-                    !g.floating
-                        && body.contains(
-                            g.bounds.x + g.bounds.width * 0.5,
-                            g.bounds.y + g.bounds.height * 0.5,
-                        )
-                })
+                let contains = |b: Bounds| body.contains(b.x + b.width * 0.5, b.y + b.height * 0.5);
+                self.groups
+                    .iter()
+                    .any(|g| !g.floating && contains(g.bounds))
+                    || (d.axis == Axis::Horizontal
+                        && if d.reversed {
+                            x <= d.bounds.x + d.bounds.width
+                        } else {
+                            x >= d.bounds.x
+                        }
+                        && self.collapsed.iter().any(|c| contains(c.bounds)))
             })
             .map(|d| (d.bounds.distance_to([x, y]), d))
             .filter(|(distance, _)| *distance <= WORKSPACE_PROXIMITY && *distance < screen_distance)

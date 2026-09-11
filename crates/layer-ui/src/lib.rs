@@ -862,6 +862,11 @@ pub enum UiAction {
         group: u32,
         viewport: [f32; 2],
     },
+    /// Double-click the canvas-facing divider to restore component defaults.
+    ResetColumnWidth {
+        id: u32,
+        viewport: [f32; 2],
+    },
     Customize {
         action: CustomizationAction,
     },

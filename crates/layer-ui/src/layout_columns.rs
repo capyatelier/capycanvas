@@ -427,6 +427,32 @@ impl DockLayout {
         self.set_column_collapsed_with_minimum(group, collapsed, viewport, false)
     }
 
+    /// Reset the entire side band through its canvas-facing divider. Tabs and
+    /// stacks share the widest component; horizontal splits add their widths.
+    pub fn reset_column_width(&mut self, id: u32, viewport: [f32; 2]) -> Result<(), String> {
+        if !viewport.into_iter().all(|v| v.is_finite() && v > 0.) {
+            return Err("Invalid workspace size".into());
+        }
+        let index = self
+            .bands
+            .iter()
+            .position(|b| b.id == id && matches!(b.edge, Edge::Left | Edge::Right))
+            .ok_or("This divider has no side column")?;
+        let resolved = self.workspace(
+            viewport[0],
+            viewport[1],
+            crate::HEADER_HEIGHT,
+            crate::STATUS_HEIGHT,
+        );
+        let mut root = self.bands[index].root.clone();
+        let bounds = subtree_bounds(&root, &resolved).ok_or("The column is not visible")?;
+        self.collapsed.retain(|c| c.root != root.id());
+        let width = default_column_width(&mut root, bounds.height, self);
+        self.bands[index].root = root;
+        self.bands[index].extent = width + WORKSPACE_SPACING;
+        Ok(())
+    }
+
     /// Opening with a resize gesture starts at the allocation minimum, so the
     /// pointer can reach the edge without traversing the previous column width.
     pub(crate) fn expand_column_for_resize(
@@ -650,6 +676,47 @@ impl DockLayout {
     }
 }
 
+fn default_column_width(node: &mut DockNode, height: f32, layout: &DockLayout) -> f32 {
+    if layout.is_collapsed(node.id()) {
+        return TILE_SIZE;
+    }
+    match node {
+        DockNode::Tabs { id, panels, .. } => panels
+            .iter()
+            .map(|p| {
+                if p.kind() == PanelKind::Tiles {
+                    layout
+                        .panel(*p)
+                        .map_or(TILE_SIZE, |p| p.tile_style.size()[0])
+                } else {
+                    p.default_width()
+                }
+            })
+            .fold(layout.group_min_width(*id), f32::max)
+            .max(ribbon_cross_min(node, Axis::Vertical, height, layout)),
+        DockNode::Split {
+            axis,
+            fraction,
+            first,
+            second,
+            ..
+        } => {
+            if *axis == Axis::Horizontal {
+                let a = default_column_width(first, height, layout);
+                let b = default_column_width(second, height, layout);
+                // Restore each side's preferred share as well as the total.
+                *fraction = a / (a + b);
+                a + b + WORKSPACE_SPACING
+            } else {
+                let usable = (height - WORKSPACE_SPACING).max(0.);
+                let a = default_column_width(first, usable * *fraction, layout);
+                let b = default_column_width(second, usable * (1. - *fraction), layout);
+                a.max(b)
+            }
+        }
+    }
+}
+
 fn subtree_bounds(node: &DockNode, geometry: &ResolvedLayout) -> Option<Bounds> {
     if let Some(column) = geometry.collapsed.iter().find(|c| c.id == node.id()) {
         return Some(column.bounds);
@@ -812,6 +879,122 @@ mod tests {
         layout.workspace(VIEW[0], VIEW[1], crate::HEADER_HEIGHT, crate::STATUS_HEIGHT)
     }
 
+    #[test]
+    fn column_width_reset_restores_shipped_starting_widths() {
+        let preset = DockLayout::editor_default();
+        let mut layout = preset.clone();
+        for band in &mut layout.bands {
+            if matches!(band.edge, Edge::Left | Edge::Right) {
+                band.extent += 120.;
+            }
+        }
+        for id in [1, 3, 11] {
+            layout.reset_column_width(id, VIEW).unwrap();
+        }
+        assert_eq!(layout, preset);
+        for id in [17, 4, 999] {
+            assert!(layout.reset_column_width(id, VIEW).is_err());
+            assert_eq!(layout, preset);
+        }
+        assert!(layout.reset_column_width(3, [f32::NAN, 1000.]).is_err());
+        assert_eq!(layout, preset);
+    }
+
+    #[test]
+    fn column_width_reset_recurses_through_tabs_stacks_and_side_by_side_groups() {
+        let tabs = |id, panels: &[Panel]| DockNode::Tabs {
+            id,
+            panels: panels.to_vec(),
+            active: panels[0],
+            tab_style: crate::TabStyle::default(),
+        };
+        let split = |id, axis, fraction, first, second| DockNode::Split {
+            id,
+            axis,
+            fraction,
+            first: Box::new(first),
+            second: Box::new(second),
+        };
+        let mut layout = DockLayout::editor_default();
+        layout.bands = vec![DockBand {
+            id: 40,
+            edge: Edge::Left,
+            extent: 800.,
+            root: split(
+                41,
+                Axis::Vertical,
+                0.4,
+                tabs(42, &[Panel::Sizes, Panel::Layers]),
+                split(
+                    43,
+                    Axis::Horizontal,
+                    0.8,
+                    tabs(44, &[Panel::Brushes]),
+                    split(
+                        45,
+                        Axis::Vertical,
+                        0.3,
+                        tabs(46, &[Panel::Navigator]),
+                        tabs(47, &[Panel::ToolSettings]),
+                    ),
+                ),
+            ),
+        }];
+        layout.next_id = 48;
+        layout.validate().unwrap();
+        layout.reset_column_width(40, VIEW).unwrap();
+        assert_eq!(layout.bands[0].extent, 242. + 254. + 2. * WORKSPACE_SPACING);
+        let widths = |layout: &DockLayout| {
+            geometry(layout)
+                .groups
+                .iter()
+                .map(|g| (g.id, g.bounds.width))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            widths(&layout),
+            vec![(42, 502.), (44, 242.), (46, 254.), (47, 254.)]
+        );
+        for (id, expected) in [(41, 0.4), (43, 242. / 496.), (45, 0.3)] {
+            let DockNode::Split { fraction, .. } = layout.node(id).unwrap() else {
+                panic!()
+            };
+            assert_eq!(*fraction, expected);
+        }
+
+        // The active Sizes tab is narrower than its inactive Layers sibling.
+        let mut tab_only = layout.clone();
+        tab_only.bands[0].root = tabs(42, &[Panel::Sizes, Panel::Layers]);
+        tab_only.reset_column_width(40, VIEW).unwrap();
+        assert_eq!(tab_only.bands[0].extent, 254. + WORKSPACE_SPACING);
+
+        // Measured tab minimums can exceed the normal starting width.
+        layout.fit_tab_groups.push(44);
+        layout.measurements.push(PanelMeasurement {
+            panel: Panel::Brushes,
+            tab_width: 600.,
+            content_height: 0.,
+        });
+        layout.reset_column_width(40, VIEW).unwrap();
+        assert_eq!(
+            widths(&layout),
+            vec![(42, 880.), (44, 620.), (46, 254.), (47, 254.)]
+        );
+
+        // Resetting an outer collapsed band opens it, while a separately
+        // collapsed inner column retains its strip and remembered width.
+        layout.set_column_collapsed(44, true, VIEW).unwrap();
+        let inner = layout.collapsed.clone();
+        layout.set_column_collapsed(41, true, VIEW).unwrap();
+        layout.reset_column_width(40, VIEW).unwrap();
+        assert_eq!(layout.collapsed, inner);
+        assert_eq!(
+            layout.bands[0].extent,
+            TILE_SIZE + 254. + 2. * WORKSPACE_SPACING
+        );
+        layout.validate().unwrap();
+    }
+
     fn assert_collapse_threshold(
         layout: &DockLayout,
         divider: u32,
@@ -843,7 +1026,7 @@ mod tests {
     }
 
     #[test]
-    fn resize_collapse_uses_minimum_width_on_both_edges() {
+    fn resize_collapse_uses_36_pixels_inside_minimum_on_both_edges() {
         for layout in [DockLayout::default(), DockLayout::editor_default()] {
             for (panel, minimum) in [
                 (Panel::Brushes, TOOL_PANEL_MIN_WIDTH),
@@ -859,8 +1042,8 @@ mod tests {
                     band.id,
                     band.root.id(),
                     band.edge == Edge::Right,
-                    minimum * 0.75,
-                    false,
+                    minimum - TILE_SIZE,
+                    true,
                 );
             }
         }
@@ -873,7 +1056,7 @@ mod tests {
             unreachable!();
         };
         *axis = Axis::Horizontal;
-        assert_collapse_threshold(&layout, 4, 5, false, TOOL_PANEL_MIN_WIDTH * 0.75, false);
+        assert_collapse_threshold(&layout, 4, 5, false, TOOL_PANEL_MIN_WIDTH - TILE_SIZE, true);
         // Brush size has no content minimum: the existing icon-width trigger
         // still wins for this narrow column.
         assert_collapse_threshold(&layout, 4, 6, true, TILE_SIZE, true);
@@ -884,8 +1067,8 @@ mod tests {
             3,
             4,
             false,
-            (TOOL_PANEL_MIN_WIDTH + WORKSPACE_SPACING) * 0.75,
-            false,
+            TOOL_PANEL_MIN_WIDTH + WORKSPACE_SPACING - TILE_SIZE,
+            true,
         );
     }
 
@@ -898,7 +1081,7 @@ mod tests {
             tab_width: 300.,
             content_height: 0.,
         });
-        assert_collapse_threshold(&layout, 3, 4, false, 320. * 0.75, false);
+        assert_collapse_threshold(&layout, 3, 4, false, 320. - TILE_SIZE, true);
         assert_eq!(layout.collapse_at_divider(4, [0., 0.], VIEW), None);
 
         // Standalone tool ribbons retain their existing resize behavior.
@@ -1175,6 +1358,76 @@ mod tests {
         assert!(layout.validate().is_err());
         layout.collapsed[0].root = 2;
         assert!(layout.validate().is_err());
+    }
+
+    #[test]
+    fn collapsed_sidebars_offer_a_canvas_side_column_target() {
+        for right in [false, true] {
+            for nested in [false, true] {
+                let mut layout = DockLayout::default();
+                layout.bands[0].edge = if right { Edge::Right } else { Edge::Left };
+                layout.bands[1].edge = if right { Edge::Left } else { Edge::Right };
+                if nested {
+                    let DockNode::Split { axis, .. } = &mut layout.bands[0].root else {
+                        unreachable!()
+                    };
+                    *axis = Axis::Horizontal;
+                }
+                layout.set_column_collapsed(5, true, VIEW).unwrap();
+                if nested {
+                    layout.set_column_collapsed(6, true, VIEW).unwrap();
+                }
+                let r = geometry(&layout);
+                let d = r.dividers.iter().find(|d| d.id == 3).unwrap();
+                let x = if right {
+                    d.bounds.x
+                } else {
+                    d.bounds.x + d.bounds.width
+                };
+                let y = d.bounds.y + d.bounds.height * 0.5;
+                let sign = if right { -1. } else { 1. };
+                for distance in [0., 2., 20., 40., 60., 80.] {
+                    let hint = r.drop_hint(x + sign * distance, y, &[], true).unwrap();
+                    assert_eq!(
+                        hint.target,
+                        DockTarget::BesideBand { band: 3 },
+                        "right={right}, nested={nested}, distance={distance}"
+                    );
+                    assert_eq!(hint.bounds.height, d.bounds.height);
+                    assert_eq!(hint.bounds.width, 3.);
+                    assert_eq!(hint.bounds.x + 1.5, d.bounds.x + d.bounds.width * 0.5);
+                    assert!(r.drop_hint(x + sign * distance, y, &[], false).is_none());
+                }
+                assert!(r.drop_hint(x + sign * 90., y, &[], true).is_none());
+                let outer = r
+                    .drop_hint(if right { VIEW[0] - 1. } else { 1. }, y, &[], true)
+                    .unwrap();
+                assert_eq!(
+                    outer.target,
+                    DockTarget::Edge {
+                        edge: if right { Edge::Right } else { Edge::Left },
+                        outer: true,
+                    }
+                );
+                for c in &r.collapsed {
+                    let x = c.bounds.x + c.bounds.width * 0.5;
+                    assert!(matches!(
+                        r.drop_hint(x, c.groups[0].bounds.y + 18., &[], true)
+                            .unwrap()
+                            .target,
+                        DockTarget::Tab { .. }
+                    ));
+                    // The new target is beside the strip, never over its controls.
+                    for control in [c.expand, c.grip] {
+                        assert!(!matches!(
+                            r.drop_hint(x, control.y + control.height * 0.5, &[], true)
+                                .map(|h| h.target),
+                            Some(DockTarget::BesideBand { .. })
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -204,12 +204,12 @@ contents and expanded column width. Rust owns state, geometry, thresholds,
 drop eligibility and drawer selection; GTK only renders and forwards input.
 
 - **Collapse column** is available from any panel-group context menu in the
-  column. Drag-resizing collapses it when the requested width falls below 75%
-  of the column's minimum width, or reaches the collapsed strip width (36
-  logical pixels), whichever happens first. Exactly 25% into the minimum does
-  not trigger the percentage rule. While the pointer stays down, moving back
-  outward across that same threshold reverses the collapse and immediately
-  resumes normal resizing, clamped to the minimum width. It can collapse again
+  column. Drag-resizing collapses it when the pointer reaches 36 logical pixels
+  inward past the column's minimum-width edge, or the requested width reaches
+  the collapsed strip width (36 logical pixels), whichever happens first.
+  While the pointer stays down, moving back outward across that same threshold
+  reverses the collapse and immediately resumes normal resizing, clamped to the
+  minimum width. It can collapse again
   on the next inward crossing without first reaching the expanded edge.
   Expansion using the button restores the remembered ordinary width.
 - Dragging a collapsed column's edge holds the entire layout fixed until the
@@ -217,12 +217,19 @@ drop eligibility and drawer selection; GTK only renders and forwards input.
   width. Until the pointer reaches the expanded edge, moving back inside that
   same 36-pixel opening distance collapses it again; crossing outward reopens it.
   Only after reaching the expanded edge does normal resizing resume and use the
-  75%-of-minimum / 36-pixel-width collapse rule. Releasing before reaching the edge
+  normal 36-pixel inward collapse threshold. Releasing before reaching the edge
   keeps the current expanded or collapsed state; cancellation restores the original
   collapsed layout. A reversed opening leaves no undo entry. Expansion and
   subsequent resizing form one undoable action.
   GTK retains the resize cursor throughout the held gesture, including while
   the pointer is inside the expanded panel.
+- Double-clicking a column's **canvas-facing divider** resets its width to its
+  components' normal starting widths, recursively: tabs and vertical stacks use
+  the maximum; side-by-side components add their widths and intervening gap.
+  Horizontal split shares reset to those widths; vertical height shares stay
+  unchanged. Content and measured minimums still apply. A collapsed band opens
+  to this default width, preserving any separately collapsed subcolumns.
+  The reset is one undoable action.
 - Double-clicking the **non-tab area of any docked panel group's tab bar** also
   collapses its containing column, whether the group has one tab or several.
   This replaces the existing docked single-panel header double-click toggle
@@ -242,6 +249,8 @@ drop eligibility and drawer selection; GTK only renders and forwards input.
   groups. Insert their tabs at the corresponding position in that collapsed
   group, following ordinary group-merging semantics. Gaps insert a new collapsed
   group at that location. The trailing empty region permits appending groups.
+  The canvas-facing side exposes a full-height insertion target: dropping a
+  panel or group there creates a new expanded column beside the collapsed strip.
 - Clicking an icon opens the group's drawer with that item selected. This is
   a content drawer, **not** the panel-configuration drawer. It displays all tabs
   in that group. Switching tabs updates the selected icon in the collapsed

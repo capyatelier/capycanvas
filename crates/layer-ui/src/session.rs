@@ -1210,6 +1210,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | UiAction::SelectPanelTab { .. }
                 | UiAction::ResizeDock { .. }
                 | UiAction::DoubleClickPanelHandle { .. }
+                | UiAction::ResetColumnWidth { .. }
                 | UiAction::NudgeDivider { .. }
                 | UiAction::PrioritizeBand { .. }
                 | UiAction::Invoke {
@@ -1403,6 +1404,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                         self.workspace_history.finish(&self.state.workspace);
                     }
                 }
+                (LAYOUT, false)
+            }
+            UiAction::ResetColumnWidth { id, viewport } => {
+                self.state
+                    .workspace
+                    .layout
+                    .reset_column_width(id, viewport)?;
                 (LAYOUT, false)
             }
             UiAction::DoubleClickPanelHandle { group, viewport } => {
@@ -7847,6 +7855,38 @@ mod tests {
     }
 
     #[test]
+    fn column_width_reset_is_one_undoable_action() {
+        let viewport = [1600., 1000.];
+        for collapsed in [false, true] {
+            let mut app = session();
+            app.set_platform(Platform::Gtk);
+            app.state.workspace.layout.bands[0].extent = 400.;
+            if collapsed {
+                app.state
+                    .workspace
+                    .layout
+                    .set_column_collapsed(5, true, viewport)
+                    .unwrap();
+            }
+            let before = app.state.workspace.clone();
+            let action = UiAction::ResetColumnWidth { id: 3, viewport };
+            app.dispatch(action.clone()).unwrap();
+            let after = app.state.workspace.clone();
+            assert_eq!(
+                after.layout.bands[0].extent,
+                Panel::Brushes.default_width() + WORKSPACE_SPACING
+            );
+            assert!(after.layout.collapsed.is_empty());
+            // A repeated reset is a no-op, not a second undo entry.
+            app.dispatch(action).unwrap();
+            invoke(&mut app, CommandId::UndoWorkspace);
+            assert_eq!(app.state.workspace, before);
+            invoke(&mut app, CommandId::RedoWorkspace);
+            assert_eq!(app.state.workspace, after);
+        }
+    }
+
+    #[test]
     fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
         for platform in [Platform::Windows] {
@@ -8131,6 +8171,146 @@ mod tests {
         }
     }
     #[test]
+    fn panels_and_groups_drop_in_new_columns_beside_collapsed_sidebars() {
+        let viewport = [1600., 1000.];
+        for right in [false, true] {
+            for whole in [false, true] {
+                let mut s = session();
+                s.set_platform(Platform::Gtk);
+                s.state
+                    .workspace
+                    .layout
+                    .add_panel_to_group(Panel::ToolSettings, 5)
+                    .unwrap();
+                let (target, source, panel) = if right {
+                    (8, 5, Panel::Brushes)
+                } else {
+                    (5, 8, Panel::Properties)
+                };
+                let item = if whole {
+                    DockItem::Group { group: source }
+                } else {
+                    DockItem::Panel { panel }
+                };
+                s.state
+                    .workspace
+                    .layout
+                    .set_column_collapsed(target, true, viewport)
+                    .unwrap();
+                let before = s.state.workspace.clone();
+                let root = before.layout.column_for_group(target).unwrap();
+                let band = before
+                    .layout
+                    .bands
+                    .iter()
+                    .find(|b| b.root.id() == root)
+                    .unwrap();
+                let moved = if whole {
+                    before.layout.group_panels(source).unwrap().to_vec()
+                } else {
+                    vec![panel]
+                };
+                let g = s
+                    .layout(viewport)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.id == source)
+                    .unwrap();
+                let start = [g.bounds.x + 20., g.bounds.y + 20.];
+                let drag = |s: &mut UiSession<Recorder>, phase, position| {
+                    s.dispatch(UiAction::DragWorkspace {
+                        item,
+                        phase,
+                        position,
+                        viewport,
+                        tabs: vec![],
+                    })
+                    .unwrap();
+                };
+                for cancel in [true, false] {
+                    drag(&mut s, ContactPhase::Down, start);
+                    drag(&mut s, ContactPhase::Move, [800., 500.]);
+                    let c = s
+                        .layout(viewport)
+                        .collapsed
+                        .into_iter()
+                        .find(|c| c.id == root)
+                        .unwrap();
+                    let point = [
+                        if right {
+                            c.bounds.x - 20.
+                        } else {
+                            c.bounds.x + c.bounds.width + 20.
+                        },
+                        c.bounds.y + c.bounds.height * 0.5,
+                    ];
+                    drag(&mut s, ContactPhase::Move, point);
+                    assert_eq!(
+                        s.drop_hint(viewport, point, &[], item, None)
+                            .unwrap()
+                            .target,
+                        DockTarget::BesideBand { band: band.id }
+                    );
+                    drag(
+                        &mut s,
+                        if cancel {
+                            ContactPhase::Cancel
+                        } else {
+                            ContactPhase::Up
+                        },
+                        point,
+                    );
+                    if cancel {
+                        assert_eq!(s.state.workspace, before);
+                        assert!(!s.command(CommandId::UndoWorkspace).enabled);
+                        continue;
+                    }
+                    let after = s.state.workspace.clone();
+                    after.validate().unwrap();
+                    assert!(after.layout.floating.is_empty());
+                    assert_eq!(after.layout.collapsed, before.layout.collapsed);
+                    let index = after
+                        .layout
+                        .bands
+                        .iter()
+                        .position(|b| b.id == band.id)
+                        .unwrap();
+                    assert_eq!(after.layout.bands[index], *band);
+                    let new_column = &after.layout.bands[index + 1];
+                    assert_eq!(new_column.edge, band.edge);
+                    assert_eq!(
+                        after.layout.group_panels(new_column.root.id()).unwrap(),
+                        moved
+                    );
+                    assert!(
+                        after
+                            .layout
+                            .collapsed_column_for_group(new_column.root.id())
+                            .is_none()
+                    );
+                    let r = s.layout(viewport);
+                    let c = r.collapsed.iter().find(|c| c.id == root).unwrap();
+                    let g = r
+                        .groups
+                        .iter()
+                        .find(|g| g.id == new_column.root.id())
+                        .unwrap();
+                    assert!(if right {
+                        g.bounds.x + g.bounds.width <= c.bounds.x
+                    } else {
+                        g.bounds.x >= c.bounds.x + c.bounds.width
+                    });
+                    invoke(&mut s, CommandId::UndoWorkspace);
+                    assert_eq!(s.state.workspace, before);
+                    assert!(!s.command(CommandId::UndoWorkspace).enabled);
+                    invoke(&mut s, CommandId::RedoWorkspace);
+                    assert_eq!(s.state.workspace, after);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn collapsed_column_drag_never_tears_off_and_is_one_undo_transaction() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
@@ -8237,18 +8417,22 @@ mod tests {
                     .unwrap();
                 };
                 drag(&mut s, ContactPhase::Down, start[0]);
-                for width in [minimum, minimum * 0.75] {
+                for width in [minimum, minimum - TILE_SIZE + 0.5] {
                     drag(&mut s, ContactPhase::Move, x_for_width(width));
                     assert!(!s.state.workspace.layout.is_collapsed(root));
                 }
                 drag(
                     &mut s,
                     ContactPhase::Move,
-                    x_for_width(minimum * 0.75 - 0.5),
+                    x_for_width(minimum - TILE_SIZE - 0.5),
                 );
                 assert!(s.state.workspace.layout.is_collapsed(root));
                 let collapsed = s.state.workspace.clone();
-                drag(&mut s, ContactPhase::Move, x_for_width(minimum * 0.75 - 1.));
+                drag(
+                    &mut s,
+                    ContactPhase::Move,
+                    x_for_width(minimum - TILE_SIZE - 1.),
+                );
                 assert_eq!(s.state.workspace, collapsed, "Hold below the threshold");
                 drag(
                     &mut s,
@@ -8257,7 +8441,7 @@ mod tests {
                     } else {
                         ContactPhase::Up
                     },
-                    x_for_width(minimum * 0.75 - 1.),
+                    x_for_width(minimum - TILE_SIZE - 1.),
                 );
                 if cancel {
                     assert_eq!(s.state.workspace, original);
@@ -8450,18 +8634,18 @@ mod tests {
                 } else {
                     crate::TOOL_PANEL_MIN_WIDTH
                 };
-                t.drag(ContactPhase::Move, minimum * 0.75 - TILE_SIZE + 0.5);
+                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
                 assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                t.drag(ContactPhase::Move, minimum * 0.75 - TILE_SIZE - 0.5);
+                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
                 let collapsed = t.session.state.workspace.clone();
                 assert!(collapsed.layout.is_collapsed(t.root));
                 assert_eq!(collapsed.layout.collapsed[0].expanded_width, t.saved_width);
                 // Reversing this collapse resumes immediately, even before the
                 // pointer has reached the minimum-width edge.
-                t.drag(ContactPhase::Move, minimum * 0.75 - TILE_SIZE);
+                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE + 0.5);
                 assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
                 assert!((t.width() - t.minimum).abs() < 0.01);
-                t.drag(ContactPhase::Move, minimum * 0.75 - TILE_SIZE - 0.5);
+                t.drag(ContactPhase::Move, minimum - TILE_SIZE - TILE_SIZE - 0.5);
                 assert_eq!(t.session.state.workspace, collapsed);
                 t.drag(ContactPhase::Up, edge + 100.);
                 assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
@@ -8575,7 +8759,7 @@ mod tests {
                     };
                     let base = (origin - t.center) * t.outward;
                     let distance = |width| base + width;
-                    let threshold = (t.minimum * 0.75).max(TILE_SIZE);
+                    let threshold = (t.minimum - TILE_SIZE).max(TILE_SIZE);
                     t.drag(ContactPhase::Down, 0.);
                     // Jump directly from a wide column across the threshold.
                     // Nested columns must retain the pre-collapse parent edge.
@@ -8586,10 +8770,9 @@ mod tests {
                         t.drag(ContactPhase::Move, distance(threshold - 10.));
                         assert_eq!(t.session.state.workspace, collapsed);
                         t.drag(ContactPhase::Move, distance(threshold));
-                        assert_eq!(
+                        assert!(
                             t.session.state.workspace.layout.is_collapsed(t.root),
-                            threshold == TILE_SIZE,
-                            "fixed threshold is inclusive"
+                            "the 36px collapse threshold is inclusive"
                         );
                         t.drag(ContactPhase::Move, distance(threshold + 0.5));
                         assert!(

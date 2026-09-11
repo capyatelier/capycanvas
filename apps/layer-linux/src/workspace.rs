@@ -2531,19 +2531,34 @@ impl Workspace {
             #[weak(rename_to = w)]
             self,
             move |gesture, count, x, y| {
-                if count == 2
-                    && let Some(DragTarget::Dock(item)) = w.drag_target_at([x as f32, y as f32])
-                    && let Some(group) = {
-                        let layout = w.surface.imp().layout.borrow();
-                        layout.panel_handle_target(item)
-                    }
-                {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    w.dispatch(UiAction::DoubleClickPanelHandle {
-                        group,
-                        viewport: [w.surface.width() as f32, w.surface.height() as f32],
-                    });
+                if count != 2 {
+                    return;
                 }
+                let point = [x as f32, y as f32];
+                let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+                let action = match w.drag_target_at(point) {
+                    Some(DragTarget::Divider(id))
+                        if w.resolved().dividers.iter().any(|d| {
+                            d.id == id && d.band && d.axis == layer_ui::Axis::Horizontal
+                        }) =>
+                    {
+                        Some(UiAction::ResetColumnWidth { id, viewport })
+                    }
+                    Some(DragTarget::Dock(item)) => w
+                        .surface
+                        .imp()
+                        .layout
+                        .borrow()
+                        .panel_handle_target(item)
+                        .map(|group| UiAction::DoubleClickPanelHandle { group, viewport }),
+                    _ => None,
+                };
+                let Some(action) = action else { return };
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                // The captured double-click consumes release; retire any
+                // pending press so later motion cannot start a stale drag.
+                w.workspace_drag_input(ContactPhase::Cancel, point, None);
+                w.dispatch(action);
             }
         ));
         self.surface.add_controller(click);
