@@ -65,8 +65,8 @@ private struct PropertyField: View {
             Toggle(label, isOn: Binding(get: { value.bool }, set: { change($0) }))
                 .toggleStyle(.switch).controlSize(.small).accessibilityIdentifier("property-" + key)
         case "choice":
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
+            PropertyChoiceRow {
+                Text(label).lineLimit(1)
                 PropertyChoice(label: label, options: control["kind"]["options"].array.map(\.string),
                     selected: Int(value.uint), identifier: "property-" + key,
                     background: EditorPalette(source: store.state["palette"])["input"]) { change($0) }
@@ -79,6 +79,23 @@ private struct PropertyField: View {
     }
 }
 
+/// Fit the longest choice label, capped at 60% of the row like the web select.
+private struct PropertyChoiceRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let ideal = subviews.reduce(CGFloat(6)) { $0 + $1.sizeThatFits(.unspecified).width }
+        let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil } ?? ideal
+        return CGSize(width: width, height: 34)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let choice = min(bounds.width * 0.6, subviews[1].sizeThatFits(.unspecified).width)
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+            proposal: ProposedViewSize(width: max(0, bounds.width - choice - 6), height: bounds.height))
+        subviews[1].place(at: CGPoint(x: bounds.maxX - choice, y: bounds.minY), anchor: .topLeading,
+            proposal: ProposedViewSize(width: choice, height: bounds.height))
+    }
+}
+
 private struct PropertyChoice: View {
     let label: String
     let options: [String]
@@ -86,23 +103,36 @@ private struct PropertyChoice: View {
     let identifier: String
     let background: Color
     let select: (Int) -> Void
+    @State private var choosing = false
     var body: some View {
-        Menu {
-            ForEach(options.indices, id: \.self) { index in
-                Button { select(index) } label: {
-                    if index == selected { Label(options[index], systemImage: "checkmark") }
-                    else { Text(options[index]) }
-                }.accessibilityIdentifier(identifier + "-option-\(index)")
-            }
-        } label: {
-            HStack {
-                Text(options.indices.contains(selected) ? options[selected] : label).lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        Button { choosing = true } label: {
+            HStack(spacing: 6) {
+                ZStack(alignment: .leading) {
+                    ForEach(options.indices, id: \.self) { Text(options[$0]).hidden().accessibilityHidden(true) }
+                    Text(options.indices.contains(selected) ? options[selected] : label)
+                }.lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                 SharedIcon(name: "chevron-down")
-            }.padding(6).background(background, in: RoundedRectangle(cornerRadius: 6)).contentShape(RoundedRectangle(cornerRadius: 6))
-        }.menuStyle(.borderlessButton).menuIndicator(.hidden)
+            }.padding(.horizontal, 10).frame(height: 34)
+                .background(background, in: RoundedRectangle(cornerRadius: 6)).contentShape(RoundedRectangle(cornerRadius: 6))
+        }.buttonStyle(.plain)
             .accessibilityLabel(label).accessibilityValue(options.indices.contains(selected) ? options[selected] : "")
             .accessibilityIdentifier(identifier)
+            .popover(isPresented: $choosing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(options.indices, id: \.self) { index in
+                            Button { choosing = false; select(index) } label: {
+                                HStack(spacing: 6) {
+                                    SharedIcon(name: "check").opacity(index == selected ? 1 : 0)
+                                    Text(options[index])
+                                    Spacer(minLength: 0)
+                                }.padding(.horizontal, 8).frame(height: 28).contentShape(Rectangle())
+                            }.buttonStyle(.plain).accessibilityIdentifier(identifier + "-option-\(index)")
+                        }
+                    }.padding(6)
+                }.frame(width: 230, height: min(400, CGFloat(options.count) * 28 + 12))
+                    .presentationCompactAdaptation(.popover)
+            }
     }
 }
 

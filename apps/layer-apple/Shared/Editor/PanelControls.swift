@@ -31,7 +31,8 @@ struct PanelControls: View {
                     let item = panel["controls"][index]
                     if item["visible_in_panel"].bool { control(item) }
                 }
-        }.padding(8).frame(maxWidth: .infinity, alignment: .topLeading)
+        }.padding(panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
     }
     @ViewBuilder func control(_ item: JSON) -> some View {
         switch item["control"].string {

@@ -140,6 +140,14 @@ final class EditorLaunchTests: XCTestCase {
         captureDefaultEditor(in: app)
     }
 
+    @MainActor func testEditorControlLayout() {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch()
+        checkEditorControlLayout(in: app)
+    }
+
     @MainActor func testNumericToolControls() throws {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-AppleInterfaceStyle", "Light"]

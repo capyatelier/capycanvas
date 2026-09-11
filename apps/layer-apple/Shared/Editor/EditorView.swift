@@ -152,6 +152,7 @@ struct EditorView<Canvas: View>: View {
                 .fontWeight(.semibold).padding(.horizontal, 8).frame(height: 36)
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
+                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
         }.padding(6).frame(height: 48)
     }
 

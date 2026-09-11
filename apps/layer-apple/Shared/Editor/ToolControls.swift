@@ -24,7 +24,8 @@ struct ToolSetControls: View {
                     if group {
                         VStack(spacing: 8) {
                             SharedIcon(name: item["icon"].string)
-                            Text(item["label"].string).fontWeight(.bold).frame(minHeight: 24)
+                            Text(item["label"].string).fontWeight(.bold)
+                                .frame(minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 0.85 * 1.66)
                         }.font(.system(size: store.catalog["text_size_pt"].number * 4 / 3 * 0.85))
                     } else {
                         HStack(spacing: 8) {
@@ -32,10 +33,11 @@ struct ToolSetControls: View {
                                 Image("preview-\(item["preview"].uint)-\(store.state["theme"].string)")
                                     .resizable().scaledToFit().frame(width: 82, height: 32)
                             } else { SharedIcon(name: item["icon"].string) }
-                            Text(item["label"].string).fontWeight(.bold).frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                            Text(item["label"].string).fontWeight(.bold)
+                                .frame(maxWidth: .infinity, minHeight: store.catalog["text_size_pt"].number * 4 / 3 * 1.66, alignment: .leading)
                         }
                     }
-                }.padding(.horizontal, 17).padding(.vertical, 5).frame(maxWidth: .infinity)
+                }.padding(.horizontal, 12).padding(.vertical, 4).frame(maxWidth: .infinity)
                     .background(item["selected"].bool ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!command.isNull && !command["enabled"].bool)
@@ -92,7 +94,7 @@ struct ToolSettingsControls: View {
     }
     var body: some View {
         let editingContext = context
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(settings, id: \.settingID) { item in
                 let index = settings.firstIndex { $0.settingID == item.settingID } ?? 0
                 if !item["group"].string.isEmpty && (index == 0 || settings[index - 1]["group"].string != item["group"].string) {

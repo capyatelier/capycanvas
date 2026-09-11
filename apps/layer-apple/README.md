@@ -76,6 +76,15 @@ captures plus measured wheel geometry for the shared
 [color sampling check](../../tools/visual/README.md). The headless ABI tests
 verify resulting brush/eraser pixels and exact Undo without driving menus.
 
+Properties choice controls share an Apple button/popover projection, sizing the
+closed control to the longest option while keeping room for its row label.
+The layer blend control exposes its current value to accessibility.
+`testEditorControlLayout` checks all six Navigator hit targets, changes a blend
+mode through Properties, verifies the Layers value and undoes the change. It
+also attaches matching `initial` and `canvas-under-header` captures. The latter
+uses four shared zoom-in steps so the paper is visible through empty header
+space; title, Zen and Settings retain their own background plates.
+
 ## Install and run
 
 ```sh
