@@ -125,17 +125,13 @@ and upstream main at 40d9096. This is a design review, not a performance pass.
 
 ### Hardware gate
 
-Host: Intel Iris Xe. On 2026-09-10, the per-display EnumDisplaySettings probe
-confirmed the built-in Surface Panel at 2256 x 1504, 60 Hz, and an external
-display at 3840 x 2160, 120 Hz. The external display begins at desktop position
-(2256, 0). Run presentation acceptance on that display and record its active
-mode again with each benchmark; a connected monitor alone does not establish
-application presentation cadence. The hardware prerequisite is now available;
-the >=120 Hz application presentation gate remains unmeasured.
-
-Run `apps/layer-windows/scripts/probe-displays.ps1` to inspect every active
-monitor. Win32_VideoController reports only the built-in mode on this host
-and must not be used to determine the external display's refresh rate.
+A 3840 x 2160 display running at 120 Hz is available for local validation.
+The >=120 Hz application presentation gate remains unmeasured. Run
+`apps/layer-windows/scripts/probe-displays.ps1` to confirm the selected display's
+active mode before each benchmark. Adapter-wide queries may report a different
+monitor's mode. Keep raw host diagnostics, desktop coordinates, captures, and
+machine-specific reports under ignored `artifacts/`; publish only reviewed,
+sanitized results needed to reproduce the performance claim.
 
 Before performance acceptance, record a fixed matrix including 4K/32-layer
 documents, G-Pen, large eraser, Natural Blender, Watercolor Wash, pen-up,
@@ -157,3 +153,23 @@ shared history. Shared-crate changes are minimal and explicit for other ports.
 Milestone 0 is the reviewed design and acceptance plan. Milestone 1 requires a
 built/running native window, actual GPU canvas, working input, lifecycle checks
 and honest presentation diagnostics. Later milestones cover parity and package.
+
+### Windows bootstrap checkpoint
+
+The native C++/WinRT desktop project builds and launches with WinUI's built-in
+control metadata and styles. Resource initialization happens in OnLaunched,
+after application construction. One D3D12 surface covers the extended client
+area; an inverse DXGI composition transform prevents double scaling at high DPI.
+The independent input dispatcher starts after the first presented image, while
+resize and shutdown use asynchronous ownership handoffs.
+
+Local app-only captures verify a controlled replay stroke, undo/redo, and the
+same painted document panned behind titlebar controls. Resize, native command
+invocation, and coordinated close also pass. Automated OS mouse movement did not
+reach the intended window, so real OS input delivery is explicitly unverified.
+This checkpoint does not pass milestone 1: bounded input transport, capture and
+cancellation details, recovery, presentation telemetry, and 120 Hz measurements
+remain outstanding. Workspace/settings parity and final packaging also remain.
+
+Upstream now provides layer-host and staged GPU startup. Integrate these shared
+facilities as the Windows shell expands, keeping the Windows surface ABI local.

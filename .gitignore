@@ -44,3 +44,10 @@ DerivedData/
 xcuserdata/
 *.xcresult/
 *.mobileprovision
+
+# Windows local tool state and generated build data.
+.vs/
+*.vcxproj.user
+/apps/layer-windows/Generated Files/
+/apps/layer-windows/x64/
+/apps/layer-windows/ipch/

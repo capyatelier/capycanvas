@@ -12,6 +12,7 @@ members = [
     "apps/layer-web",
     "apps/layer-android/native",
     "apps/layer-apple/native",
+    "apps/layer-windows/native",
 ]
 resolver = "2"
 

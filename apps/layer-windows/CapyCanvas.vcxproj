@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{D178893B-6F2A-43AB-A287-7248D89120DF}</ProjectGuid>
+    <RootNamespace>CapyCanvas</RootNamespace><ProjectName>CapyCanvas</ProjectName>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.22000.0</WindowsTargetPlatformMinVersion>
+    <TargetPlatformVersion>10.0.26100.0</TargetPlatformVersion>
+    <AppContainerApplication>false</AppContainerApplication><UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType><AppxPackage>false</AppxPackage>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <MinimalCoreWin>true</MinimalCoreWin><CppWinRTOptimized>true</CppWinRTOptimized><CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
+    <CapyRoot>$(MSBuildThisFileDirectory)..\..</CapyRoot>
+    <CapyPackages Condition="'$(CapyPackages)' == ''">$(CapyRoot)\artifacts\windows\packages</CapyPackages>
+    <CapyRustProfile Condition="'$(Configuration)' == 'Release'">release</CapyRustProfile>
+    <CapyRustProfile Condition="'$(CapyRustProfile)' == ''">debug</CapyRustProfile>
+  </PropertyGroup>
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(CapyPackages)\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('$(CapyPackages)\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.Web.WebView2.1.0.3179.45\build\native\Microsoft.Web.WebView2.props" Condition="Exists('$(CapyPackages)\Microsoft.Web.WebView2.1.0.3179.45\build\native\Microsoft.Web.WebView2.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.10.0.26100.4654\build\Microsoft.Windows.SDK.BuildTools.props" Condition="Exists('$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.10.0.26100.4654\build\Microsoft.Windows.SDK.BuildTools.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.MSIX.1.7.20250829.1\build\Microsoft.Windows.SDK.BuildTools.MSIX.props" Condition="Exists('$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.MSIX.1.7.20250829.1\build\Microsoft.Windows.SDK.BuildTools.MSIX.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Base.1.8.251216001\build\native\Microsoft.WindowsAppSDK.Base.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Base.1.8.251216001\build\native\Microsoft.WindowsAppSDK.Base.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Foundation.1.8.260803002\build\native\Microsoft.WindowsAppSDK.Foundation.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Foundation.1.8.260803002\build\native\Microsoft.WindowsAppSDK.Foundation.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.InteractiveExperiences.1.8.260708001\build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.InteractiveExperiences.1.8.260708001\build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.WinUI.1.8.260803003\build\native\Microsoft.WindowsAppSDK.WinUI.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.WinUI.1.8.260803003\build\native\Microsoft.WindowsAppSDK.WinUI.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.DWrite.1.8.25122902\build\Microsoft.WindowsAppSDK.DWrite.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.DWrite.1.8.25122902\build\Microsoft.WindowsAppSDK.DWrite.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Widgets.1.8.251231004\build\native\Microsoft.WindowsAppSDK.Widgets.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Widgets.1.8.251231004\build\native\Microsoft.WindowsAppSDK.Widgets.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.AI.1.8.79\build\native\Microsoft.WindowsAppSDK.AI.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.AI.1.8.79\build\native\Microsoft.WindowsAppSDK.AI.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.ML.1.8.2197\build\native\Microsoft.WindowsAppSDK.ML.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.ML.1.8.2197\build\native\Microsoft.WindowsAppSDK.ML.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Runtime.1.8.260804001\build\native\Microsoft.WindowsAppSDK.Runtime.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Runtime.1.8.260804001\build\native\Microsoft.WindowsAppSDK.Runtime.props')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.1.8.260804001\build\native\Microsoft.WindowsAppSDK.props" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.1.8.260804001\build\native\Microsoft.WindowsAppSDK.props')" />
+  </ImportGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet><DesktopCompatible>true</DesktopCompatible>
+    <UseDebugLibraries Condition="'$(Configuration)' == 'Debug'">true</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <OutDir>$(CapyRoot)\artifacts\windows\$(Configuration)\</OutDir>
+    <IntDir>$(CapyRoot)\artifacts\windows\obj\$(Configuration)\</IntDir>
+    <TargetName>CapyCanvas</TargetName><GenerateManifest>true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel>
+      <PrecompiledHeader>Use</PrecompiledHeader><PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile><AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)native\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link><SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll.lib;windowsapp.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+
+
+    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" />
+    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" />
+    <None Include="packages.config" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(CapyPackages)\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('$(CapyPackages)\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.Web.WebView2.1.0.3179.45\build\native\Microsoft.Web.WebView2.targets" Condition="Exists('$(CapyPackages)\Microsoft.Web.WebView2.1.0.3179.45\build\native\Microsoft.Web.WebView2.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.10.0.26100.4654\build\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists('$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.10.0.26100.4654\build\Microsoft.Windows.SDK.BuildTools.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.MSIX.1.7.20250829.1\build\Microsoft.Windows.SDK.BuildTools.MSIX.targets" Condition="Exists('$(CapyPackages)\Microsoft.Windows.SDK.BuildTools.MSIX.1.7.20250829.1\build\Microsoft.Windows.SDK.BuildTools.MSIX.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Base.1.8.251216001\build\native\Microsoft.WindowsAppSDK.Base.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Base.1.8.251216001\build\native\Microsoft.WindowsAppSDK.Base.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Foundation.1.8.260803002\build\native\Microsoft.WindowsAppSDK.Foundation.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Foundation.1.8.260803002\build\native\Microsoft.WindowsAppSDK.Foundation.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.InteractiveExperiences.1.8.260708001\build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.InteractiveExperiences.1.8.260708001\build\native\Microsoft.WindowsAppSDK.InteractiveExperiences.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.WinUI.1.8.260803003\build\native\Microsoft.WindowsAppSDK.WinUI.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.WinUI.1.8.260803003\build\native\Microsoft.WindowsAppSDK.WinUI.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.DWrite.1.8.25122902\build\Microsoft.WindowsAppSDK.DWrite.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.DWrite.1.8.25122902\build\Microsoft.WindowsAppSDK.DWrite.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Widgets.1.8.251231004\build\native\Microsoft.WindowsAppSDK.Widgets.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Widgets.1.8.251231004\build\native\Microsoft.WindowsAppSDK.Widgets.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.AI.1.8.79\build\native\Microsoft.WindowsAppSDK.AI.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.AI.1.8.79\build\native\Microsoft.WindowsAppSDK.AI.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.ML.1.8.2197\build\native\Microsoft.WindowsAppSDK.ML.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.ML.1.8.2197\build\native\Microsoft.WindowsAppSDK.ML.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Runtime.1.8.260804001\build\native\Microsoft.WindowsAppSDK.Runtime.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Runtime.1.8.260804001\build\native\Microsoft.WindowsAppSDK.Runtime.targets')" />
+    <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.1.8.260804001\build\native\Microsoft.WindowsAppSDK.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.1.8.260804001\build\native\Microsoft.WindowsAppSDK.targets')" />
+  </ImportGroup>
+  <Target Name="CopyRustRuntime" AfterTargets="Build">
+    <Copy SourceFiles="$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll" DestinationFolder="$(OutDir)" />
+  </Target>
+</Project>
