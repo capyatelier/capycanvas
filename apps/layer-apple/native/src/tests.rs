@@ -4,6 +4,8 @@ use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
+#[path = "input_tests.rs"]
+mod input;
 #[path = "navigator_tests.rs"]
 mod navigator;
 #[path = "workspace_tests.rs"]

@@ -42,6 +42,12 @@ impl SampleFlags {
     pub const PRIMARY: Self = Self(1 << 1);
     pub const BARREL_BUTTON: Self = Self(1 << 2);
     pub const INVERTED: Self = Self(1 << 3);
+    /// A later correction may replace this real sample. `sequence` is its
+    /// contact-local token until the final correction releases it.
+    pub const ESTIMATED: Self = Self(1 << 4);
+    /// Replace the registered sample with this token; never append a point,
+    /// route a pointer action, or use the correction's delivery-time camera.
+    pub const CORRECTION: Self = Self(1 << 5);
 
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 != 0
@@ -173,6 +179,7 @@ pub struct StrokeBuilder {
     real: Vec<StrokePoint>,
     predicted: Vec<StrokePoint>,
     start_ns: Option<u64>,
+    last_real_source: usize,
 }
 
 impl StrokeBuilder {
@@ -181,6 +188,7 @@ impl StrokeBuilder {
             real: Vec::with_capacity(samples),
             predicted: Vec::with_capacity(32),
             start_ns: None,
+            last_real_source: 0,
         }
     }
 
@@ -200,6 +208,7 @@ impl StrokeBuilder {
             self.predicted.push(point);
         } else {
             self.predicted.clear();
+            self.last_real_source = self.real.len();
             self.real.push(point);
         }
     }
@@ -210,6 +219,15 @@ impl StrokeBuilder {
 
     pub fn predicted_points(&self) -> &[StrokePoint] {
         &self.predicted
+    }
+
+    pub(crate) fn replace_real(&mut self, index: usize, point: StrokePoint) {
+        self.real[index] = point;
+        self.predicted.clear();
+    }
+
+    pub(crate) fn last_real_source(&self) -> usize {
+        self.last_real_source
     }
 
     pub fn elapsed_micros_at(&self, timestamp_ns: u64) -> Option<u32> {

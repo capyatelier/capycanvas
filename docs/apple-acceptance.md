@@ -812,3 +812,43 @@ The integrated signed iPad and Mac builds and WebAssembly build pass. The iPad
 build installs and launches, and the Mac build launches with a disposable workspace. The
 drawer UI and blank-canvas visual fixtures above predate the renderer merge and
 do not establish visual parity for the incoming Fill/Auto Select refinements.
+
+## Estimated Pencil observations and shared stroke correction
+
+UIKit now handles delayed Pencil property updates through the common Apple ABI
+and shared Rust input engine. Numeric observations retain their contact, token,
+timestamp, scale and original resolved transform/pressure policy. Partial/final
+updates include force, location, tilt and roll; prediction remains separate.
+Corrections bypass chrome/pointer/cursor routing and cannot start a contact.
+The adapter keeps pending observations after pen-up, releases them on blur and
+clears canceled contacts. Repeated terminal observations and stationary
+airbrush samples derived from an estimate follow the original token.
+
+Pending observations use the replaceable tail where possible. The first exact
+Metal oracle exposed watercolor material boundaries changing when persistent
+samples waited for corrections. Recording those boundaries from real input and
+retaining their indices through finalization fixes the discrepancy. Corrected
+G Pen, Pencil, watercolor and smudge strokes now match the final-value input
+oracle exactly in both stored semantics and GPU pixels on both Apple policies.
+Undo removes the original stroke; Redo restores its corrected pixels.
+
+Committed corrections amend the original history entry without adding an undo
+step or discarding redoable artwork. Captured project snapshots remain immutable,
+and affected save-checkpoint identities change while states before the stroke
+retain theirs. Direct tests also cover camera-history eviction, capture-time
+pressure policy, correction after Undo, repeated final callbacks, duplicate
+terminal samples, stationary airbrush input and cancellation/contact isolation.
+All 336 affected Rust tests pass (42 core, 35 engine, 217 UI, 12 host, 30 Apple).
+The standalone Swift observation checks and all five trace analyzer checks pass.
+Both final signed Apple builds pass, the physical iPad installs and launches,
+and the Mac launches a disposable editor.
+
+This establishes synthetic input correctness, not physical Pencil/tablet or
+performance acceptance. Retention has explicit bounds and expiry counts; callback
+loss/overflow, orientation changes and the complete physical interruption matrix
+remain open. Corrections racing later explicit point edits retain a matching
+guard and require broader workflow acceptance. Late corrections to persistent
+ink currently replay the scene: long strokes, 4K multilayer costs and sustained
+120 Hz performance remain unverified. The trace reports correction queueing and
+receipt/presentation proxies separately. See [Apple input details](../apps/layer-apple/INPUT.md)
+for the shared contract, exact bounds, limitations and reproducible checks.

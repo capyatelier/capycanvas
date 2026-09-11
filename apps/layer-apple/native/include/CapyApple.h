@@ -87,6 +87,13 @@ int32_t capy_apple_detach(CapyApple *app);
 int32_t capy_apple_pointer(CapyApple *app, uint64_t id, uint32_t tool, uint32_t button,
                           const double *records, size_t count, uint32_t predicted,
                           uint64_t view_revision);
+/* Estimate metadata is two uint64_t values per nine-double sample: an opaque
+   contact-local token (zero for untracked samples) and expecting updates (0/1).
+   Corrections replace previously admitted points, including after pen-up, and
+   must carry the original contact and view revision. They never route UI input. */
+int32_t capy_apple_pointer_updates(CapyApple *app, uint64_t id, uint32_t tool, uint32_t button,
+                                  const double *records, size_t count, const uint64_t *updates,
+                                  uint32_t correction, uint64_t view_revision);
 /* Anchors are physical canvas pixels; wheel deltas are logical points.
    Magnification is a multiplicative factor; rotation is in radians. */
 int32_t capy_apple_scroll(CapyApple *app, float x, float y, float dx, float dy,

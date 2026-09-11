@@ -128,6 +128,8 @@ open apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
 
 See [PERFORMANCE.md](PERFORMANCE.md) for opt-in local CPU/GPU/presentation traces,
 the report tool, instrumentation checks and the remaining hardware evidence.
+See [INPUT.md](INPUT.md) for Pencil corrections, shared stroke/history handling,
+fast input checks and the physical-device evidence still required.
 
 Check editor behavior directly without driving system menus:
 

@@ -289,6 +289,17 @@ impl NativeHost {
             && !self.session.state().document_file.close_ready
     }
     pub fn pointer_batch(&mut self, batch: PointerBatch<'_>) -> Result<(), String> {
+        self.pointer_batch_updates(batch, &[], false)
+    }
+    /// Optional pairs per sample: contact-local estimate token and whether
+    /// further corrections are expected (0/1). Corrections bypass UI routing
+    /// and pointer ownership: they refer to previously admitted paint only.
+    pub fn pointer_batch_updates(
+        &mut self,
+        batch: PointerBatch<'_>,
+        updates: &[u64],
+        correction: bool,
+    ) -> Result<(), String> {
         let PointerBatch {
             id,
             tool,
@@ -306,10 +317,21 @@ impl NativeHost {
         {
             return Err("Invalid native pointer batch".into());
         }
+        if (!updates.is_empty() && updates.len() != records.len() / 9 * 2)
+            || updates
+                .chunks_exact(2)
+                .any(|u| u[1] > 1 || (u[1] != 0 && u[0] == 0))
+            || (correction
+                && (predicted || updates.is_empty() || updates.chunks_exact(2).any(|u| u[0] == 0)))
+            || (predicted && !updates.is_empty())
+        {
+            return Err("Invalid native input estimates".into());
+        }
         if !self.accepts_pointer_input(view_revision) {
             return Ok(());
         }
-        for sample in records.chunks_exact(9) {
+        for (index, sample) in records.chunks_exact(9).enumerate() {
+            let update = updates.get(index * 2..index * 2 + 2).unwrap_or(&[0, 0]);
             let phase = match sample[8] as u8 {
                 0 => PenPhase::Hover,
                 1 => PenPhase::Down,
@@ -325,7 +347,9 @@ impl NativeHost {
                 PenPhase::Cancel => Some(ContactPhase::Cancel),
             };
             let position = [sample[0] as f32, sample[1] as f32];
-            let paint = if predicted {
+            let paint = if correction {
+                true
+            } else if predicted {
                 self.last_pen.is_some_and(|p| p.device_id == id) && tool != 3
             } else if let Some(phase) = contact {
                 self.input(UiInput::Pointer {
@@ -349,7 +373,11 @@ impl NativeHost {
             };
             let event = PenEvent {
                 device_id: id,
-                sequence: self.sequence + 1,
+                sequence: if update[0] != 0 {
+                    update[0]
+                } else {
+                    self.sequence + 1
+                },
                 timestamp_ns: sample[7] as u64,
                 view_revision,
                 surface_position: Point {
@@ -368,6 +396,16 @@ impl NativeHost {
                 },
                 flags: SampleFlags(
                     SampleFlags::PRIMARY.0
+                        | if correction {
+                            SampleFlags::CORRECTION.0
+                        } else {
+                            0
+                        }
+                        | if update[1] != 0 {
+                            SampleFlags::ESTIMATED.0
+                        } else {
+                            0
+                        }
                         | if predicted {
                             SampleFlags::PREDICTED.0
                         } else {
@@ -375,6 +413,11 @@ impl NativeHost {
                         },
                 ),
             };
+            if correction {
+                self.sequence += 1;
+                self.enqueue(event)?;
+                continue;
+            }
             if tool != 3 && !predicted {
                 self.session.cursor_input(if phase == PenPhase::Cancel {
                     None
