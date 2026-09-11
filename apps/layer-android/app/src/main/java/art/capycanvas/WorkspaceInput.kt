@@ -21,6 +21,11 @@ internal val LocalWorkspaceZ = staticCompositionLocalOf { 0 }
 internal class DockInteraction(val host: CanvasHost) {
     data class Region(val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int, val context: JSONObject?)
     val regions = mutableMapOf<Any, Region>()
+    val chromeRegions = mutableMapOf<Any, Rect>()
+    var drawer: JSONObject? = null
+    var drawerTileRevision by mutableIntStateOf(0)
+        private set
+    private val drawerTiles = mutableMapOf<String, JSONObject>()
     val anchors = mutableMapOf<String, Rect>()
     val tabs = mutableMapOf<String, JSONObject>()
     var origin = Offset.Zero
@@ -40,6 +45,23 @@ internal class DockInteraction(val host: CanvasHost) {
     private var generation = 0
     private val measurements = mutableMapOf<String, Pair<Float, Float>>()
 
+    fun clearDrawerTiles(column: Int) {
+        if (drawerTiles.entries.removeAll { it.value.getInt("column") == column }) publishDrawerTiles()
+    }
+    fun measureDrawerTile(column: Int, panel: String, tile: Int, bounds: Rect?) {
+        val key = "$column:$panel:$tile"
+        val next = bounds?.takeIf { it.width > 0f && it.height > 0f }?.let {
+            obj("column" to column, "anchor" to obj("panel" to panel, "tile" to tile), "bounds" to
+                obj("x" to it.left / density, "y" to it.top / density, "width" to it.width / density, "height" to it.height / density))
+        }
+        if (drawerTiles[key]?.toString() == next?.toString()) return
+        if (next == null) drawerTiles.remove(key) else drawerTiles[key] = next
+        publishDrawerTiles()
+    }
+    private fun publishDrawerTiles() {
+        host.dispatch(obj("type" to "measure_drawer_tiles", "measurements" to JSONArray(drawerTiles.values.toList())))
+        drawerTileRevision++
+    }
     fun measure(panel: String, tabWidth: Float? = null, contentHeight: Float? = null) {
         val old = measurements[panel] ?: (0f to 0f)
         val next = (tabWidth ?: old.first) to (contentHeight ?: old.second)
@@ -54,9 +76,10 @@ internal class DockInteraction(val host: CanvasHost) {
     // Shared workspace gestures have their own Zen state in Rust. Only tile
     // reordering uses the host's generic dragging fact.
     fun facts() = obj("held" to false, "dragging" to (active?.optString("type") == "tile_drag"),
-        "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion)
+        "popup_open" to (popupOpen || contextMenu != null), "expanded_panel" to expansion, "content_drawer" to drawer?.optJSONObject("placement")?.optJSONObject("bounds"),
+        "drawer_connection" to drawer?.optJSONObject("connection")?.optJSONObject("bounds"))
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())
-    fun anchorKey(item: JSONObject) = "${item.optString("kind").replace("ribbon", "panel")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
+    fun anchorKey(item: JSONObject) = "${item.optString("kind").replace("ribbon", "panel")}:${item.optString("column")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
     fun context(target: JSONObject) {
         if (dragging) return
         val anchor = anchors[anchorKey(target)] ?: return
@@ -142,6 +165,13 @@ internal class DockInteraction(val host: CanvasHost) {
 internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = pointerInput(dock) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        if (dock.chromeRegions.values.any { it.contains(down.position) }) {
+            val tab = dock.tabs.values.firstOrNull { it.getJSONObject("bounds").let { b ->
+                Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
+            } }?.optString("panel")
+            dock.host.chrome(obj("kind" to "contact", "canvas" to false,
+                "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density))), dock.facts().put("contact_tab", tab))
+        }
         val source = dock.hit(down.position)
         if (source != null) {
             // Invisible resize strips have no child button to consume their
@@ -171,4 +201,27 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
             } finally { if (started && !released) dock.finish(true) }
         }
     }
+}
+
+
+/** Only UI-covered contacts are sent here; CanvasHost gates bare canvas contacts. */
+@Composable internal fun Modifier.chromeRegion(dock: DockInteraction): Modifier {
+    val token = remember { Any() }
+    DisposableEffect(dock, token) { onDispose { dock.chromeRegions.remove(token) } }
+    return onGloballyPositioned { dock.chromeRegions[token] = it.boundsInRoot().translate(-dock.origin) }
+}
+@Composable internal fun Modifier.contextAnchor(dock: DockInteraction, target: JSONObject): Modifier {
+    val key = dock.anchorKey(target)
+    DisposableEffect(dock, key) { onDispose { dock.anchors.remove(key) } }
+    return onGloballyPositioned { dock.anchors[key] = it.boundsInRoot().translate(-dock.origin) }
+}
+internal val LocalDrawerColumn = staticCompositionLocalOf<Int?> { null }
+internal val LocalDrawerClip = staticCompositionLocalOf { Rect.Zero }
+@Composable internal fun Modifier.drawerTile(dock: DockInteraction, panel: String, tile: Int): Modifier {
+    val column = LocalDrawerColumn.current ?: return this
+    val clip = LocalDrawerClip.current
+    var bounds by remember { mutableStateOf(Rect.Zero) }
+    SideEffect { dock.measureDrawerTile(column, panel, tile, bounds.intersect(clip)) }
+    DisposableEffect(column, panel, tile) { onDispose { dock.measureDrawerTile(column, panel, tile, null) } }
+    return onGloballyPositioned { bounds = it.boundsInRoot().translate(-dock.origin) }
 }
