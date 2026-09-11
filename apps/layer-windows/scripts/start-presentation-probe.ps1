@@ -4,7 +4,7 @@ $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 if(!$Executable){$Executable=Join-Path $repo 'artifacts/windows/Release/CapyCanvas.exe'}
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
-$names=@('CAPY_PRESENT_PROBE','CAPY_TEST_DISPLAY','CAPY_SMOKE_TEST','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT')
+$names=@('CAPY_PRESENT_PROBE','CAPY_TEST_DISPLAY','CAPY_SMOKE_TEST','CAPY_TRACE_INPUT','CAPY_TRACE_TRANSPORT','CAPY_TRACE_UI','CAPY_TEST_PRIMARY')
 $previous=@{}
 foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try {

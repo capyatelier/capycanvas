@@ -1,6 +1,8 @@
 #pragma once
 #include "pch.h"
 #include "WorkspaceView.h"
+#include "HeaderView.h"
+#include "SettingsView.h"
 #include "CanvasWorkBuffer.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
@@ -12,6 +14,8 @@
 #include <variant>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
+#include <optional>
 
 class CanvasWindow : public std::enable_shared_from_this<CanvasWindow> {
 public:
@@ -34,12 +38,22 @@ private:
     bool inputDone=false;
     CapyHost* host=nullptr;
     std::unique_ptr<WorkspaceView> workspace;
+    std::unique_ptr<HeaderView> header;
+    std::unique_ptr<SettingsView> settings;
+    std::atomic<bool> menuOpen{false};
+    struct Hover {float x,y;bool leave,touch;};
+    std::optional<Hover> pendingHover;
+    std::unordered_set<uint64_t> consumedContacts; // render thread
     winrt::Microsoft::UI::Xaml::Controls::StackPanel toolbar;
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
     std::string pendingFull, pendingCamera;
     bool snapshotPosted=false;
     void Publish(std::string snapshot, bool full);
     void ApplyPending();
+    void ApplyModel(winrt::Windows::Data::Json::JsonObject const&);
+    void Popup(bool open);
+    void ChromeMotion(winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&,bool leave=false);
+    void Fullscreen();
     std::jthread renderer;
     std::mutex mutex;
     std::condition_variable wake;

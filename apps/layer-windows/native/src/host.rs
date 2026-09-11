@@ -300,6 +300,37 @@ pub unsafe extern "C" fn capy_scroll(
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_chrome(
+    host: *mut CapyHost,
+    kind: u32,
+    x: f32,
+    y: f32,
+    canvas: bool,
+    popup_open: bool,
+    touch: bool,
+) -> i32 {
+    guard(host, |host| {
+        let position = [x / host.scale, y / host.scale];
+        let event = match kind {
+            0 => layer_ui::ChromeEvent::Refresh,
+            1 => layer_ui::ChromeEvent::Motion { position },
+            2 => layer_ui::ChromeEvent::Contact { position, canvas },
+            3 => layer_ui::ChromeEvent::Leave { touch },
+            _ => return Err("Invalid chrome event".into()),
+        };
+        let reply = host.native.input(layer_ui::UiInput::Chrome {
+            event,
+            viewport: host.native.logical,
+            facts: layer_ui::ChromeFacts {
+                popup_open: popup_open
+                    || host.native.session.state().customization.control.is_some(),
+                ..Default::default()
+            },
+        })?;
+        Ok(i32::from(reply.handled) | (i32::from(reply.dismiss_popups) << 1))
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_acquire(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
         if host.config.is_none() {

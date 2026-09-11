@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "CanvasWindow.h"
+#include "UiControls.h"
 #include <microsoft.ui.xaml.media.dxinterop.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -36,7 +37,7 @@ void CanvasWindow::Open() {
     titlebar.ButtonBackgroundColor(transparent);
     titlebar.ButtonInactiveBackgroundColor(transparent);
     titlebar.ButtonForegroundColor(Windows::UI::Color{255,225,225,229});
-    titlebar.PreferredHeightOption(TitleBarHeightOption::Standard);
+    titlebar.PreferredHeightOption(TitleBarHeightOption::Tall);
     root.RequestedTheme(ElementTheme::Default);
 
     canvasFocus.Content(panel);
@@ -45,43 +46,28 @@ void CanvasWindow::Open() {
     canvasFocus.IsTabStop(true);
     Automation::AutomationProperties::SetName(canvasFocus,L"Drawing canvas");
     root.Children().Append(canvasFocus);
-    root.AddHandler(UIElement::KeyDownEvent(),box_value(KeyEventHandler([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())self->Key(e,true);
-    })),true);
-    root.AddHandler(UIElement::KeyUpEvent(),box_value(KeyEventHandler([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
-        if(auto self=weak.lock())self->Key(e,false);
-    })),true);
-    // Only the GPU panel fills the client area. XAML chrome overlays that surface.
-    toolbar.Orientation(Orientation::Horizontal);
-    toolbar.HorizontalAlignment(HorizontalAlignment::Left);
-    toolbar.VerticalAlignment(VerticalAlignment::Top);
-    toolbar.Margin(Thickness{12,8,0,0});
-    toolbar.Spacing(4);
-    toolbar.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->Resize();});
-    TextBlock name;
-    name.Text(L"Capy Canvas");
-    name.VerticalAlignment(VerticalAlignment::Center);
-    name.Margin(Thickness{8,0,16,0});
-    toolbar.Children().Append(name);
-    auto button=[&](wchar_t const* label, char const* json) {
-        Button b; b.Content(box_value(label));
-        b.Click([weak=weak_from_this(), json=std::string(json)](auto&&,auto&&) {
-            if(auto self=weak.lock()) self->Send(json);
-        });
-        toolbar.Children().Append(b);
-    };
-    button(L"Undo", R"({"type":"invoke","command":"undo"})");
-    button(L"Redo", R"({"type":"invoke","command":"redo"})");
-    button(L"Fit", R"({"type":"invoke","command":"fit_canvas"})");
-    if(GetEnvironmentVariableW(L"CAPY_SMOKE_TEST",nullptr,0)) {
-        for(bool pan:{false,true}) {
-            Button test;test.Content(box_value(pan?L"Test pan":L"Test stroke"));
-            test.Click([weak=weak_from_this(),pan](auto&&,auto&&){if(auto self=weak.lock())self->Replay(pan);});
+    root.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
+        if(auto self=weak.lock())if(!self->settings||!self->settings->IsOpen())self->Key(e,true);
+    });
+    root.PreviewKeyUp([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
+        if(auto self=weak.lock())if(!self->settings||!self->settings->IsOpen())self->Key(e,false);
+    });
+    root.PointerMoved([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+        if(auto self=weak.lock())self->ChromeMotion(e);
+    });
+    root.PointerExited([weak=weak_from_this()](auto&&,PointerRoutedEventArgs const& e){
+        if(auto self=weak.lock())self->ChromeMotion(e,true);
+    });
+    // Controlled test commands stay outside the production header.
+    toolbar.Orientation(Orientation::Horizontal);toolbar.Spacing(4);
+    toolbar.HorizontalAlignment(HorizontalAlignment::Center);toolbar.VerticalAlignment(VerticalAlignment::Bottom);
+    toolbar.Margin({0,0,0,8});
+    if(GetEnvironmentVariableW(L"CAPY_SMOKE_TEST",nullptr,0)){
+        for(int mode=0;mode<3;++mode){
+            Button test;test.Content(box_value(mode==0?L"Test stroke":mode==1?L"Test pan":L"Test backlog"));
+            test.Click([weak=weak_from_this(),mode](auto&&,auto&&){if(auto self=weak.lock())self->Replay(mode==1,mode==2);});
             toolbar.Children().Append(test);
         }
-        Button backlog;backlog.Content(box_value(L"Test backlog"));
-        backlog.Click([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->Replay(false,true);});
-        toolbar.Children().Append(backlog);
     }
     root.Children().Append(toolbar);
     status.Text(L"Preparing canvas…");
@@ -103,6 +89,9 @@ void CanvasWindow::Open() {
             if(!self->closed) {e.Cancel(true);self->Stop();}
         }
     });
+    window.AppWindow().Changed([weak=weak_from_this()](auto&&,AppWindowChangedEventArgs const& e){
+        if(e.DidPresenterChange())if(auto self=weak.lock())self->Resize();
+    });
     window.AppWindow().Resize({1440,1000});
     // Benchmark placement is opt-in; ordinary launches use Windows placement.
     if(GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
@@ -111,7 +100,8 @@ void CanvasWindow::Open() {
             MONITORINFOEXW info{};info.cbSize=sizeof(info);
             DEVMODEW mode{};mode.dmSize=sizeof(mode);
             if(GetMonitorInfoW(monitor,&info)&&EnumDisplaySettingsW(info.szDevice,ENUM_CURRENT_SETTINGS,&mode)
-                &&mode.dmDisplayFrequency>=120) {
+                &&(GetEnvironmentVariableW(L"CAPY_TEST_PRIMARY",nullptr,0)?
+                    (info.dwFlags&MONITORINFOF_PRIMARY)!=0:mode.dmDisplayFrequency>=120)) {
                 *reinterpret_cast<POINT*>(data)={info.rcWork.left+48,info.rcWork.top+48};
                 return FALSE;
             }
@@ -127,10 +117,13 @@ void CanvasWindow::Resize() {
               uint32_t(std::max(1L, std::lround(panel.ActualHeight()*scale))),scale};
     // Physical-pixel drag regions leave the app controls and system caption buttons interactive.
     auto titlebar=window.AppWindow().TitleBar();
-    auto dragStart=int32_t(std::ceil((toolbar.ActualWidth()+20)*scale));
-    titlebar.SetDragRectangles({
-        Windows::Graphics::RectInt32{dragStart,0,
-            std::max(0,int32_t(next.width)-titlebar.RightInset()-dragStart),int32_t(40*scale)}});
+    bool caption=window.AppWindow().Presenter().Kind()==AppWindowPresenterKind::Overlapped;
+    if(header){
+        header->SetFullscreen(!caption);
+        header->SetInsets(caption?float(titlebar.LeftInset())/scale:0,caption?float(titlebar.RightInset())/scale:0);
+        if(caption)titlebar.SetDragRectangles(header->DragRegions(scale,next.width));
+    } else if(caption)titlebar.SetDragRectangles({Windows::Graphics::RectInt32{
+        titlebar.LeftInset(),0,std::max(0,int32_t(next.width)-titlebar.LeftInset()-titlebar.RightInset()),int32_t(48*scale)}});
     {
         std::lock_guard lock(mutex);
         bool changed=next.width!=desired.width||next.height!=desired.height||next.scale!=desired.scale;
@@ -155,9 +148,19 @@ void CanvasWindow::Start() {
         if(auto self=weak.lock())self->Send(std::move(json));
     },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)));
     root.Children().InsertAt(1,workspace->Root());
+    auto send=[weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json));};
+    auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(catalog));
+    header=std::make_unique<HeaderView>(send,model,
+        [weak=weak_from_this()](bool open){if(auto self=weak.lock())self->Popup(open);},
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->Resize();},
+        [weak=weak_from_this()]{if(auto self=weak.lock())self->Fullscreen();});
+    root.Children().Append(header->Root());
+    settings=std::make_unique<SettingsView>(send,model,root.XamlRoot(),
+        [weak=weak_from_this()](KeyRoutedEventArgs const& e,bool pressed){if(auto self=weak.lock())self->Key(e,pressed);},
+        [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail("Cannot open Preferences: "+error);});
     if(auto snapshot=capy_snapshot(host)){
         std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
-        workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
+        ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
     }
     {std::lock_guard lock(mutex);revision=capy_view_revision(host);inputScale=desired.scale;}
     status.Text(L"Preparing brushes…");
@@ -347,7 +350,8 @@ void CanvasWindow::Key(KeyRoutedEventArgs const& e,bool pressed) {
     bool canvas=focused&&focused==canvasFocus;
     // Native controls retain text, slider and focus-navigation keys. Releases
     // still reach shared state so moving focus cannot leave a pan key held.
-    bool editing=!canvas||key==VirtualKey::Tab;
+    bool editing=!canvas;
+    if(key==VirtualKey::F4&&(GetKeyState(VK_MENU)&0x8000))return;
     using namespace Windows::Data::Json;
     JsonObject modifiers;
     modifiers.Insert(L"command",JsonValue::CreateBooleanValue((GetKeyState(VK_CONTROL)&0x8000)!=0));
@@ -384,7 +388,7 @@ void CanvasWindow::Run() {
         for(;prepared;) {
             {
                 std::unique_lock lock(mutex);
-                wake.wait(lock,[&]{return closing||resize||dirty||transportFailed||!work.Empty();});
+                wake.wait(lock,[&]{return closing||resize||dirty||transportFailed||!work.Empty()||pendingHover.has_value();});
                 if(closing) break;
                 if(resize) {
                     paused=true;resize=false;probeReady=false;
@@ -404,14 +408,24 @@ void CanvasWindow::Run() {
                 continue;
             }
             std::deque<CanvasWork> pending;
-            bool overflow;
-            {std::lock_guard lock(mutex);pending=work.Take();overflow=transportFailed;}
+            bool overflow;std::optional<Hover> hover;
+            {std::lock_guard lock(mutex);pending=work.Take();overflow=transportFailed;hover=std::exchange(pendingHover,std::nullopt);}
             space.notify_all();
             bool failed=false;
+            if(hover&&capy_chrome(host,hover->leave?3:1,hover->x,hover->y,false,menuOpen.load(),hover->touch)<0){Fail(capy_error());break;}
             for(auto& item:pending) {
                 int result;
-                if(auto points=std::get_if<std::vector<CapyPointer>>(&item))
-                    result=capy_pointer(host,points->data(),points->size());
+                if(auto points=std::get_if<std::vector<CapyPointer>>(&item)){
+                    if(points->empty())continue;
+                    auto const& first=points->front();auto const& last=points->back();
+                    result=capy_chrome(host,first.phase==1?2:first.phase==4?3:1,
+                        first.phase==1?first.x:last.x,first.phase==1?first.y:last.y,true,menuOpen.load(),first.tool==3);
+                    if(result>=0){
+                        if(first.phase==1&&(result&1))consumedContacts.insert(first.id);
+                        result=consumedContacts.contains(first.id)?0:capy_pointer(host,points->data(),points->size());
+                        if(last.phase==3||last.phase==4)consumedContacts.erase(first.id);
+                    }
+                }
                 else if(auto scroll=std::get_if<CanvasScroll>(&item))
                     result=capy_scroll(host,scroll->x,scroll->y,scroll->dx,scroll->dy,scroll->density,scroll->zoom,scroll->horizontal);
                 else {
@@ -422,6 +436,7 @@ void CanvasWindow::Run() {
                 if(result<0) {Fail(capy_error());failed=true;break;}
             }
             if(failed) break;
+            if((!pending.empty()||hover)&&capy_chrome(host,0,0,0,false,menuOpen.load(),false)<0){Fail(capy_error());break;}
             if(overflow&&capy_input(host,R"({"type":"blur"})")<0){Fail(capy_error());break;}
             auto now=Now();
             auto result=capy_frame(host,now,now);
@@ -490,6 +505,7 @@ void CanvasWindow::Fail(std::string message) {
 }
 void CanvasWindow::Stop() {
     {std::lock_guard lock(mutex);if(closing)return;closing=true;}
+    if(settings)settings->Hide();
     wake.notify_all();space.notify_all();
     if(inputController) {
         inputDispatcher.TryEnqueue([weak=weak_from_this()]{
@@ -513,6 +529,10 @@ void CanvasWindow::Finish() {
 }
 
 void CanvasWindow::Publish(std::string snapshot,bool full) {
+    // Explicit local test evidence. This can include user state and is never
+    // enabled by ordinary or presentation-probe launches.
+    if(full&&GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))
+        std::ofstream("ui-state.json") << "{\"process_id\":" << GetCurrentProcessId() << ",\"model\":" << snapshot << "}";
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
@@ -530,7 +550,44 @@ void CanvasWindow::ApplyPending() {
         full.swap(pendingFull);camera.swap(pendingCamera);
     }
     try {
-        if(!full.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(full)));
+        if(!full.empty())ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(full)));
         if(!camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(camera)));
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
+}
+
+void CanvasWindow::Popup(bool open) {
+    menuOpen.store(open);
+    using namespace CapyUi;
+    A viewport;viewport.Append(N(panel.ActualWidth()));viewport.Append(N(panel.ActualHeight()));
+    Send(to_string(O({{L"type",S(L"chrome")},{L"event",O({{L"kind",S(L"refresh")}})},
+        {L"facts",O({{L"held",B(false)},{L"dragging",B(false)},{L"popup_open",B(open)}})},
+        {L"viewport",viewport}}).Stringify()),true);
+}
+void CanvasWindow::ChromeMotion(PointerRoutedEventArgs const& e,bool leave) {
+    auto point=e.GetCurrentPoint(root);auto position=point.Position();
+    if(leave&&position.X>=0&&position.Y>=0&&position.X<root.ActualWidth()&&position.Y<root.ActualHeight())return;
+    {
+        std::lock_guard lock(mutex);
+        if(closing||!host||rendererDone.load())return;
+        pendingHover=Hover{position.X*inputScale,position.Y*inputScale,leave,
+            point.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Touch};
+    }
+    wake.notify_one();
+}
+void CanvasWindow::Fullscreen() {
+    auto app=window.AppWindow();
+    app.SetPresenter(app.Presenter().Kind()==AppWindowPresenterKind::FullScreen?
+        AppWindowPresenterKind::Overlapped:AppWindowPresenterKind::FullScreen);
+    Resize();
+}
+void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
+    using namespace CapyUi;
+    auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
+    root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+    auto foreground=color(str(object(state,L"palette"),L"text",L"#fafafb"));
+    window.AppWindow().TitleBar().ButtonForegroundColor(foreground);
+    foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
+    auto tabs=array(state,L"tabs");
+    if(tabs.Size())window.Title(str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
+    workspace->Apply(model);header->Apply(model);settings->Apply(model);
 }

@@ -92,7 +92,7 @@ directory. No generated assets or captures need to be committed.
 The current web app has also been built and captured in local hardware-backed
 Chrome using tools/visual/chrome-capture.mjs. Comparison identified and corrected
 uniform spacing/corner construction, numeric units and track styling, and UTF-8
-source decoding. Header, detailed layer layout, docking/customization, settings,
+source decoding. Detailed layer layout, docking/customization, durable settings,
 remaining panels and full visual parity are unfinished. Native frame accounting
 and presentation/input acceptance remain open.
 
@@ -154,3 +154,27 @@ Raw CSV, logs, display metadata and binary hashes stay under ignored
 artifacts/windows/presentation. Analyze actual display intervals and dropped
 frames separately from submission rate. No display-cadence result is available
 until capture succeeds, and no mouse/pen latency is measured by this probe.
+
+## Native header and Preferences checks
+
+Edit/View/Workspace menus bind to shared command state. The same GPU canvas
+continues behind the header; native caption buttons and measured drag regions
+remain above it. Preferences uses native controls with the shared settings model,
+including image tiles, numeric policy, search, validation and shortcut editing.
+
+For a controlled review instance, set CAPY_TRACE_UI=1 before launch, then run:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-header-settings.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json
+~~~
+
+The fixture checks shared acknowledgments and native control state. Run it only
+against a disposable review instance; it edits settings and toggles fullscreen.
+It does not verify physical keyboard or pointer delivery. CAPY_TEST_PRIMARY=1
+with CAPY_TEST_DISPLAY=1 places review windows on the primary display, allowing
+a separate 120 Hz probe to remain visible.
+
+The opt-in ui-state.json contains app state and may include private settings.
+It stays ignored alongside captures and traces, and must be off for performance
+runs. Settings persistence, OS theme changes, remaining workspace features and
+the full acceptance gates are still open.

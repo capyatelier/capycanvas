@@ -269,3 +269,36 @@ The capture preflight identifies the 120 Hz display, but Windows denies ETW trac
 creation in the current non-elevated session. The prepared capture script requires
 an administrator run; the drawing app stays at normal privilege. No presentation
 rate, sustained painting rate or input latency result has been established.
+
+### Native header and Preferences checkpoint
+
+The full-client SwapChainPanel now sits beneath a shared-model header: Edit,
+View and Workspace menus, document information, Zen, fullscreen and Preferences.
+System caption buttons remain native, with drag rectangles computed from the
+actual header controls and caption insets. A controlled drawing/pan capture shows
+the document and ink continuing through the titlebar area. Fullscreen and return
+to a normal window pass the native UI fixture.
+
+Preferences uses the shared pages, rows, choices, validation, search, numeric
+policy and shortcut editor in a native ContentDialog. Image choices retain the
+reference tile geometry; numeric fields distinguish sliders from spin controls.
+Palette brushes update in place, preserving settings fields and pending drafts.
+Disabled rows disable their nested controls, including keyboard interaction.
+The window shutdown path dismisses the dialog before releasing the canvas.
+
+Native UI Automation passes theme-menu round trips, color validation, retained
+fields, exclusive icon selection, shared search, dependent controls, shortcut
+editor cancellation and fullscreen. These assertions wait for an opt-in shared
+snapshot as well as native controls. Existing workspace checks and controlled
+drawing/panning pass; Zen hides chrome on controlled canvas contact and its exit
+button restores it. The 200 shared UI/host/Windows Rust tests pass. The layer test
+now waits for the expected layer count through transient UI tree reconstruction.
+
+CAPY_TRACE_UI is an explicit local test switch; ui-state.json can contain user
+settings and stays ignored. Presentation-probe launch clears that switch.
+Only source, tests and this sanitized account belong in the milestone.
+
+Settings persistence, complete workspace/panel functionality, physical input and
+shortcut capture, OS theme changes, mixed-DPI/lifecycle recovery, exact visual
+parity and packaging remain unfinished. This checkpoint does not establish
+120 Hz presentation, sustained painting performance or input-to-present latency.

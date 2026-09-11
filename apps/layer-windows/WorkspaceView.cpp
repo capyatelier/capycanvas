@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "WorkspaceView.h"
+#include "UiControls.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -21,193 +22,13 @@ using Microsoft::UI::Xaml::Automation::AutomationProperties;
 using J=JsonObject;
 using A=JsonArray;
 using V=IJsonValue;
-namespace {
-V S(hstring const& value){return JsonValue::CreateStringValue(value);}
-V N(double value){return JsonValue::CreateNumberValue(value);}
-V B(bool value){return JsonValue::CreateBooleanValue(value);}
-J O(std::initializer_list<std::pair<wchar_t const*,V>> fields){
-    J value;for(auto const& [key,item]:fields)value.Insert(key,item);return value;
-}
-J object(J const& value,wchar_t const* key){
-    auto item=value.GetNamedValue(key,JsonValue::CreateNullValue());
-    return item.ValueType()==JsonValueType::Object?item.GetObject():J{};
-}
-A array(J const& value,wchar_t const* key){
-    auto item=value.GetNamedValue(key,JsonValue::CreateNullValue());
-    return item.ValueType()==JsonValueType::Array?item.GetArray():A{};
-}
-hstring str(J const& value,wchar_t const* key,hstring fallback=L""){
-    auto item=value.GetNamedValue(key,JsonValue::CreateNullValue());
-    return item.ValueType()==JsonValueType::String?item.GetString():fallback;
-}
-double num(J const& value,wchar_t const* key,double fallback=0){
-    return value.GetNamedNumber(key,fallback);
-}
-bool flag(J const& value,wchar_t const* key,bool fallback=false){return value.GetNamedBoolean(key,fallback);}
-J find(A const& list,wchar_t const* key,hstring const& id){
-    for(auto value:list){auto row=value.GetObject();if(str(row,key)==id)return row;}return J{};
-}
-J findId(A const& list,double id){
-    for(auto value:list){auto row=value.GetObject();if(num(row,L"id")==id)return row;}return J{};
-}
-Windows::UI::Color color(hstring const& hex){
-    auto text=to_string(hex);
-    unsigned long rgb=text.size()==7?std::stoul(text.substr(1),nullptr,16):0;
-    return {255,uint8_t(rgb>>16),uint8_t(rgb>>8),uint8_t(rgb)};
-}
-SolidColorBrush fill(Windows::UI::Color value){return SolidColorBrush(value);}
-SolidColorBrush clear(){return fill({0,0,0,0});}
-SolidColorBrush selected(){return fill({56,53,132,228});}
-void place(FrameworkElement const& element,J const& rect){
-    Canvas::SetLeft(element,num(rect,L"x"));Canvas::SetTop(element,num(rect,L"y"));
-    element.Width(num(rect,L"width"));element.Height(num(rect,L"height"));
-}
-Windows::Foundation::Uri asset(std::wstring const& relative){
-    wchar_t executable[32768];auto length=GetModuleFileNameW(nullptr,executable,32768);
-    auto path=std::filesystem::path(std::wstring(executable,length)).parent_path()/L"Assets"/relative;
-    return Windows::Foundation::Uri(L"file:///"+path.generic_wstring());
-}
-Image icon(hstring name,hstring theme,double size=16){
-    std::wstring file=name.c_str();
-    if(!file.starts_with(L"layer-"))file=L"layer-"+file;
-    if(!file.ends_with(L"-symbolic"))file+=L"-symbolic";
-    Image result;result.Width(size);result.Height(size);
-    result.Source(Imaging::SvgImageSource(asset(L"icons/"+std::wstring(theme.c_str())+L"/"+file+L".svg")));
-    result.IsHitTestVisible(false);return result;
-}
-J numeric(J const& spec,double value,J const& operation){
-    auto json=to_string(O({{L"control",spec},{L"value",N(value)},{L"operation",operation}}).Stringify());
-    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_number(json.c_str()),capy_string_free);
-    if(!result)throw hresult_invalid_argument(to_hstring(capy_error()));
-    return J::Parse(to_hstring(result.get()));
-}
-using Bindings=std::vector<std::function<void()>>;
-struct WorkspaceData {
-    J state,catalog,model;
-    WorkspaceView::Dispatch send;
-    bool updating=false;
-    void dispatch(J const& action) const {send(to_string(action.Stringify()));}
-    hstring theme()const{return str(state,L"theme",L"dark");}
-    SolidColorBrush brush(wchar_t const* role)const{return fill(color(str(object(state,L"palette"),role,L"#414141")));}
-    double textSize()const{return num(catalog,L"text_size_pt",11)*96./72.;}
-};
-TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
-    TextBlock result;result.Text(text);result.FontSize(data->textSize());
-    result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
-    result.LineHeight(18);result.LineStackingStrategy(LineStackingStrategy::BlockLineHeight);
-    if(bold)result.FontWeight(Windows::UI::Text::FontWeights::Bold());
-    return result;
-}
-Button button(std::shared_ptr<WorkspaceData> const& data,hstring const& text,std::function<void()> action){
-    Button result;result.Content(box_value(text));result.FontSize(data->textSize());
-    result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));
-    result.FontWeight(Windows::UI::Text::FontWeights::Bold());
-    result.MinWidth(0);result.MinHeight(0);result.Padding(Thickness{0});
-    result.BorderThickness(Thickness{0});result.CornerRadius(CornerRadius{6,6,6,6});
-    result.Background(clear());AutomationProperties::SetName(result,text);
-    auto ink=color(str(object(data->state,L"palette"),L"text"));
-    auto hover=ink;hover.A=20;auto pressed=ink;pressed.A=41;auto disabled=ink;disabled.A=92;
-    result.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(hover));
-    result.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(pressed));
-    result.Resources().Insert(box_value(L"ButtonBackgroundDisabled"),clear());
-    result.Resources().Insert(box_value(L"ButtonForegroundDisabled"),fill(disabled));
-    result.Click([action=std::move(action)](auto&&,auto&&){action();});
-    return result;
-}
-struct NumberState {double value=0;bool editing=false,dragging=false;};
-StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
-    std::function<double()> get,std::function<void(double)> set,Bindings& bindings){
-    auto local=std::make_shared<NumberState>();local->value=get();
-    StackPanel root;root.Spacing(0);
-    Grid header;ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
-    ColumnDefinition right;right.Width({1,GridUnitType::Auto});header.ColumnDefinitions().Append(right);
-    auto text=label(data,title);text.Margin(Thickness{6,0,6,0});text.VerticalAlignment(VerticalAlignment::Center);
-    header.Children().Append(text);
-    TextBox entry;entry.Width(72);entry.MinHeight(24);entry.Height(24);entry.Padding(Thickness{6,0,6,0});
-    entry.FontSize(data->textSize());entry.Background(data->brush(L"input"));entry.BorderThickness(Thickness{0});
-    entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);header.Children().Append(entry);
-    AutomationProperties::SetName(entry,title);
-    Slider slider;slider.Minimum(0);slider.Maximum(1);slider.StepFrequency(0.001);slider.MinHeight(0);slider.Height(24);
-    slider.Resources().Insert(box_value(L"SliderHorizontalHeight"),box_value(24.));
-    for(auto key:{L"SliderHorizontalThumbWidth",L"SliderHorizontalThumbHeight",L"SliderInnerThumbWidth",L"SliderInnerThumbHeight"})
-        slider.Resources().Insert(box_value(key),box_value(0.));
-    AutomationProperties::SetName(slider,title+L" slider");
-    auto palette=object(data->state,L"palette");
-    auto panelColor=color(str(palette,L"panel")),textColor=color(str(palette,L"text"));
-    auto track=fill({255,uint8_t((int(panelColor.R)+textColor.R)/2),
-        uint8_t((int(panelColor.G)+textColor.G)/2),uint8_t((int(panelColor.B)+textColor.B)/2)});
-    for(auto key:{L"SliderTrackValueFill",L"SliderTrackValueFillPointerOver",L"SliderTrackValueFillPressed"})
-        slider.Resources().Insert(box_value(key),track);
-    for(auto key:{L"SliderThumbBackground",L"SliderThumbBackgroundPointerOver",L"SliderThumbBackgroundPressed"})
-        slider.Resources().Insert(box_value(key),data->brush(L"thumb"));
-    for(auto key:{L"SliderTrackFill",L"SliderTrackFillPointerOver",L"SliderTrackFillPressed"})
-        slider.Resources().Insert(box_value(key),data->brush(L"input"));
-    auto commit=[data,local,spec,set,weak=make_weak(entry)](bool cancel){
-        auto entry=weak.get();if(!entry||!local->editing)return;
-        try{
-            auto next=numeric(spec,local->value,cancel?O({{L"type",S(L"format")}}):
-                O({{L"type",S(L"expression")},{L"text",S(entry.Text())}}));
-            local->value=num(next,L"value");local->editing=false;
-            entry.Text(str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));entry.BorderThickness(Thickness{0});
-            if(!cancel)set(local->value);
-        }catch(hresult_error const& error){
-            entry.BorderThickness(Thickness{1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));
-            ToolTipService::SetToolTip(entry,box_value(error.message()));
-        }
-    };
-    entry.GotFocus([data,local,spec](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
-        auto entry=sender.as<TextBox>();local->editing=true;entry.Background(data->brush(L"input"));
-        entry.Text(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));
-    });
-    entry.LostFocus([commit,local,spec](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
-        auto entry=sender.as<TextBox>();commit(false);entry.Background(clear());
-        if(!local->editing)entry.Text(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
-    });
-    entry.KeyDown([commit,local](auto&&,KeyRoutedEventArgs const& e){
-        if(e.Key()==Windows::System::VirtualKey::Enter){local->editing=true;commit(false);e.Handled(true);}
-        else if(e.Key()==Windows::System::VirtualKey::Escape){commit(true);e.Handled(true);}
-        else local->editing=true;
-    });
-    slider.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler(
-        [local](auto&&,auto&&){local->dragging=true;})),true);
-    slider.AddHandler(UIElement::PointerReleasedEvent(),box_value(PointerEventHandler(
-        [local](auto&&,auto&&){local->dragging=false;})),true);
-    slider.PointerCaptureLost([local](auto&&,auto&&){local->dragging=false;});
-    slider.ValueChanged([data,local,spec,set,entry](auto&&,Primitives::RangeBaseValueChangedEventArgs const& e){
-        if(data->updating)return;
-        auto next=numeric(spec,local->value,O({{L"type",S(L"position")},{L"position",N(e.NewValue())}}));
-        local->value=num(next,L"value");if(!local->editing)entry.Text(str(next,L"edit"));set(local->value);
-    });
-    bindings.emplace_back([data,local,spec,get,entry,slider]{
-        if(local->editing||local->dragging)return;
-        local->value=get();auto shown=numeric(spec,local->value,O({{L"type",S(L"format")}}));
-        entry.Text(str(shown,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));
-        entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
-        slider.Value(num(shown,L"fill"));
-    });
-    Grid trackRow;trackRow.ColumnSpacing(6);
-    for(int i=0;i<3;i++){ColumnDefinition column;column.Width({i==1?1.:24.,i==1?GridUnitType::Star:GridUnitType::Pixel});trackRow.ColumnDefinitions().Append(column);}
-    for(int direction:{-1,1}){
-        auto step=button(data,(direction<0?L"Decrease ":L"Increase ")+title,[local,spec,set,commit,direction]{
-            commit(false);if(local->editing)return;
-            auto next=numeric(spec,local->value,O({{L"type",S(L"step")},{L"steps",N(direction)}}));
-            local->value=num(next,L"value");set(local->value);
-        });
-        step.Width(24);step.Height(24);step.Content(icon(direction<0?L"minus":L"plus",data->theme()));
-        Grid::SetColumn(step,direction<0?0:2);trackRow.Children().Append(step);
-        bindings.emplace_back([local,spec,step,direction]{step.IsEnabled(direction<0?local->value>num(spec,L"min"):local->value<num(spec,L"max"));});
-    }
-    Grid::SetColumn(slider,1);trackRow.Children().Append(slider);
-    root.Children().Append(header);root.Children().Append(trackRow);return root;
-}
-}
-
+using namespace CapyUi;
 struct WorkspaceView::Impl {
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     Canvas root;
     struct Group {Border border;std::wstring key;Bindings bindings;};
     std::map<uint32_t,Group> groups;
-    hstring previousTheme;
+    hstring previousTheme,previousPalette;
     std::map<std::wstring,FrameworkElement> anchors;
     Flyout popup{nullptr};
     std::wstring popupControl;
@@ -431,8 +252,11 @@ struct WorkspaceView::Impl {
         data->updating=true;
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         data->model=snapshot;data->state=object(snapshot,L"state");
-        auto theme=data->theme();
-        if(theme!=previousTheme){root.Children().Clear();groups.clear();previousTheme=theme;root.Children().Append(camera);}
+        data->refreshPalette();
+        auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
+        if(theme!=previousTheme||palette!=previousPalette){
+            root.Children().Clear();groups.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(camera);
+        }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
         std::vector<uint32_t> visible;

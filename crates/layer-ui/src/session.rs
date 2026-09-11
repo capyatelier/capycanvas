@@ -983,6 +983,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         CommandState {
+            checkable: id.is_toggle(),
             icon: self.command_icon(id),
             id,
             label: id.label(),

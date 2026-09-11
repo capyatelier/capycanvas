@@ -41,7 +41,7 @@ Wait-Size '64.0 px'
 $before=Count-Layers
 Invoke-Control 'New layer'
 $watch=[Diagnostics.Stopwatch]::StartNew()
-do {Start-Sleep -Milliseconds 50;$after=Count-Layers} while($after -eq $before -and $watch.Elapsed.TotalSeconds -lt 5)
+do {Start-Sleep -Milliseconds 50;$after=Count-Layers} while($after -ne ($before+1) -and $watch.Elapsed.TotalSeconds -lt 5)
 if($after -ne $before+1){throw 'New layer did not appear in the shared workspace'}
 Invoke-Control 'Undo'
 $watch.Restart()

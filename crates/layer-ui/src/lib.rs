@@ -551,6 +551,8 @@ impl CommandId {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CommandState {
     pub id: CommandId,
+    /// Use a native checkable menu item only for retained on/off commands.
+    pub checkable: bool,
     pub icon: Option<&'static str>,
     pub label: &'static str,
     pub enabled: bool,
