@@ -385,3 +385,9 @@ It saves only app captures and synthetic state under ignored artifacts/windows.
 Runtime filter package import, complete Layers/workspace controls and the full
 editor preset remain pending. These checks do not establish physical pointer
 gesture, full visual parity or frame-cadence/input-latency acceptance.
+
+Debug builds optimize Naga, the WGSL compiler dependency, while retaining
+debuggable application Rust. Process exit joins retired shader workers after
+all canvas hosts are destroyed. The lifecycle fixture covers close before
+brush readiness, during shader warmup and from clean/dirty minimized windows;
+it retains the five-second zero-exit requirement.

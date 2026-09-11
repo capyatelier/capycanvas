@@ -17,10 +17,11 @@ pub(crate) struct SystemStatus {
     pub root: gtk::Box,
     clock: gtk::Label,
     battery: gtk::Box,
-    charging: gtk::Label,
     percent: gtk::Label,
     drawing: gtk::DrawingArea,
     value: Rc<Cell<Option<Battery>>>,
+    fullscreen: Cell<bool>,
+    show_clock: Cell<layer_ui::ClockVisibility>,
     settings: Option<gio::Settings>,
     proxy: RefCell<Option<gio::DBusProxy>>,
     timer: RefCell<Option<glib::SourceId>>,
@@ -46,18 +47,16 @@ impl SystemStatus {
         battery.set_widget_name("system-battery");
         battery.add_css_class("system-battery");
         battery.set_visible(false);
-        let charging = gtk::Label::new(Some("ϟ"));
         let overlay = gtk::Overlay::new();
         let drawing = gtk::DrawingArea::new();
-        drawing.set_content_width(42);
-        drawing.set_content_height(22);
+        drawing.set_content_width(26);
+        drawing.set_content_height(14);
         drawing.set_valign(gtk::Align::Center);
         let percent = gtk::Label::new(None);
         percent.add_css_class("battery-percent");
         percent.set_margin_end(4);
         overlay.set_child(Some(&drawing));
         overlay.add_overlay(&percent);
-        battery.append(&charging);
         battery.append(&overlay);
         root.append(&clock);
         root.append(&battery);
@@ -73,51 +72,73 @@ impl SystemStatus {
                 let Some(battery) = value.get() else {
                     return;
                 };
-                let color = area.color();
-                let (w, h) = (width as f64 - 4., height as f64);
-                let rounded = |cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64| {
-                    let r = 3.;
+                let dark = adw::StyleManager::for_display(&area.display()).is_dark();
+                let (fill, track, ink) = match (battery.charging, battery.low, dark) {
+                    (true, _, _) => (0x91b89d, 0xc4c9cf, 0x13251a),
+                    (_, true, true) => (0xbc9996, 0xa3a8b0, 0x202226),
+                    (_, true, false) => (0xa15d59, 0x707479, 0xffffff),
+                    (_, _, true) => (0xe5e7eb, 0xa3a8b0, 0x202226),
+                    _ => (0x3f4246, 0x707479, 0xffffff),
+                };
+                let color = |rgb: u32| {
+                    cr.set_source_rgb(
+                        ((rgb >> 16) & 255) as f64 / 255.,
+                        ((rgb >> 8) & 255) as f64 / 255.,
+                        (rgb & 255) as f64 / 255.,
+                    )
+                };
+                let _ = cr.save();
+                // Use the same 22 × 14 body and terminal geometry as Android/web.
+                let u = (height as f64 / 14.).min(width as f64 / 26.);
+                cr.translate(0., (height as f64 - 14. * u) / 2.);
+                cr.scale(u, u);
+                let body = || {
                     cr.new_sub_path();
-                    cr.arc(x + w - r, y + r, r, -std::f64::consts::FRAC_PI_2, 0.);
-                    cr.arc(x + w - r, y + h - r, r, 0., std::f64::consts::FRAC_PI_2);
+                    cr.arc(19., 3., 3., -std::f64::consts::FRAC_PI_2, 0.);
+                    cr.arc(19., 11., 3., 0., std::f64::consts::FRAC_PI_2);
                     cr.arc(
-                        x + r,
-                        y + h - r,
-                        r,
+                        3.,
+                        11.,
+                        3.,
                         std::f64::consts::FRAC_PI_2,
                         std::f64::consts::PI,
                     );
                     cr.arc(
-                        x + r,
-                        y + r,
-                        r,
+                        3.,
+                        3.,
+                        3.,
                         std::f64::consts::PI,
                         3. * std::f64::consts::FRAC_PI_2,
                     );
                     cr.close_path();
                 };
-                cr.set_source_rgba(
-                    color.red() as f64,
-                    color.green() as f64,
-                    color.blue() as f64,
-                    1.,
-                );
-                rounded(cr, 0.75, 0.75, w - 1.5, h - 1.5);
-                cr.set_line_width(1.5);
-                let _ = cr.stroke();
-                cr.rectangle(w + 2., h * 0.3, 2., h * 0.4);
-                let _ = cr.fill();
+                body();
+                color(track);
+                let _ = cr.fill_preserve();
                 let _ = cr.save();
-                rounded(cr, 1.5, 1.5, w - 3., h - 3.);
                 cr.clip();
-                cr.set_source_rgba(
-                    color.red() as f64,
-                    color.green() as f64,
-                    color.blue() as f64,
-                    0.18,
-                );
-                cr.rectangle(1.5, 1.5, (w - 3.) * battery.percent as f64 / 100., h - 3.);
+                color(fill);
+                cr.rectangle(0., 0., 22. * battery.percent as f64 / 100., 14.);
                 let _ = cr.fill();
+                let _ = cr.restore();
+                color(track);
+                cr.rectangle(23., 4., 2., 6.);
+                let _ = cr.fill();
+                if battery.charging {
+                    cr.move_to(23., 2.);
+                    cr.line_to(18.5, 8.);
+                    cr.line_to(21.2, 8.);
+                    cr.line_to(20., 12.);
+                    cr.line_to(25., 5.9);
+                    cr.line_to(22.7, 5.9);
+                    cr.line_to(24.1, 2.);
+                    cr.close_path();
+                    cr.set_line_width(1.75);
+                    cr.set_line_join(gtk::cairo::LineJoin::Round);
+                    let _ = cr.stroke_preserve();
+                    color(ink);
+                    let _ = cr.fill();
+                }
                 let _ = cr.restore();
             }
         ));
@@ -125,21 +146,29 @@ impl SystemStatus {
             root,
             clock,
             battery,
-            charging,
             percent,
             drawing,
             value,
+            fullscreen: Cell::new(false),
+            show_clock: Cell::new(layer_ui::ClockVisibility::default()),
             settings,
             proxy: RefCell::new(None),
             timer: RefCell::new(None),
         });
+        let style = adw::StyleManager::for_display(&this.root.display());
+        this.update_style(&style);
+        style.connect_dark_notify(glib::clone!(
+            #[weak]
+            this,
+            move |style| this.update_style(style)
+        ));
         this.update_clock();
-        this.root.connect_map(glib::clone!(
+        this.clock.connect_map(glib::clone!(
             #[weak]
             this,
             move |_| this.schedule_clock()
         ));
-        this.root.connect_unmap(glib::clone!(
+        this.clock.connect_unmap(glib::clone!(
             #[weak]
             this,
             move |_| this.stop_clock()
@@ -199,6 +228,26 @@ impl SystemStatus {
         ));
         this
     }
+    pub fn set_visibility(&self, fullscreen: bool, show_clock: layer_ui::ClockVisibility) {
+        self.fullscreen.set(fullscreen);
+        self.show_clock.set(show_clock);
+        self.update_visibility();
+    }
+    fn update_visibility(&self) {
+        let clock = self.show_clock.get().visible(self.fullscreen.get());
+        let battery = self.fullscreen.get() && self.value.get().is_some();
+        self.clock.set_visible(clock);
+        self.battery.set_visible(battery);
+        self.root.set_visible(clock || battery);
+    }
+    fn update_style(&self, style: &adw::StyleManager) {
+        if style.is_dark() {
+            self.root.remove_css_class("light");
+        } else {
+            self.root.add_css_class("light");
+        }
+        self.drawing.queue_draw();
+    }
     fn update_clock(&self) {
         let preference = self.settings.as_ref().map(|s| s.string("clock-format"));
         // GTK initializes the process locale; nl_langinfo reflects LC_TIME.
@@ -221,7 +270,7 @@ impl SystemStatus {
     fn schedule_clock(self: &Rc<Self>) {
         self.stop_clock();
         self.update_clock();
-        if !self.root.is_mapped() {
+        if !self.clock.is_mapped() {
             return;
         }
         let delay = 60_000 - (glib::real_time() / 1000).rem_euclid(60_000) + 20;
@@ -272,10 +321,20 @@ impl SystemStatus {
         if self.value.replace(value) == value {
             return;
         }
-        self.battery.set_visible(value.is_some());
+        self.update_visibility();
         if let Some(b) = value {
             self.percent.set_text(&b.percent.to_string());
-            self.charging.set_visible(b.charging);
+            self.percent.set_margin_end(if b.charging { 5 } else { 4 });
+            if b.percent == 100 {
+                self.battery.add_css_class("full");
+            } else {
+                self.battery.remove_css_class("full");
+            }
+            if b.charging {
+                self.battery.add_css_class("charging");
+            } else {
+                self.battery.remove_css_class("charging");
+            }
             if b.low && !b.charging {
                 self.battery.add_css_class("low");
             } else {

@@ -74,6 +74,22 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
   await settle();
   assert.equal(await evaluate('layerApp.state().fullscreen'),false,"Maximized is not fullscreen");
   await call("Browser.setWindowBounds",{windowId,bounds:{windowState:"normal"}},null);
+  const clockPreference = async value => {
+    await evaluate(`layerApp.dispatch({type:"preferences",action:{type:"edit",id:"show_clock",value:${value}}})`);
+    await settle();
+  };
+  await clockPreference(1);
+  assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),false);
+  assert.equal(await evaluate('document.querySelector("#system-status").hidden'),false);
+  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),true);
+  await click('#fullscreen');
+  await wait('!!document.fullscreenElement');
+  await clockPreference(2);
+  assert.equal(await evaluate('document.querySelector("#system-clock").hidden'),true);
+  assert.equal(await evaluate('document.querySelector("#system-battery").hidden'),false);
+  await click('#fullscreen');
+  await wait('!document.fullscreenElement && document.querySelector("#system-status").hidden');
+  await clockPreference(0);
   for (const mode of ["absent", "denied"]) {
     const script = await call("Page.addScriptToEvaluateOnNewDocument",{source:`window.__statusBatteryCase=${JSON.stringify(mode)};Object.defineProperty(navigator,"getBattery",{configurable:true,value:${mode==="absent"?"undefined":"()=>Promise.reject(new Error('Battery permission denied'))"}});`});
     await call("Page.reload");
@@ -86,5 +102,5 @@ export async function checkFullscreen({call, evaluate, settle, windowId}) {
     await wait('!document.fullscreenElement');
     await call("Page.removeScriptToEvaluateOnNewDocument",{identifier:script.identifier});
   }
-  console.log("Fullscreen API/menu, browser fullscreen, locale clocks, low/charging/missing/denied battery passed");
+  console.log("Fullscreen API/menu, browser fullscreen, locale clocks and visibility preferences, low/charging/missing/denied battery passed");
 }

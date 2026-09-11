@@ -348,7 +348,8 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = 8.dp),
                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            SystemStatus()
+            // Android always uses an immersive fullscreen workspace.
+            SystemStatus(showClock = state.getJSONObject("settings").optString("show_clock") != "never")
             IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip"), modifier = Modifier.testTag("header-settings")) { host.invoke("settings") }
         }
     }

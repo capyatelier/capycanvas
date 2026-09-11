@@ -157,5 +157,8 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .color-swatch { min-width: 18px; min-height: 20px; padding: 3px; }
 
 .system-status { font-feature-settings: "tnum"; }
-.battery-percent { font-size: 12px; font-weight: bold; }
-.system-battery.low { color: var(--error-color); }
+.battery-percent { font-size: 11px; font-weight: bold; color: #202226; }
+.system-status.light .battery-percent { color: #fff; }
+.system-status .system-battery.charging .battery-percent { color: #13251a; }
+
+.system-battery.full .battery-percent { font-size: 10px; }

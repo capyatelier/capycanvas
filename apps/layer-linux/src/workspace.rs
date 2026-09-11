@@ -1511,7 +1511,10 @@ impl Workspace {
             self.tab.set_max_width_chars(-1);
             self.header.set_title_widget(Some(&self.tab));
         }
-        self.system_status.root.set_visible(fullscreen);
+        let show_clock = self.gpu.borrow().as_ref()
+            .map(|g| g.session.state().settings.show_clock)
+            .unwrap_or_default();
+        self.system_status.set_visibility(fullscreen, show_clock);
         self.header.set_show_start_title_buttons(!fullscreen);
         self.header.set_show_end_title_buttons(!fullscreen);
         self.dispatch(UiAction::WindowFullscreen { fullscreen });
@@ -1814,6 +1817,8 @@ impl Workspace {
             }
         }
         if regions & regions::SETTINGS != 0 {
+            self.system_status
+                .set_visibility(self.window.is_fullscreen(), state.settings.show_clock);
             self.apply_palette(state.palette);
             if state.theme == Theme::Light {
                 self.window.add_css_class("light-theme");

@@ -168,7 +168,7 @@ fn native_fullscreen_header_clock_and_battery() {
         .application(&app)
         .child(&native.root)
         .build();
-    native.root.set_visible(true);
+    native.set_visibility(true, layer_ui::ClockVisibility::Fullscreen);
     probe.present();
     until(|| native.root.is_mapped());
     native.show_battery(Some(crate::system_status::Battery {
@@ -198,6 +198,26 @@ fn native_fullscreen_header_clock_and_battery() {
             .command(CommandId::Fullscreen)
             .selected
     );
+    let clock_preference = |value| {
+        w.dispatch(layer_ui::UiAction::Preferences {
+            action: layer_ui::PreferenceAction::Edit {
+                id: layer_ui::PreferenceId::ShowClock,
+                value: layer_ui::PreferenceValue::Choice(value),
+            },
+        })
+    };
+    clock_preference(1);
+    until(|| clock.is_mapped() && status.is_visible());
+    assert!(!named(&status, "system-battery").unwrap().is_visible());
+    clock_preference(2);
+    until(|| !clock.is_visible() && !status.is_visible());
+    w.window.fullscreen();
+    until(|| w.window.is_fullscreen());
+    assert!(!clock.is_visible());
+    clock_preference(0);
+    until(|| clock.is_mapped());
+    w.window.unfullscreen();
+    until(|| !w.window.is_fullscreen() && !status.is_visible());
     w.window.destroy();
     assert!(w.gpu.borrow().is_none());
     // Finish compositor releases before libtest tears down the GTK owner thread.

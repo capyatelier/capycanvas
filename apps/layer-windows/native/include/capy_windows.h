@@ -43,6 +43,8 @@ __declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint
    Cleanup is required even after a renderer failure. */
 __declspec(dllimport) int32_t capy_finish_services(CapyHost*);
 __declspec(dllimport) void capy_destroy(CapyHost*);
+/* Process exit only, after every canvas host has been destroyed. */
+__declspec(dllimport) int32_t capy_finish_process();
 __declspec(dllimport) const char* capy_error(void);
 __declspec(dllimport) int32_t capy_resize(CapyHost*, uint32_t width, uint32_t height, float scale);
 __declspec(dllimport) int32_t capy_pointer(CapyHost*, const CapyPointer*, size_t count);

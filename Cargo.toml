@@ -31,3 +31,9 @@ debug = 1
 inherits = "release"
 debug = 0
 strip = "debuginfo"
+
+
+# WGSL parsing and validation run during interactive startup. Keep application
+# Rust debuggable while avoiding multi-second unoptimized shader compiler jobs.
+[profile.dev.package.naga]
+opt-level = 3

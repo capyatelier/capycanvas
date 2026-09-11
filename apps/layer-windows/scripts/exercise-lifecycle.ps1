@@ -69,15 +69,29 @@ try {
     $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
     $env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
-    foreach($dirty in @($false,$true)){
-        $stderr=Join-Path $run ("dirty-$dirty.stderr.log")
+    foreach($scenario in @('startup','warming','clean','dirty')){
+        $dirty=$scenario -eq 'dirty'
+        $stderr=Join-Path $run ("$scenario.stderr.log")
         $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
         [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/lifecycle-review.pid'),[string]$review.Id)
-        Write-Output "Owned lifecycle review $($review.Id), dirty=$dirty"
+        Write-Output "Owned lifecycle review $($review.Id), scenario=$scenario"
+        if($scenario -eq 'startup'){
+            Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'Startup window did not appear' 45
+            $startupBeforeReady=!(Model).brush_ready
+            $review.CloseMainWindow()|Out-Null
+            Check-Closed
+            continue
+        }
         Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
         if(!(Model).windows_isolated_settings){throw 'Lifecycle review requires an isolated profile'}
         $handle=$review.MainWindowHandle
         $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
+        if($scenario -eq 'warming'){
+            Start-Sleep -Milliseconds 1250 # Exercise close during speculative shader warmup.
+            $review.CloseMainWindow()|Out-Null
+            Check-Closed
+            continue
+        }
         if(!$dirty){
             Minimize
             $review.CloseMainWindow()|Out-Null
@@ -99,6 +113,9 @@ try {
         Check-Closed
     }
     [PSCustomObject]@{
+        startup_window_close='passed'
+        shader_warmup_close='passed'
+        startup_close_requested_before_brush_ready=$startupBeforeReady
         clean_minimized_close='passed'
         visible_unsaved_decision_from_minimized='passed'
         cancelled_close_preserves_drawing='passed'

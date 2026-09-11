@@ -175,7 +175,11 @@ try {
     $null=Control 'property-shadows-color'
     Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
     Capture 'alternate-theme'
-    Invoke 'Filters' -Name;Edit 'filter-search' 'Curves'
+    Invoke 'Filters' -Name
+    Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'adjustments'}).Count -gt 0} 'Filters tab did not reopen'
+    Edit 'filter-search' 'C';Edit 'filter-search' 'Cur';Edit 'filter-search' 'Curves'
+    Wait-Until {(Model).state.filter_picker.search -eq 'Curves'} 'Rapid search edits were lost'
+    Wait-Until {(Control 'filter-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'Curves'} 'Search text differs from its acknowledged query'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after filter edits and theme not ready' 20
     Invoke 'File' -Name;Invoke 'new_document';Invoke 'Discard Changes' -Name
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name

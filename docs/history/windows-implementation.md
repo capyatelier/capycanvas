@@ -809,3 +809,30 @@ the full Windows editor preset remain pending. Physical curve/gradient pointer
 gestures, broader DPI/device recovery, release packaging and deferred 120 Hz and
 input-to-present acceptance remain open. The strict v4 filter reference
 difference is unchanged.
+
+The publication integrates main through d8a130b, including Apple editor/header
+work, GTK/Web fullscreen and status controls, shared clock settings and the GPU
+Navigator outline contrast correction. Windows now joins retired shader workers
+after all hosts are destroyed and before process teardown. Instrumented testing
+found a six-second join during unoptimized WGSL compilation; the development
+profile now optimizes Naga while leaving application Rust debuggable. Startup,
+shader-warmup, clean minimized and dirty close fixtures pass the unchanged
+five-second zero-exit requirement with that profile. The worker is still joined;
+no forced termination or timeout bypass was added.
+
+The final tree passes 341 core/engine/host/UI/Windows unit checks, strict Windows
+adapter Clippy, the native build, three hardware D3D12 filter-preview regressions
+and four overview regressions. Preview checks cover insertion pixels, cached
+results independent of the view, the empty-document sample and cropped
+multipass output matching the full canvas. Their timing benchmarks stay ignored.
+The shared canceled-worker join test also passes.
+
+The merged native effects fixture passes again, including rapid search edits
+through a theme change. The field now retains a typed draft until its shared
+model acknowledgement and uses synchronous text-change suppression during
+programmatic updates. Navigator passes all prior controls/pixel/resize/theme
+checks after the incoming outline change. Final lifecycle checks include a
+close requested before brush readiness, close during speculative shader warmup,
+minimized clean close, Cancel preserving the drawing and previous maximized
+state, and dirty Discard. Captures and temporary pipeline diagnostics remain
+local; the temporary instrumentation was removed before publication.

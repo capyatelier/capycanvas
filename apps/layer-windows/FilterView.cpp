@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "EffectControls.h"
 #include <chrono>
+#include <optional>
 using namespace CapyEffects;
 namespace {
 struct FiltersView : std::enable_shared_from_this<FiltersView> {
@@ -34,6 +35,7 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         RefreshFilterPreviews(data->previews,context,width,height,visible);
     }
     hstring catalogKey,listKey;
+    std::optional<hstring> searchDraft;
     void send(J action){if(!data->updating)data->dispatch(O({{L"type",S(L"filter_picker")},{L"action",action}}));}
     void init(){
         auto weak=weak_from_this();root.Padding({6,6,6,6});root.RowSpacing(6);
@@ -54,7 +56,12 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         search.MinWidth(0);search.MinHeight(32);search.FontSize(data->textSize());search.MaxLength(120);
         search.Background(data->brush(L"input"));search.Padding({6,4,6,4});search.BorderThickness({0});
         AutomationProperties::SetAutomationId(search,L"filter-search");header.Children().Append(search);
-        search.TextChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->send(O({{L"op",S(L"search")},{L"query",S(self->search.Text())}}));});
+        // TextChanging is synchronous, so programmatic updates stay inside
+        // Updating. Keep typed text until its own model acknowledgement arrives.
+        search.TextChanging([weak](auto&&,auto&&){if(auto self=weak.lock();self&&!self->data->updating){
+            self->searchDraft=self->search.Text();
+            self->send(O({{L"op",S(L"search")},{L"query",S(*self->searchDraft)}}));
+        }});
         search.KeyDown([weak](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Escape){
             if(auto self=weak.lock())self->send(O({{L"op",S(L"toggle_search")}}));e.Handled(true);
         }});
@@ -79,7 +86,9 @@ struct FiltersView : std::enable_shared_from_this<FiltersView> {
         bool wasOpen=search.Visibility()==Visibility::Visible;
         category.Visibility(open?Visibility::Collapsed:Visibility::Visible);search.Visibility(open?Visibility::Visible:Visibility::Collapsed);
         search.PlaceholderText(str(picker,L"search_label"));AutomationProperties::SetName(search,str(picker,L"search_label"));
-        auto query=str(picker,L"search");if(search.Text()!=query)search.Text(query);
+        auto query=str(picker,L"search");
+        if(!open||(searchDraft&&query==*searchDraft))searchDraft.reset();
+        if(!searchDraft&&search.Text()!=query)search.Text(query);
         if(open&&!wasOpen)search.Focus(FocusState::Programmatic);
         auto choices=array(data->state,L"adjustments");auto next=choices.Stringify();if(next==listKey)return;listKey=next;
         rows.Children().Clear();previews.clear();hstring section;

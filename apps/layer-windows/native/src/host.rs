@@ -702,3 +702,16 @@ pub unsafe extern "C" fn capy_filter_previews(
     });
     result
 }
+
+/// Join retired shader workers after every host is destroyed, before process
+/// runtime teardown. Ordinary surface/document replacement stays asynchronous.
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_finish_process() -> i32 {
+    match catch_unwind(layer_render_wgpu::finish_shader_compiler_shutdown) {
+        Ok(()) => 0,
+        Err(_) => {
+            fail("Shader compiler shutdown panic");
+            -1
+        }
+    }
+}

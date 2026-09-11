@@ -52,11 +52,35 @@ impl ZenIcon {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClockVisibility {
+    #[default]
+    Fullscreen,
+    Always,
+    Never,
+}
+impl ClockVisibility {
+    pub const CHOICES: [(Self, &'static str); 3] = [
+        (Self::Fullscreen, "In fullscreen mode"),
+        (Self::Always, "Always"),
+        (Self::Never, "Never"),
+    ];
+    pub const fn visible(self, fullscreen: bool) -> bool {
+        match self {
+            Self::Fullscreen => fullscreen,
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub version: u32,
     pub theme: Option<Theme>,
+    pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
     pub light_base: HexColor,
     pub total_zen: bool,
@@ -79,6 +103,7 @@ impl Default for Settings {
         Self {
             version: 1,
             theme: None,
+            show_clock: ClockVisibility::default(),
             dark_base: Theme::Dark.default_base(),
             light_base: Theme::Light.default_base(),
             total_zen: false,
@@ -196,6 +221,7 @@ impl SettingsPage {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceId {
     Theme,
+    ShowClock,
     TotalZen,
     ZenIcon,
     DarkBase,
@@ -218,6 +244,7 @@ impl PreferenceId {
     pub fn key(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::ShowClock => "show-clock",
             Self::TotalZen => "total-zen",
             Self::ZenIcon => "zen-icon",
             Self::DarkBase => "dark-base",
@@ -648,6 +675,23 @@ impl Settings {
                         },
                     ),
                     row(
+                        ShowClock,
+                        "Show clock",
+                        "",
+                        PreferenceKind::Choice {
+                            presentation: ChoicePresentation::Dropdown,
+                            icons: Vec::new(),
+                            options: ClockVisibility::CHOICES
+                                .iter()
+                                .map(|c| c.1.into())
+                                .collect(),
+                            selected: ClockVisibility::CHOICES
+                                .iter()
+                                .position(|c| c.0 == self.show_clock)
+                                .unwrap() as u32,
+                        },
+                    ),
+                    row(
                         DarkBase,
                         "Dark theme base color",
                         "",
@@ -779,6 +823,12 @@ impl Settings {
                 ],
             }],
         ];
+        if !matches!(
+            platform,
+            Platform::Generic | Platform::Gtk | Platform::Web | Platform::Android
+        ) {
+            groups[0][0].rows.retain(|r| r.id != ShowClock);
+        }
         groups[0].push(PreferenceGroup {
             title: CommandId::ZenMode.label().into(),
             rows: vec![
@@ -907,6 +957,9 @@ impl Settings {
                     2 => Some(crate::Theme::Dark),
                     _ => None,
                 }
+            }
+            ShowClock => {
+                self.show_clock = ClockVisibility::CHOICES[value.choice().unwrap() as usize].0
             }
             Cursor => self.cursor = CursorMode::CHOICES[value.choice().unwrap() as usize].0,
             TotalZen => self.total_zen = matches!(value, PreferenceValue::Bool(true)),
@@ -1260,6 +1313,62 @@ impl PreferencesState {
 #[cfg(test)]
 mod copy_tests {
     use super::*;
+
+    #[test]
+    fn clock_visibility_defaults_round_trips_and_resets() {
+        let original: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut settings = original.clone();
+            let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
+            assert_eq!(row.title, "Show clock");
+            assert!(matches!(
+                row.kind,
+                PreferenceKind::Choice { selected: 0, .. }
+            ));
+            for (index, policy) in [
+                ClockVisibility::Fullscreen,
+                ClockVisibility::Always,
+                ClockVisibility::Never,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                settings
+                    .edit(
+                        PreferenceId::ShowClock,
+                        PreferenceValue::Choice(index as u32),
+                        platform,
+                    )
+                    .unwrap();
+                let saved = serde_json::to_string(&settings).unwrap();
+                let restored =
+                    Settings::deserialize_saved(&mut serde_json::Deserializer::from_str(&saved))
+                        .unwrap();
+                assert_eq!(restored.show_clock, policy);
+                assert_eq!(policy.visible(false), policy == ClockVisibility::Always);
+                assert_eq!(policy.visible(true), policy != ClockVisibility::Never);
+            }
+            assert!(
+                settings
+                    .edit(
+                        PreferenceId::ShowClock,
+                        PreferenceValue::Choice(3),
+                        platform
+                    )
+                    .is_err()
+            );
+            let mut preferences = PreferencesState::default();
+            preferences.edit(
+                &mut settings,
+                PreferenceAction::Reset {
+                    id: PreferenceId::ShowClock,
+                },
+                platform,
+            );
+            assert_eq!(settings, original);
+        }
+    }
 
     #[test]
     fn zen_preferences_are_persistent_resettable_on_all_platforms() {
