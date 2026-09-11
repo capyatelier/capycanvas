@@ -921,26 +921,36 @@ function queuePen(e, stage) {
   if (batch.records.length) pending.push(batch);
   wake();
 }
+function canvasPointer(e, stage) {
+  e.preventDefault();
+  if (stage === 1) {
+    canvas.focus();
+    canvas.setPointerCapture(e.pointerId);
+  }
+  let sample = e;
+  const activePen = lastPenEvent?.pointerType === "pen"
+    && lastPenEvent.pointerId === e.pointerId;
+  // Losing the browser's input stream is not an instruction to erase ink.
+  // Tablet lift can end with cancellation/capture loss, or a hover move before
+  // pointerup. Finish once, at the last contact sample: termination events may
+  // have reset coordinates/pressure or already be outside the drawing surface.
+  if (activePen && (stage === 4 ||
+      (stage === 2 && !(e.buttons & 33) && e.pressure === 0))) {
+    sample = lastPenEvent;
+    stage = 3;
+  }
+  const reply = pointerInput(sample, stage);
+  if (reply.paint) queuePen(sample, stage);
+  cursorInput(e.type === "pointercancel" || e.type === "lostpointercapture" ? null : e);
+}
 for (const [name, stage] of [
   ["pointerdown", 1],
   ["pointermove", 2],
   ["pointerup", 3],
   ["pointercancel", 4],
 ])
-  canvas.addEventListener(name, (e) => {
-    e.preventDefault();
-    const point = position(e);
-    if (stage === 1) {
-      canvas.focus();
-      canvas.setPointerCapture(e.pointerId);
-    }
-    const reply = pointerInput(e, stage, point);
-    if (reply.paint) queuePen(e, stage);
-    cursorInput(stage === 4 ? null : e);
-  });
-canvas.addEventListener("lostpointercapture", (e) => {
-  if (pointerInput(e, 4).paint) queuePen(lastPenEvent || e, 4);
-});
+  canvas.addEventListener(name, (e) => canvasPointer(e, stage));
+canvas.addEventListener("lostpointercapture", (e) => canvasPointer(e, 4));
 function pointerInput(e, stage, point = position(e)) {
   return input({
     type: "pointer",
