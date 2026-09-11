@@ -105,7 +105,7 @@ build is only build evidence.
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
 | 5. Document/settings/workspace persistence and lifecycle | Save/reopen/recovery, rotation, background/foreground, multitasking, surface replacement and memory-pressure checks remain. | Save/reopen/recovery, window ownership/close/reopen, focus, display/scale changes, sleep/wake and memory-pressure checks remain. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
-| 7. Hardware performance, sustained sessions and delivery | M4 iPad workload matrix, presentation/latency instrumentation, memory and ten-minute sessions remain. | Physical Mac workload matrix, display capability evidence, presentation/latency instrumentation, memory and ten-minute sessions remain. |
+| 7. Hardware performance, sustained sessions and delivery | Shared opt-in CPU/GPU/actual-presentation trace and local analyzer implemented; physical startup/idle instrumentation checked. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. | Same shared instrumentation and startup/idle check; display maximum is 90 Hz. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. |
 
 Start input/performance instrumentation and persistence early, and run visual
 comparisons as components land. The rows are acceptance gates, not a reason to
@@ -233,7 +233,43 @@ Keep per-platform results separate and retain failing workloads in the report.
 The current Mac display reports a maximum of 90 Hz. It can provide CPU/GPU and
 90 Hz presentation measurements, but cannot establish the 120 Hz presentation gate.
 
-Generated captures, traces and test results belong in ignored
-`artifacts/ui/parity`. Signing material and device/account identifiers remain
+Generated captures and test results belong in ignored `artifacts/ui/parity`;
+local timing traces and reports belong in ignored `artifacts/performance`. Signing material and device/account identifiers remain
 local. Repository commits contain source, reproducible commands with placeholders
 and sanitized findings. Review staged content before each push.
+
+
+Shared Apple performance instrumentation is documented in
+[`apps/layer-apple/PERFORMANCE.md`](../apps/layer-apple/PERFORMANCE.md). Opt-in
+captures distinguish CPU queue/service/stages, GPU queue spans, actual Metal
+presentation callbacks, display-link idle transitions, input receipt associations,
+memory and thermal state. The recorder and GPU readbacks are bounded. Missing,
+skipped, invalid and overflow observations remain explicit; input receipt is
+not proof that the frame includes those pixels. The GPU test exposed stale/zero
+Metal counters: marker passes now contain a storage write, and counter resolution
+runs asynchronously after marker completion. Hardware checks require positive
+timestamps and verify slot saturation/reuse. The older renderer telemetry rejects
+zero counters but still needs migration from empty marker passes; these Apple
+reports use the separate queue-span timer.
+
+The native scheduler and concurrent recorder checks pass without app automation.
+Four report tests distinguish active missed frames from idle gaps, preserve
+missing/invalid observations, deduplicate receipt associations and require shader
+readiness. Seven Apple C ABI tests and the hardware GPU timer test pass. Both
+signed builds compile and direct physical app launches work. Startup/idle probes
+validate instrumentation only; they do not close any drawing workload, physical
+Pencil latency, 120 Hz sustained-session, visual or functional parity gate.
+
+
+The corrected 30-second Debug startup/idle probes recorded 1,545 valid GPU spans
+on Mac and 510 on the physical iPad. Every acquired drawable received a
+presentation callback: Mac reported 1,544 actual presentations and one zero-time
+(skipped/unpresented) callback; iPad reported 507 actual presentations and three
+zero-time callbacks. Neither trace overflowed, skipped GPU observations, retained
+pending GPU readbacks or reported invalid GPU counters. Shader/canvas/catalog
+readiness was observed at about 17.59 seconds on Mac and 4.41 seconds on iPad,
+followed by render idle. These values include startup and profiler overhead;
+they are not representative drawing benchmarks. The probes precede integration
+of the incoming linked-mask/sparse-transform work. Early all-zero GPU traces are
+retained locally as rejected instrumentation evidence and excluded from timing
+distributions by the analyzer.

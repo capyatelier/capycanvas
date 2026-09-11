@@ -62,6 +62,9 @@ open apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
 
 ## Validation
 
+See [PERFORMANCE.md](PERFORMANCE.md) for opt-in local CPU/GPU/presentation traces,
+the report tool, instrumentation checks and the remaining hardware evidence.
+
 Check editor behavior directly without driving system menus:
 
 ```sh

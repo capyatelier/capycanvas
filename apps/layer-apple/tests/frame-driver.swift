@@ -7,6 +7,8 @@ import Foundation
     var canvasSubmitted = false
 }
 @MainActor final class NativeOwner {
+    func observeTick(now: UInt64, target: UInt64, admitted: Bool) {}
+    func observeActivity(active: Bool) {}
     var completions: [@Sendable (Bool, UInt64, [UInt64]) -> Void] = []
     func frame(now: UInt64, target: UInt64,
         completion: @escaping @Sendable (Bool, UInt64, [UInt64]) -> Void) {

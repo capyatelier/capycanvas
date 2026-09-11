@@ -113,7 +113,8 @@ impl Telemetry {
                 if let Ok(bytes) = buffer.get_mapped_range(..) {
                     let begin = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                     let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-                    if end >= begin
+                    if begin > 0
+                        && end > begin
                         && let Ok(mut samples) = samples.lock()
                     {
                         samples.push((end - begin) as f32 * period / 1_000_000.);

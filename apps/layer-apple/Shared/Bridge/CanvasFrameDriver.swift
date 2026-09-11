@@ -9,6 +9,7 @@ import QuartzCore
     private var surfaceGeneration: UInt64 = 0
     private var pending = false
     private var active = false
+    private var paused = true
     var setPaused: (Bool) -> Void = { _ in }
     var submittedViewport: () -> Void = {}
 
@@ -16,7 +17,7 @@ import QuartzCore
     func activate() { surfaceGeneration &+= 1; resetSubmission(); active = true; wake() }
     func deactivate() {
         active = false; generation &+= 1; surfaceGeneration &+= 1
-        resetSubmission(); setPaused(true)
+        resetSubmission(); pause(true)
     }
     private func resetSubmission() {
         let surface = surfaceGeneration
@@ -27,14 +28,24 @@ import QuartzCore
             if self.store?.canvasSubmitted == true { self.store?.canvasSubmitted = false }
         }
     }
-    func wake() { generation &+= 1; if active { setPaused(false) } }
+    private func pause(_ value: Bool) {
+        if paused != value {
+            store?.native?.observeActivity(active: !value)
+            paused = value
+        }
+        setPaused(value)
+    }
+    func wake() { generation &+= 1; if active { pause(false) } }
     func tick(target: TimeInterval) {
-        guard active, !pending, let native = store?.native else { return }
+        guard let native = store?.native else { return }
+        let now = UInt64(CACurrentMediaTime() * 1_000_000_000)
+        let target = UInt64(max(0, target) * 1_000_000_000)
+        native.observeTick(now: now, target: target, admitted: active && !pending)
+        guard active, !pending else { return }
         pending = true
         let submittedGeneration = generation
         let submittedSurface = surfaceGeneration
-        native.frame(now: UInt64(CACurrentMediaTime() * 1_000_000_000),
-            target: UInt64(max(0, target) * 1_000_000_000)) { [weak self] again, revision, costs in
+        native.frame(now: now, target: target) { [weak self] again, revision, costs in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pending = false
@@ -48,7 +59,7 @@ import QuartzCore
                 }
                 // A resize/input/wake during the queued frame must survive its
                 // idle reply, including a surface detached and attached again.
-                self.setPaused(!again && self.generation == submittedGeneration)
+                self.pause(!again && self.generation == submittedGeneration)
             }
         }
     }
