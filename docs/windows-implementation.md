@@ -405,3 +405,11 @@ explicit isolated profile. Raw settings, recovery files, snapshots, traces and
 reports remain private and local. Document/workspace persistence, complete
 workspace controls, physical input acceptance, visual parity and packaging
 remain open; the 120 Hz benchmark remains deferred.
+
+The subsequent shared project/Apple persistence/Android immersive-display merge
+passes all 301 core/engine/UI/host/Windows Rust tests. The hardware D3D12 project
+integration test also passes exact live-versus-reopened pixels, including masked
+content and subsequent wet painting. The merged native build passes the full
+isolated storage fixture plus existing Preferences/header and workspace checks,
+with review windows closed and empty runtime stderr. This verifies the shared
+project foundation on Windows; Windows Save/Open UI is still unimplemented.
