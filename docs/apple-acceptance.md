@@ -122,10 +122,16 @@ brush dependencies precede remaining shaders. Apple uses private disposable shad
 caches and submits bundled filters after document readiness. Cold/warm startup
 responsiveness still needs hardware measurement on both Apple platforms.
 
-Three direct Apple bridge tests pass for both iPad and Mac configurations: session
+Six direct Apple bridge tests pass. Both iPad and Mac session configurations cover
 isolation through brush/zoom/settings actions, and real GPU document pixels after
 painting, pen-up, undo and redo, plus preservation of pending ink through staged
-paper/document/brush readiness. These exercise the same C ABI used by the editor
+paper/document/brush readiness. Layer cases additionally cover rename, blend,
+opacity, locks, references, checked selection preserving the drawing target,
+mask targeting/linking/enablement, menu policy, hierarchy and collapse. Image
+import rejects incomplete data without mutation, changes actual GPU pixels,
+produces a thumbnail and restores exact pixels through undo/redo. A stateless
+numeric test checks the shared expression, formatting and slider policy.
+These exercise the same C ABI used by the editor
 and the shared staged frame preparation. Standalone checks of the actual Swift
 frame driver cover one queued frame, wakes during pending work, detached views
 staying asleep, and old completions not revealing replacement surfaces.
@@ -144,6 +150,37 @@ through dynamic states and existing host controls: it is a starting point, not
 a completeness proof. Track every entry's shared implementation, native service
 dependencies and separate iPad/Mac verification. Incoming shared features from
 other ports are in scope.
+The latest shared Operation/transform controller is integrated and expands the
+command catalog to 48 entries. Its specialized Apple controls remain unfinished.
+The layer pixel reports below were captured before this final shared integration;
+they do not establish acceptance of the new Operation workflows.
+
+The inventory now includes six layer states on each Apple platform: paint/paper,
+multiple checked rows, a mask with clipping/references and copied-mask state,
+locked layers with disabled/unlinked masks, groups with children and collapsed
+groups. Each records the shared row/header state and every available content/mask
+context menu. Selection-dependent, imported-image and additional document states
+remain to be enumerated.
+
+The shared layer panel consumes these models for rows, blend/opacity, locks,
+clipping/references, groups, mask/content targeting, rename, drag/drop, image
+import and recursive context actions. GPU thumbnails have a separate observable
+cache, visible-row requests, eight pending readbacks at most, stale-response
+filtering and no polling once current. ImageIO decoding runs off the UI/render
+queues and preserves orientation, sRGB, straight alpha and original resolution;
+standalone synthetic-image checks pass. The serial owner performs document import.
+Complete layer/menu/drag/long-press workflow acceptance and preview-cache stress
+measurements remain open. Native blend/context popovers and other editor controls
+still need visual refinement; the implementation is not a visual parity pass.
+The focused layer workflow passes on the Mac and iPad simulator, including
+creating a layer, checking another without changing the drawing target,
+switching content/mask targets and deleting a mask through its context menu.
+Explicit thumbnail hit shapes fix adjacent checkbox taps selecting content on
+iPad. Context gestures attach directly to the relevant control, avoiding row
+coordinate inference. These checks cover a small workflow, not every menu action.
+The physical iPad app launches normally; its XCTest runner timed out while
+enabling automation before running any assertions. Device input and performance
+evidence remain required; simulator results do not replace them.
 
 The initial iPad simulator launch test verifies a successful Metal viewport
 submission, a full-window canvas, settled landscape bounds and 36-point Zen
@@ -158,6 +195,17 @@ incomplete layer panel still need work. The initial dark Mac comparison at
 1200×900 logical points and scale 2 has 382,685 differing pixels out of 4,320,000
 (8.8584%). This is also a **failing baseline**, including the intentional native
 menu/window-control adaptation. No visual result has been accepted.
+The layer-panel iteration at 1200×870 and scale 2 has 346,758 differing pixels
+out of 4,176,000 (8.3036%), also failing. The reference now waits for staged
+startup and visible GPU thumbnails, and both captures are unobstructed. The
+remaining differences include text, control geometry/styles and the intentional
+Mac header adaptation. This is a different window size from the earlier baseline,
+so the percentages do not establish an improvement rate.
+The iPad simulator's settled `layer-added` fixture at 1376×1032 and scale 2 has
+383,613 differing pixels out of 5,680,128 (6.7536%), also failing. It matches one
+new empty selected layer over the original ink/paper, with GPU previews present
+in both captures. Early launch captures with unfinished previews are retained
+locally but excluded from this fixture's parity evidence.
 The comparison tool has four passing checks covering single-pixel errors,
 orientation, dimension mismatch and transparent captures.
 

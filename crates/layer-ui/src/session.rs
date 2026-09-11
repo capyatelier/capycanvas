@@ -8,6 +8,8 @@ use layer_render::CanvasRenderer;
 mod art_layers;
 #[path = "figures.rs"]
 pub(crate) mod figures;
+#[path = "operation.rs"]
+pub(crate) mod operation;
 #[path = "region_tools.rs"]
 mod region_tools;
 #[path = "rulers.rs"]
@@ -58,6 +60,7 @@ pub struct UiSession<R: CanvasRenderer> {
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
     rulers: rulers::RulerInteraction,
+    operation: operation::Operation,
     system_theme: Theme,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -103,6 +106,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             eyedropper: Default::default(),
             region_tools: Default::default(),
             rulers: Default::default(),
+            operation: Default::default(),
             system_theme: Theme::Light,
             logical_viewport: None,
             initial_fit: true,
@@ -458,11 +462,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     self.interaction.modifiers.shift = pressed;
                 }
+                if key.eq_ignore_ascii_case("alt")
+                    || key.eq_ignore_ascii_case("alt_l")
+                    || key.eq_ignore_ascii_case("alt_r")
+                {
+                    self.interaction.modifiers.alt = pressed;
+                }
                 if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. })
                     && !self.layer_interaction.path.is_empty())
                     || self.update_ruler_preview()
+                    || self.update_transform_drag()?
                 {
-                    reply.change = self.changed(regions::DOCUMENT, true);
+                    reply.change = self.changed(regions::DOCUMENT | regions::BRUSH, true);
                 }
                 // Native editors/IMEs own their text. Elsewhere in settings,
                 // printable keys start search with the original case intact.
@@ -1017,6 +1028,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::ScaleRotate => idle && self.can_transform(),
+            CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
+                idle && self.operation.active()
+            }
             CommandId::ShowRulers => idle,
             CommandId::SnapRulers => idle && self.rulers.visible,
             CommandId::DeleteRuler => {
@@ -1060,7 +1075,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             || matches!(
                 (id, self.layer_interaction.tool),
                 (CommandId::Lasso, LayerCanvasTool::Select)
-                    | (CommandId::Move, LayerCanvasTool::Move)
+                    | (
+                        CommandId::Move,
+                        LayerCanvasTool::Move | LayerCanvasTool::Transform
+                    )
                     | (CommandId::Hand, LayerCanvasTool::Hand)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
                     | (CommandId::Figure, LayerCanvasTool::Figure { .. })
@@ -1078,6 +1096,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
             || (id == CommandId::ShowRulers && self.rulers.visible)
             || (id == CommandId::SnapRulers && self.rulers.snapping)
+            || (id == CommandId::TransformAspect && self.operation.aspect)
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
@@ -1088,6 +1107,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
         use regions::*;
         let revision = self.engine.document().revision;
+        let transforming = self.operation.active();
         let was_expanded = self.state.customization.has_drawer();
         let was_zen = self.state.workspace.zen_mode;
         let tool_before = (self.state.brush.tool, self.layer_interaction.tool);
@@ -1440,6 +1460,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
                 }
+                if id.starts_with("transform_") {
+                    self.set_transform_control(&id, value)?;
+                    return Ok(self.changed(BRUSH, true));
+                }
                 let brush = tool_settings::edit(self.engine.configured_brush(), &id, value)?;
                 self.state.brush.diameter = brush.diameter;
                 self.state.brush.opacity = brush.opacity;
@@ -1754,7 +1778,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= COMMANDS;
         }
-        Ok(self.changed(changed, wake))
+        Ok(self.changed(changed, wake || transforming != self.operation.active()))
     }
 
     /// Raw records retain platform timestamp/history/prediction metadata. A
@@ -1993,6 +2017,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         self.input_pending = false;
+        if std::mem::take(&mut self.operation.changed) {
+            changed |= regions::BRUSH;
+        }
         self.poll_region_tool()?;
         if let Some(color) = self.eyedropper.poll(self.engine.backend_mut())? {
             self.state.colors.set_rgba(color)?;
@@ -2017,6 +2044,19 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::ScaleRotate => {
+                self.begin_transform()?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::ApplyTransform | CommandId::CancelTransform => {
+                self.finish_transform(command == CommandId::ApplyTransform)?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::TransformAspect => {
+                self.operation.aspect = !self.operation.aspect;
+                self.refresh_tools();
+                Ok((BRUSH, false))
+            }
             CommandId::Ruler => {
                 self.layer_action(LayerAction::Tool {
                     tool: LayerCanvasTool::Ruler {
@@ -2269,6 +2309,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn select_brush(&mut self, id: u32) -> Result<(), String> {
         let preset = preset(id)?;
+        self.cancel_layer_gesture()?;
         self.tools
             .remember(self.state.brush.preset, self.engine.configured_brush());
         let brush = self.tools.brush(preset);
@@ -2309,30 +2350,44 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_tools(&mut self) {
-        self.state.tool_actions =
-            if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
-                || !self.engine.document().rulers.is_empty()
-            {
-                [
-                    CommandId::ShowRulers,
-                    CommandId::SnapRulers,
-                    CommandId::DeleteRuler,
-                ]
-                .into_iter()
-                .filter(|c| {
-                    *c != CommandId::DeleteRuler
-                        || matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
-                })
-                .map(|command| ToolSettingAction {
-                    command,
-                    checkable: command.is_toggle(),
-                })
-                .collect()
-            } else {
-                Vec::new()
-            };
+        self.state.tool_actions = if self.operation.active() {
+            [
+                CommandId::TransformAspect,
+                CommandId::ApplyTransform,
+                CommandId::CancelTransform,
+            ]
+            .into_iter()
+            .map(|command| ToolSettingAction {
+                command,
+                checkable: command.is_toggle(),
+            })
+            .collect()
+        } else if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
+            || !self.engine.document().rulers.is_empty()
+        {
+            [
+                CommandId::ShowRulers,
+                CommandId::SnapRulers,
+                CommandId::DeleteRuler,
+            ]
+            .into_iter()
+            .filter(|c| {
+                *c != CommandId::DeleteRuler
+                    || matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
+                    || self.layer_interaction.tool == LayerCanvasTool::Move
+            })
+            .map(|command| ToolSettingAction {
+                command,
+                checkable: command.is_toggle(),
+            })
+            .collect()
+        } else {
+            Vec::new()
+        };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
-        self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
+        self.state.tool_settings = if self.operation.active() {
+            self.transform_controls()
+        } else if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
         } else if let LayerCanvasTool::Figure { paint, .. } = self.layer_interaction.tool {
             tool_settings::controls(self.engine.configured_brush())
@@ -2462,6 +2517,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        self.reconcile_transform();
         if self
             .rulers
             .selected
@@ -2616,9 +2672,17 @@ mod tests {
         sample_reply: Option<layer_render::ColorSample>,
         region_requests: Vec<layer_render::RegionRequest>,
         region_reply: Option<layer_render::RegionResult>,
+        transform: Option<layer_render::TransformPreview>,
     }
     impl CanvasRenderer for Recorder {
         type Error = BackendError;
+        fn set_transform_preview(
+            &mut self,
+            preview: Option<&layer_render::TransformPreview>,
+        ) -> Result<(), Self::Error> {
+            self.transform = preview.cloned();
+            Ok(())
+        }
         fn request_region(
             &mut self,
             request: layer_render::RegionRequest,
@@ -3070,6 +3134,22 @@ mod tests {
             invoke(&mut s, CommandId::SnapRulers);
             assert!(!s.rulers.snapping);
             assert!(matches!(saved[2].geometry, RulerGeometry::Radial { .. }));
+            // Operation edits existing guides, but never creates a ruler and
+            // never moves the paint layer while a ruler handle owns contact.
+            invoke(&mut s, CommandId::Move);
+            let layers = s.engine.document().layers.clone();
+            let end = s.engine.document().rulers[0].geometry.handles().1.unwrap();
+            send(&mut s, PenPhase::Down, [end.x, end.y]);
+            send(&mut s, PenPhase::Up, [end.x + 25., end.y + 30.]);
+            assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Move);
+            assert_eq!(s.engine.document().layers, layers);
+            assert_ne!(s.engine.document().rulers, before);
+            invoke(&mut s, CommandId::Undo);
+            s.frame(1, 1).unwrap();
+            assert_eq!(s.engine.document().rulers, before);
+            send(&mut s, PenPhase::Down, [1900., 1300.]);
+            send(&mut s, PenPhase::Up, [1900., 1300.]);
+            assert_eq!(s.engine.document().rulers, before);
         }
     }
 
@@ -3358,10 +3438,7 @@ mod tests {
         assert_eq!(colors, [[1.0, 0.0, 0.0, 0.4], [1.0, 0.0, 0.0, 0.0]]);
         let selection = operations[0].coverage.initial.as_ref().unwrap();
         let first = selection.contours()[0][0];
-        assert_eq!(
-            selection.affine.map(first),
-            Point::default()
-        );
+        assert_eq!(selection.affine.map(first), Point::default());
         assert!(s.layer_interaction.path.is_empty());
         assert_eq!(s.renderer_mut().dabs, 0);
         invoke(&mut s, CommandId::Undo);
@@ -3558,6 +3635,141 @@ mod tests {
             LayerCanvasTool::PickLayer,
             "remember source subtool"
         );
+    }
+
+    #[test]
+    fn operation_controls_preview_cancel_apply_and_undo_share_one_transaction() {
+        use layer_core::{Affine, Point, Selection};
+        let mut s = session();
+        let selection = Selection::polygon(vec![
+            Point { x: 100., y: 100. },
+            Point { x: 300., y: 100. },
+            Point { x: 300., y: 300. },
+            Point { x: 100., y: 300. },
+        ])
+        .unwrap();
+        s.fill_selection(selection.clone()).unwrap();
+        s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone())))
+            .unwrap();
+        s.frame(1, 1).unwrap();
+        let original = s.engine.document().clone();
+        invoke(&mut s, CommandId::ScaleRotate);
+        assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Transform);
+        assert_eq!(s.state.tool_settings.len(), 5);
+        assert_eq!(s.state.tool_set.groups.len(), 2);
+        for (id, value) in [
+            ("transform_x", 30.),
+            ("transform_width", 1.5),
+            ("transform_angle", 0.3),
+        ] {
+            assert!(
+                s.dispatch(UiAction::SetToolSetting {
+                    id: id.into(),
+                    value
+                })
+                .unwrap()
+                .canvas_wake
+            );
+        }
+        s.frame(2, 2).unwrap();
+        let preview = s.renderer_mut().transform.clone().unwrap();
+        assert_eq!(s.engine.document().revision, original.revision);
+        assert_ne!(preview.transform.affine, Affine::IDENTITY);
+        let mut overlay = Vec::new();
+        s.append_layer_overlay(&mut overlay);
+        assert_eq!(overlay.iter().filter(|s| s.marker == 2.).count(), 9);
+        invoke(&mut s, CommandId::ApplyTransform);
+        s.frame(3, 3).unwrap();
+        assert!(!s.operation.active());
+        let op = s
+            .engine
+            .document()
+            .layer(original.active_layer)
+            .unwrap()
+            .operations
+            .last()
+            .unwrap();
+        assert_eq!(
+            op.kind,
+            layer_core::LayerOperationKind::Transform(preview.transform)
+        );
+        assert_ne!(s.engine.document().selection.as_ref(), Some(&selection));
+        invoke(&mut s, CommandId::Undo);
+        s.frame(4, 4).unwrap();
+        assert_eq!(s.engine.document().layers, original.layers);
+        assert_eq!(s.engine.document().selection, original.selection);
+        for action in [
+            UiAction::Invoke {
+                command: CommandId::CancelTransform,
+            },
+            UiAction::Invoke {
+                command: CommandId::Pen,
+            },
+            UiAction::Layer {
+                action: LayerAction::AlphaLock {
+                    id: original.active_layer.0,
+                    value: true,
+                },
+            },
+        ] {
+            invoke(&mut s, CommandId::ScaleRotate);
+            s.dispatch(UiAction::SetToolSetting {
+                id: "transform_x".into(),
+                value: 80.,
+            })
+            .unwrap();
+            assert!(s.dispatch(action).unwrap().canvas_wake);
+            s.frame(5, 5).unwrap();
+            assert!(!s.operation.active());
+            assert!(s.renderer_mut().transform.is_none());
+            assert!(
+                s.state
+                    .tool_settings
+                    .iter()
+                    .all(|c| !c.id.starts_with("transform_"))
+            );
+        }
+        invoke(&mut s, CommandId::ScaleRotate);
+        s.frame(6, 6).unwrap();
+        let before = s.renderer_mut().transform.clone();
+        assert!(
+            s.dispatch(UiAction::SetToolSetting {
+                id: "transform_width".into(),
+                value: 0.
+            })
+            .is_err()
+        );
+        s.frame(7, 7).unwrap();
+        assert_eq!(s.renderer_mut().transform, before);
+        for (phase, point) in [
+            (PenPhase::Down, Point { x: 300., y: 300. }),
+            (PenPhase::Move, Point { x: 340., y: 320. }),
+        ] {
+            let mut e = event(&s, 1, phase, 1.);
+            e.surface_position = Affine(s.state.camera.document_to_surface()).map(point);
+            s.pen(e).unwrap();
+            s.frame(7, 7).unwrap();
+        }
+        assert!(
+            key(&mut s, "Shift_L", true, false, false)
+                .change
+                .canvas_wake
+        );
+        let size = |s: &UiSession<Recorder>, id: &str| {
+            s.state
+                .tool_settings
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap()
+                .value
+        };
+        assert!((size(&s, "transform_width") - size(&s, "transform_height")).abs() < 0.001);
+        assert!(key(&mut s, "Alt_L", true, false, true).change.canvas_wake);
+        assert!(size(&s, "transform_x").abs() < 0.001);
+        assert!(size(&s, "transform_y").abs() < 0.001);
+        key(&mut s, "escape", true, false, false);
+        s.frame(8, 8).unwrap();
+        assert!(!s.operation.active());
     }
 
     #[test]

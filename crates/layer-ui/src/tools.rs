@@ -289,6 +289,12 @@ pub struct ToolSetView {
     pub subtools: Vec<ToolSetItem>,
 }
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetView {
+    if matches!(
+        canvas_tool,
+        LayerCanvasTool::Move | LayerCanvasTool::Transform
+    ) {
+        return crate::session::operation::tool_set(canvas_tool == LayerCanvasTool::Transform);
+    }
     if let LayerCanvasTool::Ruler { kind } = canvas_tool {
         return crate::session::rulers::tool_set(kind);
     }
@@ -401,7 +407,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool) -> ToolSetV
         let (label, icon) = match canvas_tool {
             LayerCanvasTool::Select => ("Lasso", "lasso"),
             LayerCanvasTool::LassoFill => ("Lasso fill", "lasso"),
-            LayerCanvasTool::Move => ("Move layer", "move"),
+            LayerCanvasTool::Move | LayerCanvasTool::Transform => unreachable!(),
             LayerCanvasTool::Hand => ("Hand", "hand"),
             LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
             LayerCanvasTool::Gradient { .. } => unreachable!(),

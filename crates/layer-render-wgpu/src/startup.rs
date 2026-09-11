@@ -207,7 +207,9 @@ impl WgpuRasterizer {
         };
         if startup.revision != Some(document.revision) {
             let mut required = Requirements::default();
-            required.render.extend(self.scene_pipelines.pipeline.iter().cloned());
+            required
+                .render
+                .extend(self.scene_pipelines.pipeline.iter().cloned());
             for stroke in document.strokes() {
                 let mut style = style(&stroke.brush, stroke.tool, stroke.alpha_locked);
                 style.selection = stroke.selection.clone();
@@ -230,6 +232,20 @@ impl WgpuRasterizer {
                     self.selection_clip.fill.clone(),
                     self.selection_clip.resample.clone(),
                 ]);
+            }
+            if document.layers.iter().any(|l| {
+                l.operations
+                    .iter()
+                    .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))
+            }) {
+                required.render.extend(
+                    self.transforms
+                        .as_ref()
+                        .unwrap()
+                        .pipelines()
+                        .into_iter()
+                        .cloned(),
+                );
             }
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
@@ -312,6 +328,9 @@ impl WgpuRasterizer {
             ] {
                 startup.compiler.pipeline(p, OTHER);
             }
+            for p in self.transforms.as_ref().unwrap().pipelines() {
+                startup.compiler.pipeline(p, OTHER);
+            }
             startup.others_queued = true;
         }
         startup.compiler.start();
@@ -363,17 +382,20 @@ impl WgpuRasterizer {
                 }
             }
         }
-        let canvas_ready =
-            startup.revision.is_some() && startup.effects_ready && startup.document.ready()
-                && startup.masks.ready_through(DOCUMENT);
+        let canvas_ready = startup.revision.is_some()
+            && startup.effects_ready
+            && startup.document.ready()
+            && startup.masks.ready_through(DOCUMENT);
         #[cfg(target_arch = "wasm32")]
         let canvas_ready = canvas_ready && startup.compiler.ready_through(DOCUMENT);
-        let brush_ready = canvas_ready && startup.current.ready() && startup.masks.ready_through(BRUSH);
+        let brush_ready =
+            canvas_ready && startup.current.ready() && startup.masks.ready_through(BRUSH);
         #[cfg(target_arch = "wasm32")]
         let brush_ready = brush_ready && startup.compiler.ready_through(BRUSH);
-        startup.finished =
-            brush_ready && !startup.host_catalog_pending && startup.compiler.pending() == 0
-                && startup.masks.ready_through(OTHER);
+        startup.finished = brush_ready
+            && !startup.host_catalog_pending
+            && startup.compiler.pending() == 0
+            && startup.masks.ready_through(OTHER);
         let progress = StartupProgress {
             canvas_ready,
             brush_ready,
@@ -442,6 +464,13 @@ mod gpu_tests {
     use super::*;
     #[test]
     fn loaded_filters_and_current_brush_render_before_unused_pipelines() {
+        verify_document_startup(false);
+    }
+    #[test]
+    fn saved_transforms_compile_before_document_replay() {
+        verify_document_startup(true);
+    }
+    fn verify_document_startup(transform: bool) {
         let mut reference = WgpuRasterizer::new_headless().unwrap();
         let mut renderer = WgpuRasterizer::from_wgpu_staged(
             reference.adapter.clone(),
@@ -451,6 +480,15 @@ mod gpu_tests {
         .unwrap();
         assert!(renderer.pipelines.material.iter().all(|p| !p.ready()));
         assert!(renderer.pipelines.direct.iter().all(|p| !p.ready()));
+        assert!(
+            renderer
+                .transforms
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .iter()
+                .all(|p| !p.ready())
+        );
         let (release, wait) = mpsc::channel();
         renderer
             .startup
@@ -464,6 +502,19 @@ mod gpu_tests {
         let mut doc = Document::new("startup filters", 128, 128);
         let asset = AssetId("startup checker".into());
         doc.layers[0].asset = Some(asset.clone());
+        if transform {
+            doc.layers[0].operations.push(layer_core::LayerOperation {
+                after_stroke: 0,
+                coverage: layer_core::LayerMask::reveal_all(
+                    LayerId(100),
+                    layer_core::Point::default(),
+                ),
+                kind: layer_core::LayerOperationKind::Transform(layer_core::ImageTransform {
+                    affine: layer_core::Affine::translation(layer_core::Point { x: 9., y: 13. }),
+                    ..Default::default()
+                }),
+            });
+        }
         for (i, id) in ["domain_warp", "curves", "curves"].into_iter().enumerate() {
             let mut layer = Layer::paint(LayerId(10 + i as u64), id);
             layer.kind = LayerKind::Effect;
@@ -513,6 +564,16 @@ mod gpu_tests {
             renderer.pipelines.material.iter().all(|p| !p.ready()),
             "Unrelated material shaders must not gate current content"
         );
+        assert!(
+            renderer
+                .transforms
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .iter()
+                .all(|p| p.ready() == transform),
+            "Only loaded transforms belong in document-priority compilation"
+        );
         let view = layer_render::ViewState {
             width_px: 128,
             height_px: 128,
@@ -530,7 +591,7 @@ mod gpu_tests {
             texture_sign: [1.; 2],
             material: [0.; 4],
         }];
-        let batches = [DabBatch {
+        let mut batches = vec![DabBatch {
             stroke_id: StrokeId(1),
             layer_id: doc.active_layer,
             kind: DabBatchKind::Persistent,
@@ -544,6 +605,20 @@ mod gpu_tests {
                 max: layer_core::Point { x: 88., y: 88. },
             },
         }];
+        if transform {
+            batches.insert(
+                0,
+                DabBatch {
+                    kind: DabBatchKind::LayerOperation(0),
+                    dab_count: 0,
+                    damage: layer_core::Rect {
+                        min: layer_core::Point::default(),
+                        max: layer_core::Point { x: 128., y: 128. },
+                    },
+                    ..batches[0].clone()
+                },
+            );
+        }
         let packet = FramePacket {
             time_seconds: 0.,
             view,
@@ -573,5 +648,14 @@ mod gpu_tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(renderer.pipelines.material.iter().all(Deferred::ready));
+        assert!(
+            renderer
+                .transforms
+                .as_ref()
+                .unwrap()
+                .pipelines()
+                .iter()
+                .all(|p| p.ready())
+        );
     }
 }

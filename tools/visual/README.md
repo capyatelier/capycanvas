@@ -9,8 +9,13 @@ node tools/visual/chrome-capture.mjs 1376 1032 2 artifacts/ui/parity light
 ```
 
 Arguments are logical width, height, pixel scale, output directory and theme.
+An optional final `layer-added` argument captures one new empty layer selected
+above the original ink/paper layers, matching the iPad layer workflow's final
+capture. The default scenario is `initial`.
 `CAPY_CHROME` overrides the default macOS Chrome executable path. WebGPU must use
-a hardware adapter. Captures wait for GPU readiness, fonts/images and layout.
+a hardware adapter. Captures wait for staged GPU startup, fonts/images, visible
+layer thumbnail pixels and layout. GPU attachment alone can precede the actual
+preview readbacks; a fixed delay is insufficient for a settled reference.
 The native scenario must use the same theme, document, workspace and camera.
 
 For routine Mac visual work, open the built app and capture its frontmost editor

@@ -5,6 +5,10 @@ struct PanelControls: View {
     let panel: JSON
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
+        if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
+        else { controls }
+    }
+    private var controls: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(panel["controls"].array.indices, id: \.self) { index in
@@ -26,20 +30,6 @@ struct PanelControls: View {
                     var rgba = store.state["brush"]["color"].array.map(\.number); rgba[component] = value
                     store.dispatch(["type": "set_color", "rgba": rgba])
                 }
-            }
-        case "layers": layers
-        case "layer_actions":
-            HStack(spacing: 4) {
-                ForEach(store.catalog["layer_commands"].array.indices, id: \.self) { i in
-                    let command = store.command(store.catalog["layer_commands"][i].string)
-                    IconTile(icon: command["icon"].string, label: command["label"].string, enabled: command["enabled"].bool) {
-                        store.invoke(command["id"].string)
-                    }.frame(height: 28)
-                }
-            }
-        case "layer_opacity":
-            NumberControl(store: store, label: "Opacity", value: store.state["layer_tools"]["editing_layer"]["opacity"].number, control: store.catalog["layer_opacity"]) {
-                store.dispatch(["type": "set_layer_opacity", "opacity": $0])
             }
         default: Text(item["label"].string).fontWeight(.bold)
         }
@@ -81,25 +71,7 @@ struct PanelControls: View {
             }
         }
     }
-    private var layers: some View {
-        VStack(spacing: 2) {
-            ForEach(store.state["layers"].array.indices, id: \.self) { index in
-                let layer = store.state["layers"][index]
-                HStack(spacing: 6) {
-                    IconTile(icon: layer["visible"].bool ? "eye" : "eye-hidden", label: "Layer visibility") {
-                        store.dispatch(["type": "set_layer_visibility", "id": layer["id"].raw, "visible": !layer["visible"].bool])
-                    }.frame(width: 24, height: 32)
-                    Button { store.dispatch(["type": "select_layer", "id": layer["id"].raw]) } label: {
-                        HStack {
-                            Rectangle().fill(palette["input"]).frame(width: 32, height: 32)
-                            Text(layer["label"].string).lineLimit(1)
-                            Spacer(minLength: 0)
-                        }.contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                }.padding(4).background(layer["selected"].bool ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-            }
-        }
-    }
+
 }
 
 struct NumberControl: View {

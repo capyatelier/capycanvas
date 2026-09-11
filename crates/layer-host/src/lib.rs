@@ -157,6 +157,15 @@ impl NativeHost {
         self.apply_change(previous, change);
         Ok(())
     }
+    pub fn import_layer_image(
+        &mut self,
+        name: &str,
+        image: layer_render::HostImage<'_>,
+    ) -> Result<(), String> {
+        self.session.import_layer_image(name, image)?;
+        self.dirty = true;
+        Ok(())
+    }
     /// Camera motion changes the core revision without changing the workspace
     /// models. Only acknowledge it if no unpublished structural change precedes
     /// it; otherwise the next snapshot must still include that pending change.

@@ -114,7 +114,6 @@ struct EditorView<Canvas: View>: View {
             } else { PanelControls(store: store, panel: panel) }
         }.background(palette["panel"]).clipShape(RoundedRectangle(cornerRadius: 8))
             .shadow(color: .black.opacity(0.22), radius: 6, y: 2)
-            .accessibilityIdentifier("group-\(group["id"].uint)")
     }
 }
 
@@ -129,15 +128,16 @@ private struct CameraStatus: View {
 struct MenuItems: View {
     @ObservedObject var store: EditorStore
     let sections: JSON
+    var didInvoke: () -> Void = {}
     var body: some View {
         ForEach(sections.array.indices, id: \.self) { i in
             if i > 0 { Divider() }
             ForEach(sections[i].array.indices, id: \.self) { j in
                 let item = sections[i][j]
                 if !item["sections"].array.isEmpty {
-                    Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"])) }
+                    Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke)) }.disabled(!item["enabled"].bool)
                 } else {
-                    Button { store.dispatch(item["action"]) } label: {
+                    Button { store.dispatch(item["action"]); didInvoke() } label: {
                         if item["selected"].bool { Label(item["label"].string, systemImage: "checkmark") }
                         else { Text(item["label"].string) }
                     }.disabled(!item["enabled"].bool)

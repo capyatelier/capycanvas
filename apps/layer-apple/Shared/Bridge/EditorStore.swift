@@ -16,6 +16,7 @@ import SwiftUI
     var cameraRevision: UInt64 = 0
     var wake: (() -> Void)?
     private(set) var native: NativeOwner?
+    lazy var layerThumbnails = LayerThumbnails(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
 
@@ -50,15 +51,25 @@ import SwiftUI
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }
     func invoke(_ command: String) { dispatch(["type": "invoke", "command": command]) }
+    func layer(_ action: [String: Any]) { dispatch(["type": "layer", "action": action]) }
+    func importLayer(_ url: URL) { native?.importLayer(url); wake?() }
     func customize(_ action: [String: Any]) { dispatch(["type": "customize", "action": action]) }
     func input(_ value: [String: Any]) { native?.submit(1, JSON(value)); wake?() }
     func command(_ id: String) -> JSON { state["commands"].array.first { $0["id"].string == id } ?? JSON() }
     func query(_ value: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
-        native?.submit(2, JSON(value)) { result in DispatchQueue.main.async { completion(result ?? JSON()) } }
+        guard let native else { completion(JSON()); return }
+        native.submit(2, JSON(value)) { result in DispatchQueue.main.async { completion(result ?? JSON()) } }
     }
     func numeric(_ control: JSON, value: Double, operation: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
-        native?.submit(4, JSON(["control": control.raw, "value": value, "operation": operation])) { result in
-            DispatchQueue.main.async { completion(result ?? JSON()) }
-        }
+        do { completion(try resolveNumber(control, value: value, operation: operation)) }
+        catch { failure = error.localizedDescription }
+    }
+    func resolveNumber(_ control: JSON, value: Double, operation: [String: Any]) throws -> JSON {
+        let request = try JSON(["control": control.raw, "value": value, "operation": operation]).encoded()
+        guard let response = request.withCString({ capy_apple_numeric($0) }) else { throw HostFailure(message: "Numeric input failed") }
+        defer { capy_apple_string_free(response) }
+        let value = try JSON.decode(String(cString: response))
+        if !value["error"].isNull { throw HostFailure(message: value["error"].string) }
+        return value
     }
 }

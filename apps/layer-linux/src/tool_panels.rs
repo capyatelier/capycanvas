@@ -221,7 +221,11 @@ impl ToolSettings {
                     .find(|c| c.id == action.command)
                     .expect("core command exists");
                 let widget: gtk::Widget = if action.checkable {
-                    let check = gtk::CheckButton::with_label(command.label);
+                    let check = gtk::CheckButton::new();
+                    let label = gtk::Label::new(Some(command.label));
+                    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    label.set_xalign(0.);
+                    check.set_child(Some(&label));
                     let updating = self.updating.clone();
                     let id = action.command;
                     check.connect_toggled(glib::clone!(
@@ -235,14 +239,16 @@ impl ToolSettings {
                     ));
                     check.upcast()
                 } else {
-                    workspace
-                        .action_button(
-                            command.label,
-                            UiAction::Invoke {
-                                command: action.command,
-                            },
-                        )
-                        .upcast()
+                    let button = workspace.action_button(
+                        command.label,
+                        UiAction::Invoke {
+                            command: action.command,
+                        },
+                    );
+                    if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    }
+                    button.upcast()
                 };
                 widget.set_widget_name(&format!("tool-action-{:?}", action.command));
                 self.root.append(&widget);

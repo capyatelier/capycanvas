@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve, extname, sep } from 'node:path';
 import { once } from 'node:events';
 import assert from 'node:assert/strict';
-const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light'] = process.argv.slice(2);
+const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light', scenario='initial'] = process.argv.slice(2);
 const width = Number(widthArg), height = Number(heightArg), scale = Number(scaleArg);
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
+assert(['initial', 'layer-added'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -67,18 +68,33 @@ try {
   const captures = [];
   for (const selectedTheme of [theme]) {
     await evaluate(`layerApp.dispatch({type:'system_theme_changed',theme:'${selectedTheme}'}); layerApp.dispatch({type:'invoke',command:'fit_canvas'});`);
-    await evaluate(`document.fonts.ready.then(()=>Promise.all([...document.images].map(i=>i.decode()))).then(()=>new Promise(resolve=>setTimeout(resolve,500)))`);
+    if (scenario === 'layer-added') await evaluate(`layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});`);
+    await evaluate(`document.fonts.ready.then(()=>Promise.all([...document.images].map(i=>i.decode())))`);
+    // GPU attachment precedes staged compilation and thumbnail readback. A
+    // fixed delay can capture empty previews and produce a misleading diff.
+    await evaluate(`new Promise((resolve,reject)=>{
+      const start=performance.now();
+      function check(){
+        const previews=[...document.querySelectorAll('.layer-thumbnail canvas')].filter(c=>{
+          const r=c.getBoundingClientRect(); return r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight;
+        });
+        const ready=previews.every(c=>c.getContext('2d').getImageData(0,0,c.width,c.height).data.every((v,i)=>i%4!==3||v===255));
+        if(layerApp.startupTimes.complete!==null&&ready) requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)));
+        else if(performance.now()-start>25000) reject(new Error('Staged GPU startup or visible thumbnails did not settle'));
+        else setTimeout(check,100);
+      } check();
+    })`);
     const shot = await call('Page.captureScreenshot', {format:'png', fromSurface:true});
     const png = Buffer.from(shot.data, 'base64');
     assert.equal(png.readUInt32BE(16), Math.round(width * scale)); assert.equal(png.readUInt32BE(20), Math.round(height * scale));
-    const file = `${output}/web-${theme}-${width}x${height}@${scale}x.png`;
+    const file = `${output}/web-${theme}-${width}x${height}@${scale}x${scenario==='initial'?'':'-'+scenario}.png`;
     await writeFile(file,png); captures.push(file);
   }
   const metrics = await evaluate(`(async()=>{const a=await navigator.gpu.requestAdapter();return {width:innerWidth,height:innerHeight,scale:devicePixelRatio,gpu:document.body.dataset.gpu,adapter:{vendor:a.info.vendor,architecture:a.info.architecture,isFallbackAdapter:a.info.isFallbackAdapter},canvas:[layerApp.canvas.width,layerApp.canvas.height]};})()`);
   assert.equal(metrics.adapter.isFallbackAdapter,false);
   assert.deepEqual(errors,[]);
-  await writeFile(`${output}/chrome-capture.json`,JSON.stringify({metrics,captures,errors},null,2));
-  console.log(JSON.stringify({metrics,captures,errors},null,2));
+  await writeFile(`${output}/chrome-capture.json`,JSON.stringify({scenario,metrics,captures,errors},null,2));
+  console.log(JSON.stringify({scenario,metrics,captures,errors},null,2));
 } finally {
   const exited = once(chrome,'exit');
   chrome.kill(); await exited;
