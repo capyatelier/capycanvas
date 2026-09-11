@@ -133,11 +133,6 @@ impl SystemStatus {
                 let _ = cr.fill();
                 let _ = cr.restore();
                 color(track);
-                cr.new_sub_path();
-                cr.arc(24., 5., 1., std::f64::consts::PI, 2. * std::f64::consts::PI);
-                cr.arc(24., 9., 1., 0., std::f64::consts::PI);
-                cr.close_path();
-                let _ = cr.fill();
                 if battery.charging {
                     cr.move_to(23., 2.);
                     cr.line_to(18.5, 8.);
@@ -152,6 +147,12 @@ impl SystemStatus {
                     cr.set_miter_limit(4.);
                     let _ = cr.stroke_preserve();
                     color(ink);
+                    let _ = cr.fill();
+                } else {
+                    cr.new_sub_path();
+                    cr.arc(24., 5., 1., std::f64::consts::PI, 2. * std::f64::consts::PI);
+                    cr.arc(24., 9., 1., 0., std::f64::consts::PI);
+                    cr.close_path();
                     let _ = cr.fill();
                 }
                 let _ = cr.restore();
