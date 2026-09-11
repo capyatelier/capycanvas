@@ -825,6 +825,7 @@ dependencies = [
  "jni",
  "layer-core",
  "layer-engine",
+ "layer-host",
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
@@ -832,6 +833,21 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "serde",
+ "serde_json",
+ "wgpu",
+]
+
+[[package]]
+name = "layer-apple"
+version = "0.1.0"
+dependencies = [
+ "layer-core",
+ "layer-engine",
+ "layer-host",
+ "layer-render",
+ "layer-render-wgpu",
+ "layer-ui",
+ "pollster",
  "serde_json",
  "wgpu",
 ]
@@ -870,6 +886,20 @@ dependencies = [
  "layer-engine",
  "layer-render",
  "layer-render-wgpu",
+]
+
+[[package]]
+name = "layer-host"
+version = "0.1.0"
+dependencies = [
+ "layer-core",
+ "layer-engine",
+ "layer-render",
+ "layer-render-wgpu",
+ "layer-ui",
+ "serde",
+ "serde_json",
+ "wgpu",
 ]
 
 [[package]]

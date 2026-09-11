@@ -2,7 +2,5 @@
 //! actions use Serde, while pointer history crosses JNI as packed numeric data.
 #[cfg(target_os = "android")]
 mod android;
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 mod app;
-#[cfg(any(target_os = "android", test))]
-mod renderer;
