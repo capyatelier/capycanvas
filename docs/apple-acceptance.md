@@ -961,3 +961,14 @@ geometry. All 259 UI/host/Apple bridge regression checks pass (217/12/30), along
 with both integrated signed Apple builds and WebAssembly. The complete visual
 reports above remain separate from functional and performance acceptance.
 The integrated physical iPad build installs and launches successfully.
+
+The subsequent shared explicit filter-storage correction and independent v4
+reference are also integrated. On Metal, 111 renderer checks pass and the strict
+filter reference fails; 17 hardware benchmarks remain separately ignored. Both
+independent color checks pass, including six alpha levels. The reference now
+differs above one byte in 3,274 sampled pixels across 70 of 160 cases, with a
+maximum error of 47. Full backend parity remains open; see the detailed
+[filter investigation](runtime-filters.md). Both signed Apple builds and the
+WebAssembly build pass after this renderer change, and the integrated physical
+iPad app installs and launches. The configuration screenshots above contain
+blank artwork and establish no filter-output acceptance or performance claim.

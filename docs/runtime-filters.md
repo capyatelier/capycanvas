@@ -386,8 +386,19 @@ This does **not** solve complete cross-backend parity. With explicit rounding,
 hardware Vulkan and Mesa software Vulkan still differ above one byte in 23,114
 sampled channels (maximum 188); their unfiltered exports differ by at most one.
 Spatial sampling, intermediate composition and numerical filter math need
-further isolation. Metal and browser WebGPU have not run v4. Do not treat the
-passing scalar or same-backend migration checks as complete backend acceptance.
+further isolation. Browser WebGPU has not run v4. Do not treat the passing
+scalar or same-backend migration checks as complete backend acceptance.
+
+The integrated Metal suite executes 112 checks: 111 pass and the strict v4
+reference fails; 17 hardware benchmarks remain separately ignored. Both scalar
+color checks pass, including all six tone-ramp alpha levels. The full sheet has
+3,461 channels above one byte across 3,274 sampled pixels and 70 of 160 cases,
+with maximum channel error 47. This is substantially narrower than the v3
+discrepancy, but remains a failing gate with every channel and the one-byte
+tolerance intact. Pixel Mosaic accounts for 838 failing pixels across its two
+unmasked scopes; Ripple supplies the maximum error. These counts identify
+useful isolation cases, not a conclusion about their cause. The complete Metal
+sheet was visually inspected and the full per-case report retained locally.
 
 The hardware performance comparison uses the same release test and 2048×1536
 artwork, 64 warmup plus 256 measured edits, in three alternating implicit/rounded
