@@ -1657,7 +1657,7 @@ impl Workspace {
                         }
                         if active {
                             if this.gpu.borrow().as_ref().is_some_and(|g| {
-                                g.session.engine().backend().clock.period() != period
+                                !g.session.engine().backend().clock.aligned(next, period)
                             }) {
                                 this.ticking.set(false);
                                 this.wake();

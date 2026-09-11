@@ -15,7 +15,7 @@ for (const path of process.argv.slice(2)) {
     const bytes = readFileSync(path);
     const json = JSON.parse(path.endsWith('.gz') ? gunzipSync(bytes) : bytes);
     for (const r of Array.isArray(json) ? json : [json]) {
-        const name = r.events ? 'NativePan' : r.brush;
+        const name = (r.events ? 'NativePan' : r.brush) + (r.gpu_timestamps === false ? ' (no GPU queries)' : '');
         if (!groups.has(name)) groups.set(name, {runs: [], samples: {}});
         const group = groups.get(name);
         const add = (key, samples) => (group.samples[key] ??= []).push(...samples);
@@ -25,6 +25,10 @@ for (const path of process.argv.slice(2)) {
         add('worker_cpu_ms', r.worker_cpu.map(v => v[3]));
         for (const [i, phase] of ['compose', 'encode', 'submit', 'feedback', 'present'].entries())
             add(`worker_${phase}_ms`, (r.worker_cpu_stages ?? []).map(v => v[i + 1]));
+        const threadCpu = r.worker_thread_cpu ?? [];
+        add('worker_thread_cpu_ms', threadCpu.map(v => v.slice(1).reduce((a, b) => a + b, 0)));
+        for (const [i, phase] of ['acquire', 'compose', 'encode', 'submit', 'feedback', 'present'].entries())
+            add(`worker_${phase}_thread_cpu_ms`, threadCpu.map(v => v[i + 1]));
         const pan = r.events?.filter(e => e[2] === 1);
         const active = !pan || !pan.length ? () => true : t => t >= pan[0][0] && t <= pan.at(-1)[0];
         // Exclude setup/focus movements and genuinely idle time from pan FPS.

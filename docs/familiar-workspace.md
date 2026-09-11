@@ -1905,3 +1905,89 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - The full Vulkan renderer suite now passes 110 tests with zero failures and
   zero exclusions; 17 hardware benchmarks remain separately ignored. Strict
   renderer Clippy passes. The replacement sheet was visually inspected.
+
+### Active presentation phase and driver-stall investigation
+
+- The test-only timing report now separates elapsed stage times from actual
+  worker-thread CPU time (`CLOCK_THREAD_CPUTIME_ID`). Acquire, composition,
+  encoding, submission, feedback and presentation can be correlated by frame
+  ID. These counters, their storage and GPU queries are absent from application
+  builds. `LAYER_PACING_GPU_TIMESTAMPS=0` additionally removes query submissions
+  from the native pacing test; the summarizer keeps these runs separate.
+- The recurring early stall is reproducible without GPU timestamp queries:
+  one unprofiled panning run spent 22.844ms in submission (4.671ms thread CPU),
+  with a 28.504ms presentation gap. Earlier queried runs placed the corresponding
+  event in presentation instead. Native syscall stacks identify memory cleanup
+  inside the NVIDIA Vulkan queue submit/present calls, not GTK rendering or an
+  application destructor. The observed calls are unmap-DMA, unmap-memory and
+  free in NVIDIA's [published ioctl definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/src/nvidia/arch/nvalloc/unix/include/nv_escape.h).
+  Context-switch evidence also records blocking, not just preemption. This
+  identifies the executing path, not which allocations originally triggered
+  driver retirement or a proven driver workaround. The stall is **not fixed**.
+  Profiler/tracer overhead is excluded from the benchmark numbers. Tools were
+  extracted only into temporary storage; raw traces and machine details are
+  not repository artifacts.
+- The broader sweep exposed a separate, actionable pacing problem. Transforming
+  accumulated wet artwork with the ordinary numeric controls updating delivered
+  only 104.35Hz, despite CPU/GPU p99 spans of 2.567/5.368ms. Even the simple
+  rectangle case delivered 114.84Hz with controls, versus 119.96Hz with the side
+  controls hidden. Passing an isolated shader budget did not prove a smooth
+  composited application.
+- A running timer previously noticed changes in refresh **rate**, but not a
+  newly available/corrected presentation **phase**. It now realigns against
+  updated compositor feedback while input remains active. Circular phase error
+  avoids a wraparound mismatch; changes below 1/16 refresh are ignored to avoid
+  rearming for small feedback jitter. Tests cover idle, initial unknown phase,
+  rate changes, phase shifts during activity and both directions of jitter.
+- Phase correction alone did not leave enough room for the wet transform plus
+  native controls. The Wayland deadline now reserves three quarters of a
+  refresh instead of half for canvas, GTK and compositor work together. At
+  120Hz this adds 2.083ms of lead time, not a frame of queued history. No view
+  update throttling, input dropping, extra canvas allocation, GPU readback or
+  additional renderer thread was introduced. Experimental deadline overrides
+  were removed. The clock arithmetic adds only atomic reads on the main thread.
+- Serial six-second full-workspace runs, 384px brushes; later workloads retain
+  earlier artwork. Before/after refer to the same seven-workload sweep, with
+  real child-surface presentation feedback and no simultaneous build/profiler:
+
+  | Workload | Before Hz | After Hz | After CPU median/p95/p99 ms | After GPU span median/p95/p99 ms |
+  | --- | ---: | ---: | --- | --- |
+  | G-Pen | 119.956 | 120.008 | .361/.630/.873 | .163/.410/2.249 |
+  | Natural Blender | 119.789 | 119.797 | .733/1.291/1.608 | .718/1.535/3.310 |
+  | Wet Round | 119.790 | 120.003 | .629/1.218/1.721 | .518/1.220/1.907 |
+  | Watercolor | 119.904 | 120.006 | 1.300/2.534/3.172 | 1.536/4.135/4.985 |
+  | Pan | 120.012 | 119.864 | .209/.491/.710 | .104/1.275/2.281 |
+  | Hand | 120.009 | 119.824 | .284/.540/.762 | .093/.312/1.935 |
+  | Transform accumulated artwork | 104.347 | 119.507 | 1.664/2.357/2.773 | 1.937/2.709/3.304 |
+
+  Transform discards fell from 93 to four. Other workloads discarded zero or
+  one presentation each. Median enqueue-to-presentation after the change was
+  5.375–5.656ms, with p99 6.173–8.877ms; the transform maximum was 11.263ms.
+  This is a measured latency/headroom tradeoff, not a free speedup or a guarantee
+  for every frame. Synthetic input is not a physical stylus measurement, and
+  device timestamp spans include queue bubbles, not only shader execution.
+  CPU/GPU tails were higher for several brushes in this repeat; they are
+  reported, not dismissed as free. No shader or raster algorithm changed.
+- A timestamp-free repeat delivered 119.73–120.01Hz for brushes/navigation,
+  and 118.67Hz for transforms (10 discarded presentations). A two-thirds lead
+  candidate had reached 119.84Hz with queries, but only 117.67Hz without them.
+  The retained change improves composited transforms substantially without
+  throttling controls, but does **not** establish a no-missed-frame guarantee.
+  Remaining performance work includes the driver-retirement trigger and the
+  residual transform presentation misses; watercolor selection-edge behavior
+  and final human GTK review remain separate goal gates.
+- Post-merge validation with the shared estimated-input correction work passes
+  all 306 core/engine/UI/host tests and strict GTK/UI/host Clippy. The release
+  application and test executable build. The native default-workspace workflow
+  passes again, including fresh dark/light and compact captures; the default
+  dark capture was visually inspected. The timer arithmetic regression passes.
+  A new timestamp-free seven-workload sweep delivers 119.80–120.01Hz for brushes
+  and navigation, and 118.50Hz for transforms (10 discarded presentations).
+  Transform worker elapsed median/p95/p99 is 1.649/2.286/2.618ms; GTK dispatch
+  p99 is 1.203ms. Pan has zero discarded presentations, 0.570ms worker p99,
+  0.078ms input-handler p99 and 0.070ms GTK-dispatch p99. These are synthetic
+  input runs with actual presentation feedback, not physical-input acceptance.
+  The incoming Apple report separately confirms that the sRGB import oracle
+  passes on Metal but the v3 filter-output reference fails (maximum channel
+  error 255); see [Apple acceptance](apple-acceptance.md). That cross-backend
+  failure is not waived by the passing Vulkan or GTK checks.
