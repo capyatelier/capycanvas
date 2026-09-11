@@ -1991,3 +1991,34 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   passes on Metal but the v3 filter-output reference fails (maximum channel
   error 255); see [Apple acceptance](apple-acceptance.md). That cross-backend
   failure is not waived by the passing Vulkan or GTK checks.
+
+### Filter storage correction after integration
+
+- The collaborator's independent Curves/Exposure and Halftone color tests fail
+  on the hardware Vulkan host, isolating a real reliance on implementation-
+  defined UNORM conversion. Explicit nearest rounding at each physical filter
+  output fixes them, including six alpha levels. The shared wrapper covers
+  previews, multipass and fused output without quantizing between fused filters
+  or adding passes/resources/preparation work. No ordinary brush shader changes.
+- The pre-migration renderer with the same import and rounding contracts supplies
+  a new v4 reference. Only four of 1,966,080 current/reference channels differ,
+  each by one byte; no tolerance is relaxed. The old v3 PNG is recoverable in Git.
+  See [provenance](../crates/layer-render-wgpu/tests/fixtures/README.md).
+- Three paired benchmark repeats show approximately 0.014ms (2.6%) extra GPU
+  time for a full-image five-filter edit, with effectively unchanged small-region
+  painting. GPU p99 stays under 0.681ms; CPU tails vary in both directions and
+  are reported in [the full comparison](runtime-filters.md#explicit-filter-storage-conversion).
+  This is not a zero-cost or complete presentation-latency claim.
+- The scalar tests also pass on software Vulkan. Full-image differences across
+  backends remain after rounding and require further investigation; Metal and
+  browser WebGPU have not run v4. This milestone does not declare that gate done.
+- The final complete hardware Vulkan suite passes 112 tests with no failures
+  or exclusions (17 benchmarks separately ignored), including the v4 reference.
+  The reference sheet was visually inspected; the expanded software alpha
+  oracles also pass. No raw machine profiles or third-party images are included.
+- Strict renderer/GTK Clippy, WebAssembly checking and the GTK release rebuild
+  pass. Native runtime package loading (all forty plus Tent Blur) and the full
+  forty-filter picker/property workflow pass; the fresh Curves control capture
+  was visually inspected. These checks preserve the separate remaining gates:
+  watercolor selection-edge appearance, residual presentation stalls/misses,
+  broader backend numerical parity and final human GTK review.
