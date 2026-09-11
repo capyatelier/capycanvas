@@ -348,6 +348,10 @@ pub enum CustomizationAction {
         panel: Panel,
         group: u32,
     },
+    RestoreBuiltinToolbar {
+        panel: Panel,
+        group: Option<u32>,
+    },
     SetTileStyle {
         panel: Panel,
         style: TileStyle,
@@ -644,7 +648,8 @@ impl DockLayout {
         group: Option<u32>,
         platform: Platform,
     ) -> Vec<ContextMenuItem> {
-        self.panels
+        let mut items: Vec<_> = self
+            .panels
             .iter()
             .filter(|p| p.id.kind() == kind && p.id.available_on(platform))
             .map(|p| {
@@ -669,7 +674,21 @@ impl DockLayout {
                     });
                 item
             })
-            .collect()
+            .collect();
+        if kind == PanelKind::Tiles {
+            items.extend(
+                [Panel::Toolbar, Panel::Commands]
+                    .into_iter()
+                    .filter(|p| p.available_on(platform) && self.panel(*p).is_err())
+                    .map(|panel| {
+                        ContextMenuItem::edit(
+                            format!("Restore {} toolbar", panel.label()),
+                            CustomizationAction::RestoreBuiltinToolbar { panel, group },
+                        )
+                    }),
+            );
+        }
+        items
     }
     pub fn toolbar_options(&self, panel: Panel) -> Result<Vec<Vec<ContextMenuItem>>, String> {
         let p = self.panel(panel)?;
@@ -788,7 +807,7 @@ impl DockLayout {
         }
         Ok(())
     }
-    fn unused_toolbar_name(&self, stem: &str) -> String {
+    pub(crate) fn unused_toolbar_name(&self, stem: &str) -> String {
         if self.validate_toolbar_name(stem).is_ok() {
             return stem.into();
         }
@@ -1364,6 +1383,7 @@ impl CustomizationState {
             visible: true,
         }
         | AddPanel { panel, .. }
+        | RestoreBuiltinToolbar { panel, .. }
         | ShowAllControls { panel } = &action
             && !panel.available_on(platform)
         {
@@ -1411,6 +1431,10 @@ impl CustomizationState {
             }
             AddPanel { panel, group } => {
                 layout.add_panel_to_group(panel, group)?;
+                changed |= regions::LAYOUT;
+            }
+            RestoreBuiltinToolbar { panel, group } => {
+                layout.restore_builtin_toolbar(panel, group)?;
                 changed |= regions::LAYOUT;
             }
             SetTileStyle { panel, style } => {
