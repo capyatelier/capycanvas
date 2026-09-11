@@ -1447,3 +1447,10 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   unsaved-work/cancellation handling, the eight menus and command ribbon, final
   default layout, region refinements, historical filter-reference reconciliation,
   and the integrated GTK approval gate. The full goal remains active.
+
+- Post-merge check: incoming native Apple color controls are integrated. Shared
+  UI now passes 208 tests; core/engine pass 39/31, native host passes eight, and
+  the Apple Rust bridge passes eleven tests serially with Vulkan access on Linux.
+  The sandbox run cannot supply the hardware adapter required by its GPU cases;
+  this is not macOS/iOS device validation. Workspace/Wasm checks and strict
+  UI/GTK Clippy pass. Concurrent Android workspace changes are separate work.
