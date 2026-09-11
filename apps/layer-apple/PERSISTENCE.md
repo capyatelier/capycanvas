@@ -7,6 +7,11 @@ Both apps expose New, Open, Save and Save As using the shared editable
 window close with the shared unsaved-change decision; macOS also protects app
 termination. Both also maintain private recovery copies of unsaved artwork.
 
+**File → New Window** opens another editor on both platforms. Each scene owns
+its document, camera and Undo history. Closing one scene leaves the other scenes
+open. The command is also available through shortcut and toolbar customization;
+an iPad environment without multiple-window support reports that limitation.
+
 ## Artwork files
 
 The shared Rust document request flow owns busy state, save checkpoints and
@@ -114,8 +119,8 @@ default, so another window's changes cannot alter its future restore.
 Settings commits propagate to the process's other owners. Pending local writes
 defer incoming notifications; owners converge to the newest successful commit.
 A failed local save retains the accepted in-memory edit and offers Retry Save.
-Workspaces remain independent after their initial copy. Native multi-scene
-lifecycle acceptance, including iPad window-management support, remains open.
+Workspaces remain independent after their initial copy. Full native multi-scene
+lifecycle acceptance, including physical iPad window management, remains open.
 
 Rust's durable workspace view excludes in-flight layout gestures, measurements
 and scroll allocations. The native host emits it only when committed topology
@@ -146,8 +151,15 @@ bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/recovery.swift
 cargo test -p layer-apple project_ --lib
+cargo test -p layer-apple ui_actions_change_only_the_addressed_apple_session
 cargo test -p layer-host workspace_persistence --lib
 ```
+
+The focused `testIndependentEditorWindows` UI check is shared by both Xcode test
+targets. It activates ordinary in-app New Window and Close toolbar commands,
+checks independent layers and Undo in two scenes, closes the second scene and
+continues editing the first. Test applications use isolated persistence and
+register termination at teardown, including when an assertion fails.
 
 The project-file checks use the actual Swift owner, coordinator and Metal C ABI
 with injected location choices. They cover both Mac destination-first saves and

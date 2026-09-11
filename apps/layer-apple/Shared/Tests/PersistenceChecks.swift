@@ -1,12 +1,19 @@
 import XCTest
 
-@MainActor func editorTestApplication() -> XCUIApplication {
-    let app = XCUIApplication()
-    app.launchEnvironment["CAPY_DISABLE_PERSISTENCE"] = "1"
-    return app
-}
-
 extension XCTestCase {
+    @MainActor func editorTestApplication() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["CAPY_DISABLE_PERSISTENCE"] = "1"
+        // Clean up the app even when an assertion interrupts the workflow.
+        // Each test owns this application; unrelated app instances stay open.
+        addTeardownBlock {
+            await MainActor.run {
+                if app.state != .notRunning { app.terminate() }
+            }
+        }
+        return app
+    }
+
     @MainActor func checkSettingsAndWorkspaceRestart(in app: XCUIApplication) {
         app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
         app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString

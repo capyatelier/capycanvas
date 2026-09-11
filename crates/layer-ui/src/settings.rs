@@ -21,7 +21,8 @@ impl Platform {
         matches!(self, Self::Mac | Self::Ios)
     }
     pub fn native_windows(self) -> bool {
-        matches!(self, Self::Gtk | Self::Windows | Self::Mac)
+        // The iOS host is an iPad app with independent native editor scenes.
+        matches!(self, Self::Gtk | Self::Windows | Self::Mac | Self::Ios)
     }
 }
 
