@@ -7,9 +7,11 @@ members = [
     "crates/layer-ffi",
     "crates/layer-bench",
     "crates/layer-ui",
+    "crates/layer-host",
     "apps/layer-linux",
     "apps/layer-web",
     "apps/layer-android/native",
+    "apps/layer-apple/native",
 ]
 resolver = "2"
 

@@ -65,8 +65,8 @@ impl App {
             })
         }
         .map_err(error)?;
-        let [width, height] = self.session.state().camera.viewport;
-        if self.session.engine().backend().0.is_none() {
+        let [width, height] = self.host.session.state().camera.viewport;
+        if self.host.session.engine().backend().0.is_none() {
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                     compatible_surface: Some(&surface),
@@ -85,7 +85,7 @@ impl App {
                     ..Default::default()
                 }))
                 .map_err(error)?;
-            self.session.renderer_mut().0 = Some(
+            self.host.session.renderer_mut().0 = Some(
                 WgpuRasterizer::from_wgpu_staged_cached(
                     adapter,
                     device,
@@ -95,7 +95,7 @@ impl App {
                 .map_err(error)?,
             );
         }
-        let gpu = self.session.renderer_mut().0.as_ref().unwrap();
+        let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let mut config = surface
             .get_default_config(gpu.adapter(), width, height)
             .ok_or("The Vulkan device cannot present to this surface")?;
@@ -123,23 +123,24 @@ impl App {
             _instance: instance,
             _window: window,
         });
-        self.error = None;
-        self.dirty = true;
+        self.host.error = None;
+        self.host.dirty = true;
         Ok(())
     }
     fn render(&mut self, now: u64, presentation: u64) -> Result<bool, String> {
         self.frame_cost = [0; 5];
-        if (!self.dirty && self.startup.complete) || self.surface.is_none() {
+        if (!self.host.dirty && self.host.startup.complete) || self.surface.is_none() {
             return Ok(false);
         }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
         if self.blank_presented {
-            let engine = self.session.engine();
+            let engine = self.host.session.engine();
             let gpu = engine.backend().0.as_ref().unwrap();
             if gpu.startup_needs_update(engine.document(), engine.brush()) {
                 let (document, brush) = (engine.document().clone(), engine.brush().clone());
-                self.session
+                self.host
+                    .session
                     .renderer_mut()
                     .0
                     .as_mut()
@@ -147,7 +148,8 @@ impl App {
                     .prepare_startup(&document, &brush)
                     .map_err(error)?;
             }
-            self.startup = self
+            self.host.startup = self
+                .host
                 .session
                 .renderer_mut()
                 .0
@@ -155,17 +157,17 @@ impl App {
                 .unwrap()
                 .poll_startup()
                 .map_err(error)?;
-            if self.startup.canvas_ready {
-                let previous = self.session.state().revision;
-                let change = self.session.frame(now, presentation)?;
-                self.dirty = change.canvas_wake;
-                self.apply_change(previous, change);
+            if self.host.startup.canvas_ready {
+                let previous = self.host.session.state().revision;
+                let change = self.host.session.frame(now, presentation)?;
+                self.host.dirty = change.canvas_wake;
+                self.host.apply_change(previous, change);
             }
         } else {
             // Submit paper immediately without consuming the engine's pending
             // document replay. The first real frame retains its reset/history.
-            let view = self.session.state().camera.view();
-            let document = self.session.engine().document();
+            let view = self.host.session.state().camera.view();
+            let document = self.host.session.engine().document();
             let extent = [document.width, document.height];
             let layers: Vec<_> = document
                 .layers
@@ -173,7 +175,8 @@ impl App {
                 .filter(|l| l.kind == layer_core::LayerKind::Background)
                 .cloned()
                 .collect();
-            self.session
+            self.host
+                .session
                 .renderer_mut()
                 .0
                 .as_mut()
@@ -190,14 +193,18 @@ impl App {
                 })
                 .map_err(error)?;
         }
-        self.dirty |= !self.startup.complete;
-        let view = self.session.state().camera.view();
-        let surround = self.session.state().palette.surround_linear;
-        let scale = self.session.state().camera.viewport[0] as f32 / self.logical[0];
-        self.session.update_canvas_cursor(&mut self.cursor, false);
-        self.session.append_layer_overlay(&mut self.cursor.segments);
+        self.host.dirty |= !self.host.startup.complete;
+        let view = self.host.session.state().camera.view();
+        let surround = self.host.session.state().palette.surround_linear;
+        let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];
+        self.host
+            .session
+            .update_canvas_cursor(&mut self.cursor, false);
+        self.host
+            .session
+            .append_layer_overlay(&mut self.cursor.segments);
         let surface = self.surface.as_mut().unwrap();
-        let gpu = self.session.renderer_mut().0.as_ref().unwrap();
+        let gpu = self.host.session.renderer_mut().0.as_ref().unwrap();
         let extent = [view.width_px, view.height_px];
         if extent != [surface.config.width, surface.config.height] {
             surface.config.width = extent[0];
@@ -210,11 +217,11 @@ impl App {
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.surface.configure(gpu.device(), &surface.config);
-                self.dirty = true;
+                self.host.dirty = true;
                 return Ok(true);
             }
             wgpu::CurrentSurfaceTexture::Timeout => {
-                self.dirty = true;
+                self.host.dirty = true;
                 return Ok(true);
             }
             wgpu::CurrentSurfaceTexture::Occluded => return Ok(false),
@@ -238,7 +245,7 @@ impl App {
         self.frame_cost[3] = elapsed() - self.frame_cost[..3].iter().sum::<i64>();
         gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         self.frame_cost[4] = elapsed() - self.frame_cost[..4].iter().sum::<i64>();
-        Ok(self.dirty)
+        Ok(self.host.dirty)
     }
 }
 
@@ -319,7 +326,7 @@ pub extern "system" fn Java_art_capycanvas_Native_attach(
     let result = read(&mut env, &cache_directory)
         .and_then(|directory| app.attach(&env, surface, &directory));
     if let Err(e) = &result {
-        app.error = Some(e.clone());
+        app.host.error = Some(e.clone());
     }
     fail(&mut env, result);
 }
@@ -329,7 +336,7 @@ pub extern "system" fn Java_art_capycanvas_Native_finishStartupCache(
     _: JClass,
     handle: jlong,
 ) {
-    if let Some(gpu) = &mut unsafe { app(handle) }.session.renderer_mut().0 {
+    if let Some(gpu) = &mut unsafe { app(handle) }.host.session.renderer_mut().0 {
         gpu.finish_startup_cache();
     }
 }
@@ -340,7 +347,10 @@ pub extern "system" fn Java_art_capycanvas_Native_detach(
     handle: jlong,
 ) {
     let app = unsafe { app(handle) };
-    fail(&mut env, app.input(layer_ui::UiInput::Blur).map(|_| ()));
+    fail(
+        &mut env,
+        app.host.input(layer_ui::UiInput::Blur).map(|_| ()),
+    );
     app.surface = None;
 }
 #[unsafe(no_mangle)]
@@ -354,7 +364,9 @@ pub extern "system" fn Java_art_capycanvas_Native_resize(
 ) {
     fail(
         &mut env,
-        unsafe { app(handle) }.resize(width.max(0) as u32, height.max(0) as u32, density),
+        unsafe { app(handle) }
+            .host
+            .resize(width.max(0) as u32, height.max(0) as u32, density),
     );
 }
 #[unsafe(no_mangle)]
@@ -370,13 +382,14 @@ pub extern "system" fn Java_art_capycanvas_Native_scroll(
     horizontal: jboolean,
 ) {
     let app = unsafe { app(handle) };
-    let dpi = app.session.state().camera.viewport[0] as f32 / app.logical[0];
-    let previous = app.session.state().revision;
+    let dpi = app.host.session.state().camera.viewport[0] as f32 / app.host.logical[0];
+    let previous = app.host.session.state().revision;
     let result = app
+        .host
         .session
         .scroll([x, y], [dx, dy], dpi, zoom != 0, horizontal != 0)
         .map(|change| {
-            app.apply_change(previous, change);
+            app.host.apply_change(previous, change);
         });
     fail(&mut env, result);
 }
@@ -389,7 +402,7 @@ pub extern "system" fn Java_art_capycanvas_Native_dispatch(
 ) {
     let result = read(&mut env, &action)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|action| unsafe { app(handle) }.dispatch(action));
+        .and_then(|action| unsafe { app(handle) }.host.dispatch(action));
     fail(&mut env, result);
 }
 #[unsafe(no_mangle)]
@@ -401,7 +414,7 @@ pub extern "system" fn Java_art_capycanvas_Native_input(
 ) -> jstring {
     let result = read(&mut env, &input)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|input| unsafe { app(handle) }.input(input))
+        .and_then(|input| unsafe { app(handle) }.host.input(input))
         .and_then(|reply| serde_json::to_string(&reply).map_err(error));
     string(&mut env, result)
 }
@@ -431,7 +444,7 @@ pub extern "system" fn Java_art_capycanvas_Native_pointer(
             .get_double_array_region(&records, 0, &mut data)
             .map_err(error)
             .and_then(|()| {
-                app.pointer(
+                app.host.pointer(
                     id.max(0) as u64,
                     tool as u8,
                     button as u8,
@@ -456,7 +469,7 @@ pub extern "system" fn Java_art_capycanvas_Native_frame(
     match app.render(now.max(0) as u64, presentation.max(now).max(0) as u64) {
         Ok(wake) => wake as jboolean,
         Err(e) => {
-            app.error = Some(e.clone());
+            app.host.error = Some(e.clone());
             fail(&mut env, Err(e));
             0
         }
@@ -468,7 +481,7 @@ pub extern "system" fn Java_art_capycanvas_Native_snapshot(
     _: JClass,
     handle: jlong,
 ) -> jstring {
-    match unsafe { app(handle) }.take_snapshot() {
+    match unsafe { app(handle) }.host.take_snapshot() {
         Some(snapshot) => string(&mut env, Ok(snapshot.to_string())),
         None => std::ptr::null_mut(),
     }
@@ -482,7 +495,7 @@ pub extern "system" fn Java_art_capycanvas_Native_query(
 ) -> jstring {
     let result = read(&mut env, &query)
         .and_then(|s| serde_json::from_str(&s).map_err(error))
-        .and_then(|query| unsafe { app(handle) }.query(query))
+        .and_then(|query| unsafe { app(handle) }.host.query(query))
         .map(|v| v.to_string());
     string(&mut env, result)
 }
@@ -495,7 +508,7 @@ pub extern "system" fn Java_art_capycanvas_Native_takeFilterPreviews(
     handle: jlong,
 ) -> jni::sys::jobjectArray {
     let result = (|| {
-        let renderer = unsafe { app(handle) }.session.renderer_mut();
+        let renderer = unsafe { app(handle) }.host.session.renderer_mut();
         if let Some(gpu) = &renderer.0 {
             gpu.device().poll(wgpu::PollType::Poll).map_err(error)?;
         }
@@ -540,7 +553,7 @@ pub extern "system" fn Java_art_capycanvas_Native_importLayer(
         let name = read(&mut env, &name)?;
         let bytes = env.convert_byte_array(&rgba).map_err(error)?;
         let app = unsafe { app(handle) };
-        app.session.import_layer_image(
+        app.host.session.import_layer_image(
             &name,
             layer_render::HostImage {
                 width: width as u32,
@@ -550,7 +563,7 @@ pub extern "system" fn Java_art_capycanvas_Native_importLayer(
                 bytes: &bytes,
             },
         )?;
-        app.dirty = true;
+        app.host.dirty = true;
         Ok(())
     })();
     fail(&mut env, result);

@@ -43,3 +43,7 @@ Raw probe JSON, Chrome traces, script snapshots, exact build hashes, and numeric
 The broad editor smoke test fails at `Zen hover at 600,80`. A separate build of unchanged commit `40d9096` reproduces that same failure, so it predates this startup change; the focused startup/input/filter checks above pass.
 
 The prior Android staged-startup and bounded native pipeline-cache work is a dependency of this milestone. Its physical-device results are recorded in `artifacts/android/cached-startup-validation.md`; this web change does not add web disk caching.
+
+## Concurrent native-host integration
+
+Merged the published NativeHost/Apple bridge foundation after the startup milestone. Android retains staged readiness, early-contact suppression, first-paper presentation, and bounded cache completion through the extracted shared host. Eager hosts remain ready when their GPU is attached. Seven shared-host tests pass, Android ARM64 and WebAssembly checks pass, and the Apple bridge's host-independent code checks on Linux (Metal itself was not exercised here).

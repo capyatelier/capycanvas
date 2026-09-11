@@ -1,11 +1,11 @@
 [package]
-name = "layer-android"
+name = "layer-apple"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 layer-host = { path = "../../../crates/layer-host" }
@@ -14,13 +14,6 @@ layer-engine = { path = "../../../crates/layer-engine" }
 layer-render = { path = "../../../crates/layer-render" }
 layer-render-wgpu = { path = "../../../crates/layer-render-wgpu" }
 layer-ui = { path = "../../../crates/layer-ui" }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pollster = "0.4"
 wgpu = "30.0.1"
-
-[target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
-ndk-sys = "0.6"
-raw-window-handle = "0.6"
-
