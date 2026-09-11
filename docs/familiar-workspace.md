@@ -1991,3 +1991,87 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   passes on Metal but the v3 filter-output reference fails (maximum channel
   error 255); see [Apple acceptance](apple-acceptance.md). That cross-backend
   failure is not waived by the passing Vulkan or GTK checks.
+
+### Filter storage correction after integration
+
+- The collaborator's independent Curves/Exposure and Halftone color tests fail
+  on the hardware Vulkan host, isolating a real reliance on implementation-
+  defined UNORM conversion. Explicit nearest rounding at each physical filter
+  output fixes them, including six alpha levels. The shared wrapper covers
+  previews, multipass and fused output without quantizing between fused filters
+  or adding passes/resources/preparation work. No ordinary brush shader changes.
+- The pre-migration renderer with the same import and rounding contracts supplies
+  a new v4 reference. Only four of 1,966,080 current/reference channels differ,
+  each by one byte; no tolerance is relaxed. The old v3 PNG is recoverable in Git.
+  See [provenance](../crates/layer-render-wgpu/tests/fixtures/README.md).
+- Three paired benchmark repeats show approximately 0.014ms (2.6%) extra GPU
+  time for a full-image five-filter edit, with effectively unchanged small-region
+  painting. GPU p99 stays under 0.681ms; CPU tails vary in both directions and
+  are reported in [the full comparison](runtime-filters.md#explicit-filter-storage-conversion).
+  This is not a zero-cost or complete presentation-latency claim.
+- The scalar tests also pass on software Vulkan. Full-image differences across
+  backends remain after rounding and require further investigation; Metal and
+  browser WebGPU have not run v4. This milestone does not declare that gate done.
+- The final complete hardware Vulkan suite passes 112 tests with no failures
+  or exclusions (17 benchmarks separately ignored), including the v4 reference.
+  The reference sheet was visually inspected; the expanded software alpha
+  oracles also pass. No raw machine profiles or third-party images are included.
+- Strict renderer/GTK Clippy, WebAssembly checking and the GTK release rebuild
+  pass. Native runtime package loading (all forty plus Tent Blur) and the full
+  forty-filter picker/property workflow pass; the fresh Curves control capture
+  was visually inspected. These checks preserve the separate remaining gates:
+  watercolor selection-edge appearance, residual presentation stalls/misses,
+  broader backend numerical parity and final human GTK review.
+
+### Watercolor halo isolation
+
+- A new mixed-media regression reproduced a concrete edge error: putting an
+  opaque dry red mark beside blue watercolor changed a blue halo pixel from
+  `[0, 0, 255, 12]` to `[255, 0, 0, 33]`. The morphology used wetness correctly,
+  but its strongest-color search included unwetted pigment. Color candidates
+  now come only from occupied wet samples. The unused sampling argument is
+  removed; there are no new passes, channels, allocations or CPU pixel work.
+- Eight synthetic cases cover all four stencil directions inside a tile and
+  across tile boundaries. Every pixel outside the dry mark stays unchanged;
+  tight dirty-region updates equal full recomposition. The diagnostic sheet
+  was visually inspected: the first row contains blue watercolor alone, the
+  second adds the separate red marks. It deliberately uses a strong, wide edge
+  on tiny dabs to expose sampling errors, not as a representative brush preset.
+  Generated images remain ignored under `artifacts/brush-validation/wet-edge/`.
+- A separate GPU test verifies that a live layer mask clips both watercolor
+  pigment and the outside band without modifying the stored pigment or wetness.
+  Disabling or deleting that mask restores the exact original image. This
+  validates an explicit final-appearance mask, not automatic per-stroke halo
+  clipping to a past drawing selection.
+- [CSP distinguishes brush and whole-layer watercolor edges](https://support.clip-studio.com/en-us/faq/articles/20200061),
+  [describes an outside-stroke band](https://help.clip-studio.com/en-us/manual_en/810_subtools/W.htm),
+  and [supports masks created from selections](https://help.clip-studio.com/en-us/manual_en/180_layers/Layer_masks.htm).
+  These support the separate painting/effect/mask concepts; they do not prove
+  CSP's exact selection-clipping policy. No claim of that behavior is inferred.
+- Three serial, alternating before/after benchmark pairs use the existing
+  2048×1536 selected-brush workload: eight 384px dabs per update, forty warmup
+  updates and 120 measured updates. Each table cell is the median of three
+  per-run median/p95/p99 values, not a pooled distribution; units are ms.
+
+  | Watercolor workload | CPU before | CPU after | GPU before | GPU after | Completion before | Completion after |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | No selection | .366/.493/.752 | .362/.622/1.012 | .413/.416/.417 | .412/.414/.424 | .855/1.091/1.247 | .849/1.111/1.534 |
+  | Selection | .353/.365/.384 | .358/.538/.702 | .462/.475/.479 | .461/.462/.472 | .874/.959/.983 | .877/1.138/1.220 |
+
+  GPU medians are effectively unchanged. CPU and completion tails are higher
+  in these samples, despite no CPU scheduling change; the cause is not proven
+  and this is not a zero-cost claim. The largest post-change per-run completion
+  p99 is 1.823ms, below the 8.33ms budget. Explicit GPU-completion benchmarks do
+  not establish compositor or physical input latency.
+- The complete GPU suite passes 113 tests without exclusions (17 benchmark
+  tests separately ignored), followed by the additional live-mask test passing
+  independently. Remaining gates are still strict selection-edge appearance,
+  rare presentation stalls/residual transform misses, cross-backend filter
+  numerical parity and final GTK human review.
+- After merging the Apple UI/validation milestone, the release GTK application
+  rebuild and native selected-brush workflow pass (G-Pen, Wet Round, Watercolor,
+  selection inversion and undo/redo). Fresh dark/light captures were visually
+  inspected. Strict renderer/GTK Clippy and the WebAssembly check pass. The
+  incoming Metal report now tests v4: 111 tests pass and the strict reference
+  still fails, with maximum channel error 47; it is no longer an untested v4
+  backend. The detailed counts remain in [runtime filter validation](runtime-filters.md).

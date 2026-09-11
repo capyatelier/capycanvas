@@ -230,8 +230,8 @@ fn scalar_stored_srgb_byte(linear: f64) -> u8 {
     (scalar_srgb_encode(stored) * 255.).round() as u8
 }
 
-/// Opaque pointwise cases isolate filter math and eight-bit storage from
-/// spatial sampling, masks and partial-alpha composition in the full fixture.
+/// Pointwise ramps isolate filter math and premultiplied eight-bit storage
+/// from spatial sampling and masks in the full fixture.
 #[test]
 fn pointwise_tone_filters_match_scalar_color_oracles() {
     fn lookup(data: &[[f32; 4]], offset: usize, v: f64) -> f64 {
@@ -241,16 +241,18 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
             + f64::from(data[1 + offset + (i + 1).min(255)][0]) * x.fract()
     }
     let mut r = WgpuRasterizer::new_headless().unwrap();
-    let extent = [256, 1];
+    let alphas = [255, 192, 127, 64, 1, 0];
+    let extent = [256, alphas.len() as u32];
     let asset = AssetId("test:pointwise-tone-ramp".into());
-    let bytes: Vec<u8> = (0..=255u8)
-        .flat_map(|v| [v, 255 - v, v.wrapping_mul(137), 255])
+    let bytes: Vec<u8> = alphas
+        .into_iter()
+        .flat_map(|alpha| (0..=255u8).flat_map(move |v| [v, 255 - v, v.wrapping_mul(137), alpha]))
         .collect();
     r.prepare_asset(
         &asset,
         HostImage {
             width: 256,
-            height: 1,
+            height: extent[1],
             stride: 1024,
             format: PixelFormat::Rgba8Srgb,
             bytes: &bytes,
@@ -277,14 +279,17 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
             .zip(actual.chunks_exact(4))
             .enumerate()
         {
-            assert_eq!(pixel[3], 255);
+            assert_eq!(pixel[3], source[3]);
+            let alpha = f64::from(source[3]) / 255.;
             for channel in 0..3 {
                 // This oracle starts from the encoded input and does not use
                 // the renderer output or WGSL implementation to make expected
                 // pixels. Rust's curve table is public application data; the
                 // scalar transfer functions/interpolation use f64 arithmetic.
-                let linear =
-                    (scalar_srgb_decode(f64::from(source[channel]) / 255.) * 255.).round() / 255.;
+                let stored = (scalar_srgb_decode(f64::from(source[channel]) / 255.) * alpha * 255.)
+                    .round()
+                    / 255.;
+                let linear = if alpha == 0. { 0. } else { stored / alpha };
                 let adjusted = if id == "curves" {
                     let channel_value =
                         lookup(&values, 256 * (channel + 1), scalar_srgb_encode(linear));
@@ -294,11 +299,13 @@ fn pointwise_tone_filters_match_scalar_color_oracles() {
                         .clamp(0., 1.))
                     .powf(1. / f64::from(values[3][0]))
                 };
-                let expected = scalar_stored_srgb_byte(adjusted);
+                let stored = (adjusted.clamp(0., 1.) * alpha * 255.).round() / 255.;
+                let straight = if alpha == 0. { 0. } else { stored / alpha };
+                let expected = (scalar_srgb_encode(straight) * 255.).round() as u8;
                 assert!(
                     pixel[channel].abs_diff(expected) <= 1,
                     "{id} pixel {index} channel {channel}: source={source:?}, actual={pixel:?}, expected={expected}, linear_byte={}",
-                    adjusted * 255.
+                    adjusted * alpha * 255.
                 );
             }
         }
@@ -419,7 +426,7 @@ fn runtime_filter_pixel_reference() {
     }
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/runtime-filters-v3.png"
+        "/tests/fixtures/runtime-filters-v4.png"
     );
     let mut reader = png::Decoder::new(std::fs::File::open(path).unwrap())
         .read_info()

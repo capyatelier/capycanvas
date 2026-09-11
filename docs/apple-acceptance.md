@@ -923,3 +923,52 @@ are applied by the comparator. The Mac OS window controls/menu arrangement is
 an intentional adaptation retained in the report; configuration control styles
 and heights, panel placement, toolbar color shape and other differences still
 fail visual acceptance. The source captures and complete report remain ignored.
+
+## Configuration controls and panel surface alignment
+
+Both Apple hosts now use the compact configuration controls already exposed by
+web and Android: wrapping size buttons, a brush-color swatch that opens the
+existing shared color editor, and the shared checkmark asset in 16-point checkboxes.
+The live size grid follows the same two/three/four-column breakpoints, cell
+padding and label line height, including wide drawers. Native content measurement
+continues to feed Rust's expansion placement. Panel shadow opacity/offset/blur
+and the dynamic toolbar color glyph now follow the reference styling and icon
+geometry. Brush values, preset choices, color state/actions and document behavior
+remain owned by the shared core.
+
+The configuration fixture's full-image exact differences improve from 25.3555%
+to 7.3088% on Mac and from 18.0784% to 3.9751% on iPad Simulator. Final maximum
+channel errors are 209 and 204 respectively. Comparisons retain the same light
+theme, default document, camera, complete pixels and sRGB handling; viewports are
+1200 by 870 and 1376 by 1032 at 2x scale. The iPad portrait raster is rotated only,
+without resampling. The Chrome fixtures remain unchanged; no thresholds or masks
+were introduced. These are improvements to failing visual gates, not acceptance.
+Header/menu differences, layer controls, typography, remaining icon/shadow
+rasterization and other editor states still need full parity work.
+
+The focused shared workflow additionally selects a compact preset and checks
+both the live panel and configuration values, opens the color editor from its
+swatch, changes the paint slot and returns to configuration. It retains the
+control-visibility and live tear-off assertions. The surface comparison uses
+direct captures, without UI event automation or system-menu testing.
+The final workflow executes and passes once on each platform; both signed
+Apple builds pass. Broader editor states, physical lifecycle and sustained
+performance remain required beyond these targeted checks.
+
+The incoming Android editor-preset/live-Navigator changes are integrated. Their
+shared layout edits are conditional on Android and preserve Apple/Web fixture
+geometry. All 259 UI/host/Apple bridge regression checks pass (217/12/30), along
+with both integrated signed Apple builds and WebAssembly. The complete visual
+reports above remain separate from functional and performance acceptance.
+The integrated physical iPad build installs and launches successfully.
+
+The subsequent shared explicit filter-storage correction and independent v4
+reference are also integrated. On Metal, 111 renderer checks pass and the strict
+filter reference fails; 17 hardware benchmarks remain separately ignored. Both
+independent color checks pass, including six alpha levels. The reference now
+differs above one byte in 3,274 sampled pixels across 70 of 160 cases, with a
+maximum error of 47. Full backend parity remains open; see the detailed
+[filter investigation](runtime-filters.md). Both signed Apple builds and the
+WebAssembly build pass after this renderer change, and the integrated physical
+iPad app installs and launches. The configuration screenshots above contain
+blank artwork and establish no filter-output acceptance or performance claim.

@@ -3,7 +3,8 @@ import SwiftUI
 struct EditorPalette {
     let source: JSON
     subscript(_ name: String) -> Color { Color(hex: source[name].string) }
-    var active: Color { Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255).opacity(0.22) }
+    var accent: Color { Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255) }
+    var active: Color { accent.opacity(0.22) }
 }
 extension Color {
     init(hex: String) {
