@@ -8,18 +8,23 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
   function toolbar(panel,tiles) {
     const view=customization.view(panel),root=element("div","toolbar-controls");
     root.dataset.panel=panel;root.dataset.tileStyle=view.tile_style;
+    root.style.setProperty("--tile-icon-size",`${view.tile_icon_size}px`);
+    root.dataset.labeled=String(view.tile_label_lines>0);
+    root.style.setProperty("--tile-label-lines",view.tile_label_lines);
+    root.style.setProperty("--tile-label-weight",view.tile_label_bold?700:400);
     for(const tile of view.tiles) {
       const node=element("div","tile-button tool-tile");node.dataset.tile=tile.id;
       if(tile.control.kind==="divider"){node.classList.add("tile-divider");node.setAttribute("role","separator");}
       else {const b=button("",()=>dispatch({type:"activate_tile",panel,tile:tile.id}));
         b.disabled=!tile.enabled;b.title=tile.tooltip;b.setAttribute("aria-label",tile.label);b.setAttribute("aria-pressed",tile.selected);
-        b.append(icon(tile.icon));if(view.tile_style==="labeled") b.append(element("span","tile-label",tile.label));node.append(b);}
+        b.append(icon(tile.icon));if(view.tile_label_lines>0) b.append(element("span","tile-label",tile.label));node.append(b);}
       customization.target(node,{kind:"tile",panel,tile:tile.id});
       root.append(draggable(node,{kind:"tile",panel,tile:tile.id}));
       if(tiles){const bounds=tiles.find(([id])=>id===tile.id)?.[1];if(bounds)place(node,bounds);else node.hidden=true;}
     }
     root.refreshPanel=()=>{
       const current=customization.view(panel);
+      root.style.setProperty("--tile-icon-size",`${current.tile_icon_size}px`);
       for(const tile of current.tiles) {
         const row=[...root.children].find(n=>Number(n.dataset.tile)===tile.id),b=row?.querySelector("button");
         if(!b)continue;b.disabled=!tile.enabled;b.title=tile.tooltip;b.setAttribute("aria-pressed",String(tile.selected));b.setAttribute("aria-label",tile.label);

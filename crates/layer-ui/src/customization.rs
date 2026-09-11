@@ -52,14 +52,18 @@ pub struct TabPresentation {
 pub enum TileStyle {
     #[default]
     Small,
+    Medium,
     Large,
+    MediumLabeled,
     Labeled,
 }
 impl TileStyle {
     pub fn size(self) -> [f32; 2] {
         let [w, h] = match self {
             Self::Small => [1.0, 1.0],
+            Self::Medium => [1.5, 1.5],
             Self::Large => [2.0, 2.0],
+            Self::MediumLabeled => [3.0, 1.5],
             Self::Labeled => [3.0, 2.0],
         };
         [w * TILE_SIZE, h * TILE_SIZE]
@@ -67,15 +71,35 @@ impl TileStyle {
     pub fn label(self) -> &'static str {
         match self {
             Self::Small => "Small Tiles",
+            Self::Medium => "Medium Tiles",
             Self::Large => "Large Tiles",
-            Self::Labeled => "Labeled Tiles",
+            Self::MediumLabeled => "Medium Labeled Tiles",
+            Self::Labeled => "Large Labeled Tiles",
         }
     }
     pub fn icon_size(self) -> u32 {
-        if self == Self::Large { 32 } else { 16 }
+        match self {
+            Self::Small | Self::MediumLabeled | Self::Labeled => 16,
+            Self::Medium => 24,
+            Self::Large => 32,
+        }
+    }
+    pub fn label_lines(self) -> u32 {
+        match self {
+            Self::MediumLabeled => 2,
+            Self::Labeled => 3,
+            _ => 0,
+        }
+    }
+    fn available_on(self, platform: Platform) -> bool {
+        !matches!(self, Self::Medium | Self::MediumLabeled)
+            || matches!(
+                platform,
+                Platform::Generic | Platform::Android | Platform::Web
+            )
     }
     pub(crate) fn floating_width(self) -> f32 {
-        let columns = if self == Self::Labeled { 2.0 } else { 3.0 };
+        let columns = if self.label_lines() > 0 { 2.0 } else { 3.0 };
         columns * (self.size()[0] + 2.0) - 2.0
     }
 }
@@ -585,7 +609,7 @@ impl DockLayout {
                 if panel.kind() != PanelKind::Tiles {
                     return Err("Choose a toolbar".into());
                 }
-                (p.menu_name(), self.toolbar_options(panel)?)
+                (p.menu_name(), self.toolbar_options_on(panel, platform)?)
             }
         };
         Ok(ContextMenu { title, sections })
@@ -692,6 +716,13 @@ impl DockLayout {
         items
     }
     pub fn toolbar_options(&self, panel: Panel) -> Result<Vec<Vec<ContextMenuItem>>, String> {
+        self.toolbar_options_on(panel, Platform::Generic)
+    }
+    fn toolbar_options_on(
+        &self,
+        panel: Panel,
+        platform: Platform,
+    ) -> Result<Vec<Vec<ContextMenuItem>>, String> {
         let p = self.panel(panel)?;
         if panel.kind() != PanelKind::Tiles {
             return Err("Choose a toolbar".into());
@@ -711,17 +742,24 @@ impl DockLayout {
                     },
                 ),
             ],
-            [TileStyle::Small, TileStyle::Large, TileStyle::Labeled]
-                .into_iter()
-                .map(|style| {
-                    let mut item = ContextMenuItem::edit(
-                        style.label(),
-                        CustomizationAction::SetTileStyle { panel, style },
-                    );
-                    item.selected = Some(p.tile_style == style);
-                    item
-                })
-                .collect(),
+            [
+                TileStyle::Small,
+                TileStyle::Medium,
+                TileStyle::Large,
+                TileStyle::MediumLabeled,
+                TileStyle::Labeled,
+            ]
+            .into_iter()
+            .filter(|style| style.available_on(platform))
+            .map(|style| {
+                let mut item = ContextMenuItem::edit(
+                    style.label(),
+                    CustomizationAction::SetTileStyle { panel, style },
+                );
+                item.selected = Some(p.tile_style == style);
+                item
+            })
+            .collect(),
             vec![
                 ContextMenuItem::edit(
                     format!("Rename {name}…"),
@@ -1046,6 +1084,9 @@ pub struct PanelView {
     pub icon: &'static str,
     pub tab: TabPresentation,
     pub tile_style: TileStyle,
+    pub tile_icon_size: u32,
+    pub tile_label_lines: u32,
+    pub tile_label_bold: bool,
     pub toolbar_options: Vec<Vec<ContextMenuItem>>,
     pub expanded: bool,
     pub configuration_title: String,
@@ -1123,8 +1164,14 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
         icon: config.icon(),
         tab: state.workspace.layout.tab_presentation(panel),
         tile_style: config.tile_style,
+        tile_icon_size: config.tile_style.icon_size(),
+        tile_label_lines: config.tile_style.label_lines(),
+        tile_label_bold: config.tile_style == TileStyle::Labeled,
         toolbar_options: if panel.kind() == PanelKind::Tiles {
-            let mut options = state.workspace.layout.toolbar_options(panel)?;
+            let mut options = state
+                .workspace
+                .layout
+                .toolbar_options_on(panel, state.platform)?;
             options[0].remove(0); // The configuration column is already open.
             ContextMenu {
                 title: String::new(),
@@ -1443,6 +1490,9 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             SetTileStyle { panel, style } => {
+                if !style.available_on(platform) {
+                    return Err("This tile size is not available on this platform yet".into());
+                }
                 layout.set_tile_style(panel, style, viewport)?;
                 changed |= regions::LAYOUT;
             }
@@ -1767,6 +1817,126 @@ mod tests {
     const ERASE: ToolbarControl = ToolbarControl::Command {
         command: CommandId::Eraser,
     };
+
+    #[test]
+    fn medium_tiles_follow_shared_docking_and_roundtrip() {
+        for style in [TileStyle::Medium, TileStyle::MediumLabeled] {
+            for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+                let mut workspace = WorkspaceState::default();
+                workspace
+                    .layout
+                    .set_tile_style(Panel::Toolbar, style, VIEWPORT)
+                    .unwrap();
+                workspace
+                    .layout
+                    .move_panel(
+                        VIEWPORT,
+                        Panel::Toolbar,
+                        DockTarget::Edge { edge, outer: true },
+                    )
+                    .unwrap();
+                workspace.validate().unwrap();
+                let resolved = workspace.layout.workspace(
+                    VIEWPORT[0],
+                    VIEWPORT[1],
+                    crate::HEADER_HEIGHT,
+                    crate::STATUS_HEIGHT,
+                );
+                let group = resolved
+                    .groups
+                    .iter()
+                    .find(|g| g.panels.contains(&Panel::Toolbar))
+                    .unwrap();
+                let tiles = &group.tiles.as_ref().unwrap().tiles;
+                assert!(!tiles.is_empty());
+                for tile in tiles {
+                    assert_eq!([tile.width, tile.height], style.size());
+                    assert!(tile.x >= 0.0 && tile.y >= 0.0);
+                    assert!(tile.x + tile.width <= group.bounds.width + 0.01);
+                    assert!(tile.y + tile.height <= group.bounds.height + 0.01);
+                }
+                let json = serde_json::to_string(&workspace).unwrap();
+                assert!(json.contains(&format!(
+                    "\"tile_style\":{}",
+                    serde_json::to_string(&style).unwrap()
+                )));
+                assert_eq!(
+                    serde_json::from_str::<WorkspaceState>(&json).unwrap(),
+                    workspace
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn medium_tile_choice_is_limited_to_supported_hosts() {
+        let layout = DockLayout::default();
+        for platform in [
+            Platform::Generic,
+            Platform::Android,
+            Platform::Web,
+            Platform::Gtk,
+            Platform::Mac,
+            Platform::Ios,
+            Platform::Windows,
+        ] {
+            let supported = matches!(
+                platform,
+                Platform::Generic | Platform::Android | Platform::Web
+            );
+            let context = layout
+                .context_menu_on(
+                    ContextTarget::Ribbon {
+                        panel: Panel::Toolbar,
+                    },
+                    platform,
+                )
+                .unwrap();
+            let options = layout.toolbar_options_on(Panel::Toolbar, platform).unwrap();
+            assert_eq!(
+                serde_json::to_value(context.sections).unwrap(),
+                serde_json::to_value(&options).unwrap()
+            );
+            for style in [TileStyle::Medium, TileStyle::MediumLabeled] {
+                assert_eq!(
+                    options
+                        .iter()
+                        .flatten()
+                        .any(|item| item.label == style.label()),
+                    supported
+                );
+                let mut state = CustomizationState::default();
+                let mut changed = layout.clone();
+                assert_eq!(
+                    state
+                        .edit(
+                            &mut changed,
+                            CustomizationAction::SetTileStyle {
+                                panel: Panel::Toolbar,
+                                style
+                            },
+                            platform,
+                            VIEWPORT,
+                            false
+                        )
+                        .is_ok(),
+                    supported
+                );
+                assert_eq!(
+                    changed.panel(Panel::Toolbar).unwrap().tile_style,
+                    if supported { style } else { TileStyle::Small }
+                );
+            }
+        }
+        assert_eq!(TileStyle::Medium.icon_size(), 24);
+        assert_eq!(TileStyle::MediumLabeled.icon_size(), 16);
+        assert_eq!(TileStyle::MediumLabeled.label_lines(), 2);
+        assert_eq!(TileStyle::Labeled.label_lines(), 3);
+        assert_eq!(
+            serde_json::from_str::<TileStyle>("\"labeled\"").unwrap(),
+            TileStyle::Labeled
+        );
+    }
 
     #[test]
     fn legacy_workspace_defaults_and_customized_state_roundtrip() {

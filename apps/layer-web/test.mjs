@@ -13,6 +13,7 @@ import { checkPreferences, checkSettingsParity } from "./preferences.test.mjs";
 import { checkPwa, servePackage } from "./pwa.test.mjs";
 import { checkGpuStartup, checkGpuCompatibility } from "./gpu.test.mjs";
 import { checkStagedStartup } from "./startup.test.mjs";
+import { checkMediumTiles } from "./tiles.test.mjs";
 import { checkCustomization, checkWorkspace, checkTabStyles, checkToolbarManager } from "./customization.test.mjs";
 
 const packageHost = process.argv.includes("--package") ? await servePackage() : null;
@@ -171,7 +172,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--fullscreen")) {
+  if (process.argv.includes("--medium-tiles")) {
+    await checkMediumTiles({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--fullscreen")) {
     const {windowId} = await call("Browser.getWindowForTarget",{targetId:target.targetId},null);
     await checkFullscreen({call,evaluate,settle,windowId});
     assert.deepEqual(errors,[]);

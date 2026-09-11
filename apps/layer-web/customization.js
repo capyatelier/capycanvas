@@ -202,6 +202,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
           const strip = element("div", "toolbar-controls");
           strip.dataset.panel = config.id;
           strip.dataset.tileStyle = view.tile_style;
+          strip.style.setProperty("--tile-icon-size", `${view.tile_icon_size}px`);
+          strip.dataset.labeled = String(view.tile_label_lines > 0);
+          strip.style.setProperty("--tile-label-lines", view.tile_label_lines);
+          strip.style.setProperty("--tile-label-weight", view.tile_label_bold ? 700 : 400);
           for (const tile of view.tiles) {
             // Like GTK, drag/context target surrounds the command button. A
             // disabled command remains movable and removable.
@@ -218,9 +222,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
             });
             if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
             const glyph = icon(tile.icon);
-            glyph.style.width = glyph.style.height = `${view.tile_style === "large" ? 32 : 16}px`;
             node.append(glyph);
-            if (view.tile_style === "labeled") node.append(element("span", "tile-label", tile.label));
+            if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
             tileRoot.append(node);
             target(tileRoot, { kind: "tile", panel: config.id, tile: tile.id });
             strip.append(draggable(tileRoot, { kind: "tile", panel: config.id, tile: tile.id }));

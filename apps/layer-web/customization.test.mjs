@@ -187,7 +187,7 @@ export async function checkWorkspace({ call, evaluate, settle }) {
   }
   await reset();
   for (const edge of ["left", "right", "top", "bottom"]) {
-    for (const style of ["small", "large", "labeled"]) {
+    for (const style of ["small", "medium", "large", "medium_labeled", "labeled"]) {
       await reset();
       await customize({ type: "set_tile_style", panel: "toolbar", style });
       await send({ type: "move_panel", panel: "toolbar", target: { kind: "edge", edge, outer: true } });
@@ -258,12 +258,12 @@ export async function checkWorkspace({ call, evaluate, settle }) {
     for (const mode of ["compact", "vertical", "horizontal"]) {
       if (mode !== "compact") await clickAt(await point(grip("toolbar")), 2);
       assert.equal((await snapshot()).layout.floating[0].toolbar_layout, mode);
-      for (const [style, label, width, height, glyph] of [["large", "Large Tiles", 72, 72, 32], ["labeled", "Labeled Tiles", 108, 72, 16], ["small", "Small Tiles", 36, 36, 16]]) {
+      for (const [style, label, width, height, glyph] of [["medium", "Medium Tiles", 54, 54, 24], ["large", "Large Tiles", 72, 72, 32], ["medium_labeled", "Medium Labeled Tiles", 108, 54, 16], ["labeled", "Large Labeled Tiles", 108, 72, 16], ["small", "Small Tiles", 36, 36, 16]]) {
         await context(grip("toolbar")); await choose(label);
         assert.equal((await snapshot()).layout.floating[0].toolbar_layout, mode, "tile size must retain the selected preset");
         const g = await group("toolbar");
         const bounds = await evaluate(`(()=>{const strip=document.querySelector('[data-panel="toolbar"] .toolbar-controls'),b=strip.getBoundingClientRect();return[...strip.querySelectorAll('[data-tile]')].map(n=>{const r=n.getBoundingClientRect(),s=n.querySelector('svg').getBoundingClientRect();return{x:r.x-b.x,y:r.y-b.y,width:r.width,height:r.height,glyph:s.width,label:n.querySelector('.tile-label')?.textContent}})})()`);
-        for (const b of bounds) { assert.equal(b.width, width); assert.equal(b.height, height); assert.equal(b.glyph, glyph); assert.ok(b.x>=0&&b.y>=0&&b.x+b.width<=g.bounds.width+.5&&b.y+b.height<=g.bounds.height+.5); if (style === "labeled") assert.ok(b.label); }
+        for (const b of bounds) { assert.equal(b.width, width); assert.equal(b.height, height); assert.equal(b.glyph, glyph); assert.ok(b.x>=0&&b.y>=0&&b.x+b.width<=g.bounds.width+.5&&b.y+b.height<=g.bounds.height+.5); if (style.endsWith("labeled")) assert.ok(b.label); }
         if (mode === "horizontal") assert.ok(bounds.every(b=>b.y===0));
         if (mode === "vertical") assert.ok(bounds.every(b=>b.x===0));
         await shot(`floating-${mode}-${style}-${theme}`);

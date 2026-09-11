@@ -46,10 +46,12 @@ class AndroidHostTest {
     private val host get() = compose.activity.host
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private var originalWorkspace: JSONObject? = null
+    private var originalTheme: Any = JSONObject.NULL
     @Before fun ready() {
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
         assertNull("GPU initialization", host.failure)
         originalWorkspace = JSONObject(state().getJSONObject("workspace").toString())
+        originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         compose.runOnIdle {
             host.dispatch(obj("type" to "close_settings"))
             host.dispatch(obj("type" to "set_theme", "theme" to "light"))
@@ -63,6 +65,7 @@ class AndroidHostTest {
             compose.runOnIdle {
                 host.dispatch(obj("type" to "close_settings"))
                 host.dispatch(obj("type" to "restore_workspace", "workspace" to workspace))
+                host.dispatch(obj("type" to "set_theme", "theme" to originalTheme))
             }
             waitState { it.getJSONObject("workspace").toString() == workspace.toString() }
         }
@@ -299,12 +302,14 @@ class AndroidHostTest {
             androidx.compose.ui.geometry.Size(semantics.size.width.toFloat(), semantics.size.height.toFloat()))
     }
     private fun workspaceMenu() {
-        val button = compose.onNode(hasText("Workspace") and hasClickAction())
+        val button = compose.onNode(hasText("Window") and hasClickAction())
         val anchor = screenBounds(button)
         button.performClick()
         val menu = screenBounds(compose.onNodeWithTag("workspace-menu"))
         assertEquals("Workspace menu aligns with its header button", anchor.left, menu.left, 2f)
-        assertEquals("Workspace menu opens below its header button", anchor.bottom, menu.top, 2f)
+        // Material dropdowns reserve 48 dp at the top and bottom of the screen.
+        val menuTop = maxOf(anchor.bottom, 48f * compose.activity.resources.displayMetrics.density)
+        assertEquals("Workspace menu opens below its header button within the screen margin", menuTop, menu.top, 2f)
     }
     private fun assertContextBeside(tag: String) {
         // The group menu is anchored to the draggable header, not its grip.
@@ -662,7 +667,7 @@ class AndroidHostTest {
 
     @Test fun dockedToolbarHandlesRestoreSingleLanesOrNecessaryWrap() {
         for (edge in listOf("left", "right", "top", "bottom")) {
-            for (style in listOf("small", "large", "labeled")) {
+            for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
                 action(obj("type" to "restore_workspace", "workspace" to JSONObject(defaultWorkspace)))
                 customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
                 action(obj("type" to "move_panel", "panel" to "toolbar", "viewport" to viewport(), "target" to obj("kind" to "edge", "edge" to edge, "outer" to true)))
@@ -687,13 +692,32 @@ class AndroidHostTest {
             action(obj("type" to "set_theme", "theme" to theme))
             for (layout in listOf("compact", "vertical", "horizontal")) {
                 assertEquals(layout, preset())
-                for (style in listOf("small", "large", "labeled")) {
+                for (style in listOf("small", "medium", "large", "medium_labeled", "labeled")) {
                     customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to style))
                     assertEquals("Changing tile size keeps $layout", layout, preset())
                     val resolved = group("toolbar")
                     val tile = resolved.getJSONObject("tiles").array("tiles").getJSONObject(0)
-                    assertEquals(if (style == "small") 36f else if (style == "large") 72f else 108f, tile.number("width"), .01f)
-                    assertEquals(if (style == "small") 36f else 72f, tile.number("height"), .01f)
+                    val width = when (style) { "small" -> 36f; "medium" -> 54f; "large" -> 72f; else -> 108f }
+                    val height = when (style) { "small" -> 36f; "medium", "medium_labeled" -> 54f; else -> 72f }
+                    val iconSize = when (style) { "medium" -> 24; "large" -> 32; else -> 16 }
+                    assertEquals(width, tile.number("width"), .01f)
+                    assertEquals(height, tile.number("height"), .01f)
+                    val first = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").getJSONObject(0).getInt("id")
+                    compose.onNodeWithTag("tile-toolbar-$first").assertWidthIsEqualTo(width.dp).assertHeightIsEqualTo(height.dp)
+                    compose.onNodeWithTag("tile-icon-toolbar-$first", useUnmergedTree = true).assertWidthIsEqualTo(iconSize.dp).assertHeightIsEqualTo(iconSize.dp)
+                    if (style.endsWith("labeled")) {
+                        val labels = compose.onAllNodes(SemanticsMatcher("toolbar label") { it.config.contains(SemanticsProperties.TestTag) && it.config[SemanticsProperties.TestTag].startsWith("tile-label-toolbar-") }, useUnmergedTree = true)
+                        assertTrue(labels.fetchSemanticsNodes().isNotEmpty())
+                        for (index in labels.fetchSemanticsNodes().indices) {
+                            val results = mutableListOf<TextLayoutResult>()
+                            labels[index].performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
+                            val result = results.single()
+                            assertEquals(if (style == "labeled") 3 else 2, result.layoutInput.maxLines)
+                            assertEquals(if (style == "labeled") 700 else 400, result.layoutInput.style.fontWeight!!.weight)
+                            assertTrue("Label must fit within its tile", result.size.height <= height * compose.activity.resources.displayMetrics.density)
+                            assertTrue(result.lineCount <= result.layoutInput.maxLines)
+                        }
+                    }
                     val grip = resolved.getJSONObject("tiles").getJSONObject("grip")
                     assertEquals(layout == "horizontal", grip.number("height") > grip.number("width"))
                     capture("workspace-$theme-$layout-$style")
@@ -801,6 +825,7 @@ class AndroidHostTest {
     }
 
     @Test fun toolbarConfigurationAndGroupCollapseUseTheSharedDefault() {
+        val originalIcon = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("icon")
         floatPanel("toolbar")
         compose.onNodeWithTag("ribbon-grip-toolbar").performTouchInput { doubleClick() }
         customize(obj("type" to "set_tile_style", "panel" to "toolbar", "style" to "large"))
@@ -811,7 +836,13 @@ class AndroidHostTest {
         compose.onNodeWithTag("tab-toolbar").performClick()
         waitState { it.getJSONObject("customization").optString("expanded") == "toolbar" }
         capture("workspace-toolbar-configure")
-        compose.onNodeWithText("Labeled Tiles").performScrollTo().performClick()
+        compose.onNodeWithText("Medium Tiles").performScrollTo().performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("tile_style") == "medium" }
+        capture("workspace-toolbar-configure-medium")
+        compose.onNodeWithText("Medium Labeled Tiles").performScrollTo().performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("tile_style") == "medium_labeled" }
+        capture("workspace-toolbar-configure-medium-labeled")
+        compose.onNodeWithText("Large Labeled Tiles").performScrollTo().performClick()
         compose.waitUntil(10_000) { host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("tile_style") == "labeled" }
         capture("workspace-toolbar-configure-labeled")
         customize(obj("type" to "close_expanded"))
@@ -821,13 +852,16 @@ class AndroidHostTest {
         assertEquals("compact", state().getJSONObject("workspace").getJSONObject("layout").array("floating").objects().first().getString("toolbar_layout"))
         val tiles = toolbar.getJSONObject("tiles").array("tiles").objects()
         assertEquals(2, tiles.count { it.number("y") == tiles[0].number("y") })
+        // Keep the grip outside Material's screen-edge menu margin so this
+        // configuration test can check adjacency without menu edge clamping.
+        floatPanel("toolbar", y = 120f)
         capture("workspace-toolbar-collapse")
         contextGrip("ribbon-grip-toolbar")
         compose.onNodeWithText("Icons only").assertDoesNotExist()
         compose.onNodeWithText("Configure Tools toolbar…").performClick()
         customize(obj("type" to "close_expanded"))
         val tabIcon = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }.getString("icon")
-        assertEquals("brush", tabIcon)
+        assertEquals(originalIcon, tabIcon)
         // Workspace's New Toolbar command opens the same picker as the context menu.
         workspaceMenu(); compose.onNodeWithText("New Toolbar…").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.objectOrNull("picker") != null }

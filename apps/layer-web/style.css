@@ -189,9 +189,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .toolbar-controls > button, .toolbar-controls > .tool-tile { position: absolute; min-height: 0; padding: 0; }
 .panel .tool-tile > button { display: grid; place-items: center; padding: 0; min-height: 0; width: 100%; height: 100%; }
 .tool-tile > button:disabled { pointer-events: none; }
-.panel .toolbar-controls[data-tile-style="labeled"] .tool-tile > button { display: flex; justify-content: flex-start; gap: 0; text-align: left; }
-.toolbar-controls[data-tile-style="labeled"] .tool-tile svg { width: 16px; margin: 0 10px; }
-.tile-label { width: 72px; padding-right: 4px; line-height: 18px; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.tile-label { width: 72px; min-width: 0; padding-right: 4px; line-height: 18px; font-weight: var(--tile-label-weight); overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: var(--tile-label-lines); -webkit-box-orient: vertical; }
 .panel-measure { position: fixed; left: -10000px; top: 0; visibility: hidden; pointer-events: none; }
 .toolbar-controls[data-axis="vertical"] > .panel-grip svg { transform: translateY(-1.6px) rotate(90deg); }
 .brush-list { display: flex; flex-direction: column; gap: 2px; }
@@ -525,7 +523,9 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 }
 .drawer-bridge { position:absolute; fill:var(--panel); pointer-events:auto; }
 .zen-toolbar .tool-tile > button, .drawer-column .tool-tile > button { display:grid; place-items:center; padding:0; width:100%; height:100%; min-height:0; }
-.zen-toolbar .toolbar-controls[data-tile-style="large"] svg, .drawer-column .toolbar-controls[data-tile-style="large"] svg { width:32px; height:32px; }
+.toolbar-controls .tool-tile > button > svg { width:var(--tile-icon-size,16px); height:var(--tile-icon-size,16px); }
+.toolbar-controls[data-labeled="true"] .tool-tile > button { display:flex; justify-content:flex-start; gap:0; text-align:left; }
+.toolbar-controls[data-labeled="true"] .tool-tile > button > svg { flex-shrink:0; margin:0 10px; }
 #document-title { position:static; transform:none; left:auto; flex:1; min-width:0; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .window-fullscreen #document-title { text-align:right; }
 #header-end { flex-shrink:0; }

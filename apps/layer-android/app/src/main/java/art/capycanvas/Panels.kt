@@ -28,7 +28,7 @@ import kotlin.math.roundToInt
 @Composable internal fun ToolRibbon(host: CanvasHost, panel: JSONObject, geometry: JSONObject, dock: DockInteraction, modifier: Modifier, vertical: Boolean = false) {
     val density = LocalDensity.current.density
     Box(modifier.chromeRegion(dock)) {
-        val style = panel.getString("tile_style")
+        val labelLines = panel.getInt("tile_label_lines")
         val tiles = panel.array("tiles").objects()
         geometry.array("tiles").objects().forEachIndexed { index, bounds ->
             tiles.getOrNull(index)?.let { tile ->
@@ -56,11 +56,12 @@ import kotlin.math.roundToInt
                         onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
                         onClick = { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Box(if (style == "labeled") Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
-                        SharedIcon(icon, tile.getString("label"), Modifier.size(if (style == "large") 32.dp else 16.dp), fill = fill)
+                    Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
+                        SharedIcon(icon, tile.getString("label"), Modifier.size(panel.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}"), fill = fill)
                     }
-                    if (style == "labeled") Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp),
-                        fontWeight = FontWeight.Bold, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
+                        fontWeight = if (panel.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = labelLines, overflow = TextOverflow.Ellipsis)
                 }
                 }
             }
