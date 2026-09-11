@@ -803,7 +803,18 @@ impl WgpuRasterizer {
         queue: wgpu::Queue,
         staged: bool,
     ) -> Result<Self, GpuRasterError> {
-        if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+        let hardware = adapter.get_info().device_type != wgpu::DeviceType::Cpu;
+        // Unit-test binaries can explicitly admit a software backend for
+        // numerical comparisons. Production hosts always require hardware.
+        #[cfg(test)]
+        let hardware = hardware || {
+            let numerical = std::env::var("LAYER_TEST_SOFTWARE_GPU").as_deref() == Ok("numerical");
+            if numerical {
+                eprintln!("NUMERICAL TEST ONLY: software renderer; timings are not hardware measurements");
+            }
+            numerical
+        };
+        if !hardware {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

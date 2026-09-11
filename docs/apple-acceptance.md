@@ -862,3 +862,22 @@ does not exercise the input-correction path. Full input/output/difference
 artifacts remain local; no channel masks, fixture replacement or tolerance
 relaxation was applied. Cross-backend filter parity remains an explicit failing
 gate and requires further investigation beyond this input milestone.
+
+## Filter color isolation across backends
+
+The strict reference discrepancy is reproduced on both Metal and a local Vulkan
+SwiftShader numerical backend. Metal's full sheet also exactly matches the
+pre-migration implementation with identical corrected imports. New independent
+scalar tests cover the complete opaque Curves/Exposure channel ramp and
+Halftone's full ink/paper endpoints; both tests pass on both backends. They
+isolate color/storage behavior without generating expected images from renderer
+output. Partial alpha, spatial filtering and the full 160-case reference remain
+open. See [the filter investigation](runtime-filters.md) for numerical evidence.
+
+The software backend is admitted only by an explicit opt-in in renderer unit-test
+binaries. Production iPad and Mac hosts retain their hardware requirement.
+Software results establish no performance claim. Output-rounding experiments
+were reverted: neither solved the strict full-sheet comparison. The checked-in
+reference, one-byte tolerance and all compared channels remain unchanged.
+Both signed Apple builds and the production renderer library check pass with
+the test-only diagnostics present. This milestone changes no app rendering code.
