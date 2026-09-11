@@ -54,24 +54,56 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
     }
 }
 
-fn key(app: &App) -> CapyNavigatorKey {
-    let mut value = CapyNavigatorKey::default();
-    unsafe { capy_apple_navigator_key(app.0, &mut value) };
-    value
+fn placements(app: &App, value: Value) -> i32 {
+    let source = CString::new(value.to_string()).unwrap();
+    unsafe { capy_apple_navigator_placements(app.0, source.as_ptr()) }
+}
+fn slot() -> Value {
+    json!({"bounds":[10,20,264,200],"clip":[12,30,200,170],"order":3})
+}
+fn overview(app: &App) -> Vec<layer_render_wgpu::OverviewPlacement> {
+    let app = unsafe { &*app.0 };
+    app.metal.overview_placements(&app.host)
 }
 
 #[test]
-fn opening_a_document_replaces_pending_navigator_pixels_and_retains_diagnostics() {
+fn live_navigator_uses_current_document_camera_and_display_scale_without_bitmaps() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
             Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
         app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"stats","visible":true}}));
+        assert_eq!(unsafe { capy_apple_resize(app.0, 2400, 1800, 2.) }, 0);
         app.draw_frame();
+        assert_eq!(placements(&app, json!([slot()])), 0);
+        let initial = overview(&app)[0];
+        assert_eq!(initial.bounds, [28., 48., 512., 384.]);
+        assert_eq!(initial.clip, Some([24., 60., 400., 340.]));
+        assert_eq!(initial.scale, 2.);
+        let document_revision = unsafe { &*app.0 }.host.session.engine().document().revision;
+        for command in ["zoom_in", "rotate_right", "flip_horizontal"] {
+            app.invoke(command);
+        }
+        let moved = overview(&app)[0];
+        assert_eq!(moved.bounds, initial.bounds);
+        assert_ne!(moved.work_area, initial.work_area);
+        assert_eq!(
+            unsafe { &*app.0 }.host.session.engine().document().revision,
+            document_revision
+        );
         app.stroke();
         app.draw_frame();
-        let old_key = key(&app);
-        assert_eq!(poll(&app, 1_000_000_000, true), (1, std::ptr::null_mut()));
+        assert!(
+            !unsafe { &*app.0 }
+                .host
+                .session
+                .engine()
+                .backend()
+                .0
+                .as_ref()
+                .unwrap()
+                .canvas_preview_pending()
+        );
         let project = ProjectJob::new(&app, true);
         assert_eq!(unsafe { capy_project_new(project.0, 600, 300) }, 0);
         assert_eq!(
@@ -81,114 +113,56 @@ fn opening_a_document_replaces_pending_navigator_pixels_and_retains_diagnostics(
             0
         );
         app.draw_frame();
-        let next_key = key(&app);
-        assert_ne!(next_key.epoch, old_key.epoch);
-        let image = ready(&app, 2_000_000_000);
-        unsafe {
-            let mut info = std::mem::MaybeUninit::uninit();
-            capy_preview_image_read(image, info.as_mut_ptr());
-            let info = info.assume_init();
-            assert_eq!(info.key, next_key);
-            assert_eq!((info.width, info.height), (256, 128));
-            assert!(
-                std::slice::from_raw_parts(info.pixels, info.count)
-                    .iter()
-                    .all(|v| *v == 255)
-            );
-            capy_preview_image_free(image);
-        }
+        // No new layout or bitmap delivery is needed to adopt a different aspect ratio.
+        let replaced = overview(&app)[0];
+        assert_eq!(replaced.bounds, [28., 112., 512., 256.]);
+        assert_eq!(replaced.clip, initial.clip);
+        assert_eq!(unsafe { capy_apple_resize(app.0, 1200, 900, 1.) }, 0);
+        let resized = overview(&app)[0];
+        assert_eq!(resized.bounds, replaced.bounds.map(|v| v * 0.5));
+        assert_eq!(resized.clip, initial.clip.map(|c| c.map(|v| v * 0.5)));
+        assert_eq!(resized.scale, 1.);
+        app.draw_frame();
         let stats = app.request(2, json!({"type":"renderer_stats"})).unwrap();
         assert!(!stats["samples"].as_array().unwrap().is_empty());
+        assert_eq!(placements(&app, json!([])), 0);
+        assert!(overview(&app).is_empty());
     }
-}
-fn poll(app: &App, now: u64, visible: bool) -> (i32, *mut CapyPreviewImage) {
-    let mut image = std::ptr::null_mut();
-    let status =
-        unsafe { capy_apple_navigator_preview(app.0, now, u32::from(visible), &mut image) };
-    assert!(status >= 0);
-    (status, image)
-}
-fn wait_gpu(app: &App) {
-    unsafe { &*app.0 }
-        .host
-        .session
-        .engine()
-        .backend()
-        .0
-        .as_ref()
-        .unwrap()
-        .device()
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(std::time::Duration::from_secs(10)),
-        })
-        .unwrap();
-}
-fn ready(app: &App, now: u64) -> *mut CapyPreviewImage {
-    let (status, image) = poll(app, now, true);
-    assert_eq!(status, 1);
-    assert!(image.is_null());
-    wait_gpu(app);
-    let (status, image) = poll(app, now + 1, true);
-    assert_eq!(status, 0);
-    assert!(!image.is_null());
-    image
 }
 
 #[test]
-fn navigator_preview_is_bounded_owned_idle_and_keeps_the_throttled_final_stroke() {
+fn navigator_layout_is_bounded_atomic_ordered_and_does_not_keep_idle_frames_awake() {
     for platform in [0, 1] {
         let app = App::new(platform);
-        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
-            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
-        app.draw_frame();
-        assert_eq!(poll(&app, 0, false), (0, std::ptr::null_mut()));
-        let first_key = key(&app);
-        unsafe { capy_preview_image_free(ready(&app, 1_000_000_000)) };
-        // Camera-only changes never invalidate document pixels or allocate a new image.
-        for command in [
-            "zoom_in",
-            "rotate_right",
-            "flip_horizontal",
-            "flip_vertical",
-            "zoom_out",
-            "rotate_left",
+        let upper = json!({"bounds":[30,40,264,200],"clip":[30,40,264,200],"order":9});
+        assert_eq!(placements(&app, json!([upper, slot()])), 0);
+        let before = overview(&app);
+        assert_eq!(before.len(), 2);
+        assert!(before[0].bounds[0] < before[1].bounds[0]);
+        unsafe { &mut *app.0 }.host.dirty = false;
+        assert_eq!(placements(&app, json!([slot(), upper])), 0);
+        assert!(
+            !unsafe { &*app.0 }.host.dirty,
+            "Identical sorted layout stays idle"
+        );
+        for invalid in [
+            json!([{"bounds":[0,0,0,0],"clip":[0,0,1,1],"order":0}]),
+            json!(vec![slot(); 33]),
+            json!([{"bounds":[null,0,1,1],"clip":[0,0,1,1],"order":0}]),
         ] {
-            app.invoke(command);
-            app.draw_frame();
-            assert_eq!(key(&app), first_key);
-            assert_eq!(poll(&app, 1_010_000_000, true), (0, std::ptr::null_mut()));
-        }
-        app.stroke();
-        app.draw_frame();
-        let final_key = key(&app);
-        assert_ne!(first_key.revision, final_key.revision);
-        let pixels = app.pixels();
-        // No more canvas frames will occur. The C ABI must keep the owner awake
-        // through the shared 15Hz throttle until this final composition arrives.
-        assert_eq!(poll(&app, 1_020_000_000, true), (1, std::ptr::null_mut()));
-        let image = ready(&app, 1_066_666_667);
-        assert_eq!(poll(&app, 1_100_000_000, true), (0, std::ptr::null_mut()));
-        assert_eq!(app.pixels(), pixels);
-        drop(app);
-        let pointer = image as usize;
-        std::thread::spawn(move || unsafe {
-            let image = pointer as *mut CapyPreviewImage;
-            let mut info = std::mem::MaybeUninit::uninit();
-            capy_preview_image_read(image, info.as_mut_ptr());
-            let info = info.assume_init();
-            assert_eq!(info.key, final_key);
+            assert_eq!(placements(&app, invalid), -1);
             assert_eq!(
-                (info.width, info.height, info.stride, info.count),
-                (256, 192, 1024, 196608)
+                overview(&app),
+                before,
+                "Rejected geometry keeps the last valid layout"
             );
-            let bytes = std::slice::from_raw_parts(info.pixels, info.count);
-            assert!(bytes.chunks_exact(4).any(|p| p[0] < 240));
-            assert!(bytes.chunks_exact(4).all(|p| p[3] == 255));
-            capy_preview_image_free(image);
-        })
-        .join()
-        .unwrap();
+        }
+        assert_eq!(placements(&app, json!([])), 0);
+        assert!(
+            unsafe { &*app.0 }.host.dirty,
+            "Hiding the last preview clears its surface pixels"
+        );
+        assert!(overview(&app).is_empty());
     }
 }
 

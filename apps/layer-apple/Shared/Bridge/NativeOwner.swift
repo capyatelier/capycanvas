@@ -23,12 +23,6 @@ final class NativeOwner: @unchecked Sendable {
     private var lastSnapshotTime: UInt64 = 0
     private var bundledFiltersLoaded = false
     private var canvasReady = false
-    typealias NavigatorReceiver = @Sendable (NativePreviewImage, @escaping @Sendable () -> Void) -> Void
-    private var navigatorReceiver: NavigatorReceiver?
-    private var navigatorScheduled = false
-    private var navigatorDeliveryPending = false
-    private var navigatorNeedsUpdate = false
-    private var navigatorKey = CapyNavigatorKey()
     private var shadersReady = false
     private let trace: FrameTrace?
     private var latestTracedInput: UInt64 = 0
@@ -120,49 +114,13 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(FilterPreviewReply(status: JSON(), atlas: nil, error: error.localizedDescription)) }
         }
     }
-    func setNavigatorReceiver(_ receiver: NavigatorReceiver?) {
-        queue.async { [self] in
-            navigatorReceiver = receiver
-            if receiver != nil { navigatorNeedsUpdate = true; scheduleNavigator() }
+    func navigatorPlacements(_ value: JSON) {
+        perform { [self] in
+            let source = try value.encoded()
+            try check(source.withCString { capy_apple_navigator_placements(handle, $0) })
+            // Layout can settle after the canvas driver has gone idle.
+            receive(nil, nil)
         }
-    }
-    /// One scheduled poll and one image delivery at most. A stalled UI/decoder
-    /// cannot queue more bitmaps behind it. The shared producer also caps GPU
-    /// sampling to 15Hz and keeps a final update alive through its throttle.
-    private func scheduleNavigator() {
-        guard navigatorReceiver != nil, canvasReady, layer != nil, navigatorNeedsUpdate,
-            !navigatorScheduled, !navigatorDeliveryPending else { return }
-        navigatorScheduled = true
-        queue.asyncAfter(deadline: .now() + .milliseconds(33)) { [self] in
-            navigatorScheduled = false
-            guard navigatorReceiver != nil, layer != nil else { return }
-            var pointer: OpaquePointer?
-            let result = capy_apple_navigator_preview(handle, FrameTrace.now(), 1, &pointer)
-            navigatorNeedsUpdate = result == 1
-            if result < 0 {
-                receive(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Navigator preview failed")
-                return
-            }
-            if let pointer, let receiver = navigatorReceiver {
-                navigatorDeliveryPending = true
-                receiver(NativePreviewImage(pointer)) { [weak self] in
-                    self?.queue.async { [weak self] in
-                        guard let self else { return }
-                        self.navigatorDeliveryPending = false; self.scheduleNavigator()
-                    }
-                }
-            }
-            scheduleNavigator()
-        }
-    }
-    private func updateNavigator() {
-        guard navigatorReceiver != nil, canvasReady else { return }
-        var key = CapyNavigatorKey()
-        capy_apple_navigator_key(handle, &key)
-        if key.epoch != navigatorKey.epoch || key.revision != navigatorKey.revision {
-            navigatorKey = key; navigatorNeedsUpdate = true
-        }
-        scheduleNavigator()
     }
     private func restore(_ loaded: EditorPersistence.Loaded) {
         for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
@@ -501,7 +459,6 @@ final class NativeOwner: @unchecked Sendable {
                     try publish(); lastSnapshotTime = now
                 }
                 if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
-                updateNavigator()
                 if let observation {
                     let state: UInt64 = (canvasReady ? 1 : 0) | (bundledFiltersLoaded ? 2 : 0)
                         | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)
