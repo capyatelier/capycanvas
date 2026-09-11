@@ -79,3 +79,25 @@ Verify the comparator with:
 ```sh
 artifacts/ui/parity/python-env/bin/python -m unittest discover -s tools/visual
 ```
+
+The native `testColorControls` fixture attaches each full HSV/HLS capture and a
+JSON file containing its logical viewport, wheel bounds and selected color.
+Check sampled interior colors against the shared Rust picker with:
+
+```sh
+cargo build -p layer-ui --example color_wheel_reference
+artifacts/ui/parity/python-env/bin/python tools/visual/check_color_wheel.py \
+  artifacts/color-hsv.png artifacts/color-hsv-geometry.json \
+  --output artifacts/color-hsv-report.json
+```
+
+This color check preserves the source, honors EXIF/ICC data and rejects mismatched
+viewport geometry. Rust classifies samples and computes their expected colors;
+the Python tool does not duplicate color conversion or wheel hit policy. It
+samples every 11 physical pixels, excluding antialiased boundaries (a two-pixel
+neighborhood must remain in the same region) and markers (seven logical points).
+The default limit is two levels per 8-bit channel, including opacity. Both the
+ring and field must have at least 20 samples. The report retains every count and
+the worst failures. This checks sampled color correctness only; it does not
+replace full-image Chrome comparisons or establish editor visual parity. The
+web renderer currently has no matching custom color-wheel fixture.

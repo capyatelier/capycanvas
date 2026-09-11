@@ -13,7 +13,8 @@ mod color;
 mod tool_settings;
 mod tools;
 pub use color::{
-    ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart, hue_color,
+    ColorAction, ColorSlot, ColorSpace, ColorState, ColorPanelView, ColorComponentView,
+    ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};
 use tools::preset;

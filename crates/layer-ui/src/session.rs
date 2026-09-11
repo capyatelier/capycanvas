@@ -6627,7 +6627,7 @@ mod tests {
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
                 let available = platform == Platform::Gtk
-                    || (panel == Panel::ToolSettings
+                    || (matches!(panel, Panel::ToolSettings | Panel::Color)
                         && matches!(platform, Platform::Ios | Platform::Mac));
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),

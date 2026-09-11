@@ -38,6 +38,10 @@ pub enum ColorAction {
         index: usize,
         value: f32,
     },
+    RgbaComponent {
+        index: usize,
+        value: f32,
+    },
     Pick {
         part: ColorWheelPart,
         point: [f32; 2],
@@ -55,6 +59,35 @@ pub struct ColorState {
     paint_slot: ColorSlot,
     hues: [f32; 2],
 }
+
+/// Derived presentation data for native hosts. Geometry is normalized to a
+/// unit square; hosts scale it and render gradients without converting colors.
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorPanelView {
+    pub space: ColorSpace,
+    pub geometry: ColorWheelGeometry,
+    pub hue_color: [f32; 3],
+    pub hue_stops: [[f32; 3]; 7],
+    pub hue_start_degrees: f32,
+    pub hue_marker: [f32; 2],
+    pub field_marker: [f32; 2],
+    pub components: [ColorComponentView; 3],
+    pub swatches: [ColorSwatchView; 3],
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorComponentView {
+    pub label: &'static str,
+    pub name: &'static str,
+    pub value: f32,
+    pub numeric: crate::NumericControl,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct ColorSwatchView {
+    pub slot: ColorSlot,
+    pub label: &'static str,
+    pub rgba: [f32; 4],
+    pub selected: bool,
+}
 impl Default for ColorState {
     fn default() -> Self {
         Self {
@@ -68,6 +101,40 @@ impl Default for ColorState {
     }
 }
 impl ColorState {
+    pub fn view(&self) -> ColorPanelView {
+        let geometry = ColorWheelGeometry::new(1.).unwrap();
+        let components = self.components();
+        let names = match self.space {
+            ColorSpace::Hsv => ["Hue", "Saturation", "Value"],
+            ColorSpace::Hls => ["Hue", "Lightness", "Saturation"],
+        };
+        ColorPanelView {
+            space: self.space,
+            geometry,
+            hue_color: hue_color(components[0]),
+            hue_stops: std::array::from_fn(|i| hue_color(i as f32 * 60.)),
+            hue_start_degrees: ColorWheelGeometry::HUE_START_DEGREES,
+            hue_marker: geometry.hue_marker(components[0]),
+            field_marker: self.marker(&geometry),
+            components: std::array::from_fn(|i| ColorComponentView {
+                label: self.labels()[i],
+                name: names[i],
+                value: components[i],
+                numeric: Self::component_control(i).unwrap(),
+            }),
+            swatches: [
+                (ColorSlot::Foreground, "Foreground color", self.foreground),
+                (ColorSlot::Background, "Background color", self.background),
+                (ColorSlot::Transparent, "Transparent paint", [0.; 4]),
+            ]
+            .map(|(slot, label, rgba)| ColorSwatchView {
+                slot,
+                label,
+                rgba,
+                selected: self.slot == slot,
+            }),
+        }
+    }
     pub fn rgba(&self) -> [f32; 4] {
         if self.paint_slot == ColorSlot::Background {
             self.background
@@ -131,6 +198,14 @@ impl ColorState {
                 self.hues.swap(0, 1);
             }
             ColorAction::Space { space } => self.space = space,
+            ColorAction::RgbaComponent { index, value } => {
+                if index > 3 || !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err("Invalid RGBA component".into());
+                }
+                let mut rgba = self.rgba();
+                rgba[index] = value;
+                self.set_rgba(rgba)?;
+            }
             ColorAction::Component { index, value } => {
                 if index > 2
                     || !value.is_finite()
@@ -153,7 +228,7 @@ impl ColorState {
                         let h = ((point[1] - geometry.center[1])
                             .atan2(point[0] - geometry.center[0])
                             .to_degrees()
-                            + 150.)
+                            - ColorWheelGeometry::HUE_START_DEGREES)
                             .rem_euclid(360.);
                         self.apply(ColorAction::Component { index: 0, value: h })?;
                     }
@@ -278,6 +353,7 @@ pub struct ColorWheelGeometry {
     pub triangle: [[f32; 2]; 3],
 }
 impl ColorWheelGeometry {
+    pub const HUE_START_DEGREES: f32 = -150.;
     pub fn new(size: f32) -> Option<Self> {
         if !size.is_finite() || size < 1. {
             return None;
@@ -298,7 +374,7 @@ impl ColorWheelGeometry {
         })
     }
     pub fn hue_marker(&self, hue: f32) -> [f32; 2] {
-        let angle = (hue - 150.).to_radians();
+        let angle = (hue + Self::HUE_START_DEGREES).to_radians();
         let r = (self.outer + self.inner) * 0.5;
         [
             self.center[0] + r * angle.cos(),
@@ -367,6 +443,52 @@ mod tests {
             a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5),
             "{a:?} != {b:?}"
         );
+    }
+    #[test]
+    fn rgba_channel_edits_preserve_other_channels_and_reject_invalid_values() {
+        let mut state = ColorState::default();
+        state.set_rgba([0.2, 0.4, 0.6, 0.8]).unwrap();
+        state
+            .apply(ColorAction::RgbaComponent {
+                index: 0,
+                value: 0.3,
+            })
+            .unwrap();
+        state
+            .apply(ColorAction::RgbaComponent {
+                index: 3,
+                value: 0.5,
+            })
+            .unwrap();
+        close(state.rgba(), [0.3, 0.4, 0.6, 0.5]);
+        state
+            .apply(ColorAction::Select {
+                slot: ColorSlot::Transparent,
+            })
+            .unwrap();
+        let before = state.clone();
+        for (index, value) in [
+            (4, 0.5),
+            (0, -0.1),
+            (1, 1.1),
+            (2, f32::NAN),
+            (3, f32::INFINITY),
+        ] {
+            assert!(
+                state
+                    .apply(ColorAction::RgbaComponent { index, value })
+                    .is_err()
+            );
+            assert_eq!(state, before);
+        }
+        state
+            .apply(ColorAction::RgbaComponent {
+                index: 1,
+                value: 0.7,
+            })
+            .unwrap();
+        assert_eq!(state.slot, ColorSlot::Foreground);
+        close(state.rgba(), [0.3, 0.7, 0.6, 0.5]);
     }
     #[test]
     fn both_spaces_and_wheel_markers_roundtrip() {

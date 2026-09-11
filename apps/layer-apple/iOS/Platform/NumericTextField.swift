@@ -35,7 +35,7 @@ struct NumericTextField: UIViewRepresentable {
             let coordinator = context.coordinator
             DispatchQueue.main.async { [weak field] in
                 guard coordinator.parent.focused, let field, !field.isFirstResponder else { return }
-                if field.becomeFirstResponder() { field.selectAll(nil) }
+                field.becomeFirstResponder()
             }
         } else if !focused && field.isFirstResponder { field.resignFirstResponder() }
     }
@@ -43,7 +43,12 @@ struct NumericTextField: UIViewRepresentable {
         var parent: NumericTextField
         init(_ parent: NumericTextField) { self.parent = parent }
         @objc func changed(_ field: UITextField) { parent.text = field.text ?? "" }
-        func textFieldDidBeginEditing(_ textField: UITextField) { if !parent.focused { parent.focused = true } }
+        func textFieldDidBeginEditing(_ textField: UITextField) {
+            if !parent.focused { parent.focused = true }
+            DispatchQueue.main.async { [weak textField] in
+                if let textField, textField.isFirstResponder { textField.selectAll(nil) }
+            }
+        }
         func textFieldDidEndEditing(_ textField: UITextField) { if parent.focused { parent.focused = false } }
         func textFieldShouldReturn(_ textField: UITextField) -> Bool { parent.submit() }
     }
