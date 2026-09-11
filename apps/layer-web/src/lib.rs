@@ -65,6 +65,12 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn set_transform_preview(
+        &mut self,
+        preview: Option<&layer_render::TransformPreview>,
+    ) -> Result<(), Self::Error> {
+        self.renderer()?.set_transform_preview(preview)
+    }
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,

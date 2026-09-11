@@ -99,6 +99,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     pending_smudge_dabs: Vec<Dab>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
+    transform_preview: Option<layer_render::TransformPreview>,
     rebuild_all: bool,
     composite_all: bool,
     animation_origin_ns: Option<u64>,
@@ -152,6 +153,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             pending_smudge_dabs: Vec::with_capacity(MAX_SMUDGE_DABS_PER_BATCH),
             dabs: Vec::with_capacity(capacity.dabs_per_frame),
             batches: Vec::with_capacity(capacity.batches_per_frame),
+            transform_preview: None,
             rebuild_all: true,
             composite_all: true,
             animation_origin_ns: None,
@@ -287,6 +289,29 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
+    /// Disposable absolute pixel transform. History changes only on Apply.
+    pub fn set_transform_preview(
+        &mut self,
+        preview: Option<layer_render::TransformPreview>,
+    ) -> Result<(), DocumentError> {
+        if let Some(p) = &preview {
+            let doc = self.document();
+            if self.has_active_stroke()
+                || doc.is_locked(p.layer)
+                || doc
+                    .layer(p.layer)
+                    .is_none_or(|l| l.kind != layer_core::LayerKind::Paint)
+                || p.transform.affine.inverse().is_none()
+            {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Select an unlocked paint layer and finish the stroke",
+                ));
+            }
+        }
+        self.transform_preview = preview;
+        Ok(())
+    }
+
     /// Append an ordered raster operation without replaying unchanged strokes.
     /// Undo/device recovery still replay the same durable operation definition.
     pub fn append_layer_operation(
@@ -314,6 +339,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let damage = operation.bounds([self.document().width, self.document().height]);
         layer.operations.push(operation);
         self.editor.perform(Edit::ReplaceLayer(Box::new(layer)))?;
+        self.transform_preview = None;
         self.batches.push(DabBatch {
             stroke_id: StrokeId(0),
             layer_id: id,
@@ -422,6 +448,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
         let image = self.editor.undo_changes_image();
         let changed = self.editor.undo()?;
+        self.transform_preview = None;
         self.rebuild_all |= changed && image;
         Ok(changed)
     }
@@ -429,6 +456,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
         let image = self.editor.redo_changes_image();
         let changed = self.editor.redo()?;
+        self.transform_preview = None;
         self.rebuild_all |= changed && image;
         Ok(changed)
     }
@@ -463,6 +491,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let changes_composite =
             edit.changes_image() && !matches!(&edit, Edit::SetActiveLayer { .. });
         self.editor.perform(edit)?;
+        self.transform_preview = None;
         self.rebuild_all |= rebuild;
         self.composite_all |= changes_composite;
         Ok(())
@@ -530,6 +559,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let result = self
             .backend
             .set_selection_outline(self.editor.document().selection.as_ref())
+            .and_then(|_| {
+                self.backend
+                    .set_transform_preview(self.transform_preview.as_ref())
+            })
             .and_then(|_| self.backend.submit(packet))
             .map_err(EngineError::Backend);
 
@@ -637,6 +670,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         transform.surface_to_document[5] -= offset.y;
         match event.phase {
             PenPhase::Down => {
+                self.transform_preview = None;
                 if self.active_stroke.is_some() {
                     self.cancel_active();
                 }
@@ -1424,10 +1458,18 @@ mod tests {
         preview: Vec<Dab>,
         styles: Vec<DabStyle>,
         saw_reset: bool,
+        transform: Option<layer_render::TransformPreview>,
     }
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn set_transform_preview(
+            &mut self,
+            preview: Option<&layer_render::TransformPreview>,
+        ) -> Result<(), Self::Error> {
+            self.transform = preview.cloned();
+            Ok(())
+        }
 
         fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error> {
             self.size = [width, height];
@@ -1612,6 +1654,54 @@ mod tests {
             engine.render_frame().unwrap();
             assert_eq!(engine.document().strokes().count(), 1);
         }
+    }
+
+    #[test]
+    fn transform_preview_is_not_history_and_edits_or_new_strokes_cancel_it() {
+        let (mut producer, consumer) = input_queue(32);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("preview", 128, 128),
+            consumer,
+            view(128, 128),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        engine.render_frame().unwrap();
+        let initial = engine.document().clone();
+        let mut preview = layer_render::TransformPreview {
+            transaction: 1,
+            layer: initial.active_layer,
+            selection: None,
+            transform: layer_core::ImageTransform::default(),
+        };
+        for x in [12., 100., -23.] {
+            preview.transform.affine = layer_core::Affine::translation(Point { x, y: 4. });
+            engine.set_transform_preview(Some(preview.clone())).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(engine.backend.transform.as_ref(), Some(&preview));
+            assert_eq!(engine.document().revision, initial.revision);
+            assert_eq!(engine.document().layers, initial.layers);
+            assert!(!engine.can_undo());
+        }
+        engine.set_transform_preview(None).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.backend.transform.is_none());
+        engine.set_transform_preview(Some(preview.clone())).unwrap();
+        producer.push(event(1, PenPhase::Down, 20.)).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.backend.transform.is_none());
+        assert!(engine.set_transform_preview(Some(preview.clone())).is_err());
+        producer.push(event(2, PenPhase::Up, 80.)).unwrap();
+        engine.render_frame().unwrap();
+        engine.set_transform_preview(Some(preview.clone())).unwrap();
+        engine.undo().unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.backend.transform.is_none());
+        engine.set_transform_preview(Some(preview)).unwrap();
+        engine.set_layer_opacity(initial.active_layer, 0.5).unwrap();
+        engine.render_frame().unwrap();
+        assert!(engine.backend.transform.is_none());
     }
 
     #[test]

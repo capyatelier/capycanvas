@@ -620,6 +620,7 @@ impl Scene {
             || (!packet.composite_all && !dirty.is_empty());
         let unidentified_paint = painting
             && packet.dab_batches.is_empty()
+            && r.transform_damage.is_empty()
             && self.images.preview_layer.is_none()
             && r.preview_layer_id.is_none();
         let mut changes: Vec<PixelRect> = packet
@@ -633,6 +634,7 @@ impl Scene {
                     && (unidentified_paint
                         || self.images.preview_layer == Some(l.id)
                         || r.preview_layer_id == Some(l.id)
+                        || r.transform_damage.iter().any(|(id, _)| *id == l.id)
                         || packet.dab_batches.iter().any(|b| {
                             b.layer_id == l.id
                                 || l.mask.as_ref().is_some_and(|m| m.id == b.layer_id)

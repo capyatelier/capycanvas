@@ -245,6 +245,16 @@ pub struct RegionResult {
     pub pixels: std::sync::Arc<layer_core::SelectionPixels>,
 }
 
+/// Absolute, disposable transform of one immutable layer-local source. Keep the
+/// transaction id and selection fixed while dragging; a new id captures anew.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransformPreview {
+    pub transaction: u64,
+    pub layer: LayerId,
+    pub selection: Option<layer_core::Selection>,
+    pub transform: layer_core::ImageTransform,
+}
+
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
 /// `submit` consumes the borrowed frame without retaining it and enqueues GPU
@@ -253,6 +263,14 @@ pub struct RegionResult {
 /// resources; the trait intentionally exposes no host pixel target.
 pub trait CanvasRenderer {
     type Error: std::error::Error + 'static;
+    /// Applied by the next submit. None restores the captured original before
+    /// subsequent paint/operations. This performs no readback or blocking wait.
+    fn set_transform_preview(
+        &mut self,
+        _preview: Option<&TransformPreview>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     /// Display-only selection. It never changes paint, export or sampling input.
     fn set_selection_outline(
         &mut self,
