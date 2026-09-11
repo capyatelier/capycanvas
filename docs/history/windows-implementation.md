@@ -882,3 +882,13 @@ package import, full editor columns/drawers/expansion/docking, remaining command
 coverage and native packaging are not complete. The full Windows editor preset
 remains gated. These checks do not establish physical drag/pen/touch behavior,
 full matched-state visual parity, 120 Hz painting or input-to-present latency.
+
+The publication integrates main through ec71032, including the shared collapsed
+column gesture correction, Tool tab naming, diagnostic row order, header battery
+artwork and bounded Ripple phase. The final tree passes 279 UI/host/Windows unit
+checks (three explicit GPU tests ignored), the native build and the complete
+Layers fixture. The preceding merge also passes strict Windows adapter Clippy,
+the hardware D3D12 spatial-filter linear-sampling oracle, all native effects
+checks and startup, shader-warmup, minimized clean and dirty close lifecycle
+checks. The last incoming change affects shared column resize policy; all shared
+UI tests and the native Layers fixture pass again after that integration.
