@@ -80,6 +80,7 @@ impl ClockVisibility {
 pub struct Settings {
     pub version: u32,
     pub theme: Option<Theme>,
+    // Keep the persisted key compatible with the original clock-only setting.
     pub show_clock: ClockVisibility,
     pub dark_base: HexColor,
     pub light_base: HexColor,
@@ -676,7 +677,7 @@ impl Settings {
                     ),
                     row(
                         ShowClock,
-                        "Show clock",
+                        "Show battery and clock",
                         "",
                         PreferenceKind::Choice {
                             presentation: ChoicePresentation::Dropdown,
@@ -1321,7 +1322,7 @@ mod copy_tests {
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut settings = original.clone();
             let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
-            assert_eq!(row.title, "Show clock");
+            assert_eq!(row.title, "Show battery and clock");
             assert!(matches!(
                 row.kind,
                 PreferenceKind::Choice { selected: 0, .. }

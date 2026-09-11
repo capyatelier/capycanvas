@@ -60,7 +60,7 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #canvas-cursor .cursor-outline-front { stroke: white; stroke-dasharray: 3 3; }
 #canvas-cursor .cursor-marker-back { stroke-width: 3; }
 #canvas-cursor .cursor-marker-front { stroke: white; }
-#header { position: absolute; inset: 0 0 auto; height: 48px; padding: 6px; display: flex; align-items: center; justify-content: space-between; background: transparent; z-index: 1000; }
+#header { --header-item-gap:6px; --header-text-padding:12px; position: absolute; inset: 0 0 auto; height: 48px; padding: 6px; display: flex; align-items: center; justify-content: space-between; gap:var(--header-item-gap); background: transparent; z-index: 1000; }
 #header nav > button, .header-menu > summary, #document-title { background: var(--bg); border-radius: 6px; }
 :where(:root:not([data-touch])) #header nav > button:hover, :where(:root:not([data-touch])) .header-menu > summary:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 #header nav > button:active, .header-menu > summary:active { background: color-mix(in srgb, var(--bg), var(--text) 16%); }
@@ -70,9 +70,10 @@ body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #zen-button[aria-pressed="true"] { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
 .zen-hidden #zen-button[aria-pressed="true"] { background: var(--bg); }
 :root:not([data-touch]) #zen-button:hover { background: color-mix(in srgb, var(--bg), var(--text) 8%); }
-#header nav { display: flex; align-items: center; gap: 6px; z-index: 1; }
-#document-title { position: absolute; left: 50%; transform: translateX(-50%); font-weight: 600; white-space: nowrap; padding: 4px 8px; height: 36px; line-height: 28px; }
+#header nav { display: flex; align-items: center; gap:var(--header-item-gap); z-index: 1; }
+#document-title { position: absolute; left: 50%; transform: translateX(-50%); font-weight: 600; white-space: nowrap; padding:0 var(--header-text-padding); height:36px; line-height:36px; }
 .header-menu { position: relative; }
+.header-menu > summary { padding:0 var(--header-text-padding); }
 summary { list-style: none; display: flex; align-items: center; }
 summary::-webkit-details-marker { display: none; }
 .popover { position: absolute; top: 40px; left: 0; background: var(--popover); padding: 6px; min-width: 168px; border-radius: 10px; box-shadow: 0 6px 20px #0005; }
@@ -518,8 +519,8 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .document-dialog h2 { margin:0; font-size:1.15em; }
 .document-dialog footer { display:flex; gap:8px; justify-content:flex-end; }
 @media(max-width:850px) {
-  #header-start { gap:0 !important; }
-  .header-menu > summary { padding:0 6px; font-size:12px; }
+  #header { --header-item-gap:0px; --header-text-padding:6px; }
+  .header-menu > summary { font-size:12px; }
   #document-title { display:none; }
 }
 .drawer-bridge { position:absolute; fill:var(--panel); pointer-events:auto; }
@@ -528,8 +529,10 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 #document-title { position:static; transform:none; left:auto; flex:1; min-width:0; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .window-fullscreen #document-title { text-align:right; }
 #header-end { flex-shrink:0; }
-.system-status { display:flex; align-items:center; gap:10px; padding:0 6px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.system-status[hidden], #system-clock[hidden], .system-battery[hidden], .battery-charging[hidden] { display:none; }
+.system-status { display:flex; align-items:center; gap:var(--header-item-gap); white-space:nowrap; font-variant-numeric:tabular-nums; }
+#system-clock { display:flex; align-items:center; height:36px; padding:0 var(--header-text-padding); }
+.system-status-tile { display:grid; place-items:center; width:36px; height:36px; flex:none; }
+.system-status[hidden], #system-clock[hidden], .system-status-tile[hidden], .system-battery[hidden], .battery-charging[hidden] { display:none; }
 .system-battery { --battery-fill:#e5e7eb; --battery-track:#a3a8b0; --battery-ink:#202226; display:inline-block; position:relative; width:26px; height:14px; }
 body[data-theme="light"] .system-battery { --battery-fill:#3f4246; --battery-track:#707479; --battery-ink:#fff; }
 .system-battery.low { --battery-fill:#bc9996; --battery-track:#a3a8b0; --battery-ink:#202226; }

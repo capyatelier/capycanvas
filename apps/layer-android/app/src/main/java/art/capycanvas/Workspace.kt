@@ -345,11 +345,11 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             }
             if (showTitle) state.array("tabs").optJSONObject(0)?.let { tab ->
                 Text("${tab.optString("title")}${if (state.getJSONObject("document_file").optBoolean("modified")) " •" else ""} · ${tab.optInt("width")} × ${tab.optInt("height")}",
-                    Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = 8.dp),
+                    Modifier.widthIn(max = 350.dp).testTag("document-title").padding(horizontal = 12.dp),
                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Android always uses an immersive fullscreen workspace.
-            SystemStatus(showClock = state.getJSONObject("settings").optString("show_clock") != "never")
+            if (state.getJSONObject("settings").optString("show_clock") != "never") SystemStatus()
             IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip"), modifier = Modifier.testTag("header-settings")) { host.invoke("settings") }
         }
     }
