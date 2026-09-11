@@ -50,7 +50,7 @@ mod selection_clip;
 mod telemetry;
 pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
-pub use present::ViewportPresenter;
+pub use present::{OverviewPlacement, ViewportPresenter};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const EXPORT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;

@@ -9,6 +9,8 @@ use layer_render::{DabStyle, ViewState};
 mod figures;
 #[path = "paint_transform_tests.rs"]
 mod transforms;
+#[path = "overview_tests.rs"]
+mod overviews;
 
 fn view() -> ViewState {
     ViewState {

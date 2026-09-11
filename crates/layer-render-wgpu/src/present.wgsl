@@ -32,6 +32,12 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
 fn display_color(rgb: vec3<f32>) -> vec3<f32> {
     return select(rgb * 12.92, 1.055 * pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055, rgb > vec3<f32>(0.0031308));
 }
+fn window_coverage(surface: vec2<f32>) -> f32 {
+    let radius = camera.viewport.w;
+    let q = abs(surface - camera.viewport.xy * 0.5) - camera.viewport.xy * 0.5 + radius;
+    let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    return select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
+}
 @fragment fn fs_main(vertex: Vertex) -> @location(0) vec4<f32> {
     let surface = vertex.uv * camera.viewport.xy;
     let p = vec2<f32>(dot(camera.inverse.xz, surface), dot(camera.inverse.yw, surface)) + camera.offset_document.xy;
@@ -52,10 +58,7 @@ fn display_color(rgb: vec3<f32>) -> vec3<f32> {
         }
     }
     // Signed distance to the full-window rounded rectangle; no inset/cropping.
-    let radius = camera.viewport.w;
-    let q = abs(surface - camera.viewport.xy * 0.5) - camera.viewport.xy * 0.5 + radius;
-    let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
-    let coverage = select(1.0, clamp(0.5 - distance, 0.0, 1.0), radius > 0.0);
+    let coverage = window_coverage(surface);
     return vec4<f32>(rgb * coverage, coverage);
 }
 
@@ -92,8 +95,41 @@ struct CursorVertex {
         alpha = clamp(0.5 - d, 0., 1.);
         white = clamp(0.5 - scale - d, 0., 1.);
     }
-    let radius = camera.viewport.w;
-    let q = abs(v.position.xy-camera.viewport.xy*0.5)-camera.viewport.xy*0.5+radius;
-    let clip = select(1.0, clamp(0.5-length(max(q,vec2<f32>(0.0)))-min(max(q.x,q.y),0.0)+radius,0.0,1.0), radius > 0.0);
+    let clip = window_coverage(v.position.xy);
     return vec4<f32>(vec3<f32>(white), alpha) * clip;
+}
+
+struct OverviewVertex {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) ab: vec4<f32>,
+    @location(2) @interpolate(flat) cd: vec4<f32>,
+    @location(3) @interpolate(flat) outline: vec4<f32>,
+    @location(4) @interpolate(flat) background_scale: vec4<f32>,
+};
+@vertex fn overview_vertex(@builtin(vertex_index) index: u32,
+    @location(0) bounds: vec4<f32>, @location(1) ab: vec4<f32>, @location(2) cd: vec4<f32>,
+    @location(3) outline: vec4<f32>, @location(4) background_scale: vec4<f32>) -> OverviewVertex {
+    let corners = array(vec2(0.,0.), vec2(1.,0.), vec2(0.,1.), vec2(0.,1.), vec2(1.,0.), vec2(1.,1.));
+    let uv = corners[index];
+    let point = bounds.xy + uv * bounds.zw;
+    return OverviewVertex(vec4(point / camera.viewport.xy * vec2(2.,-2.) + vec2(-1.,1.),0.,1.), uv, ab, cd, outline, background_scale);
+}
+fn overview_edge(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let d = b-a;
+    return length(p-a-d*clamp(dot(p-a,d)/max(dot(d,d),.000001),0.,1.));
+}
+@fragment fn overview_fragment(v: OverviewVertex) -> @location(0) vec4<f32> {
+    let paint = sample_overview(canvas, canvas_sampler, v.uv, fwidth(v.uv));
+    var rgb = paint.rgb + v.background_scale.rgb * (1.-paint.a);
+    let p = v.position.xy;
+    let edge = min(min(overview_edge(p,v.ab.xy,v.ab.zw),overview_edge(p,v.ab.zw,v.cd.xy)),
+                   min(overview_edge(p,v.cd.xy,v.cd.zw),overview_edge(p,v.cd.zw,v.ab.xy)));
+    let scale = v.background_scale.w;
+    rgb = mix(rgb,vec3(1.),clamp(1.5*scale+.5-edge,0.,1.));
+    rgb = mix(rgb,v.outline.rgb,clamp(.75*scale+.5-edge,0.,1.));
+    if camera.viewport.z > .5 { rgb = display_color(rgb); }
+    let opacity = v.outline.a;
+    // Keep destination window alpha; only mix color inside its coverage.
+    return vec4(rgb * opacity * window_coverage(p),opacity);
 }

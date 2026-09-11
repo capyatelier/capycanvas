@@ -1671,3 +1671,61 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   non-Metal Apple warnings remain. This is shared-source integration, not new
   Apple-device validation. The temporary Vulkan tracing source and binary were
   removed; only test-only timing/preview assertions remain in the application.
+
+### GPU overview presentation foundation (GTK connection still pending)
+
+- Tested a bounded four-buffer GBM/DMA-buffer preview transport locally. Buffers
+  were reused only after GDK's texture-release callback; steady mapped writes
+  were inexpensive. Nevertheless the full workspace actually using
+  `GdkDmabufTexture` regressed to 115.39/111.34Hz in paired G-Pen runs, with GTK
+  paint p99 of 16.56/23.68ms. Reusing backing storage alone does not remove GTK's
+  import/presentation stalls. The temporary integration, dependency declarations
+  and diagnostic output field were removed, not left as another rendering path.
+  Separate rectangular GraphicsOffload probes also fell back (verified through
+  Wayland attachment requests); they are not evidence of successful offload.
+- Added opt-in overview rendering to the existing `ViewportPresenter`. Native
+  hosts can supply image bounds, camera work-area corners, colors, scale and
+  opacity. The presenter samples its existing document composition and draws all
+  overviews with one instanced draw inside the existing viewport pass. There is
+  no preview image, image upload, pixel readback, extra submission or additional
+  compositor surface. Work-area outlines are drawn in that same shader.
+- The overview pipeline is prepared only for hosts that request it, using the
+  renderer's pipeline cache. Each placement uses an 80-byte record; a single
+  overview retains a 128-byte vertex buffer. Geometry/color changes reuse this
+  buffer; identical placements upload nothing. Hidden overviews draw nothing.
+  Native integration must prewarm the optional pipeline during startup, before
+  accepting drawing input, and present placements through the existing worker.
+- Exported previews and in-surface overviews share the same sixteen-tap linear,
+  premultiplied-color sampling function. Direct overviews sample at their final
+  physical size, whereas exported previews retain their existing 256px limit.
+  This is not a claim of pixel identity to the two-stage GTK-scaled export.
+  Window coverage is shared with canvas/cursor presentation; overview blending
+  retains destination alpha so it cannot thicken antialiased window corners.
+- Release renderer-only benchmark: 2048×1536 output, 40 warmups, 120 measured
+  frames per case. CPU covers presenter setup/encoding/submission; GPU is the
+  queue span between timestamp markers, including submission gaps. Values are
+  median/p95/p99 milliseconds, not physical input-to-display latency:
+
+  | Overview workload | CPU | GPU |
+  | --- | --- | --- |
+  | None | .007 / .017 / .031 | .028 / .034 / .049 |
+  | One, 100×75 | .008 / .027 / .029 | .036 / .051 / .055 |
+  | One, 256×192 | .008 / .015 / .027 | .039 / .043 / .056 |
+  | Two, 256×192 each | .007 / .014 / .026 | .046 / .048 / .061 |
+  | One, with camera/outline updates | .010 / .010 / .016 | .043 / .045 / .046 |
+  | None, repeated control | .007 / .015 / .028 | .028 / .033 / .045 |
+
+- GPU tests cover transparent color composition, linear/sRGB targets, overview
+  bounds, rotated/flipped camera outlines, subsequent painting, multiple views,
+  hiding/reopening, resource reuse and rounded-window alpha. Existing exported
+  Navigator preview and transformed selection-outline regressions also pass.
+  Strict renderer Clippy, workspace/all-targets and WebAssembly checks pass;
+  the native GTK Navigator interaction/capture test passes. Existing non-Metal
+  Apple build warnings remain; no new device validation on other hosts is claimed.
+- **Not connected to GTK yet.** The remaining integration is to leave a native
+  panel's image rectangle transparent while preserving controls, panel stacking,
+  scroll clipping, drawers and fades; send its placement with the existing frame
+  handoff; remove GTK's exported-image polling; and rerun full-window drawing/
+  panning tests with proof that the overview stays live. Renderer-only timing
+  does not close the 120Hz goal. Selection refinements, watercolor boundaries,
+  the historical filter-reference mismatch and final GTK approval remain open.

@@ -70,7 +70,12 @@ impl WgpuRasterizer {
                     .create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("Navigator downsample"),
                         source: wgpu::ShaderSource::Wgsl(
-                            include_str!("canvas_preview.wgsl").into(),
+                            concat!(
+                                include_str!("overview_sample.wgsl"),
+                                "\n",
+                                include_str!("canvas_preview.wgsl")
+                            )
+                            .into(),
                         ),
                     });
                 let layout = self
