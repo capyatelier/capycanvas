@@ -84,6 +84,9 @@ impl CanvasRenderer for Renderer {
     fn prepare_asset(&mut self, id: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error> {
         self.gpu()?.prepare_asset(id, image)
     }
+    fn source_asset(&self, id: &AssetId) -> Option<layer_core::ProjectAsset> {
+        self.0.as_ref()?.source_asset(id)
+    }
     fn release_asset(&mut self, id: &AssetId) {
         if let Some(gpu) = &mut self.0 {
             gpu.release_asset(id);

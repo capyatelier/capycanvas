@@ -539,7 +539,7 @@ impl LayerPage {
 
 struct MaskAsset {
     id: AssetId,
-    source: Vec<u8>,
+    source: std::sync::Arc<[u8]>,
     extent: [u32; 3],
     outline: std::sync::OnceLock<layer_render::TipOutline>,
     _texture: wgpu::Texture,
@@ -634,6 +634,7 @@ pub struct WgpuRasterizer {
     last_time_seconds: f32,
     filter_source_epoch: u64,
     images: std::collections::HashMap<AssetId, (wgpu::TextureView, [u32; 2])>,
+    image_sources: std::collections::HashMap<AssetId, layer_core::ProjectAsset>,
     composite_texture: Option<wgpu::Texture>,
     composite_view: Option<wgpu::TextureView>,
     composite_bind_group: Option<wgpu::BindGroup>,
@@ -936,6 +937,7 @@ impl WgpuRasterizer {
             composite_revision: 0,
             thumbnails: thumbnails::Thumbnails::new(),
             images: Default::default(),
+            image_sources: Default::default(),
             paint_layers: Vec::with_capacity(8),
             composite_texture: None,
             composite_view: None,
@@ -1096,11 +1098,20 @@ impl WgpuRasterizer {
     ) -> Result<(), GpuRasterError> {
         if width == 0
             || height == 0
+            || width > self.device.limits().max_texture_dimension_2d
+            || height > self.device.limits().max_texture_dimension_2d
             || stride < width
             || pixels.len() < stride as usize * height as usize
         {
             return Err(GpuRasterError::InvalidImage);
         }
+        let source = layer_core::ProjectAsset::copy_rows(
+            [width, height],
+            layer_core::ProjectAssetFormat::R8Unorm,
+            stride as usize,
+            pixels,
+        )
+        .map_err(|_| GpuRasterError::InvalidImage)?;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("layer R8 brush tip"),
             size: wgpu::Extent3d {
@@ -1144,8 +1155,8 @@ impl WgpuRasterizer {
         );
         let asset = MaskAsset {
             id: id.clone(),
-            source: pixels.to_vec(),
-            extent: [width, height, stride],
+            source: source.bytes,
+            extent: [width, height, width],
             outline: std::sync::OnceLock::new(),
             _texture: texture,
             view,
@@ -3821,6 +3832,13 @@ impl CanvasRenderer for WgpuRasterizer {
             {
                 return Err(GpuRasterError::InvalidImage);
             }
+            let source = layer_core::ProjectAsset::copy_rows(
+                [image.width, image.height],
+                layer_core::ProjectAssetFormat::Rgba8Srgb,
+                image.stride as usize,
+                image.bytes,
+            )
+            .map_err(|_| GpuRasterError::InvalidImage)?;
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 // Preserve encoded bytes; scene initialization performs the
                 // shared sRGB-to-linear conversion once on the GPU.
@@ -3854,6 +3872,7 @@ impl CanvasRenderer for WgpuRasterizer {
                     [image.width, image.height],
                 ),
             );
+            self.image_sources.insert(asset.clone(), source);
             return Ok(());
         }
         if image.format != PixelFormat::R8Unorm {
@@ -3862,8 +3881,21 @@ impl CanvasRenderer for WgpuRasterizer {
         self.upload_mask(asset, image.width, image.height, image.stride, image.bytes)
     }
 
+    fn source_asset(&self, asset: &AssetId) -> Option<layer_core::ProjectAsset> {
+        if let Some(source) = self.image_sources.get(asset) {
+            return Some(source.clone());
+        }
+        let mask = self.mask(asset).ok()?;
+        Some(layer_core::ProjectAsset {
+            extent: [mask.extent[0], mask.extent[1]],
+            format: layer_core::ProjectAssetFormat::R8Unorm,
+            bytes: mask.source.clone(),
+        })
+    }
+
     fn release_asset(&mut self, asset: &AssetId) {
         self.images.remove(asset);
+        self.image_sources.remove(asset);
         self.masks.retain(|stored| stored.id != *asset);
         self.texture_sets.clear();
     }

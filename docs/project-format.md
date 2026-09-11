@@ -21,6 +21,15 @@ Known versioned built-in brush assets may be resolved from the app; custom
 textures and imported images must be embedded. Source pixels are retained for
 replay, not rendered on the CPU. Saving needs no canvas readback.
 
+`CanvasRenderer::source_asset` exposes shared immutable storage for uploaded
+images and masks. `Project::snapshot_with` requests only reachable dependencies;
+when the renderer supplies a built-in mask, its exact bytes are embedded too.
+The wgpu backend retains packed sRGB imports (four bytes per pixel) and shares
+its existing mask source storage. Row padding is excluded, and releasing an
+asset releases the renderer's source reference. Archive snapshots keep their own
+Arc references. Import/save memory peaks and storage scheduling still need
+hardware measurement; no full-resolution generated canvas copy is retained.
+
 ## Container and validation
 
 Version one is `CAPYPROJECT` followed by byte `1`, then a gzip stream containing
@@ -79,7 +88,13 @@ batch group, not unrelated strokes in a full document replay.
 - Optional `CAPY_PROJECT_CAPTURES` writes generated test PNGs for inspection;
   use a directory under ignored `artifacts/`, never commit those captures.
 
-GTK file dialogs, save cancellation and unsaved-work behavior are not covered by
-these codec tests. Browser/Android/Apple project UI and GPU replay are not yet
-device-tested. The independent historical filter-reference discrepancy remains
-open as documented in [runtime-filters.md](runtime-filters.md).
+The GPU project workload also passes on Metal. The Apple bridge suite separately
+checks both iPad and Mac session configurations: import, textured painting,
+applied mask, transform, project round trip, exact fresh-GPU pixels, then new
+painting and undo. Source access shares immutable storage. The fixture uses
+real editor actions, with no OS-menu automation.
+
+GTK/Apple file dialogs, save cancellation, unsaved-work behavior and physical
+iPad project UI/replay are not covered by these codec tests. Browser and Android
+project workflows also remain. The independent historical filter-reference
+discrepancy remains open as documented in [runtime-filters.md](runtime-filters.md).
