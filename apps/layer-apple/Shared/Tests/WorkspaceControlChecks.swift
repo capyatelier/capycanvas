@@ -1,10 +1,32 @@
 import XCTest
 
 extension XCTestCase {
+    @MainActor private func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
+        #if os(macOS)
+        return app.windows.firstMatch
+        #else
+        return app
+        #endif
+    }
     @MainActor private func workspaceActivate(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10))
         #if os(macOS)
-        element.click()
+        if element.isHittable {
+            element.click()
+        } else {
+            // SwiftUI's offset controls inside a scroll view can have a valid
+            // visible frame without an XCTest hit point. Use measured editor
+            // bounds for this in-app fallback; resulting state is still checked.
+            let window = XCUIApplication().windows.firstMatch
+            let frame = element.frame
+            guard frame.width > 0, frame.height > 0,
+                frame.midX.isFinite, frame.midY.isFinite, window.frame.contains(frame) else {
+                XCTFail("The workspace control must have finite bounds inside its editor window")
+                return
+            }
+            window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: frame.midX - window.frame.minX, dy: frame.midY - window.frame.minY)).click()
+        }
         #else
         element.tap()
         #endif
@@ -31,9 +53,9 @@ extension XCTestCase {
         let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
         if !drawer.waitForExistence(timeout: 2) { workspaceActivate(pen) }
         XCTAssertTrue(drawer.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.frame.contains(drawer.frame), "The shared drawer bounds must stay within the viewport")
+        XCTAssertTrue(workspaceViewport(in: app).frame.contains(drawer.frame), "The shared drawer bounds must stay within the viewport")
         XCTAssertTrue(drawer.buttons["brush-1"].exists)
-        let outside = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.7))
+        let outside = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.7))
         #if os(macOS)
         outside.click()
         #else
@@ -111,7 +133,7 @@ extension XCTestCase {
         let grip = app.descendants(matching: .any)["group-options-6"].firstMatch
         XCTAssertTrue(grip.waitForExistence(timeout: 5))
         let original = grip.frame
-        let target = app.coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.48))
+        let target = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.48))
         let start = grip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         #if os(macOS)
         start.click(forDuration: 0.1, thenDragTo: target)
