@@ -3,7 +3,7 @@
 use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
-use layer_render_wgpu::{GpuRasterError, ViewportPresenter, WgpuRasterizer};
+use layer_render_wgpu::{GpuRasterError, StartupProgress, ViewportPresenter, WgpuRasterizer};
 use layer_ui::{UiAction, UiSession, ui_catalog};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -13,6 +13,8 @@ pub struct WebApp {
     session: UiSession<WebRenderer>,
     canvas: web_sys::HtmlCanvasElement,
     sequence: u64,
+    startup: StartupProgress,
+    deferred_contacts: std::collections::BTreeSet<u64>,
 }
 
 #[derive(Deserialize)]
@@ -45,6 +47,7 @@ pub struct WebGpu {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
+    blank_presented: bool,
 }
 
 /// An unattached GPU, not a fallback rasterizer. Only viewport bookkeeping is
@@ -263,7 +266,7 @@ impl WebApp {
         serialize(&self.session.layer_menu(id, mask).map_err(js)?)
     }
     pub fn request_layer_thumbnail(&mut self, request: u64, target: u64) -> Result<bool, JsValue> {
-        if !self.gpu_ready() || self.session.engine().has_pending_document_edits() {
+        if !self.startup.complete || self.session.engine().has_pending_document_edits() {
             return Ok(false);
         }
         self.session
@@ -343,10 +346,89 @@ impl WebApp {
             session,
             canvas,
             sequence: 0,
+            startup: StartupProgress::default(),
+            deferred_contacts: Default::default(),
         })
     }
     pub fn gpu_ready(&self) -> bool {
         self.session.engine().backend().0.is_some()
+    }
+    pub fn brush_ready(&self) -> bool {
+        self.startup.brush_ready
+            && self
+                .session
+                .engine()
+                .backend()
+                .0
+                .as_ref()
+                .is_some_and(|gpu| {
+                    !gpu.renderer.startup_needs_update(
+                        self.session.engine().document(),
+                        self.session.engine().brush(),
+                    )
+                })
+    }
+    pub fn canvas_presented(&self) -> bool {
+        self.session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .is_some_and(|g| g.blank_presented)
+    }
+    pub fn shader_work_pending(&self) -> bool {
+        self.session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .is_some_and(|g| g.renderer.shader_work_pending())
+    }
+    pub fn wait_for_canvas(&self) -> Result<js_sys::Promise, JsValue> {
+        let gpu = self
+            .session
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .ok_or_else(|| js("GPU unavailable"))?;
+        let queue = gpu
+            .renderer
+            .queue()
+            .as_webgpu()
+            .ok_or_else(|| js("WebGPU queue unavailable"))?;
+        Ok(queue.on_submitted_work_done().unchecked_into())
+    }
+    pub fn startup_progress(&mut self) -> Result<JsValue, JsValue> {
+        if let Some(gpu) = &mut self.session.renderer_mut().0 {
+            self.startup = gpu.renderer.poll_startup().map_err(js)?;
+        }
+        serialize(&[
+            self.startup.canvas_ready,
+            self.startup.brush_ready,
+            self.startup.complete,
+        ])
+    }
+    pub fn startup_catalog_submitted(&mut self) {
+        if let Some(gpu) = &mut self.session.renderer_mut().0 {
+            gpu.renderer.startup_catalog_submitted();
+        }
+    }
+    /// Return an owned promise: UI/input may borrow the session while the
+    /// browser validates this one job. No WebApp borrow survives an await.
+    pub fn compile_startup_step(&mut self) -> Result<js_sys::Promise, JsValue> {
+        self.prepare_startup()?;
+        let gpu = self
+            .session
+            .renderer_mut()
+            .0
+            .as_ref()
+            .ok_or_else(|| js("GPU unavailable"))?;
+        let work = gpu.renderer.compile_startup_step();
+        Ok(wasm_bindgen_futures::future_to_promise(async move {
+            work.await.map_err(js)?;
+            Ok(JsValue::UNDEFINED)
+        }))
     }
     pub fn attach_gpu(&mut self, mut gpu: WebGpu) -> Result<(), JsValue> {
         if self.gpu_ready() {
@@ -407,8 +489,9 @@ impl WebGpu {
         }));
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let presenter = ViewportPresenter::new(&device, config.format);
-        let renderer = WgpuRasterizer::from_wgpu(adapter, device, queue)
+        let mut renderer = WgpuRasterizer::from_wgpu_staged(adapter, device, queue)
             .map_err(|error| gpu_error("renderer", error))?;
+        renderer.wait_for_startup_catalog();
         if let Some(error) = validation.pop().await {
             return Err(gpu_error("renderer", error));
         }
@@ -418,7 +501,35 @@ impl WebGpu {
             surface,
             config,
             presenter,
+            blank_presented: false,
         })
+    }
+}
+
+impl WebApp {
+    fn prepare_startup(&mut self) -> Result<(), JsValue> {
+        let engine = self.session.engine();
+        let Some(gpu) = &engine.backend().0 else {
+            return Ok(());
+        };
+        if !gpu.blank_presented {
+            return Ok(());
+        }
+        if gpu
+            .renderer
+            .startup_needs_update(engine.document(), engine.brush())
+        {
+            let (document, brush) = (engine.document().clone(), engine.brush().clone());
+            self.session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .unwrap()
+                .renderer
+                .prepare_startup(&document, &brush)
+                .map_err(js)?;
+        }
+        Ok(())
     }
 }
 
@@ -526,6 +637,24 @@ impl WebApp {
         if !self.gpu_ready() && matches!(input, layer_ui::UiInput::Pointer { .. }) {
             return serialize(&layer_ui::InputReply::default());
         }
+        if let layer_ui::UiInput::Pointer { id, phase, .. } = &input {
+            use layer_ui::ContactPhase;
+            if *phase == ContactPhase::Down {
+                self.deferred_contacts.remove(id);
+                if !self.brush_ready() {
+                    self.deferred_contacts.insert(*id);
+                }
+            }
+            if self.deferred_contacts.contains(id) {
+                if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
+                    self.deferred_contacts.remove(id);
+                }
+                return serialize(&layer_ui::InputReply::default());
+            }
+        }
+        if matches!(input, layer_ui::UiInput::Blur) {
+            self.deferred_contacts.clear();
+        }
         serialize(&self.session.input(input).map_err(js)?)
     }
     pub fn layout(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
@@ -594,6 +723,9 @@ impl WebApp {
         if !records.len().is_multiple_of(11) {
             return Err(js("Invalid pen batch length"));
         }
+        if !self.brush_ready() {
+            return Ok((records.len() / 11) as u32);
+        }
         for (index, item) in records.chunks_exact(11).enumerate() {
             if !item.iter().all(|n| n.is_finite()) {
                 return Err(js("Invalid pen sample"));
@@ -646,13 +778,64 @@ impl WebApp {
         if !self.gpu_ready() {
             return serialize(&layer_ui::UiChange::default());
         }
-        let change = self
+        let first = !self
             .session
-            .frame(
-                (now_ms * 1_000_000.0) as u64,
-                (presentation_ms * 1_000_000.0) as u64,
-            )
-            .map_err(js)?;
+            .engine()
+            .backend()
+            .0
+            .as_ref()
+            .unwrap()
+            .blank_presented;
+        let mut change = layer_ui::UiChange::default();
+        if first {
+            // Present only paper without consuming the engine's pending replay.
+            // Loaded strokes and effects retain their initial reset/history.
+            let view = self.session.state().camera.view();
+            let doc = self.session.engine().document();
+            let extent = [doc.width, doc.height];
+            let layers: Vec<_> = doc
+                .layers
+                .iter()
+                .filter(|l| l.kind == layer_core::LayerKind::Background)
+                .cloned()
+                .collect();
+            self.session
+                .renderer_mut()
+                .renderer()
+                .map_err(js)?
+                .submit(FramePacket {
+                    time_seconds: 0.,
+                    view,
+                    document_extent: extent,
+                    layers: &layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: true,
+                    composite_all: true,
+                })
+                .map_err(js)?;
+        } else {
+            self.prepare_startup()?;
+            self.startup = self
+                .session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .unwrap()
+                .renderer
+                .poll_startup()
+                .map_err(js)?;
+            if self.startup.canvas_ready {
+                change = self
+                    .session
+                    .frame(
+                        (now_ms * 1_000_000.) as u64,
+                        (presentation_ms * 1_000_000.) as u64,
+                    )
+                    .map_err(js)?;
+            }
+        }
+        change.canvas_wake |= !self.startup.complete;
         let view = self.session.state().camera.view();
         let surround = self.session.state().palette.surround_linear;
         let mut overlay = Vec::new();
@@ -700,6 +883,7 @@ impl WebApp {
             surround,
         );
         gpu.renderer.queue().present(target);
+        gpu.blank_presented = true;
         serialize(&change)
     }
 }

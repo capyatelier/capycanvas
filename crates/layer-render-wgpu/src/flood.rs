@@ -18,7 +18,7 @@ impl Flood {
     pub fn storage_bytes(&self) -> u64 {
         self.capacity + self.empty.size()
     }
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &PipelineDevice) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("connected region"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[

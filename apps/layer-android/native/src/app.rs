@@ -14,6 +14,7 @@ struct SnapshotKey {
     hide_floating_panels: bool,
     keep_zen_button: bool,
     gpu_ready: bool,
+    startup: layer_render_wgpu::StartupProgress,
     error: Option<String>,
 }
 
@@ -26,6 +27,10 @@ pub(crate) struct App {
     keep_zen_button: bool,
     pub error: Option<String>,
     pub sequence: u64,
+    pub startup: layer_render_wgpu::StartupProgress,
+    deferred_contacts: std::collections::BTreeSet<u64>,
+    #[cfg(target_os = "android")]
+    pub blank_presented: bool,
     #[cfg(target_os = "android")]
     pub profiling: bool,
     #[cfg(target_os = "android")]
@@ -56,6 +61,10 @@ impl App {
             keep_zen_button: true,
             error: None,
             sequence: 0,
+            startup: Default::default(),
+            deferred_contacts: Default::default(),
+            #[cfg(target_os = "android")]
+            blank_presented: false,
             #[cfg(target_os = "android")]
             profiling: false,
             #[cfg(target_os = "android")]
@@ -227,7 +236,18 @@ impl App {
                 });
                 self.dirty = true;
             }
-            if paint && self.session.engine().backend().0.is_some() {
+            if phase == PenPhase::Down {
+                if self.paint_ready() {
+                    self.deferred_contacts.remove(&id);
+                } else {
+                    self.deferred_contacts.insert(id);
+                }
+            }
+            let preparing = self.deferred_contacts.contains(&id);
+            if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
+                self.deferred_contacts.remove(&id);
+            }
+            if paint && !preparing && self.session.engine().backend().0.is_some() {
                 self.sequence += 1;
                 self.enqueue(event)?;
                 if !predicted {
@@ -241,6 +261,16 @@ impl App {
         }
         Ok(())
     }
+    fn paint_ready(&self) -> bool {
+        #[cfg(target_os = "android")]
+        if let Some(gpu) = &self.session.engine().backend().0 {
+            let engine = self.session.engine();
+            if gpu.startup_needs_update(engine.document(), engine.brush()) {
+                return false;
+            }
+        }
+        self.startup.brush_ready
+    }
     /// Check the core revision before building any layout, panel models or JSON.
     /// Camera-only changes return a small patch, without constructing UI models.
     /// Presentation-only state is included because it is not part of UiState.
@@ -252,6 +282,7 @@ impl App {
             hide_floating_panels: self.hide_floating_panels,
             keep_zen_button: self.keep_zen_button,
             gpu_ready: self.session.engine().backend().0.is_some(),
+            startup: self.startup,
             error: self.error.clone(),
         };
         if self.last_snapshot.as_ref() == Some(&key) {
@@ -281,7 +312,8 @@ impl App {
             "panel_measurements": self.session.state().workspace.layout.measurements,
             "chrome_hidden": self.chrome_hidden, "gpu_ready": self.session.engine().backend().0.is_some(),
             "hide_floating_panels": self.hide_floating_panels, "keep_zen_button": self.keep_zen_button,
-            "error": self.error})
+            "canvas_ready": self.startup.canvas_ready, "brush_ready": self.startup.brush_ready,
+            "shaders_ready": self.startup.complete, "error": self.error})
     }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {
         #[derive(Deserialize)]

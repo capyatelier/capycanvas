@@ -65,7 +65,7 @@ impl Preparation {
     }
     pub fn pipeline(
         &mut self,
-        device: &wgpu::Device,
+        device: &PipelineDevice,
         key: &Key,
     ) -> Result<wgpu::ComputePipeline, GpuRasterError> {
         if let Some((_, pipeline)) = self.pipelines.iter().find(|(k, _)| k == key) {

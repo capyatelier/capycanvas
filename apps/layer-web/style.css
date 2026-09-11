@@ -27,6 +27,8 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #gpu-notice { position: absolute; inset: 54px 6px 30px; display: flex; flex-direction: column; padding: 6px; overflow: auto; background: var(--bg); cursor: default; container-type: inline-size; }
 #gpu-notice[hidden] { display: none; }
+.startup-progress { position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%); padding: 6px 12px; border-radius: 6px; background: var(--bg); color: var(--fg); pointer-events: none; }
+.startup-progress[hidden] { display: none; }
 .gpu-help { width: 100%; max-width: 640px; flex: none; margin: auto; padding: 16px 20px; font-size: var(--ui-text-size); line-height: 1.4; user-select: text; overflow-wrap: anywhere; }
 .gpu-help h1 { font-size: var(--ui-text-size); line-height: 1.25; margin: 0 0 8px; }
 .gpu-help h2 { font-size: var(--ui-text-size); margin: 16px 0 8px; }

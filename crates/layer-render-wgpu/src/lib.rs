@@ -23,6 +23,16 @@ use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 mod canvas_preview;
 mod color_sample;
 pub mod pixel_transform;
+mod deferred;
+mod builtin_masks;
+use builtin_masks::builtin_masks;
+use deferred::Deferred;
+mod pipeline_device;
+use pipeline_device::PipelineDevice;
+#[cfg(not(target_arch = "wasm32"))]
+mod shader_cache;
+mod startup;
+pub use startup::StartupProgress;
 mod effect_validation;
 mod effects;
 mod flood;
@@ -541,19 +551,37 @@ struct TextureSet {
 }
 
 struct Pipelines {
-    direct: [wgpu::RenderPipeline; DirectPipelineKind::COUNT],
-    material: [wgpu::RenderPipeline; MaterialPipelineKind::COUNT],
-    watercolor_transport: [wgpu::RenderPipeline; WATERCOLOR_TRANSPORT_STEPS as usize],
-    reservoir: wgpu::RenderPipeline,
-    stroke_edge: wgpu::RenderPipeline,
+    direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
+    material: [Deferred<wgpu::RenderPipeline>; MaterialPipelineKind::COUNT],
+    watercolor_transport: [Deferred<wgpu::RenderPipeline>; WATERCOLOR_TRANSPORT_STEPS as usize],
+    reservoir: Deferred<wgpu::RenderPipeline>,
+    stroke_edge: Deferred<wgpu::RenderPipeline>,
     background: wgpu::RenderPipeline,
     background_empty: wgpu::BindGroup,
     composite: wgpu::RenderPipeline,
-    watercolor_composite: wgpu::RenderPipeline,
-    export: wgpu::RenderPipeline,
+    watercolor_composite: Deferred<wgpu::RenderPipeline>,
+    export: Deferred<wgpu::RenderPipeline>,
 }
 
 impl Pipelines {
+    fn compile_all(&self) {
+        for p in self
+            .direct
+            .iter()
+            .chain(&self.material)
+            .chain(&self.watercolor_transport)
+        {
+            p.compile();
+        }
+        for p in [
+            &self.reservoir,
+            &self.stroke_edge,
+            &self.watercolor_composite,
+            &self.export,
+        ] {
+            p.compile();
+        }
+    }
     fn direct(&self, kind: DirectPipelineKind) -> &wgpu::RenderPipeline {
         &self.direct[kind as usize]
     }
@@ -567,8 +595,9 @@ impl Pipelines {
 /// Headless-capable wgpu brush renderer. A platform presenter can sample the
 /// same composite texture rather than requesting readback.
 pub struct WgpuRasterizer {
+    startup: Option<startup::Startup>,
     adapter: wgpu::Adapter,
-    device: wgpu::Device,
+    device: PipelineDevice,
     queue: wgpu::Queue,
     surface_extent: [u32; 2],
     document_extent: [u32; 2],
@@ -705,6 +734,38 @@ impl WgpuRasterizer {
         device: wgpu::Device,
         queue: wgpu::Queue,
     ) -> Result<Self, GpuRasterError> {
+        Self::from_wgpu_inner(adapter, device.into(), queue, false)
+    }
+
+    /// Show compositing first; the native host drives dependency-prioritized warmup.
+    pub fn from_wgpu_staged(
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Result<Self, GpuRasterError> {
+        Self::from_wgpu_inner(adapter, device.into(), queue, true)
+    }
+
+    /// Native staged startup with a disposable cache in a host-owned private directory.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_wgpu_staged_cached(
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        directory: &std::path::Path,
+    ) -> Result<Self, GpuRasterError> {
+        let device = PipelineDevice::cached(device, &adapter, directory);
+        let mut renderer = Self::from_wgpu_inner(adapter, device, queue, true)?;
+        renderer.startup.as_mut().unwrap().host_catalog_pending = true;
+        Ok(renderer)
+    }
+
+    fn from_wgpu_inner(
+        adapter: wgpu::Adapter,
+        device: PipelineDevice,
+        queue: wgpu::Queue,
+        staged: bool,
+    ) -> Result<Self, GpuRasterError> {
         if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             return Err(GpuRasterError::HardwareAdapterRequired);
         }
@@ -813,6 +874,7 @@ impl WgpuRasterizer {
         let selection_clip = selection_clip::SelectionClip::new(&device);
         let scene_pipelines = scene::Pipelines::new(&device);
         let mut renderer = Self {
+            startup: None,
             telemetry,
             adapter,
             device,
@@ -884,7 +946,23 @@ impl WgpuRasterizer {
             inspection: None,
             metrics: GpuRasterMetrics::default(),
         };
-        renderer.install_builtin_masks()?;
+        if !cfg!(target_arch = "wasm32") || !staged {
+            renderer.install_builtin_masks()?;
+            for pipeline in &renderer.scene_pipelines.pipeline { pipeline.compile(); }
+        }
+        if !staged {
+            renderer.pipelines.compile_all();
+            renderer.layer_masks.compile_all();
+            renderer.selection_clip.compile_all();
+        }
+        if staged {
+            // Web can present paper with the flat compositor; tiled document
+            // composition is prepared next, before loaded content is replayed.
+            renderer.validated_effects = Some(renderer.scene_pipelines.effects(&renderer));
+            #[cfg(not(target_arch = "wasm32"))]
+            { renderer.scene = Some(scene::Scene::new(&renderer)); }
+            renderer.startup = Some(startup::Startup::new(&renderer.device)?);
+        }
         Ok(renderer)
     }
 
@@ -959,49 +1037,9 @@ impl WgpuRasterizer {
     }
 
     fn install_builtin_masks(&mut self) -> Result<(), GpuRasterError> {
-        self.upload_mask(&AssetId::from(WHITE_MASK_ASSET), 1, 1, 1, &[255])?;
-        for (id, bytes) in [
-            (
-                PENCIL_TEXTURE_ASSET,
-                include_bytes!("../../../assets/brushes/pencil-grain.pgm").as_slice(),
-            ),
-            (
-                PAINTBRUSH_TEXTURE_ASSET,
-                include_bytes!("../../../assets/brushes/paint-bristles.pgm").as_slice(),
-            ),
-        ] {
-            let (width, height, pixels) =
-                parse_ascii_pgm(bytes).ok_or(GpuRasterError::InvalidImage)?;
+        for (id, generate) in builtin_masks() {
+            let (width, height, pixels) = generate()?;
             self.upload_mask(&AssetId::from(id), width, height, width, &pixels)?;
-        }
-        for (id, pixels) in [
-            (PAPER_GRAIN_TEXTURE_ASSET, procedural_paper_grain()),
-            (BRISTLE_GRAIN_TEXTURE_ASSET, procedural_bristle_grain()),
-            (WATERCOLOR_TIP_TEXTURE_ASSET, procedural_watercolor_tip()),
-            (
-                WATERCOLOR_TRANSPORT_LONG_NARROW_ASSET,
-                procedural_transport_field(TransportFieldKind::LongNarrow),
-            ),
-            (
-                WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,
-                procedural_transport_field(TransportFieldKind::LongBroad),
-            ),
-            (
-                WATERCOLOR_TRANSPORT_SHORT_NARROW_ASSET,
-                procedural_transport_field(TransportFieldKind::ShortNarrow),
-            ),
-            (
-                WATERCOLOR_TRANSPORT_SHORT_BROAD_ASSET,
-                procedural_transport_field(TransportFieldKind::ShortBroad),
-            ),
-        ] {
-            self.upload_mask(
-                &AssetId::from(id),
-                PROCEDURAL_GRAIN_SIZE,
-                PROCEDURAL_GRAIN_SIZE,
-                PROCEDURAL_GRAIN_SIZE,
-                &pixels,
-            )?;
         }
         Ok(())
     }
@@ -3650,6 +3688,15 @@ impl CanvasRenderer for WgpuRasterizer {
         &mut self,
         request: layer_render::FilterPreviewRequest,
     ) -> Result<bool, Self::Error> {
+        if self
+            .startup
+            .as_ref()
+            .is_some_and(|s| !s.finished || self.effect_validation.is_some())
+        {
+            // Preview rows retry later; they must not synchronously compile the
+            // catalog on the canvas thread while startup work is prioritized.
+            return Ok(false);
+        }
         self.start_filter_previews(request)
     }
     fn request_effect_validation(
@@ -3754,7 +3801,10 @@ impl CanvasRenderer for WgpuRasterizer {
         }
         let started = self.telemetry.enabled.then(web_time::Instant::now);
         let scene_required = needs_scene(packet);
-        if !scene_required {
+        // Staged native initialization already prepared these general layouts
+        // and pipelines. Keep them while displaying the initial paper frame.
+        let keep_scene = self.startup.is_some();
+        if !scene_required && !keep_scene {
             self.scene = None;
         }
         if let Some(scene) = &mut self.scene {
@@ -5741,56 +5791,91 @@ fn compose_wgsl(parts: &[&str]) -> Cow<'static, str> {
     Cow::Owned(source)
 }
 
-fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipelines {
-    let brush = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer dry brush shader"),
-        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-            include_str!("brush.wgsl"),
-            include_str!("selection_clip.wgsl"),
-        ])),
-    });
+fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pipelines {
+    let brush = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer dry brush shader"),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    include_str!("brush.wgsl"),
+                    include_str!("selection_clip.wgsl"),
+                ])),
+            })
+        })
+    };
     let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("layer composite shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
     });
-    let advanced_brush = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer textured dry brush shader"),
-        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-            include_str!("advanced_brush.wgsl"),
-            include_str!("brush_coverage.wgsl"),
-            include_str!("selection_clip.wgsl"),
-        ])),
-    });
-    let material_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer destination brush shader"),
-        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-            include_str!("material_brush.wgsl"),
-            include_str!("brush_coverage.wgsl"),
-            include_str!("selection_clip.wgsl"),
-        ])),
-    });
-    let stroke_edge_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer post-stroke edge shader"),
-        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-            include_str!("stroke_edge.wgsl"),
-            include_str!("selection_clip.wgsl"),
-        ])),
-    });
-    let watercolor_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer live watercolor composite shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("watercolor_composite.wgsl").into()),
-    });
-    let watercolor_transport_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer watercolor capillary transport shader"),
-        source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-            include_str!("watercolor_transport.wgsl"),
-            include_str!("selection_clip.wgsl"),
-        ])),
-    });
-    let export_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("layer export shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("export.wgsl").into()),
-    });
+    let advanced_brush = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer textured dry brush shader"),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    include_str!("advanced_brush.wgsl"),
+                    include_str!("brush_coverage.wgsl"),
+                    include_str!("selection_clip.wgsl"),
+                ])),
+            })
+        })
+    };
+    let material_shader = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer destination brush shader"),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    include_str!("material_brush.wgsl"),
+                    include_str!("brush_coverage.wgsl"),
+                    include_str!("selection_clip.wgsl"),
+                ])),
+            })
+        })
+    };
+    let stroke_edge_shader = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer post-stroke edge shader"),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    include_str!("stroke_edge.wgsl"),
+                    include_str!("selection_clip.wgsl"),
+                ])),
+            })
+        })
+    };
+    let watercolor_shader = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer live watercolor composite shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("watercolor_composite.wgsl").into()),
+            })
+        })
+    };
+    let watercolor_transport_shader = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer watercolor capillary transport shader"),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                    include_str!("watercolor_transport.wgsl"),
+                    include_str!("selection_clip.wgsl"),
+                ])),
+            })
+        })
+    };
+    let export_shader = {
+        let device = device.clone();
+        Deferred::new(move || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer export shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("export.wgsl").into()),
+            })
+        })
+    };
     let analytic_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("layer analytic brush pipeline layout"),
         bind_group_layouts: &[Some(layouts.style), Some(layouts.target)],
@@ -5957,7 +6042,8 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
         ),
     ]
     .map(|(layout, shader, entry, blend, label)| {
-        brush_pipeline(device, layout, shader, entry, blend, label)
+        let (device, layout, shader) = (device.clone(), layout.clone(), shader.clone());
+        Deferred::new(move || brush_pipeline(&device, &layout, &shader, entry, blend, label))
     });
     let max_blend = wgpu::BlendState {
         color: wgpu::BlendComponent {
@@ -6024,55 +6110,80 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
         ),
     ]
     .map(|(targets, label)| {
-        fullscreen_pipeline_targets(
-            device,
-            &material_pipeline_layout,
-            &material_shader,
-            "fragment_main",
-            &targets,
-            label,
-        )
+        let (device, layout, shader) = (
+            device.clone(),
+            material_pipeline_layout.clone(),
+            material_shader.clone(),
+        );
+        Deferred::new(move || {
+            fullscreen_pipeline_targets(&device, &layout, &shader, "fragment_main", &targets, label)
+        })
     });
     let watercolor_transport = std::array::from_fn(|step| {
-        fullscreen_pipeline_targets_with_constants(
-            device,
-            &watercolor_transport_layout,
-            &watercolor_transport_shader,
-            "fragment_main",
-            &[
-                Some(wgpu::ColorTargetState {
-                    format: COLOR_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::RED,
-                }),
-            ],
-            &[("TRANSPORT_PASS", step as f64)],
-            "layer nonlinear watercolor capillary relaxation",
-        )
+        let (device, layout, shader) = (
+            device.clone(),
+            watercolor_transport_layout.clone(),
+            watercolor_transport_shader.clone(),
+        );
+        Deferred::new(move || {
+            fullscreen_pipeline_targets_with_constants(
+                &device,
+                &layout,
+                &shader,
+                "fragment_main",
+                &[
+                    Some(wgpu::ColorTargetState {
+                        format: COLOR_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::RED,
+                    }),
+                ],
+                &[("TRANSPORT_PASS", step as f64)],
+                "layer nonlinear watercolor capillary relaxation",
+            )
+        })
     });
-    let reservoir = fullscreen_pipeline(
-        device,
-        &material_pipeline_layout,
-        &material_shader,
-        "reservoir_fragment",
-        None,
-        COLOR_FORMAT,
-        "layer brush reservoir exchange",
-    );
-    let stroke_edge = fullscreen_pipeline(
-        device,
-        &edge_pipeline_layout,
-        &stroke_edge_shader,
-        "fragment_main",
-        None,
-        COLOR_FORMAT,
-        "layer post-stroke edge",
-    );
+    let reservoir = {
+        let (device, layout, shader) = (
+            device.clone(),
+            material_pipeline_layout.clone(),
+            material_shader.clone(),
+        );
+        Deferred::new(move || {
+            fullscreen_pipeline(
+                &device,
+                &layout,
+                &shader,
+                "reservoir_fragment",
+                None,
+                COLOR_FORMAT,
+                "layer brush reservoir exchange",
+            )
+        })
+    };
+    let stroke_edge = {
+        let (device, layout, shader) = (
+            device.clone(),
+            edge_pipeline_layout.clone(),
+            stroke_edge_shader.clone(),
+        );
+        Deferred::new(move || {
+            fullscreen_pipeline(
+                &device,
+                &layout,
+                &shader,
+                "fragment_main",
+                None,
+                COLOR_FORMAT,
+                "layer post-stroke edge",
+            )
+        })
+    };
     let background = fullscreen_pipeline(
         device,
         &background_layout,
@@ -6091,24 +6202,39 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
         COLOR_FORMAT,
         "layer composition",
     );
-    let watercolor_composite = fullscreen_pipeline(
-        device,
-        &watercolor_pipeline_layout,
-        &watercolor_shader,
-        "fragment_main",
-        Some(paint_blend),
-        COLOR_FORMAT,
-        "layer live watercolor composition",
-    );
-    let export = fullscreen_pipeline(
-        device,
-        &export_layout,
-        &export_shader,
-        "fragment_main",
-        None,
-        EXPORT_FORMAT,
-        "layer sRGB export",
-    );
+    let watercolor_composite = {
+        let (device, layout, shader) = (
+            device.clone(),
+            watercolor_pipeline_layout.clone(),
+            watercolor_shader.clone(),
+        );
+        Deferred::new(move || {
+            fullscreen_pipeline(
+                &device,
+                &layout,
+                &shader,
+                "fragment_main",
+                Some(paint_blend),
+                COLOR_FORMAT,
+                "layer live watercolor composition",
+            )
+        })
+    };
+    let export = {
+        let (device, layout, shader) =
+            (device.clone(), export_layout.clone(), export_shader.clone());
+        Deferred::new(move || {
+            fullscreen_pipeline(
+                &device,
+                &layout,
+                &shader,
+                "fragment_main",
+                None,
+                EXPORT_FORMAT,
+                "layer sRGB export",
+            )
+        })
+    };
     Pipelines {
         direct,
         material,
@@ -6124,7 +6250,7 @@ fn create_pipelines(device: &wgpu::Device, layouts: PipelineLayouts<'_>) -> Pipe
 }
 
 fn brush_pipeline(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
@@ -6143,7 +6269,7 @@ fn brush_pipeline(
 }
 
 fn brush_pipeline_format(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
@@ -6191,7 +6317,7 @@ fn brush_pipeline_format(
 }
 
 fn fullscreen_pipeline(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
@@ -6227,7 +6353,7 @@ fn fullscreen_pipeline(
 }
 
 fn fullscreen_pipeline_targets(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,
@@ -6258,7 +6384,7 @@ fn fullscreen_pipeline_targets(
 }
 
 fn fullscreen_pipeline_targets_with_constants(
-    device: &wgpu::Device,
+    device: &PipelineDevice,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     fragment_entry: &'static str,

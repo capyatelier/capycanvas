@@ -47,7 +47,7 @@ class AndroidHostTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private var originalWorkspace: JSONObject? = null
     @Before fun ready() {
-        compose.waitUntil(60_000) { host.snapshot?.optBoolean("gpu_ready") == true || host.failure != null }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true || host.failure != null }
         assertNull("GPU initialization", host.failure)
         originalWorkspace = JSONObject(state().getJSONObject("workspace").toString())
         compose.runOnIdle {
@@ -1588,6 +1588,7 @@ class AndroidHostTest {
     }
 
     @Test fun cameraNavigationPublishesOnlyReadoutUpdates() {
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("shaders_ready") == true }
         // Warm the camera path, including any initial fit/command changes.
         var aspect = 1f
         instrumentation.runOnMainSync {

@@ -6,6 +6,32 @@ use std::{collections::HashMap, sync::Arc};
 #[path = "effect_preparation.rs"]
 mod preparation;
 
+/// Only immutable GPU handles are shared with the compiler thread.
+pub(super) trait Gpu {
+    fn device(&self) -> &PipelineDevice;
+    fn queue(&self) -> &wgpu::Queue;
+}
+impl Gpu for WgpuRasterizer {
+    fn device(&self) -> &PipelineDevice {
+        &self.device
+    }
+    fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+}
+pub(super) struct Context {
+    pub device: PipelineDevice,
+    pub queue: wgpu::Queue,
+}
+impl Gpu for Context {
+    fn device(&self) -> &PipelineDevice {
+        &self.device
+    }
+    fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+}
+
 // WebGPU guarantees 16 sampled textures per stage. Two are scene inputs;
 // the rest let ordinary aligned masks participate in the same fused shader.
 pub(super) const MASK_SLOTS: usize = 14;
@@ -158,7 +184,7 @@ impl Effects {
     }
     pub fn prepare(
         &mut self,
-        r: &WgpuRasterizer,
+        r: &impl Gpu,
         layers: &[&Layer],
         stage: Execution,
         time: f32,
@@ -182,7 +208,7 @@ impl Effects {
             for (i, (properties, layer)) in old.properties.iter_mut().zip(layers).enumerate() {
                 let seconds = layer.effect.as_ref().unwrap().time_seconds(time);
                 if properties[3] != seconds {
-                    r.queue.write_buffer(
+                    r.queue().write_buffer(
                         &old.buffer,
                         old.offsets[i] as u64 * 16 + 12,
                         &seconds.to_le_bytes(),
@@ -226,12 +252,14 @@ impl Effects {
         } else {
             let source = shader_source(&programs, &offsets, stage)?;
             validate_source(&source)?;
-            let module = r.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("checked pointwise effect"),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
+            let module = r
+                .device()
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("checked pointwise effect"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                });
             let pipeline = fullscreen_pipeline(
-                &r.device,
+                &r.device(),
                 &self.pipeline_layout,
                 &module,
                 "effect_fragment",
@@ -290,7 +318,7 @@ impl Effects {
                     .and_then(|old| old.lookups.get(lookups.len()));
                 if !reusable || old.is_none_or(|old| old.key != key || old.values != values) {
                     dispatches.push((
-                        self.preparation.pipeline(&r.device, &key)?,
+                        self.preparation.pipeline(&r.device(), &key)?,
                         definition.workgroups,
                     ));
                 }
@@ -300,7 +328,7 @@ impl Effects {
         let buffer = if reusable {
             self.instances[&ids].buffer.clone()
         } else {
-            r.device.create_buffer(&wgpu::BufferDescriptor {
+            r.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("effect parameter values"),
                 size: bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -319,7 +347,7 @@ impl Effects {
             }
             let directory = base as usize + 1 + data[base as usize + 1][0] as usize;
             let end = directory + effect.program.lookups.len();
-            r.queue.write_buffer(
+            r.queue().write_buffer(
                 &buffer,
                 u64::from(base) * 16,
                 &bytes[base as usize * 16..end * 16],
@@ -328,7 +356,7 @@ impl Effects {
         let binding = if reusable {
             self.instances[&ids].binding.clone()
         } else {
-            r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            r.device().create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("effect parameter binding"),
                 layout: &self.layout,
                 entries: &[wgpu::BindGroupEntry {
@@ -340,7 +368,7 @@ impl Effects {
         let compute_binding = if reusable {
             self.instances[&ids].compute_binding.clone()
         } else {
-            r.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            r.device().create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("effect preparation binding"),
                 layout: &self.preparation.layout,
                 entries: &[wgpu::BindGroupEntry {

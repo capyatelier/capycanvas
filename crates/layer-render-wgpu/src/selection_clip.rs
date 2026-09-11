@@ -8,8 +8,8 @@ use std::{
 use wgpu::util::DeviceExt;
 
 pub(super) struct SelectionClip {
-    crossings: wgpu::ComputePipeline,
-    fill: wgpu::ComputePipeline,
+    pub(super) crossings: Deferred<wgpu::ComputePipeline>,
+    pub(super) fill: Deferred<wgpu::ComputePipeline>,
     layout: wgpu::BindGroupLayout,
     pub buffer: Option<wgpu::Buffer>,
     pub binding: Option<wgpu::BindGroup>,
@@ -20,7 +20,7 @@ pub(super) struct SelectionClip {
     pixels_bytes: u64,
 }
 impl SelectionClip {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &PipelineDevice) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("selection raster inputs"),
             entries: &[
@@ -29,26 +29,35 @@ impl SelectionClip {
                 buffer_entry(2, wgpu::BufferBindingType::Storage { read_only: false }),
             ],
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("packed selection coverage"),
-            source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
-                include_str!("selection_clip_init.wgsl"),
-                include_str!("selection_geometry.wgsl"),
-            ])),
-        });
+        let shader = {
+            let device = device.clone();
+            Deferred::new(move || {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("packed selection coverage"),
+                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
+                        include_str!("selection_clip_init.wgsl"),
+                        include_str!("selection_geometry.wgsl"),
+                    ])),
+                })
+            })
+        };
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("selection raster layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
         let pipeline = |entry| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("rasterize packed selection"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
+            let (device, pipeline_layout, shader) =
+                (device.clone(), pipeline_layout.clone(), shader.clone());
+            Deferred::new(move || {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("rasterize packed selection"),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             })
         };
         Self {
@@ -64,6 +73,11 @@ impl SelectionClip {
             pixels_bytes: 0,
         }
     }
+    pub fn compile_all(&self) {
+        self.crossings.compile();
+        self.fill.compile();
+    }
+
     pub fn reset(&mut self) {
         self.buffer = None;
         self.binding = None;
