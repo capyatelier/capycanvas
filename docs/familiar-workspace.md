@@ -1355,8 +1355,9 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - Nested collapsed subcolumns retain their state when a containing column also
   collapses. Drawer/context anchors resolve to the visible outer strip until it
   expands, not to a hidden child strip.
-- Still required for columns: final constrained-viewport and native incoming-drop/
-  resize interaction coverage, and the final presentation audit. This is not the
+- Still required for columns: the final presentation audit in the completed
+  default workspace. Native incoming-drop, resize and constrained-viewport coverage
+  is recorded below. This is not the
   full GTK approval milestone. Region refinements, complete menus/file workflows,
   final default layout and full workspace validation remain outstanding.
 
@@ -1383,3 +1384,19 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   Zen and stacked-divider regressions. Dark/light images were visually inspected at
   `artifacts/familiar-workspace/columns-nested-{Dark,Light}.png` (ignored).
   These are GTK interaction checks, not physical-device or frame-rate claims.
+- Further native validation covers nine incoming drag combinations: a panel,
+  complete tab group and standalone toolbar into a collapsed group's tab list,
+  inter-group gap and trailing space. The stable GTK input handler performs the
+  tear-off, hint and release; all resulting panels remain in the collapsed tree.
+  Native divider drags collapse each side, stay latched when moved back, and
+  restore the original width on expansion.
+- Nested drawers were also checked at an actually allocated 640×480 window,
+  with bounds assertions and inspected dark/light captures at
+  `artifacts/familiar-workspace/columns-nested-small-{Dark,Light}.png`.
+  The test unmaximizes and waits for the restore configure before resizing;
+  requesting a smaller default alone did not resize the maximized test window.
+- Scrolling a toolbar origin fully out of view now clears its presented drawer
+  rectangle, so invisible UI cannot intercept canvas contacts. Scrolling it back
+  restores its current geometry; the persistent column drawer remains open.
+  Native tests verify both directions. No test artifacts or local paths are
+  included in the repository.

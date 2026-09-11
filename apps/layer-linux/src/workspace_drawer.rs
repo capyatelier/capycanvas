@@ -546,9 +546,14 @@ impl Drawer {
         place(&heights)
     }
     pub fn geometry(&self, w: &Workspace) -> Option<DrawerPlacement> {
-        let target = self
+        let Some(target) = self
             .target(w)
-            .or_else(|| self.closing.get().then(|| self.placement()).flatten())?;
+            .or_else(|| self.closing.get().then(|| self.placement()).flatten())
+        else {
+            // A scrolled-out origin has no visible child or chrome hit region.
+            self.presented.borrow_mut().take();
+            return None;
+        };
         let end = if self.closing.get() {
             target.closed()
         } else {
