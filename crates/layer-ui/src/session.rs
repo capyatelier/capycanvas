@@ -166,6 +166,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn state(&self) -> &UiState {
         &self.state
     }
+    /// Only committed workspace topology is durable. A process interruption
+    /// during a drag must restore its starting layout, not an intermediate tear-off.
+    pub fn durable_workspace(&self) -> WorkspaceState {
+        let mut workspace = self
+            .workspace_history
+            .gesture_start()
+            .unwrap_or(&self.state.workspace)
+            .clone();
+        workspace.layout.measurements.clear();
+        workspace.layout.column_scroll.clear();
+        workspace
+    }
     pub fn poll_navigator_preview(
         &mut self,
         now_ns: u64,
@@ -6628,7 +6640,7 @@ mod tests {
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
                 let available = platform == Platform::Gtk
-                    || (panel == Panel::ToolSettings
+                    || (matches!(panel, Panel::ToolSettings | Panel::Color)
                         && matches!(platform, Platform::Ios | Platform::Mac));
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),

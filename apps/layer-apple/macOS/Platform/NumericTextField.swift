@@ -15,7 +15,7 @@ struct NumericTextField: NSViewRepresentable {
     @Environment(\.isEnabled) private var enabled
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
+        let field = Field()
         field.isBordered = false; field.drawsBackground = false
         field.focusRingType = .none; field.alignment = .right
         field.lineBreakMode = .byClipping; field.maximumNumberOfLines = 1
@@ -25,6 +25,11 @@ struct NumericTextField: NSViewRepresentable {
     }
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
+        (field as? Field)?.beginEditing = {
+            let beginning = !context.coordinator.parent.focused
+            context.coordinator.parent.focused = true
+            return beginning
+        }
         if field.stringValue != text { field.stringValue = text }
         field.placeholderString = label
         field.font = .systemFont(ofSize: fontSize)
@@ -44,7 +49,9 @@ struct NumericTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: NumericTextField
         init(_ parent: NumericTextField) { self.parent = parent }
-        func controlTextDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            if !parent.focused { parent.focused = true }
+        }
         func controlTextDidChange(_ notification: Notification) {
             if let field = notification.object as? NSTextField { parent.text = field.stringValue }
         }
@@ -59,6 +66,17 @@ struct NumericTextField: NSViewRepresentable {
             case #selector(NSResponder.moveDown(_:)): parent.step(-1); return true
             default: return false
             }
+        }
+    }
+    private final class Field: NSTextField {
+        var beginEditing: () -> Bool = { true }
+        override func mouseDown(with event: NSEvent) {
+            // AppKit's didBeginEditing notification arrives on the first text
+            // change. The field editor can already exist before mouseDown;
+            // use our focus binding to identify and publish a new edit.
+            let beginning = beginEditing()
+            super.mouseDown(with: event)
+            if beginning { currentEditor()?.selectAll(nil) }
         }
     }
 }

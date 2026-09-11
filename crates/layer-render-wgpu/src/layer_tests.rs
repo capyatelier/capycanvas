@@ -33,6 +33,7 @@ fn dab(color: [f32; 4]) -> Dab {
 }
 fn batch(id: u64) -> DabBatch {
     DabBatch {
+        material_update: 0,
         stroke_id: StrokeId(1),
         layer_id: LayerId(id),
         kind: DabBatchKind::Persistent,

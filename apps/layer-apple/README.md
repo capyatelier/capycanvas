@@ -47,6 +47,14 @@ slider mappings and stepping resolve through Rust. The shared Apple control
 handles optimistic edits and local validation feedback; small AppKit/UIKit
 adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
 
+Enable **Workspace → Color panel** for the shared HSV square / HLS triangle,
+foreground/background/transparent paint slots, swap and component expressions.
+Rust owns color conversion, hue memory, normalized geometry, hit regions and
+drag clamping. Both native hosts share the gradient drawing and controls; their
+small input views latch the starting region for each mouse, Pencil or touch
+contact. Picking a color exits transparent paint using the previous paint slot.
+Channel edits update the current Rust state, preserving other queued changes.
+
 For reproducible Debug editor fixtures, `CAPY_INITIAL_ACTIONS` accepts a JSON
 array of shared actions at launch. For example, this opens Tool Settings without
 driving the Mac system menu bar:
@@ -66,7 +74,14 @@ xcrun swiftc apps/layer-apple/Shared/Editor/NumericEditState.swift \
 /tmp/capy-numeric-edit
 cargo test -p layer-apple apple_tool_panels
 cargo test -p layer-apple apple_transform_settings
+cargo test -p layer-apple apple_color_
 ```
+
+The focused `testColorControls` test checks native wheel contacts, color-space
+and paint-slot controls and expression entry on both targets. It retains full
+captures plus measured wheel geometry for the shared
+[color sampling check](../../tools/visual/README.md). The headless ABI tests
+verify resulting brush/eraser pixels and exact Undo without driving menus.
 
 ## Install and run
 
@@ -83,6 +98,11 @@ Physical devices need Developer Mode, pairing, a development certificate/private
 key and a profile covering the selected device. A first Personal Team installation
 may also require trusting the developer account in the device's Settings.
 Team IDs, keys and provisioning profiles are not stored in this repository.
+
+Settings and committed workspace layouts now persist in private Application
+Support files. Settings propagate across live owners; each restored scene keeps
+its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
+failure/retry behavior and fast tests. Artwork save/open/recovery remains pending.
 
 Launch a local Mac build with:
 
@@ -206,7 +226,7 @@ need complete acceptance on both platforms.
 
 Still required: complete panel/drawer/menu/dialog behavior and customization,
 filters/properties and other specialized controls, complete settings/shortcut
-UI, document and preference/workspace persistence, Pencil estimated-property
+UI, document persistence and complete settings/workspace lifecycle coverage, Pencil estimated-property
 corrections, complete hover/sensor/shortcut routing, platform lifecycle coverage,
 full pixel-difference validation, and measured iPad and Mac hardware performance.
 Mac tablet/proximity, mouse, wheel, trackpad and keyboard adapters are present;

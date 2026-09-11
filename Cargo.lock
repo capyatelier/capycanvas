@@ -865,6 +865,7 @@ dependencies = [
 name = "layer-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "serde",
  "serde_json",
 ]
@@ -936,6 +937,7 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "layer-core",
+ "layer-engine",
  "layer-render",
  "libc",
  "naga",

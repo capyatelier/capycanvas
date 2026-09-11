@@ -3,8 +3,26 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testSettingsAndWorkspaceRestart() throws {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        checkSettingsAndWorkspaceRestart(in: app)
+    }
+
+    @MainActor func testColorControls() throws {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"preferences","action":{"type":"edit","id":"theme","value":1}},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}},{"type":"set_color","rgba":[1,0,0,1]}]"#
+        app.launch()
+        checkColorControls(in: app) { mode, wheel in
+            let window = app.windows.firstMatch
+            attachColorFixture(name: "mac-color-" + mode, space: mode,
+                screenshot: window.screenshot(), viewport: window.frame, wheel: wheel)
+        }
+    }
+
     @MainActor func testNumericToolControls() throws {
-        let app = XCUIApplication()
+        let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-AppleInterfaceStyle", "Light"]
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]"#
         app.launch()
@@ -14,7 +32,7 @@ final class EditorLaunchTests: XCTestCase {
     }
 
     @MainActor func testMetalLaunchCaptureAndMouseStroke() throws {
-        let app = XCUIApplication()
+        let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-AppleInterfaceStyle", "Light"]
         app.launch()
         let window = app.windows.firstMatch

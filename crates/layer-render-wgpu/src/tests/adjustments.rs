@@ -253,6 +253,7 @@ fn paint(r: &mut WgpuRasterizer, layers: &[Layer], id: u64, color: [f32; 4], rad
     let mut dab = test_dab([64., 64.], color, 1.);
     dab.radii = [radius; 2];
     let batch = DabBatch {
+        material_update: 0,
         stroke_id: StrokeId(id),
         layer_id: LayerId(id),
         kind: DabBatchKind::Persistent,
@@ -501,6 +502,7 @@ fn adjustment_latency() {
                 let mut dab = test_dab([size as f32 / 2.; 2], [0.15, 0.35, 0.65, 1.], 1.);
                 dab.radii = [size as f32; 2];
                 let mut batch = DabBatch {
+                    material_update: 0,
                     stroke_id: StrokeId(1),
                     layer_id: LayerId(1),
                     kind: DabBatchKind::Persistent,
@@ -791,6 +793,7 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
     let mut dab = test_dab([255., 150.], [0.8, 0.2, 0.1, 0.65], 1.);
     dab.radii = [45.; 2];
     let batch = DabBatch {
+        material_update: 0,
         stroke_id: StrokeId(1),
         layer_id: LayerId(1),
         kind: DabBatchKind::Persistent,

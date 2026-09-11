@@ -21,7 +21,7 @@ pub enum FigurePaint {
     Both,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Figure {
     pub shape: FigureShape,
     pub paint: FigurePaint,

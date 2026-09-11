@@ -417,7 +417,7 @@ pub enum PanelKind {
 impl Panel {
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if self == Self::ToolSettings
+        if matches!(self, Self::ToolSettings | Self::Color)
             && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
         {
             return true;

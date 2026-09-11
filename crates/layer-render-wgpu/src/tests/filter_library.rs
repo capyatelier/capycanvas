@@ -91,6 +91,7 @@ fn submit(
         dab.radii = [radius; 2];
         dabs.push(dab);
         batches.push(DabBatch {
+            material_update: 0,
             stroke_id: StrokeId(77),
             layer_id: LayerId(1),
             kind: DabBatchKind::Persistent,

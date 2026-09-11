@@ -103,7 +103,7 @@ build is only build evidence.
 | 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. Physical Pencil, undo/redo and lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
 | 3. Complete input contract and bounded transport | Coalesced/predicted input foundation exists; corrections, sensors, palm/navigation, interruption and real Pencil evidence remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
-| 5. Document/settings/workspace persistence and lifecycle | Save/reopen/recovery, rotation, background/foreground, multitasking, surface replacement and memory-pressure checks remain. | Save/reopen/recovery, window ownership/close/reopen, focus, display/scale changes, sleep/wake and memory-pressure checks remain. |
+| 5. Document/settings/workspace persistence and lifecycle | Atomic settings and per-scene workspace persistence implemented; Simulator restart passes. Artwork save/reopen/recovery and full physical lifecycle matrix remain. | Same persistence; native restart and owner isolation pass. Artwork save/reopen/recovery and full window/display/sleep/memory-pressure matrix remain. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
 | 7. Hardware performance, sustained sessions and delivery | Shared opt-in CPU/GPU/actual-presentation trace and local analyzer implemented; physical startup/idle instrumentation checked. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. | Same shared instrumentation and startup/idle check; display maximum is 90 Hz. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. |
 
@@ -368,3 +368,79 @@ failure remains at maximum channel error 255, with three explicitly ignored
 benchmarks. The control UI tests and visual captures above precede that merge;
 they do not validate the new collapsed-column UI, which Apple still needs to
 project. The final merged builds install/launch through the normal native paths.
+
+The next shared Apple milestone adds the native Color panel on both platforms:
+HSV square, HLS triangle, foreground/background/transparent paint, swap and
+component expressions. Rust supplies normalized geometry, hue memory, colors,
+numeric specifications, hit policy and bounded picking; Apple shares rendering
+and controls, with small native contact adapters. RGBA channel edits apply to
+the current owner state so queued edits cannot overwrite other channels.
+
+Focused Mac and iPad Simulator tests pass for color-space switching, hue/field
+picking, expression entry, paint slots, a latched hue drag that exits transparent
+paint, empty-corner rejection and swap. Existing numeric-control workflows also
+pass on both. These checks found and fixed the outlined icon's incomplete hit
+area and an AppKit focus transition that discarded a click into an always-visible
+field. Temporary native event tracing was removed. Both signed apps build; the
+physical iPad app installs and launches. Physical Pencil input remains a separate
+acceptance requirement; Simulator touch does not establish it.
+
+Each native color capture is sampled against Rust's actual picker at matching
+normalized coordinates, after ICC conversion. Both platforms pass 758 HSV and
+587 HLS samples within two 8-bit channel levels. Mac HLS field maximum error is
+one level; the remaining ring/field maxima are two. Initial perceptual-gradient
+and mesh-gradient attempts failed the same check; explicit device-space linear
+gradients now reproduce display-encoded square and triangle interpolation. The
+checker excludes only the declared boundary neighborhood and marker radii, and
+rejects missing/transparent interior samples. This is sampled color correctness,
+not full-image parity: the web renderer still lacks a matching custom wheel.
+All captures, geometry metadata, reports and failed attempts remain local.
+
+All 226 shared/Apple tests pass (207 UI + 8 host + 11 Apple ABI), including actual
+Metal brush color, transparent erasing with the current tip and exact pixel Undo.
+The WebAssembly compile check, standalone numeric edit-state checks and nine
+visual-tool tests pass. Full feature inventory, remaining specialized panels,
+persistence, complete visual/input coverage and sustained hardware performance
+remain open on both platforms.
+
+After integrating the incoming live collapsed-toolbar drawer work, both signed
+Apple builds and all 227 shared/Apple tests pass (208 UI + 8 host + 11 ABI).
+WebAssembly compilation passes; the merged physical iPad build installs and
+launches, and the merged Mac build launches. The focused UI and color captures
+above precede this merge; they do not validate Apple drawer projection, which
+remains unfinished. No full-image or hardware performance gate is closed by
+these integration checks.
+
+The persistence milestone adds shared Apple settings and per-scene workspace
+storage using the existing Rust models. Reads and atomic private-file writes run
+on a separate I/O queue. The owner reserves restoration ahead of input and surface
+tasks. Scene IDs survive system scene restoration; a new scene receives its own
+initial workspace file without changing the default used for future windows.
+Settings propagate across owners after successful commits, with pending local
+writes protected from stale notifications. Failed saves retain accepted edits,
+report errors and support retry. Invalid saved data is reported and preserved.
+
+The shared native snapshot now emits workspace persistence data only when the
+committed topology changes. In-flight drags, measurements and scroll allocations
+are excluded by Rust; camera and ordinary brush updates cause no workspace saves.
+Mac termination and iPad background adapters flush accepted work across both
+queues. Their complete physical interruption/expiration matrix remains open.
+
+Both signed builds pass. The standalone filesystem tests pass atomic old/new
+generation reads, private permissions, limits, failure preservation and scene
+isolation. Real Swift-owner/C-ABI tests pass on both platform configurations for
+restore ordering, rapid cross-owner settings edits, exact restored workspaces,
+write acknowledgments and forced write failure followed by retry. Focused Mac and
+iPad Simulator UI tests retain the dark theme and Color panel across termination
+and relaunch without fixture actions. They use isolated private namespaces; other
+UI fixtures disable storage. All 228 shared/Apple tests pass (208 UI + 9 host +
+11 ABI), as does WebAssembly compilation. See the reproducible commands and
+remaining storage gates in [Apple persistence](../apps/layer-apple/PERSISTENCE.md).
+The final signed iPad build installs and launches on the attached device, and
+the final Mac build launches normally. These launches do not establish physical
+background-task expiration or termination/interruption persistence acceptance.
+
+This does not save artwork. A shared editable document archive, file actions,
+autosave/recovery, complete lifecycle acceptance and measured storage overhead
+remain required, together with the other feature, input, visual and hardware
+performance gates. No complete persistence or overall parity claim is made.

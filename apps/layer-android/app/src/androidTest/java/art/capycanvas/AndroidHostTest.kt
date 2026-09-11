@@ -1745,7 +1745,8 @@ class AndroidHostTest {
     }
 
     @Test fun settingChoicesStayOnPageAndDismissNatively() {
-        compose.onNodeWithContentDescription("Settings").performClick()
+        val settingsLabel = state().array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip")
+        compose.onNodeWithContentDescription(settingsLabel).performClick()
         fun kind(page: String, id: String) = preferences().array("pages").objects().first { it.getString("id") == page }
             .array("groups").objects().flatMap { it.array("rows").objects() }.first { it.getString("id") == id }.getJSONObject("kind")
         // The same renderer handles ordinary choices and choices with previews.

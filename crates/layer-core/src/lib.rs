@@ -17,6 +17,8 @@ mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
+mod project;
+pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
     BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,
@@ -33,13 +35,39 @@ use std::{
 
 pub type Revision = u64;
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct LayerId(pub u64);
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct StrokeId(pub u64);
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 pub struct AssetId(pub Arc<str>);
 
 impl From<&str> for AssetId {
@@ -55,7 +83,7 @@ pub struct Point {
     pub y: f32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct Rect {
     pub min: Point,
@@ -105,7 +133,7 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LayerKind {
     Paint,
     ImportedImage,
@@ -115,7 +143,7 @@ pub enum LayerKind {
     Effect,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Layer {
     pub id: LayerId,
     pub name: Arc<str>,
@@ -190,7 +218,7 @@ impl Layer {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct StrokePoint {
     pub position: Point,
@@ -204,7 +232,7 @@ pub struct StrokePoint {
     pub elapsed_micros: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum StrokeTool {
     Brush,
     Eraser,
@@ -216,7 +244,7 @@ pub const MAX_BRUSH_MAPPINGS: usize = 32;
 pub const MAX_BRUSH_SCATTER_DIAMETERS: f32 = 16.0;
 pub const MAX_BRUSH_STAMP_COUNT: u8 = 16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushSensor {
     Pressure,
@@ -230,7 +258,7 @@ pub enum BrushSensor {
     Random,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushTarget {
     Diameter,
@@ -252,7 +280,7 @@ pub enum BrushTarget {
     DeformStrength,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushCombine {
     Replace,
@@ -265,7 +293,7 @@ pub enum BrushCombine {
 /// Preset editors may expose arbitrary control points, but compile them to this
 /// bounded representation before a stroke begins. It is cheap to evaluate on
 /// the CPU before resolved dabs are submitted to the renderer.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct BrushCurve {
     pub samples: [f32; BRUSH_CURVE_SAMPLES],
@@ -307,7 +335,7 @@ impl BrushCurve {
 /// Sensor values are normalized from `input_min..input_max`; the curve is then
 /// sampled and transformed by `output = curve * scale + bias` before combining
 /// it with the selected target register. Mappings are evaluated in order.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushMapping {
     pub sensor: BrushSensor,
     pub target: BrushTarget,
@@ -334,7 +362,7 @@ impl BrushMapping {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum BrushTip {
     AnalyticEllipse,
     /// Content-addressed single-channel mask. The render backend prepares it
@@ -342,7 +370,7 @@ pub enum BrushTip {
     Mask(AssetId),
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushExecution {
     #[default]
@@ -356,7 +384,7 @@ pub enum BrushExecution {
     Liquify,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushBlendMode {
     #[default]
@@ -370,7 +398,7 @@ pub enum BrushBlendMode {
     Overlay,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushAccumulation {
     #[default]
@@ -378,7 +406,7 @@ pub enum BrushAccumulation {
     Uniform,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum BrushGrainBehavior {
     #[default]
@@ -386,7 +414,7 @@ pub enum BrushGrainBehavior {
     Canvas,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum DualCombineMode {
     #[default]
@@ -398,7 +426,7 @@ pub enum DualCombineMode {
     Max,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum ColorMixSpace {
     #[default]
@@ -406,7 +434,7 @@ pub enum ColorMixSpace {
     Oklab,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum LiquifyMode {
     #[default]
@@ -420,7 +448,7 @@ pub enum LiquifyMode {
     Reconstruct,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushPath {
     /// Random spacing deviation as a fraction of resolved spacing.
     pub spacing_jitter: f32,
@@ -445,7 +473,7 @@ impl Default for BrushPath {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushStabilization {
     pub streamline: f32,
     pub pressure_smoothing: f32,
@@ -466,7 +494,7 @@ impl Default for BrushStabilization {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushTaper {
     pub start_distance_diameters: f32,
     pub end_distance_diameters: f32,
@@ -489,7 +517,7 @@ impl Default for BrushTaper {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushShape {
     pub count: u8,
     pub count_jitter: f32,
@@ -521,7 +549,7 @@ impl Default for BrushShape {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushGrain {
     pub asset: AssetId,
     pub behavior: BrushGrainBehavior,
@@ -533,7 +561,7 @@ pub struct BrushGrain {
     pub offset_jitter: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DualBrush {
     pub tip: BrushTip,
     pub grain: Option<BrushGrain>,
@@ -544,7 +572,7 @@ pub struct DualBrush {
     pub offset: [f32; 2],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushColorDynamics {
     pub secondary_color_rgba_linear: [f32; 4],
     pub stamp_hue_jitter: f32,
@@ -573,7 +601,7 @@ impl Default for BrushColorDynamics {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushRendering {
     pub blend_mode: BrushBlendMode,
     pub accumulation: BrushAccumulation,
@@ -598,7 +626,7 @@ impl Default for BrushRendering {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushWetMix {
     pub amount_of_paint: f32,
     pub density: f32,
@@ -636,7 +664,7 @@ impl Default for BrushWetMix {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushDeform {
     pub mode: LiquifyMode,
     pub strength: f32,
@@ -657,7 +685,7 @@ impl Default for BrushDeform {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushBounds {
     pub minimum_size: f32,
     pub maximum_size: f32,
@@ -671,7 +699,7 @@ pub struct BrushBounds {
 /// update deposits watercolor wetness and runs one bounded GPU exchange over
 /// the new dabs' affected neighborhoods; there is no frame-driven fluid
 /// simulation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushTransport {
     pub conductance: AssetId,
     /// Texture repeats per 256 document pixels.
@@ -705,7 +733,7 @@ impl Default for BrushBounds {
 ///
 /// Dynamic mappings are Arc-backed so strokes share preset data. Editing a
 /// preset creates a new snapshot; old strokes remain deterministic on replay.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BrushSnapshot {
     pub schema_version: u16,
     pub tip: BrushTip,
@@ -1091,13 +1119,17 @@ impl fmt::Display for BrushError {
 
 impl std::error::Error for BrushError {}
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Stroke {
     pub id: StrokeId,
     pub layer_id: LayerId,
     pub tool: StrokeTool,
     pub brush: BrushSnapshot,
     pub points: Arc<[StrokePoint]>,
+    /// Exclusive point ends of material updates. Watercolor transports pigment
+    /// after each update, so replay must preserve these boundaries, not merge
+    /// an entire stroke into one transport step. Empty means one update.
+    pub material_updates: Arc<[u32]>,
     pub bounds: Rect,
     /// Captured at contact start; replay must not use today's alpha lock.
     pub alpha_locked: bool,
@@ -1147,6 +1179,7 @@ impl Stroke {
             tool,
             brush,
             points,
+            material_updates: Arc::default(),
             bounds,
             alpha_locked: false,
             selection: None,
@@ -1154,7 +1187,7 @@ impl Stroke {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Document {
     pub id: Arc<str>,
     pub width: u32,

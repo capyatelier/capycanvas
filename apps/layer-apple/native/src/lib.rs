@@ -100,6 +100,19 @@ pub unsafe extern "C" fn capy_apple_numeric(json: *const c_char) -> *mut c_char 
     })
     .unwrap_or(std::ptr::null_mut())
 }
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_apple_color_hit(x: f32, y: f32, size: f32, space: u32) -> u32 {
+    let space = match space {
+        0 => layer_ui::ColorSpace::Hsv,
+        1 => layer_ui::ColorSpace::Hls,
+        _ => return 0,
+    };
+    match layer_ui::ColorWheelGeometry::new(size).and_then(|g| g.hit([x, y], space)) {
+        None => 0,
+        Some(layer_ui::ColorWheelPart::Hue) => 1,
+        Some(layer_ui::ColorWheelPart::Field) => 2,
+    }
+}
 /// # Safety
 /// Valid handle; json must be a NUL-terminated UTF-8 string when request != 3.
 #[unsafe(no_mangle)]

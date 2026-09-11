@@ -34,6 +34,10 @@ That Looper exclusively calls the Rust `UiSession` and wgpu device. Low-rate
 actions/snapshots use the existing Serde schema through JNI; pen history uses
 numeric batches, never JSON. UI work cannot block surface acquisition or painting.
 The surface is independently composited behind the transparent native controls.
+The activity hides Android's status and navigation bars at launch and when it
+regains focus, using `WindowInsetsControllerCompat` immersive mode with transient
+bars revealed by edge swipes. The workspace reclaims the hidden bars' space while
+retaining display-cutout padding. This window policy adds no canvas shader work.
 The keyboard changes the settings insets, not the GPU surface size. Predictions
 from Android's API 34 `MotionPredictor`, when supplied, use the engine's existing
 predicted-sample flag and never become document truth. Older devices retain the
@@ -58,6 +62,14 @@ the existing submissions without adding a CPU wait.
 Surface loss must not destroy the session or document. All window references and
 swapchains must be released on their owning render thread, after the surface is
 detached. A failed GPU initialization leaves native controls and an error visible.
+
+Fullscreen was checked on the Wacom MovinkPad 14 (Android 15): landscape canvas
+bounds expanded from `[0,42][2880,1744]` to `[0,0][2880,1800]`, recovering 98
+vertical pixels. `AndroidFullscreenTest` verifies hidden bars, canvas bounds,
+system-bar reappearance and fullscreen restoration after background/resume.
+The pen/touch surface-recovery test also exercises orientation changes and the
+native preferences overlay. Local screenshots and test logs are under
+`artifacts/android/immersive-*`.
 
 Build tools: Android SDK 37.0 (the repository package is `platforms/android-37.0`),
 NDK r29, Gradle 9.5, Java 25 host runtime, arm64 devices and x86_64 emulator.

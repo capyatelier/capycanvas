@@ -78,6 +78,7 @@ struct ActiveStroke {
     feedback: InstantFeedbackConfig,
     persistent_started: bool,
     committed_smudge_dabs: usize,
+    material_updates: Vec<u32>,
     ruler: Option<layer_core::RulerConstraint>,
 }
 
@@ -419,6 +420,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let damage = operation.bounds([self.document().width, self.document().height]);
             history.push(operation);
             batches.push(DabBatch {
+                material_update: 0,
                 stroke_id: StrokeId(0),
                 layer_id: id,
                 kind: DabBatchKind::LayerOperation(index),
@@ -634,6 +636,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.append_continuous(timestamp_ns);
         }
         self.advance_finalized_prefix();
+        self.record_material_update();
         if self.rebuild_all {
             self.build_full_scene();
             self.rebuild_all = false;
@@ -687,6 +690,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             && !active.feedback.enabled
         {
             self.append_real_dab(point);
+        }
+    }
+
+    fn record_material_update(&mut self) {
+        let Some(active) = &mut self.active_stroke else {
+            return;
+        };
+        if active.brush.execution != BrushExecution::Watercolor {
+            return;
+        }
+        let end = if active.feedback.enabled {
+            self.finalized_real_points
+        } else {
+            self.builder.real_points().len()
+        } as u32;
+        if end > active.material_updates.last().copied().unwrap_or(0) {
+            active.material_updates.push(end);
         }
     }
 
@@ -832,6 +852,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     feedback,
                     persistent_started: false,
                     committed_smudge_dabs: 0,
+                    material_updates: Vec::new(),
                     ruler,
                 };
                 self.active_stroke = Some(active);
@@ -897,6 +918,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 self.flush_smudge_chunks(true);
                 self.finish_persistent_stroke();
+                self.record_material_update();
                 let active = self.active_stroke.take().expect("checked above");
                 let points = self.builder.finish().unwrap_or_default();
                 let has_end_taper = active.brush.taper.end_distance_diameters > 0.0;
@@ -910,6 +932,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 )
                 .map_err(EngineError::Document)?;
                 stroke.alpha_locked = alpha_locked;
+                stroke.material_updates = active.material_updates.into();
                 stroke.selection = active.style.selection.clone();
                 self.editor
                     .perform(Edit::InsertStroke(Box::new(stroke)))
@@ -940,6 +963,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let layer_id = active.layer_id;
         let style = active.style.clone();
         let stroke_start = !active.persistent_started;
+        let material_update = active.material_updates.len() as u32;
         let start = self.dabs.len();
         let damage = self
             .dab_generator
@@ -953,6 +977,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 &mut self.batches,
                 &self.dabs,
                 DabBatch {
+                    material_update,
                     stroke_id,
                     layer_id,
                     kind: DabBatchKind::Persistent,
@@ -1004,6 +1029,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 &mut self.batches,
                 &self.dabs,
                 DabBatch {
+                    material_update: 0,
                     stroke_id,
                     layer_id,
                     kind: DabBatchKind::Persistent,
@@ -1040,6 +1066,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         // Preserve pen-up even when spacing emitted no contact in this frame.
         // Stateful renderers still need to finalize accumulated stroke state.
         self.batches.push(DabBatch {
+            material_update: 0,
             stroke_id: active.id,
             layer_id: active.layer_id,
             kind: DabBatchKind::Persistent,
@@ -1188,6 +1215,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             &mut self.batches,
             &self.dabs,
             DabBatch {
+                material_update: 0,
                 stroke_id: active.id,
                 layer_id: active.layer_id,
                 kind: DabBatchKind::Preview,
@@ -1240,6 +1268,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .expect("replay stroke exists"),
                 Replay::Operation(layer_id, index) => {
                     self.batches.push(DabBatch {
+                        material_update: 0,
                         stroke_id: StrokeId(0),
                         layer_id,
                         kind: DabBatchKind::LayerOperation(index),
@@ -1259,7 +1288,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let mut generator = DabGenerator::default();
             generator.reset_for_replay(stroke);
             let mut started = false;
-            for point in stroke.points.iter().copied() {
+            for (point_index, point) in stroke.points.iter().copied().enumerate() {
                 let start = self.dabs.len();
                 let damage = generator.append(point, &stroke.brush, &mut self.dabs);
                 if self.dabs.len() == start {
@@ -1269,6 +1298,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     &mut self.batches,
                     &self.dabs,
                     DabBatch {
+                        material_update: stroke
+                            .material_updates
+                            .partition_point(|end| *end as usize <= point_index)
+                            as u32,
                         stroke_id: stroke.id,
                         layer_id: stroke.layer_id,
                         kind: DabBatchKind::Persistent,
@@ -1314,6 +1347,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         &mut self.batches,
                         &self.dabs,
                         DabBatch {
+                            material_update: 0,
                             stroke_id: active.id,
                             layer_id: active.layer_id,
                             kind: DabBatchKind::Persistent,
@@ -1329,7 +1363,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 return;
             }
             let mut started = false;
-            for point in self.builder.real_points()[..point_count].iter().copied() {
+            for (point_index, point) in self.builder.real_points()[..point_count]
+                .iter()
+                .copied()
+                .enumerate()
+            {
                 let start = self.dabs.len();
                 let damage = generator.append(point, &active.brush, &mut self.dabs);
                 if self.dabs.len() == start {
@@ -1339,6 +1377,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     &mut self.batches,
                     &self.dabs,
                     DabBatch {
+                        material_update: active
+                            .material_updates
+                            .partition_point(|end| *end as usize <= point_index)
+                            as u32,
                         stroke_id: active.id,
                         layer_id: active.layer_id,
                         kind: DabBatchKind::Persistent,
@@ -1438,6 +1480,7 @@ fn push_mergeable_batch(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBat
                         ..batch.first_dab.saturating_add(batch.dab_count) as usize],
                 )))
         && last.stroke_id == batch.stroke_id
+        && last.material_update == batch.material_update
         && last.layer_id == batch.layer_id
         && last.kind == batch.kind
         && !last.stroke_end
@@ -1543,6 +1586,7 @@ mod tests {
         persistent_dabs: usize,
         persistent: Vec<Dab>,
         persistent_batches: Vec<(StrokeId, bool, bool, u32)>,
+        material_batches: Vec<(u32, u32)>,
         preview: Vec<Dab>,
         styles: Vec<DabStyle>,
         saw_reset: bool,
@@ -1580,6 +1624,7 @@ mod tests {
             }
             if packet.reset_layers {
                 self.persistent.clear();
+                self.material_batches.clear();
             }
             self.preview.clear();
             self.styles.clear();
@@ -1591,6 +1636,10 @@ mod tests {
                 match batch.kind {
                     DabBatchKind::LayerOperation(_) => {}
                     DabBatchKind::Persistent => {
+                        if batch.dab_count > 0 {
+                            self.material_batches
+                                .push((batch.material_update, batch.dab_count));
+                        }
                         self.persistent_dabs += dabs.len();
                         self.persistent.extend_from_slice(dabs);
                         self.persistent_batches.push((
@@ -1613,6 +1662,90 @@ mod tests {
 
         fn take_readback(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
             None
+        }
+    }
+
+    #[test]
+    fn material_update_history_preserves_live_and_active_replay() {
+        for feedback in [false, true] {
+            for coalesced in [1, 2, 4] {
+                let (mut input, consumer) = input_queue(32);
+                let mut canvas = CanvasEngine::new(
+                    RecordingRenderer::default(),
+                    Document::new("material replay", 128, 128),
+                    consumer,
+                    view(128, 128),
+                    ViewTransform {
+                        revision: 1,
+                        ..ViewTransform::IDENTITY
+                    },
+                )
+                .unwrap();
+                canvas
+                    .set_brush(default_brush(DefaultBrushPreset::WatercolorWash))
+                    .unwrap();
+                canvas
+                    .set_instant_feedback(InstantFeedbackConfig {
+                        enabled: feedback,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                for i in 0..9 {
+                    let mut p = event(
+                        i + 1,
+                        if i == 0 {
+                            PenPhase::Down
+                        } else {
+                            PenPhase::Move
+                        },
+                        8. + i as f32 * 9.,
+                    );
+                    p.timestamp_ns = (i + 1) * 16_000_000;
+                    input.push(p).unwrap();
+                    if i % coalesced == 0 {
+                        canvas.render_frame().unwrap();
+                    }
+                }
+                canvas.render_frame().unwrap();
+                let before = canvas.backend().material_batches.clone();
+                let updates = canvas
+                    .active_stroke
+                    .as_ref()
+                    .unwrap()
+                    .material_updates
+                    .clone();
+                canvas.render_frame().unwrap();
+                assert_eq!(
+                    canvas.active_stroke.as_ref().unwrap().material_updates,
+                    updates,
+                    "idle is not a material update"
+                );
+                canvas.rebuild_all = true;
+                canvas.render_frame().unwrap();
+                assert_eq!(
+                    canvas.backend().material_batches,
+                    before,
+                    "active replay: feedback={feedback}, coalesced={coalesced}"
+                );
+                let mut up = event(10, PenPhase::Up, 89.);
+                up.timestamp_ns = 160_000_000;
+                input.push(up).unwrap();
+                canvas.render_frame().unwrap();
+                let before = canvas.backend().material_batches.clone();
+                let stroke = canvas.document().strokes().next().unwrap();
+                assert_eq!(
+                    stroke.material_updates.last().copied(),
+                    Some(stroke.points.len() as u32)
+                );
+                assert!(stroke.material_updates.windows(2).all(|w| w[0] < w[1]));
+                canvas.rebuild_all = true;
+                canvas.render_frame().unwrap();
+                assert_eq!(
+                    canvas.backend().material_batches,
+                    before,
+                    "committed replay: feedback={feedback}, coalesced={coalesced}"
+                );
+            }
         }
     }
 
@@ -2667,6 +2800,7 @@ mod tests {
             let mut style = style_for(&BrushSnapshot::default(), StrokeTool::Brush);
             style.execution = execution;
             DabBatch {
+                material_update: 0,
                 stroke_id: StrokeId(7),
                 layer_id: LayerId(3),
                 kind: DabBatchKind::Persistent,

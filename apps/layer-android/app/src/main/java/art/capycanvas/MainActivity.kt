@@ -9,16 +9,26 @@ import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
     val host: CanvasHost by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        enterFullscreen()
         updateTheme(resources.configuration)
         setContent {
             ReportDrawnWhen { host.snapshot?.optBoolean("brush_ready") == true }
             CapyApp(host)
+        }
+    }
+    private fun enterFullscreen() {
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
         }
     }
     private fun updateTheme(config: Configuration) {
@@ -38,7 +48,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (!hasFocus) host.input(obj("type" to "blur"))
+        if (hasFocus) enterFullscreen() else host.input(obj("type" to "blur"))
     }
 }
 
