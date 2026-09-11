@@ -70,7 +70,7 @@ function Check-Projection {
     }
 }
 Invoke-Control ((Model).workspace_menu.title)
-(Control 'Tool Settings panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+(Control 'Tool panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
 $null=Field 'flow'
 Select-Tool 'pen'
 $entry=Field 'flow';$original=$entry.GetRuntimeId() -join ':'

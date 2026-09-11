@@ -39,6 +39,15 @@ window. Shared layout tests cover four window sizes, unchanged left panels and
 command ribbon, and the matching reduction in Layers. Existing customized
 workspaces are preserved; Window → Reset layout applies the updated defaults.
 
+The follow-up layout places Brush size as the second tab beside Tool (renamed
+from Tool Settings).
+Tool Set receives the former Brush size panel's height and the removed divider;
+Tool and Color retain their heights apart from subpixel split rounding.
+
+Diagnostics places its live graph below GPU timings and Canvas storage below
+Frames. Rust owns both row order and chart placement; native hosts project that
+ordering rather than assigning a fixed footer position to the chart.
+
 **Separate renderer follow-ups remain open:** residual transform/presentation
 stalls and strict Metal/D3D12 filter-pixel parity. GTK design approval does not
 resolve these or establish physical stylus latency or new device validation on
@@ -49,8 +58,9 @@ other platforms. The corrected native event-wait measurements are below.
 - Left edge: Pen, Pencil, Brush, Eraser, Airbrush, Decoration, Blend, Liquify;
   divider; Lasso, Auto select, Fill, Gradient; divider; Operation, Figure,
   Ruler, Hand, Eyedropper, foreground/background color selector.
-- Second left column: Tool Set, Tool Settings, Brush size, Color, vertically stacked.
-  **Tool Set and Tool Settings must fit three standard tiles inside their minimum
+- Second left column: Tool Set, Tool (Brush size as its second tab),
+  then Color, vertically stacked. Tool Set uses the freed Brush size space.
+  **Tool Set and Tool must fit three standard tiles inside their minimum
   width**, with normal two-pixel tile gaps and content padding. Group selectors
   wrap; labels truncate instead of forcing wider panels. Layers keeps its
   separate six-tile minimum. Settings controls must remain usable at minimum width.
@@ -112,8 +122,8 @@ independently decide when a tool is selected or a drawer opens.
   the connector geometry and suppresses concave joins near an aligned body
   edge; round only the exposed corners. Apply this to normal and Zen tiles,
   every opening direction, viewport clamping, resizing and animation.
-- Every actual tool/preset gets two columns: Tool Set, then Tool Settings.
-  Color gets one Color panel. Opacity gets Tool Settings, exposing the editable
+- Every actual tool/preset gets two columns: Tool Set, then Tool.
+  Color gets one Color panel. Opacity gets Tool, exposing the editable
   value and its related controls. Size preset tiles remain immediate value
   choices; add a Brush size panel tile for its full controls.
 - New/Open/Save, undo/redo, clear/fill selection, transforms and navigation
@@ -125,7 +135,7 @@ independently decide when a tool is selected or a drawer opens.
   Each built-in panel declares a separate, more relaxed `drawer_width` in Rust,
   wider than its ordinary dock default and respecting its intrinsic minimum.
   Use this width in every drawer type, superseding the earlier three-tile drawer
-  width. Docked Tool Set/Tool Settings still retain their three-tile minimum. Content
+  width. Docked Tool Set/Tool still retain their three-tile minimum. Content
   uses ordinary panel models and shared preview caches; opening a drawer must not
   detach an existing docked widget or duplicate GPU preview generation.
 - Top toolbar: open downward, left-aligned with the tile; shift left only as
@@ -259,7 +269,7 @@ Ctrl/Cmd+0, preserving explicit custom bindings rather than stealing them.
 Tool Set shows only groups belonging to the active tool. Group buttons have an
 icon and name, three tiles wide and one tall, with exactly one selected. The list
 below shows that group's subtools and retains useful brush stroke previews.
-Switching tools remembers their last subtool. Tool Settings comes from shared
+Switching tools remembers their last subtool. The Tool panel comes from shared
 metadata and follows the current subtool; no GTK-owned brush or selection policy.
 
 Existing GPU brush presets supply Pen/Marker, Pencil/Pastel, paint/watercolor/oil,

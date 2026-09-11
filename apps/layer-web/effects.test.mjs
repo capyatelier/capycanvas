@@ -102,6 +102,29 @@ export async function benchmarkFilters({evaluate}) {
   }
 }
 
+export async function checkDiagnostics({evaluate,settle}) {
+  const send=action=>evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
+  await send({type:"customize",action:{type:"set_panel_visible",panel:"stats",visible:true}});
+  await send({type:"move_panel",panel:"stats",viewport:[1440,1000],target:{kind:"float",position:[720,120]}});
+  for(const theme of ["dark","light"]) {
+    await send({type:"set_theme",theme});
+    await evaluate(`new Promise((resolve,reject)=>{
+      const deadline=performance.now()+10000;
+      const ready=()=>{
+        const chart=document.querySelector('.renderer-stats .renderer-chart');
+        if(chart?.getBoundingClientRect().height>0)resolve(true);
+        else if(performance.now()>deadline)reject(Error('Visible diagnostics chart timed out'));
+        else setTimeout(ready,100);
+      };ready();
+    })`);
+    await settle();
+    assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.firstChild.textContent)"),
+      ["CPU · ms","GPU · ms","chart","Frames","Canvas storage","Dabs","Effect passes","Pipelines"]);
+    assert.equal(await evaluate("document.querySelector('.renderer-chart').getBoundingClientRect().height"),46);
+  }
+  console.log("PASS: live diagnostics chart after GPU timings and storage after Frames in both themes");
+}
+
 export async function checkAdjustments({call,evaluate,settle}) {
   const directory="artifacts/ui/adjustments-web";
   await mkdir(directory,{recursive:true});
@@ -128,7 +151,15 @@ export async function checkAdjustments({call,evaluate,settle}) {
     await settle();
   }
   await evaluate("document.querySelector('.dock-tab[data-panel=adjustments]').click()");
-  await evaluate("new Promise(resolve=>setTimeout(resolve,1500))");
+  await evaluate(`new Promise((resolve,reject)=>{
+    const deadline=performance.now()+20000;
+    const ready=()=>{
+      const canvas=document.querySelector('.filter-row canvas');
+      if(canvas?.getContext('2d').getImageData(0,0,200,40).data.some((v,i)=>i%4===3&&v>0))resolve(true);
+      else if(performance.now()>deadline)reject(Error('GPU filter preview timed out'));
+      else setTimeout(ready,100);
+    };ready();
+  })`);
   await capture("01-adjustments");
   assert.ok(await evaluate("document.querySelector('.filter-row').getBoundingClientRect().width>160"));
   assert.equal(await evaluate("document.querySelector('.filter-row canvas').getBoundingClientRect().height"),40);
@@ -171,9 +202,19 @@ export async function checkAdjustments({call,evaluate,settle}) {
   const editing=await evaluate("Number(layerApp.state().layer_properties.layer)");
   await send({type:"set_layer_visibility",id:editing,visible:true});
   for(let i=0;i<20;i++){await send({type:"set_layer_opacity",id:editing,opacity:.8+i*.005});await settle();}
-  await evaluate("new Promise(resolve=>setTimeout(resolve,250))");
-  assert.ok(await evaluate("document.querySelector('.renderer-stats').getBoundingClientRect().height>190"));
+  await evaluate(`new Promise((resolve,reject)=>{
+    const deadline=performance.now()+10000;
+    const ready=()=>{
+      const panel=document.querySelector('.renderer-stats');
+      if(panel.getBoundingClientRect().height>0 && panel.children.length===layerApp.app.renderer_stats().rows.length+1)resolve(true);
+      else if(performance.now()>deadline)reject(Error('Diagnostics rows and chart did not render'));
+      else setTimeout(ready,100);
+    };ready();
+  })`);
+  assert.equal(await evaluate("document.querySelector('.renderer-chart').getBoundingClientRect().height"),46);
   const stats=await evaluate("layerApp.app.renderer_stats()");assert.ok(stats.samples.length>0,JSON.stringify({stats,layout:await evaluate("JSON.stringify(layerApp.app.layout(innerWidth,innerHeight),(_,v)=>typeof v==='bigint'?Number(v):v)"),error:await evaluate("document.querySelector('#status')?.textContent")}));
+  const order=stats.rows.map(row=>row.label);order.splice(Number(stats.chart_after_rows),0,"chart");
+  assert.deepEqual(await evaluate("Array.from(document.querySelector('.renderer-stats').children,child=>child.matches('.renderer-chart')?'chart':child.firstChild.textContent)"),order);
   await capture("stats-dark");await send({type:"set_theme",theme:"light"});await capture("stats-light");
   console.log(`PASS: ${choices.length} categorized filters, GPU previews, search, insertion/properties, controls, GPU rendering and live telemetry`);
 }

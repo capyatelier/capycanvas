@@ -192,8 +192,27 @@ class AndroidHostTest {
         action(obj("type" to "set_layer_visibility", "id" to state().getJSONObject("layer_properties").getLong("layer"), "visible" to true))
         repeat(16) { action(obj("type" to "set_layer_opacity", "id" to state().getJSONObject("layer_properties").getLong("layer"), "opacity" to .8+it*.01)) }
         compose.onNodeWithTag("renderer-stats").assertIsDisplayed()
+        val chart = compose.onNodeWithTag("renderer-stats-chart").fetchSemanticsNode().boundsInRoot
+        assertTrue(chart.top >= compose.onNodeWithText("GPU · ms").fetchSemanticsNode().boundsInRoot.bottom)
+        val frames = compose.onNodeWithText("Frames").fetchSemanticsNode().boundsInRoot
+        assertTrue(frames.top >= chart.bottom)
+        assertTrue(compose.onNodeWithText("Canvas storage").fetchSemanticsNode().boundsInRoot.top >= frames.bottom)
         capture("adjustments-stats-dark")
         action(obj("type" to "set_theme", "theme" to "light"));capture("adjustments-stats-light")
+    }
+    @Test fun diagnosticsFollowSharedOrder() {
+        customize(obj("type" to "set_panel_visible", "panel" to "stats", "visible" to true))
+        floatPanel("stats", 650f, 120f)
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("renderer-stats-chart").fetchSemanticsNodes().isNotEmpty() }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val gpu = compose.onNodeWithText("GPU · ms").fetchSemanticsNode().boundsInRoot
+            val chart = compose.onNodeWithTag("renderer-stats-chart").fetchSemanticsNode().boundsInRoot
+            val frames = compose.onNodeWithText("Frames").fetchSemanticsNode().boundsInRoot
+            val storage = compose.onNodeWithText("Canvas storage").fetchSemanticsNode().boundsInRoot
+            assertTrue(chart.top >= gpu.bottom && frames.top >= chart.bottom && storage.top >= frames.bottom)
+            capture("diagnostics-order-$theme")
+        }
     }
     private fun preferences() = host.snapshot!!.getJSONObject("preferences")
     /** Opt-in platform sweep; normal correctness tests don't run a benchmark. */
@@ -1397,7 +1416,9 @@ class AndroidHostTest {
         val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
         val firstTile = toolbar.array("tiles").objects().first().getInt("id")
         compose.onNodeWithTag("tile-toolbar-$firstTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
-        compose.onNodeWithContentDescription("Zen mode").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
+        compose.onNodeWithTag("zen-button").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
+        compose.onNodeWithTag("tab-name-tool_settings", useUnmergedTree = true).assertTextEquals("Tool")
+        compose.onNodeWithTag("tab-sizes").performClick()
         compose.onNodeWithTag("number-value-Brush size").assertHeightIsEqualTo(24.dp)
         compose.onNodeWithTag("number-slider-Brush size").assertHeightIsEqualTo(24.dp)
         val numericSlider = compose.onNodeWithTag("number-slider-Brush size")
@@ -1415,14 +1436,16 @@ class AndroidHostTest {
         val brush = state().getJSONObject("brush").getInt("preset")
         compose.onNodeWithTag("brush-preview-$brush", useUnmergedTree = true).assertHeightIsEqualTo(40.dp)
         compose.onAllNodesWithContentDescription("Move panel group").onFirst().assertWidthIsEqualTo(20.dp)
-        compose.onAllNodesWithText("Brushes").onFirst().assertHeightIsEqualTo(36.dp)
+        compose.onNodeWithTag("tab-brushes").assertHeightIsEqualTo(36.dp)
         compose.runOnIdle { host.invoke("fit_canvas") }
         capture("25-editor-default-light")
         compose.runOnIdle { host.dispatch(obj("type" to "set_theme", "theme" to "dark")) }
         waitState { it.getString("theme") == "dark" }
         capture("26-editor-default-dark")
-        compose.onNodeWithContentDescription("Settings").performClick()
-        compose.onNodeWithTag("preferences-surface").assertWidthIsEqualTo(compose.activity.resources.configuration.screenWidthDp.dp)
+        compose.onNodeWithTag("header-settings").performClick()
+        compose.waitUntil(10_000) { host.snapshot?.objectOrNull("preferences") != null }
+        compose.waitForIdle()
+        compose.onNodeWithTag("preferences-surface", useUnmergedTree = true).assertWidthIsEqualTo(compose.activity.resources.configuration.screenWidthDp.dp)
         compose.onAllNodes(isDialog()).assertCountEquals(0)
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         compose.onNodeWithTag("settings-done").performClick()

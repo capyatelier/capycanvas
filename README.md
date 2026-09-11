@@ -109,7 +109,7 @@ reuse those files.
 We built the workspace from configurable panels and toolbars so artists can put
 the controls they use where they expect to find them. Panels can be docked,
 floated, grouped in tabs or collapsed. Artists can choose toolbar contents and
-adjust control visibility and sizing. Tool Settings follows the active tool,
+adjust control visibility and sizing. The Tool panel follows the active tool,
 and Properties shows the selected filter's parameters.
 
 To clear controls from the canvas without rearranging the workspace, we added

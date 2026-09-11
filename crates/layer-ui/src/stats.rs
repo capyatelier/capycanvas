@@ -13,6 +13,8 @@ pub struct StatsView {
     pub samples: Vec<f32>,
     pub budget_ms: f32,
     pub chart_label: &'static str,
+    /// Insert the chart after this many metric rows on every frontend.
+    pub chart_after_rows: usize,
 }
 pub(super) fn view(t: RendererTelemetry) -> StatsView {
     fn percentiles(values: Vec<f32>) -> String {
@@ -46,6 +48,11 @@ pub(super) fn view(t: RendererTelemetry) -> StatsView {
             description: "Submitted drawing updates. Cached canvas navigation and compositor frames are not counted.",
         },
         StatRow {
+            label: "Canvas storage",
+            value: format!("{:.1} MiB", t.resident_bytes as f64 / 1048576.),
+            description: "Tracked paint, preview, masks, effect parameters, composite and scene scratch allocation. Excludes driver overhead and imported assets; not total VRAM use.",
+        },
+        StatRow {
             label: "Dabs",
             value: t.dabs.to_string(),
             description: "Brush dabs submitted since renderer creation.",
@@ -60,16 +67,37 @@ pub(super) fn view(t: RendererTelemetry) -> StatsView {
             value: t.compiled_effects.to_string(),
             description: "Cached effect pipelines. Parameter edits do not compile new pipelines.",
         },
-        StatRow {
-            label: "Canvas storage",
-            value: format!("{:.1} MiB", t.resident_bytes as f64 / 1048576.),
-            description: "Tracked paint, preview, masks, effect parameters, composite and scene scratch allocation. Excludes driver overhead and imported assets; not total VRAM use.",
-        },
     ];
     StatsView {
         rows,
         samples,
         budget_ms: 1000. / 120.,
         chart_label: "CPU render · last 120 updates",
+        chart_after_rows: 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diagnostics_orders_chart_and_storage_with_their_metrics() {
+        let view = view(RendererTelemetry::default());
+        assert_eq!(
+            view.rows.iter().map(|row| row.label).collect::<Vec<_>>(),
+            [
+                "CPU · ms",
+                "GPU · ms",
+                "Frames",
+                "Canvas storage",
+                "Dabs",
+                "Effect passes",
+                "Pipelines"
+            ]
+        );
+        assert_eq!(view.rows[view.chart_after_rows - 1].label, "GPU · ms");
+        assert_eq!(view.rows[view.chart_after_rows].label, "Frames");
+        assert_eq!(serde_json::to_value(&view).unwrap()["chart_after_rows"], 2);
     }
 }

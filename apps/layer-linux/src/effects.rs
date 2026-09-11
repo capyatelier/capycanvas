@@ -607,7 +607,8 @@ impl EffectPanels {
             return;
         };
         if self.stats_labels.borrow().is_empty() {
-            for metric in &view.rows {
+            self.stats_plot.set_tooltip_text(Some(view.chart_label));
+            for (index, metric) in view.rows.iter().enumerate() {
                 let value = gtk::Label::new(None);
                 value.set_xalign(1.);
                 value.add_css_class("numeric");
@@ -615,9 +616,10 @@ impl EffectPanels {
                 row.set_tooltip_text(Some(metric.description));
                 self.stats.append(&row);
                 self.stats_labels.borrow_mut().push(value);
+                if index + 1 == view.chart_after_rows {
+                    self.stats.append(&self.stats_plot);
+                }
             }
-            self.stats_plot.set_tooltip_text(Some(view.chart_label));
-            self.stats.append(&self.stats_plot);
         }
         for (label, metric) in self.stats_labels.borrow().iter().zip(&view.rows) {
             label.set_text(&metric.value);

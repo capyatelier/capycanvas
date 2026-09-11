@@ -472,7 +472,7 @@ impl Panel {
             Self::Toolbar => "Tools",
             Self::Commands => "Commands",
             Self::Brushes => "Tool Set",
-            Self::ToolSettings => "Tool Settings",
+            Self::ToolSettings => "Tool",
             Self::Color => "Color",
             Self::Sizes => "Brush size",
             Self::Layers => "Layers",
@@ -1127,14 +1127,16 @@ impl DockLayout {
                 extent: 248.,
                 root: stack(
                     4,
-                    0.44,
+                    // Tool Set takes Brush size's former space; Settings and
+                    // Color retain their shares of the column.
+                    0.4592,
+                    tabs(6, &[Panel::Brushes]),
                     stack(
                         5,
-                        0.56,
-                        tabs(6, &[Panel::Brushes]),
-                        tabs(7, &[Panel::ToolSettings]),
+                        0.1936 / 0.5408,
+                        tabs(7, &[Panel::ToolSettings, Panel::Sizes]),
+                        tabs(10, &[Panel::Color]),
                     ),
-                    stack(8, 0.38, tabs(9, &[Panel::Sizes]), tabs(10, &[Panel::Color])),
                 ),
             },
             DockBand {
@@ -3873,6 +3875,14 @@ mod tests {
         assert_eq!(tools[8].control, ToolbarControl::Divider);
         assert_eq!(tools[13].control, ToolbarControl::Divider);
         assert_eq!(tools.last().unwrap().control, ToolbarControl::Color);
+        let settings_group = layout.panel_group(Panel::ToolSettings).unwrap();
+        assert_eq!(layout.panel(Panel::ToolSettings).unwrap().title(), "Tool");
+        assert_eq!(crate::PanelControl::ToolSettings.label(), "Tool");
+        let DockNode::Tabs { panels, active, .. } = layout.node(settings_group).unwrap() else {
+            panic!("Tool tab group");
+        };
+        assert_eq!(panels, &[Panel::ToolSettings, Panel::Sizes]);
+        assert_eq!(*active, Panel::ToolSettings);
         for viewport in [[1600., 1200.], [1200., 900.], [900., 640.], [640., 480.]] {
             let r = layout.workspace(
                 viewport[0],
@@ -3895,11 +3905,19 @@ mod tests {
             let command = group(&r, Panel::Commands);
             assert!(toolbar.x + toolbar.width < brushes.x);
             assert_eq!(brushes.x, settings.x);
-            assert_eq!(settings.x, sizes.x);
-            assert_eq!(sizes.x, color.x);
+            assert_eq!(settings, sizes);
+            assert_eq!(settings.x, color.x);
             assert!(brushes.y + brushes.height < settings.y);
-            assert!(settings.y + settings.height < sizes.y);
-            assert!(sizes.y + sizes.height < color.y);
+            assert!(settings.y + settings.height < color.y);
+            // Before tabbing Brush size, this column had two vertical pairs:
+            // Set/Settings (44%) and Sizes/Color (56%). Recover the removed
+            // panel and divider for Tool Set without resizing its neighbors.
+            let height = color.y + color.height - brushes.y;
+            let upper = (height - WORKSPACE_SPACING) * 0.44 - WORKSPACE_SPACING;
+            let lower = (height - WORKSPACE_SPACING) * 0.56 - WORKSPACE_SPACING;
+            assert!((settings.height - upper * 0.44).abs() < 1.);
+            assert!((color.height - lower * 0.62).abs() < 1.);
+            assert!((brushes.height - upper * 0.56 - lower * 0.38 - WORKSPACE_SPACING).abs() < 1.);
             assert!(nav.y + nav.height < properties.y);
             assert!(properties.y + properties.height < layers.y);
             assert_eq!(group(&r, Panel::Stats), nav);
