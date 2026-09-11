@@ -5,6 +5,39 @@ final class EditorLaunchTests: XCTestCase {
 
 
 
+    @MainActor func testPartialZenToolbar() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"invoke","command":"zen_mode"}]"#
+        app.launch()
+        let section = app.descendants(matching: .any)["zen-toolbar-0"].firstMatch
+        XCTAssertTrue(section.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.frame.contains(section.frame))
+        #if os(macOS)
+        app.buttons["zen-button"].click()
+        #else
+        app.buttons["zen-button"].tap()
+        #endif
+        XCTAssertTrue(app.buttons["panel-tab-sizes"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
+
+    @MainActor func testCollapsedColumnsDrawersAndZen() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":5},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":5,"collapsed":true}}]"#
+        app.launch()
+        checkCollapsedColumnsDrawersAndZen(in: app)
+    }
+
     @MainActor func testToolbarCustomization() throws {
         let app = editorTestApplication()
         #if os(iOS)

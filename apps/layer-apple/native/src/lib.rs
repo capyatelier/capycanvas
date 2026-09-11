@@ -16,6 +16,8 @@ pub struct CapyApple {
     host: NativeHost,
     error: Option<CString>,
     navigator_preview_epoch: Option<u64>,
+    chrome_facts: layer_ui::ChromeFacts,
+    dismissed_contacts: std::collections::BTreeSet<u64>,
 }
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
@@ -50,6 +52,8 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             metal: metal::MetalHost::default(),
             error: None,
             navigator_preview_epoch: None,
+            chrome_facts: Default::default(),
+            dismissed_contacts: Default::default(),
         })))
     })
     .ok()
@@ -152,13 +156,17 @@ pub unsafe extern "C" fn capy_apple_request(
                     .dispatch(serde_json::from_value(value).map_err(|e| e.to_string())?)?;
                 Some(serde_json::Value::Null)
             }
-            1 => Some(
-                serde_json::to_value(
-                    a.host
-                        .input(serde_json::from_value(value).map_err(|e| e.to_string())?)?,
-                )
-                .map_err(|e| e.to_string())?,
-            ),
+            1 => {
+                let input: layer_ui::UiInput =
+                    serde_json::from_value(value).map_err(|e| e.to_string())?;
+                let reply = a.host.input(input.clone())?;
+                match input {
+                    layer_ui::UiInput::Chrome { facts, .. } => a.chrome_facts = facts,
+                    layer_ui::UiInput::Blur => a.dismissed_contacts.clear(),
+                    _ => {}
+                }
+                Some(serde_json::to_value(reply).map_err(|e| e.to_string())?)
+            }
             2 => Some(a.host.query(value)?),
             3 => a.host.take_snapshot(),
             4 => Some(
@@ -291,6 +299,7 @@ pub unsafe extern "C" fn capy_apple_detach(app: *mut CapyApple) -> i32 {
     };
     app.perform(|a| {
         a.host.input(layer_ui::UiInput::Blur)?;
+        a.dismissed_contacts.clear();
         a.metal.detach();
         Ok(())
     })
@@ -357,6 +366,7 @@ pub unsafe extern "C" fn capy_apple_pointer(
     app.perform(|a| {
         if records.is_null()
             || count == 0
+            || count % 9 != 0
             || count > 8192 * 9
             || tool > 3
             || button > 2
@@ -364,11 +374,50 @@ pub unsafe extern "C" fn capy_apple_pointer(
         {
             return Err("Invalid Apple pointer batch".into());
         }
+        let records = unsafe { std::slice::from_raw_parts(records, count) };
+        if !records.iter().all(|v| v.is_finite())
+            || records
+                .chunks_exact(9)
+                .any(|r| r[7] < 0. || r[8] < 0. || r[8] > 4. || r[8].fract() != 0.)
+        {
+            return Err("Invalid Apple pointer sample".into());
+        }
+        if !a.host.accepts_pointer_input(view_revision) {
+            return Ok(());
+        }
+        if a.dismissed_contacts.contains(&id) {
+            if predicted == 0 && records.chunks_exact(9).any(|r| r[8] >= 3.) {
+                a.dismissed_contacts.remove(&id);
+            }
+            return Ok(());
+        }
+        if predicted == 0 && records[8] == 1. {
+            let viewport = a.host.logical;
+            let physical = a.host.session.state().camera.viewport;
+            let position = [
+                records[0] as f32 * viewport[0] / physical[0].max(1) as f32,
+                records[1] as f32 * viewport[1] / physical[1].max(1) as f32,
+            ];
+            let reply = a.host.input(layer_ui::UiInput::Chrome {
+                event: layer_ui::ChromeEvent::Contact {
+                    position,
+                    canvas: true,
+                },
+                facts: a.chrome_facts,
+                viewport,
+            })?;
+            if reply.handled {
+                if !records.chunks_exact(9).any(|r| r[8] >= 3.) {
+                    a.dismissed_contacts.insert(id);
+                }
+                return Ok(());
+            }
+        }
         a.host.pointer_batch(PointerBatch {
             id,
             tool: tool as u8,
             button: button as u8,
-            records: unsafe { std::slice::from_raw_parts(records, count) },
+            records,
             predicted: predicted != 0,
             view_revision,
         })

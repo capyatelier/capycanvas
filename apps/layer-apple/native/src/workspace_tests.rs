@@ -256,3 +256,192 @@ fn expanded_toolbar_geometry_and_final_drop_action_match_the_shared_preview() {
         assert_eq!(app.state()["workspace"], baseline);
     }
 }
+
+#[test]
+fn apple_drawer_dismissal_consumes_the_entire_canvas_contact_then_allows_painting() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let scale = if platform == 0 { 2. } else { 1. };
+        assert_eq!(
+            unsafe {
+                capy_apple_resize(
+                    app.0,
+                    (1200. * scale) as u32,
+                    (900. * scale) as u32,
+                    scale as f32,
+                )
+            },
+            0
+        );
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().unwrap());
+        app.draw_frame();
+        let paper = app.pixels();
+        app.action(json!({"type":"activate_tile","panel":"toolbar","tile":1}));
+        if app.state()["customization"]["drawer"].is_null() {
+            app.action(json!({"type":"activate_tile","panel":"toolbar","tile":1}));
+        }
+        assert!(app.state()["customization"]["drawer"].is_object());
+        let geometry = app
+            .request(
+                2,
+                json!({"type":"drawer","column":null,"heights":[400,250],"progress":1}),
+            )
+            .unwrap();
+        let facts = json!({"held":false,"dragging":false,"popup_open":false,"content_drawer":geometry["placement"]["bounds"],"drawer_connection":geometry["connection"]["bounds"]});
+        app.request(
+            1,
+            json!({"type":"chrome","event":{"kind":"refresh"},"facts":facts,"viewport":[1200,900]}),
+        )
+        .unwrap();
+        let revision = app.state()["camera"]["revision"].as_u64().unwrap();
+        // Separate ABI batches, including visual prediction, cannot leak a move
+        // after the initial down was used to dismiss the native drawer.
+        for (phase, predicted) in [(1., 0), (2., 1), (2., 0), (3., 0)] {
+            let record = [
+                800. * scale,
+                650. * scale,
+                1.,
+                0.,
+                0.,
+                0.,
+                0.,
+                2_000_000_000. + phase * 10_000_000.,
+                phase,
+            ];
+            assert_eq!(
+                unsafe {
+                    capy_apple_pointer(
+                        app.0,
+                        77,
+                        1,
+                        0,
+                        record.as_ptr(),
+                        record.len(),
+                        predicted,
+                        revision,
+                    )
+                },
+                0
+            );
+        }
+        assert!(app.state()["customization"]["drawer"].is_null());
+        app.draw_frame();
+        assert_eq!(app.pixels(), paper);
+        assert!(unsafe { &*app.0 }.dismissed_contacts.is_empty());
+        assert_eq!(unsafe { capy_apple_resize(app.0, 1200, 900, 1.) }, 0);
+        app.stroke();
+        app.draw_frame();
+        assert_ne!(app.pixels(), paper);
+        app.invoke("undo");
+        app.draw_frame();
+        assert_eq!(app.pixels(), paper);
+    }
+}
+
+#[test]
+fn apple_collapsed_toolbar_child_drawers_follow_live_tiles_and_preserve_topology() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let group = unsafe { &*app.0 }
+            .host
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel_group(layer_ui::Panel::Brushes)
+            .unwrap();
+        app.action(json!({"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":group},"viewport":[1200,900]}));
+        let baseline = app.state()["workspace"].clone();
+        customize(
+            &app,
+            json!({"type":"set_column_collapsed","group":group,"collapsed":true}),
+        );
+        customize(
+            &app,
+            json!({"type":"toggle_column_drawer","group":group,"panel":"toolbar"}),
+        );
+        let column = unsafe { &*app.0 }
+            .host
+            .session
+            .state()
+            .workspace
+            .layout
+            .collapsed_column_for_group(group)
+            .unwrap();
+        let root = snapshot(&app);
+        assert!(
+            root["layout"]["collapsed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == column)
+        );
+        assert_eq!(
+            root["state"]["customization"]["column_drawers"][0]["tabs"]["active"],
+            "toolbar"
+        );
+        let collapsed = app.state()["workspace"].clone();
+        let geometry = app
+            .request(
+                2,
+                json!({"type":"drawer_toolbar","panel":"toolbar","width":272,"height":800}),
+            )
+            .unwrap();
+        assert!(geometry["content_height"].as_f64().unwrap() > 0.);
+        let measure = |y, height| {
+            app.action(json!({"type":"measure_drawer_tiles","measurements":[{"column":column,"anchor":{"panel":"toolbar","tile":1},"bounds":{"x":80.,"y":y,"width":36.,"height":height}}]}))
+        };
+        measure(100., 36.);
+        app.action(json!({"type":"activate_tile","panel":"toolbar","tile":1}));
+        if app.state()["customization"]["drawer"].is_null() {
+            app.action(json!({"type":"activate_tile","panel":"toolbar","tile":1}));
+        }
+        let query = json!({"type":"drawer","column":null,"heights":[700,250],"progress":1});
+        let first = app.request(2, query.clone()).unwrap();
+        assert_eq!(first["placement"]["anchor"]["y"], 100.);
+        measure(60., 20.);
+        let next = app.request(2, query.clone()).unwrap();
+        assert_eq!(next["placement"]["anchor"]["height"], 20.);
+        assert!(next["connection"].is_object());
+        app.action(json!({"type":"measure_drawer_tiles","measurements":[]}));
+        assert!(app.request(2, query).unwrap().is_null());
+        assert_eq!(
+            app.state()["workspace"],
+            collapsed,
+            "Drawer scrolling and geometry are transient"
+        );
+        customize(&app, json!({"type":"close_expanded"}));
+        customize(
+            &app,
+            json!({"type":"toggle_column_drawer","group":group,"panel":"toolbar"}),
+        );
+        app.invoke("undo_workspace");
+        assert_eq!(
+            app.state()["workspace"],
+            baseline,
+            "Only the collapse changed durable topology"
+        );
+        app.invoke("undo_workspace"); // Restore the outward-facing lone toolbar.
+        let zen_layout = app.state()["workspace"].clone();
+        app.invoke("zen_mode");
+        let zen = snapshot(&app);
+        assert_eq!(zen["partial_zen"], true);
+        assert!(
+            !zen["zen_toolbars"]["sections"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(app.state()["workspace"]["layout"], zen_layout["layout"]);
+        app.invoke("zen_mode");
+        app.invoke("new_toolbar");
+        assert!(
+            snapshot(&app)["picker"]["choices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["control"] == json!({"kind":"panel","panel":"navigator"}))
+        );
+    }
+}

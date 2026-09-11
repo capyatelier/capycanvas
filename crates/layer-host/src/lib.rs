@@ -284,6 +284,10 @@ impl NativeHost {
         })
     }
 
+    pub fn accepts_pointer_input(&self, view_revision: u64) -> bool {
+        view_revision >= self.document_view_revision
+            && !self.session.state().document_file.close_ready
+    }
     pub fn pointer_batch(&mut self, batch: PointerBatch<'_>) -> Result<(), String> {
         let PointerBatch {
             id,
@@ -302,9 +306,7 @@ impl NativeHost {
         {
             return Err("Invalid native pointer batch".into());
         }
-        if view_revision < self.document_view_revision
-            || self.session.state().document_file.close_ready
-        {
+        if !self.accepts_pointer_input(view_revision) {
             return Ok(());
         }
         for sample in records.chunks_exact(9) {
@@ -741,14 +743,22 @@ impl NativeHost {
                     return Err("Invalid drawer toolbar size".into());
                 }
                 let config = self.session.state().workspace.layout.panel(panel)?;
-                json!(layer_ui::toolbar_tile_layout(
+                let geometry = layer_ui::toolbar_tile_layout(
                     width,
-                    height,
+                    layer_ui::toolbar_content_height(width, config.tiles(), config.tile_style),
                     layer_ui::Axis::Vertical,
                     config.tiles(),
                     false,
-                    config.tile_style
-                ))
+                    config.tile_style,
+                );
+                let content_height = geometry
+                    .tiles
+                    .iter()
+                    .map(|b| b.y + b.height + 4.)
+                    .fold(0., f32::max);
+                let mut value = json!(geometry);
+                value["content_height"] = json!(content_height);
+                value
             }
             Query::Navigator { viewport } => {
                 let state = self.session.state();

@@ -9,6 +9,7 @@ struct WorkspaceContext: ViewModifier {
     var doubleClick: (() -> Void)?
     @State private var menu = JSON()
     @State private var generation = UUID()
+    @State private var popupID = UUID()
     func body(content: Content) -> some View {
         content.editorContextAction(open)
             .simultaneousGesture(TapGesture(count: 2).exclusively(before: TapGesture()).onEnded { value in
@@ -18,7 +19,8 @@ struct WorkspaceContext: ViewModifier {
                 WorkspaceMenu(store: store, menu: menu) { menu = JSON() }
                     .presentationCompactAdaptation(.popover)
             }
-            .onDisappear { generation = UUID(); menu = JSON() }
+            .onChange(of: menu.isNull) { _, empty in store.workspace.popover(popupID, open: !empty) }
+            .onDisappear { generation = UUID(); menu = JSON(); store.workspace.popover(popupID, open: false) }
     }
     private func open() {
         let request = UUID(); generation = request

@@ -60,6 +60,15 @@ struct EditorView<Canvas: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .coordinateSpace(name: "editor-workspace")
+        .simultaneousGesture(SpatialTapGesture(coordinateSpace: .named("editor-workspace")).onEnded { event in
+            store.workspace.chrome(["kind": "contact", "position": [event.location.x, event.location.y], "canvas": false])
+        })
+        .onContinuousHover(coordinateSpace: .named("editor-workspace")) { phase in
+            switch phase {
+            case .active(let point): store.workspace.chrome(["kind": "motion", "position": [point.x, point.y]])
+            case .ended: store.workspace.chrome(["kind": "leave", "touch": false])
+            }
+        }
         .onPreferenceChange(WorkspaceTabs.self) { bounds in
             store.workspace.tabs = bounds.compactMap { key, rect in
                 let parts = key.split(separator: ":").compactMap { UInt64($0) }

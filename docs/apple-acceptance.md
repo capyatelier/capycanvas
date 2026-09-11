@@ -749,3 +749,66 @@ Collapsed columns/drawers, remaining panel projections and complete context/
 dialog/drag workflows still require acceptance on both platforms. Recovery,
 physical Pencil/tablet and lifecycle coverage, the complete visual fixture
 matrix and sustained hardware performance remain open.
+
+## Collapsed columns, content drawers and partial Zen
+
+Apple now projects the same collapsed columns, tabbed column drawers, child
+tool drawers and partial-Zen edge toolbar sections as the shared core/Android
+path. Both platforms expose collapse/expand, content-panel toolbar choices and
+the Commands panel. Ordinary dock topology and source panel ownership are
+preserved. Column scrolling reports a native offset; clipped toolbar tile
+rectangles update child anchors. Drawer tabs reuse the existing shared controls,
+including filters, layers, tool settings, color, Navigator and Diagnostics.
+The host query returns shared natural toolbar height and connection geometry.
+
+Each drawer coalesces layout, content measurement and anchor changes behind
+one pending geometry query; stale replies cannot publish earlier placement.
+Camera/painting snapshots do not start new geometry queries unless those inputs
+changed. Native hit testing respects drawer stacking and clipping, including
+blank drawer regions covering dock grips. The actual animated bounds feed the
+shared chrome policy. Context popovers and native sheets supply the popup fact.
+Chrome visibility refreshes on Zen mode changes as well as geometry changes;
+the focused UI check exposed and verified the missing mode refresh on exit.
+
+Canvas admission stays on the serial Rust owner. A real down uses logical
+workspace coordinates and shared dismissal before the physical pointer batch.
+If consumed, the whole contact, including subsequent movement and prediction,
+is suppressed until its terminal event. Focus loss clears that admission state.
+Invalid and stale-document samples remain rejected before they affect chrome.
+Both platform policies pass actual Metal checks for no paint through dismissal,
+subsequent normal painting and exact Undo, including a 2x coordinate case.
+
+All 258 affected tests pass (217 UI, 12 host, 29 Apple). The second new Apple
+test verifies column/tab projection, child anchor movement/clipping, transient
+measurement state, collapse undo, panel choices and Zen topology preservation.
+Its Zen fixture restores an outward-facing lone toolbar: the shared policy
+intentionally excludes a toolbar nested in a content tab group. Both signed
+builds and WebAssembly compile; the Mac test target compiles. The physical iPad
+build installs and launches, and a separate disposable Mac editor launches.
+
+The iPad column/tab/child drawer/dismissal/expand workflow passes, and the Zen
+entry/exit check passes after the visibility fix. An earlier Xcode invocation
+reported zero executed tests despite the new method being present in its built
+binary; removing only the disposable test runner allowed the focused checks to
+execute. That zero-test result is not counted as passing evidence. Mac GUI
+checks remain limited by the pending XCTest authentication prompt and were not
+repeated. No system-menu coordinate tests were used.
+
+The new 1376 by 1032, 2x Chrome/native Zen comparison retains every pixel and
+rotates only the native portrait raster. It differs at 1.3477% of pixels, with
+maximum channel error 166; all differing pixels lie in the top 119 physical
+rows. Chrome currently omits the partial-Zen toolbar sections, so this is an
+explicit host feature difference and a failing full-image result. The native
+sections remain present. Complete drawer/style/gesture fixtures, source-corner
+connections, full main-editor visual acceptance, recovery, physical input and
+lifecycle coverage and sustained performance remain required on both platforms.
+
+The incoming shared GPU Fill/Auto Select edge refinements are integrated. All
+258 UI/host/Apple tests pass again, along with six focused GPU checks covering
+flood masks, independent pixel morphology, antialiasing through history replay,
+invalid requests and startup compilation. Two hardware latency benchmarks remain
+explicitly ignored; these correctness results establish no performance claim.
+The integrated signed iPad and Mac builds and WebAssembly build pass. The iPad
+build installs and launches, and the Mac build launches with a disposable workspace. The
+drawer UI and blank-canvas visual fixtures above predate the renderer merge and
+do not establish visual parity for the incoming Fill/Auto Select refinements.

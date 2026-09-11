@@ -3,6 +3,7 @@ import SwiftUI
 struct PanelControls: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
+    var scrollable = true
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
@@ -19,14 +20,18 @@ struct PanelControls: View {
         else { controls }
     }
     private var controls: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+        Group {
+            if scrollable { ScrollView { controlBody }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else { controlBody }
+        }
+    }
+    private var controlBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
                 ForEach(panel["controls"].array.indices, id: \.self) { index in
                     let item = panel["controls"][index]
                     if item["visible_in_panel"].bool { control(item) }
                 }
-            }.padding(8).frame(maxWidth: .infinity, alignment: .topLeading)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.padding(8).frame(maxWidth: .infinity, alignment: .topLeading)
     }
     @ViewBuilder func control(_ item: JSON) -> some View {
         switch item["control"].string {

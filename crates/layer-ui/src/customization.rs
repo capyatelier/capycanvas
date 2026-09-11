@@ -599,7 +599,11 @@ impl DockLayout {
         let Some(group) = group.filter(|_| {
             matches!(
                 platform,
-                Platform::Gtk | Platform::Generic | Platform::Android
+                Platform::Gtk
+                    | Platform::Generic
+                    | Platform::Android
+                    | Platform::Ios
+                    | Platform::Mac
             )
         }) else {
             return Vec::new();
@@ -952,7 +956,11 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
                         && p.available_on(platform)
                         && matches!(
                             platform,
-                            Platform::Gtk | Platform::Generic | Platform::Android
+                            Platform::Gtk
+                                | Platform::Generic
+                                | Platform::Android
+                                | Platform::Ios
+                                | Platform::Mac
                         )
                 })
                 .map(|panel| ToolbarControl::Panel { panel }),
@@ -1060,7 +1068,11 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                     enabled = panel.available_on(state.platform)
                         && matches!(
                             state.platform,
-                            Platform::Gtk | Platform::Generic | Platform::Android
+                            Platform::Gtk
+                                | Platform::Generic
+                                | Platform::Android
+                                | Platform::Ios
+                                | Platform::Mac
                         );
                     false
                 }
@@ -1503,7 +1515,11 @@ impl CustomizationState {
             ToggleToolDrawer { anchor } => {
                 if !matches!(
                     platform,
-                    Platform::Gtk | Platform::Generic | Platform::Android
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
                 ) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
@@ -1533,7 +1549,11 @@ impl CustomizationState {
             SetColumnCollapsed { group, collapsed } => {
                 if !matches!(
                     platform,
-                    Platform::Gtk | Platform::Generic | Platform::Android
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
                 ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
@@ -1544,7 +1564,11 @@ impl CustomizationState {
             ToggleColumnDrawer { group, panel } => {
                 if !matches!(
                     platform,
-                    Platform::Gtk | Platform::Generic | Platform::Android
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
                 ) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }

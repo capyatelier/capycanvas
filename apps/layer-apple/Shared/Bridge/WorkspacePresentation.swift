@@ -11,7 +11,9 @@ import SwiftUI
     private var geometryKey = ""
     private var animation: Task<Void, Never>?
     var tabs: [JSON] = []
-    var sources: [String: CGRect] = [:]
+    var sources: [String: WorkspaceSource] = [:]
+    private var chromeKey = ""
+    private var popovers = Set<UUID>()
     private struct Drag {
         let token = UUID()
         let item: JSON
@@ -22,6 +24,7 @@ import SwiftUI
     private var queryingDrop = false
     init(store: EditorStore) { self.store = store }
     func refresh() {
+        refreshChrome()
         guard let store else { return }
         let desired = store.state["customization"]["expanded"]
         guard !desired.isNull || shownPanel != nil else { return }
@@ -46,8 +49,9 @@ import SwiftUI
                 }
                 guard !Task.isCancelled else { return }
                 self.expansion = next
+                self.refreshChrome()
                 if fraction == 1 || next.isNull {
-                    if closing || next.isNull { self.shownPanel = nil; self.expansion = JSON() }
+                    if closing || next.isNull { self.shownPanel = nil; self.expansion = JSON(); self.refreshChrome() }
                     self.animation = nil; return
                 }
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
@@ -59,9 +63,42 @@ import SwiftUI
         configurationHeight = height; refresh()
     }
     func source(at point: CGPoint) -> JSON? {
-        sources.filter { $0.value.contains(point) }
-            .min { $0.value.width * $0.value.height < $1.value.width * $1.value.height }
+        guard let store, !store.snapshot["partial_zen"].bool else { return nil }
+        // Blank drawer regions still occlude dock grips underneath them.
+        let drawerLayer = store.contentDrawers.items.values.filter {
+            $0.geometry["placement"]["bounds"].rect.contains(point) || $0.geometry["connection"]["bounds"].rect.contains(point)
+        }.map { $0.id == "tool" ? 220 : 200 }.max() ?? 0
+        let columnLayer = store.snapshot["layout"]["collapsed"].array.contains { $0["bounds"].rect.contains(point) } ? 160 : 0
+        return sources.filter { $0.value.layer >= max(drawerLayer, columnLayer) && $0.value.bounds.contains(point) }
+            .max {
+                if $0.value.layer != $1.value.layer { return $0.value.layer < $1.value.layer }
+                return $0.value.bounds.width * $0.value.bounds.height > $1.value.bounds.width * $1.value.bounds.height
+            }
             .flatMap { try? JSON.decode($0.key) }
+    }
+    func popover(_ id: UUID, open: Bool) {
+        if open { popovers.insert(id) } else { popovers.remove(id) }
+        refreshChrome()
+    }
+    private var facts: JSON {
+        guard let store else { return JSON() }
+        let tool = store.contentDrawers.items["tool"]?.geometry ?? JSON()
+        let modal = ["picker", "toolbar_prompt", "toolbar_manager", "preferences"].contains { !store.snapshot[$0].isNull }
+            || !store.state["customization"]["control"].isNull
+        return JSON(["held": false, "dragging": drag?.item["kind"].string == "tile", "popup_open": modal || !popovers.isEmpty,
+            "expanded_panel": expansion.raw, "content_drawer": tool["placement"]["bounds"].raw,
+            "drawer_connection": tool["connection"]["bounds"].raw])
+    }
+    func chrome(_ event: [String: Any]) {
+        guard let store, !store.snapshot["layout"]["viewport"].isNull else { return }
+        store.input(["type": "chrome", "event": event, "facts": facts.raw, "viewport": store.snapshot["layout"]["viewport"].raw])
+    }
+    func refreshChrome() {
+        guard let store, !store.snapshot["layout"]["viewport"].isNull else { return }
+        let next = JSON([facts.raw, store.snapshot["layout"]["viewport"].raw,
+            store.state["workspace"]["zen_mode"].raw, store.state["settings"]["total_zen"].raw]).stableKey
+        guard next != chromeKey else { return }; chromeKey = next
+        chrome(["kind": "refresh"])
     }
     private func send(_ operation: Drag, phase: String) {
         guard operation.item["kind"].string != "tile", let store else { return }
@@ -82,19 +119,21 @@ import SwiftUI
             animation?.cancel(); animation = nil; expansion = JSON(); shownPanel = nil; geometryKey = ""
         }
         send(operation, phase: "down")
+        refreshChrome()
     }
     func move(_ item: JSON, point: CGPoint, released: Bool = false) {
         guard drag?.item.stableKey == item.stableKey else { return }
         drag?.point = point; drag?.released = released
         if let current = drag, current.item["kind"].string != "tile" {
             send(current, phase: released ? "up" : "move")
-            if released { drag = nil; dropHint = JSON(); return }
+            if released { drag = nil; dropHint = JSON(); refreshChrome(); return }
         }
         if item["type"].isNull { queryDrop() }
     }
     func cancel(_ item: JSON) {
         if let current = drag, current.item.stableKey == item.stableKey {
             send(current, phase: "cancel"); drag = nil; dropHint = JSON()
+            refreshChrome()
         }
     }
     private func queryDrop() {
@@ -108,6 +147,7 @@ import SwiftUI
             guard current.point == request.point else { self.queryDrop(); return }
             if current.released {
                 self.drag = nil; self.dropHint = JSON()
+                self.refreshChrome()
                 if !result["action"].isNull { store.dispatch(result["action"]) }
             } else { self.dropHint = result }
         }
@@ -120,10 +160,12 @@ struct WorkspaceDrag: ViewModifier {
     let workspace: WorkspacePresentation
     let item: JSON
     @Environment(\.workspaceGesturesEnabled) private var enabled
+    @Environment(\.workspaceLayer) private var layer
+    @Environment(\.workspaceClip) private var clip
     func body(content: Content) -> some View {
         content.background(GeometryReader { allocation in
             Color.clear.preference(key: WorkspaceSources.self,
-                value: enabled ? [item.stableKey: allocation.frame(in: .named("editor-workspace"))] : [:])
+                value: enabled ? [item.stableKey: WorkspaceSource(bounds: allocation.frame(in: .named("editor-workspace")).intersection(clip), layer: layer)] : [:])
         })
     }
 }
@@ -158,15 +200,22 @@ struct WorkspaceRootDrag: ViewModifier {
     }
 }
 private struct WorkspaceGesturesEnabled: EnvironmentKey { static let defaultValue = true }
+private struct WorkspaceLayer: EnvironmentKey { static let defaultValue = 0 }
+private struct WorkspaceClip: EnvironmentKey { static let defaultValue = CGRect.infinite }
 extension EnvironmentValues {
+    var workspaceLayer: Int { get { self[WorkspaceLayer.self] } set { self[WorkspaceLayer.self] = newValue } }
+    var workspaceClip: CGRect { get { self[WorkspaceClip.self] } set { self[WorkspaceClip.self] = newValue } }
     var workspaceGesturesEnabled: Bool {
         get { self[WorkspaceGesturesEnabled.self] }
         set { self[WorkspaceGesturesEnabled.self] = newValue }
     }
 }
+struct WorkspaceSource: Equatable { let bounds: CGRect; let layer: Int }
 struct WorkspaceSources: PreferenceKey {
-    static var defaultValue: [String: CGRect] { [:] }
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, next in next }) }
+    static var defaultValue: [String: WorkspaceSource] { [:] }
+    static func reduce(value: inout [String: WorkspaceSource], nextValue: () -> [String: WorkspaceSource]) {
+        value.merge(nextValue(), uniquingKeysWith: { old, next in old.layer > next.layer ? old : next })
+    }
 }
 
 struct WorkspaceTabs: PreferenceKey {
