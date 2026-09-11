@@ -2068,3 +2068,10 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   independently. Remaining gates are still strict selection-edge appearance,
   rare presentation stalls/residual transform misses, cross-backend filter
   numerical parity and final GTK human review.
+- After merging the Apple UI/validation milestone, the release GTK application
+  rebuild and native selected-brush workflow pass (G-Pen, Wet Round, Watercolor,
+  selection inversion and undo/redo). Fresh dark/light captures were visually
+  inspected. Strict renderer/GTK Clippy and the WebAssembly check pass. The
+  incoming Metal report now tests v4: 111 tests pass and the strict reference
+  still fails, with maximum channel error 47; it is no longer an untested v4
+  backend. The detailed counts remain in [runtime filter validation](runtime-filters.md).
