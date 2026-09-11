@@ -118,9 +118,9 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
         Canvas(Modifier.fillMaxSize()) {
             val u = size.height / 14
             val body = Size(22 * u, size.height)
-            drawRoundRect(track, size = body, cornerRadius = CornerRadius(3 * u))
+            drawRoundRect(track, size = body, cornerRadius = CornerRadius(4 * u))
             clipRect(right = body.width * battery.percent / 100) {
-                drawRoundRect(fill, size = body, cornerRadius = CornerRadius(3 * u))
+                drawRoundRect(fill, size = body, cornerRadius = CornerRadius(4 * u))
             }
             if (battery.charging) {
                 val bolt = Path().apply {
@@ -129,9 +129,9 @@ internal data class DeviceBattery(val percent: Int, val charging: Boolean, val l
                     lineTo(25f * u, 5.9f * u); lineTo(22.7f * u, 5.9f * u)
                     lineTo(24.1f * u, 2f * u); close()
                 }
-                // A fine pale edge keeps the dark terminal mark legible on dark chrome.
-                drawPath(bolt, track, style = Stroke(1.75f * u))
-                drawPath(bolt, ink)
+                // Reverse the bolt contrast in dark mode, independently of the percentage.
+                drawPath(bolt, if (dark) Color(0xFF202226) else track, style = Stroke(1.75f * u))
+                drawPath(bolt, if (dark) Color(0xFFE5E7EB) else ink)
             } else {
                 drawRoundRect(track, Offset(23 * u, 4 * u), Size(2 * u, 6 * u), CornerRadius(u))
             }
