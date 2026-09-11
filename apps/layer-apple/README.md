@@ -14,8 +14,10 @@ for the shared-code boundaries, milestone matrix and remaining work.
 
 [Performance workflows and measurements](PERFORMANCE.md) include five opt-in
 synthetic drawing profiles shared by both targets and a ten-minute physical 4K
-watercolor baseline on each. CPU spikes, missing GPU observations and the Mac's
-current 90 Hz display leave performance acceptance open. Benchmark sessions use
+watercolor baseline on each. Current validation targets 90 Hz on Mac and 120 Hz
+on iPad; the user deferred Mac 120 Hz testing until suitable hardware is available.
+CPU spikes, missing GPU observations and the remaining workload matrix leave
+performance acceptance open. Benchmark sessions use
 isolated storage; ordinary launches do not start synthetic input or recording.
 
 ## Build
@@ -155,8 +157,34 @@ The native adapter uses [AppKit window full screen](https://developer.apple.com/
 The installed UIKit SDK's [iOS geometry preferences](https://developer.apple.com/documentation/uikit/uiwindowscene/geometrypreferences/ios)
 expose orientation changes but no equivalent iPad window toggle. That shared
 command capability remains explicitly unavailable on iPad and open in the review.
-Full-screen editor layout/rendering and the browser's optional system-status
-surface also remain open acceptance items.
+Full-screen editor layout/rendering remains an open acceptance item.
+
+Both Apple headers implement **Show battery and clock** from Appearance settings:
+Always, In fullscreen mode, or Never. The shared Swift component uses the editor
+palette and the browser/Android battery geometry. Desktops without an internal
+battery show only the clock; unavailable readings never become a fabricated
+percentage. Mac full-screen notifications and iPad scene geometry observations
+control the fullscreen-only policy. Observing an iPad scene does not add the
+still-unavailable full-screen toggle.
+
+Visible headers share one native battery subscription and one minute-aligned
+clock timer. The last hidden/background header stops monitoring; minute and
+power updates stay outside the Rust owner and drawing display link. UIKit uses
+[battery monitoring](https://developer.apple.com/documentation/uikit/uidevice/isbatterymonitoringenabled),
+restoring its previous state after use. AppKit uses IOKit power notifications,
+with power-service reads on a utility queue. Fast lifecycle checks need no GUI:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/SystemStatus.swift \
+  apps/layer-apple/macOS/Platform/BatterySource.swift \
+  apps/layer-apple/tests/system-status.swift -o /tmp/capy-system-status-tests
+/tmp/capy-system-status-tests
+```
+
+`testSystemStatusSetting` exercises preference and Zen effects in the editor.
+Exact component rasterization and the complete full-screen/window-layout matrix
+remain part of visual acceptance; implementation is not a pixel-parity pass.
 
 Launch a local Mac build with:
 

@@ -148,11 +148,17 @@ struct EditorView<Canvas: View>: View {
             }
             let tab = store.state["tabs"][0]
             Text(verbatim: "\(tab["title"].string) · \(Int(tab["width"].number)) × \(Int(tab["height"].number))")
+                .lineLimit(1)
                 .accessibilityIdentifier("document-title")
                 .fontWeight(.semibold).padding(.horizontal, 8).frame(height: 36)
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-            IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
-                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+            HStack(spacing: 6) {
+                if SystemStatus.visible(policy: store.state["settings"]["show_clock"].string, fullscreen: store.state["fullscreen"].bool) {
+                    SystemStatusView(palette: palette, dark: store.state["theme"].string == "dark")
+                }
+                IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
+                    .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+            }
         }.padding(6).frame(height: 48)
     }
 
@@ -220,8 +226,10 @@ private struct EditorHeaderLayout: Layout {
         let ideal = subviews[0].sizeThatFits(.unspecified)
         let leading = ideal.width <= available ? ideal : subviews[0].sizeThatFits(ProposedViewSize(width: available, height: 36))
         subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(leading))
-        let center = max(leading.width + 6, (bounds.width - title.width) / 2)
-        subviews[1].place(at: CGPoint(x: bounds.minX + center, y: bounds.minY), proposal: ProposedViewSize(title))
+        let titleWidth = min(title.width, max(0, bounds.width - leading.width - trailing.width - 12))
+        let center = max(leading.width + 6, min((bounds.width - titleWidth) / 2, bounds.width - trailing.width - 6 - titleWidth))
+        subviews[1].place(at: CGPoint(x: bounds.minX + center, y: bounds.minY),
+            proposal: ProposedViewSize(width: titleWidth, height: 36))
         subviews[2].place(at: CGPoint(x: bounds.maxX - trailing.width, y: bounds.minY), proposal: ProposedViewSize(trailing))
     }
 }

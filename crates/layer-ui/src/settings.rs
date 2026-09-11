@@ -826,7 +826,12 @@ impl Settings {
         ];
         if !matches!(
             platform,
-            Platform::Generic | Platform::Gtk | Platform::Web | Platform::Android
+            Platform::Generic
+                | Platform::Gtk
+                | Platform::Web
+                | Platform::Android
+                | Platform::Ios
+                | Platform::Mac
         ) {
             groups[0][0].rows.retain(|r| r.id != ShowClock);
         }
@@ -1319,7 +1324,13 @@ mod copy_tests {
     fn clock_visibility_defaults_round_trips_and_resets() {
         let original: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
-        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        for platform in [
+            Platform::Gtk,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+        ] {
             let mut settings = original.clone();
             let row = settings.field(PreferenceId::ShowClock, platform).unwrap();
             assert_eq!(row.title, "Show battery and clock");
