@@ -1664,3 +1664,10 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   drawing; panning correctly reuses the unchanged overview. Raw reports and
   traces remain local and untracked. Region refinements, the historical filter
   comparison, final integrated validation and user approval remain outstanding.
+- The full native default-workspace test was rerun successfully after the
+  sampling change. Incoming Apple menu/shortcut work is merged; post-merge
+  validation passes 217 shared UI and 12 host tests, strict UI/GTK Clippy,
+  workspace/Wasm checks and the native GTK menu/document workflows. Existing
+  non-Metal Apple warnings remain. This is shared-source integration, not new
+  Apple-device validation. The temporary Vulkan tracing source and binary were
+  removed; only test-only timing/preview assertions remain in the application.
