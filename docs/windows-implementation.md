@@ -457,3 +457,43 @@ now snapshots assets through CanvasRenderer::source_asset and still passes exact
 D3D12 save/reopen and continued wet-paint comparisons. The merged WinUI build
 passes all four Color captures and its color, Preferences/header and workspace
 interaction checks, then closes with empty runtime stderr.
+
+### Native Tool Set and Tool Settings checkpoint
+
+Tool Set now projects shared tool groups and subtools, including stroke previews,
+selection state and non-paint tools. A compact chooser uses the shared command
+catalog to keep every drawing tool reachable until Windows toolbar customization
+is complete. Tool Settings is available from Workspace and renders shared numeric
+schemas, group labels and checkable/enabled command actions.
+
+Value updates retain fields, buttons and the scroll container. Changing a tool,
+preset or editing target replaces the field context; detached controls cannot
+apply drafts to a new context. Normal focus loss can commit an edit before a
+target-changing command executes. The new target's controls then display the
+acknowledged shared state.
+
+The long Tool Settings panel uses WinUI ScrollView. The previous ScrollViewer
+retained its controls but jumped when a value changed in the scrolled panel;
+ScrollView passes the same strict scroll-offset test. No blanket suppression of
+native focus scrolling is installed. Numeric controls avoid redundant text writes
+and hide the default slider tooltip, which reports normalized positions instead
+of the shared numeric units.
+
+Opening Tool Settings and Color together exposed an existing fractional-width
+allocation defect: the wheel could be one physical pixel wider than its height.
+The wheel now chooses a square device-pixel extent before arranging and drawing.
+The combined-panel HSV/HLS and remembered-hue captures pass the original color
+tolerance; the checker and reference pixels were not relaxed.
+
+All 233 UI/host/Windows Rust tests pass. Native UI Automation passes all 18
+drawing commands (including transform), tool/subtool/schema projection, shared
+expressions, retained fields/buttons/scrolling, stale tool draft handling, target
+context replacement, gradient and figure choices, ruler toggles and transform
+cancellation. Color, Preferences/header and workspace regressions pass on the
+same isolated instance, which closes with empty runtime stderr. The combined
+layout was also inspected visually.
+
+Physical pointer/keyboard acceptance, full workspace layout parity, connected
+drawers/customization, document workflows, lifecycle/device recovery and release
+packaging remain open. The 120 Hz benchmark stays deferred. Raw traces, captures,
+profiles and diagnostic logs remain ignored and local.

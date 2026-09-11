@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "WorkspaceView.h"
 #include "ColorView.h"
+#include "ToolView.h"
 #include "UiControls.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -41,31 +42,6 @@ struct WorkspaceView::Impl {
         AutomationProperties::SetName(root,L"Drawing workspace");
         camera.FontSize(num(catalog,L"text_size_pt",11)*96./72.);
         camera.IsHitTestVisible(false);
-    }
-    StackPanel brushes(Bindings& bindings){
-        StackPanel list;list.Spacing(2);
-        for(auto value:array(data->catalog,L"brush_categories")){
-            auto category=value.GetObject();
-            auto heading=label(data,str(category,L"label"),true);heading.Opacity(.55);
-            heading.Margin(Thickness{8,8,8,8});list.Children().Append(heading);
-            for(auto choiceValue:array(category,L"brushes")){
-                auto choice=choiceValue.GetObject();double id=num(choice,L"id");
-                auto pick=button(data,str(choice,L"label"),[data=data,id]{
-                    data->dispatch(O({{L"type",S(L"select_brush")},{L"id",N(id)}}));
-                });
-                pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-                pick.Padding(Thickness{6,3,6,3});
-                StackPanel content;
-                Image preview;preview.Height(40);preview.Stretch(Stretch::Fill);
-                preview.Source(Imaging::BitmapImage(asset(L"brush-previews/"+std::to_wstring(int(id))+L"-"+std::wstring(data->theme().c_str())+L".png")));
-                content.Children().Append(preview);
-                auto title=label(data,str(choice,L"label"),true);title.TextAlignment(TextAlignment::Right);
-                content.Children().Append(title);pick.Content(content);list.Children().Append(pick);
-                bindings.emplace_back([data=data,id,pick]{
-                    pick.Background(num(object(data->state,L"brush"),L"preset")==id?selected():clear());
-                });
-            }
-        }return list;
     }
     Grid sizes(double width,Bindings& bindings){
         Grid grid;int columns=std::max(1,int(width/44));
@@ -177,9 +153,10 @@ struct WorkspaceView::Impl {
             for(auto value:array(panel,L"controls")){
                 auto control=value.GetObject();if(!flag(control,L"visible_in_panel"))continue;
                 auto kind=str(control,L"control");
-                if(kind==L"brushes")content.Children().Append(brushes(bindings));
+                if(kind==L"brushes")content.Children().Append(ToolSetPanel(data,bindings));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16,bindings));
                 else if(kind==L"layers")content.Children().Append(layers(bindings));
+                else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel")content.Children().Append(ColorPanel(data,bindings));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
                     bool size=kind==L"brush_size";
@@ -201,8 +178,15 @@ struct WorkspaceView::Impl {
                     }content.Children().Append(actions);
                 }
             }
-            ScrollViewer scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollMode::Disabled);
-            scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);Grid::SetRow(scroll,1);frame.Children().Append(scroll);
+            if(str(panel,L"id")==L"tool_settings"){
+                ScrollView scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollingScrollMode::Disabled);
+                scroll.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);
+                scroll.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);
+                Grid::SetRow(scroll,1);frame.Children().Append(scroll);
+            }else{
+                ScrollViewer scroll;scroll.Content(content);scroll.HorizontalScrollMode(ScrollMode::Disabled);
+                scroll.VerticalScrollBarVisibility(ScrollBarVisibility::Auto);Grid::SetRow(scroll,1);frame.Children().Append(scroll);
+            }
         }
         group.border.Child(frame);
     }

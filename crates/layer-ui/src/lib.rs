@@ -200,6 +200,8 @@ pub struct UiCatalog {
     pub panels: Vec<PanelChoice>,
     pub toolbar: &'static [ToolbarControl],
     pub menus: &'static [MenuSpec],
+    /// Primary drawing tools for hosts that also expose a compact tool chooser.
+    pub tool_commands: &'static [CommandId],
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
     pub brush_sizes: &'static [f32],
@@ -315,6 +317,7 @@ pub fn ui_catalog() -> UiCatalog {
         toolbar: TOOLBAR_CONTROLS,
         menus: MENUS,
         layer_commands: &CommandId::LAYERS,
+        tool_commands: &CommandId::TOOLS,
         brush_categories: brush_categories().collect(),
         brush_sizes: BRUSH_SIZES,
         brush_size: NumericControl::brush_size(),
@@ -492,6 +495,26 @@ impl CommandId {
         Self::NewWindow,
         Self::KeyboardShortcuts,
         Self::About,
+    ];
+    pub const TOOLS: [Self; 18] = [
+        Self::Pen,
+        Self::Pencil,
+        Self::Brush,
+        Self::Eraser,
+        Self::Airbrush,
+        Self::Decoration,
+        Self::Blend,
+        Self::Liquify,
+        Self::Lasso,
+        Self::Move,
+        Self::ScaleRotate,
+        Self::Hand,
+        Self::Eyedropper,
+        Self::Gradient,
+        Self::Figure,
+        Self::Ruler,
+        Self::AutoSelect,
+        Self::Fill,
     ];
     pub const LAYERS: [Self; 4] = [
         Self::AddLayer,

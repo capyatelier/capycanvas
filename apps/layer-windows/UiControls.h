@@ -127,7 +127,7 @@ inline Button button(std::shared_ptr<WorkspaceData> const& data,hstring const& t
 }
 struct NumberState {double value=0;bool editing=false,dragging=false,formatting=false;};
 inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
-    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false){
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false,hstring const& identifier=L""){
     auto local=std::make_shared<NumberState>();local->value=get();
     StackPanel root;root.Spacing(0);
     Grid header;ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
@@ -137,21 +137,24 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
     TextBox entry;entry.Width(72);entry.MinHeight(24);entry.Height(24);entry.Padding(Thickness{6,0,6,0});
     entry.FontSize(data->textSize());entry.Background(data->brush(L"input"));entry.BorderThickness(Thickness{0});
     entry.TextAlignment(TextAlignment::Right);Grid::SetColumn(entry,1);header.Children().Append(entry);
-    AutomationProperties::SetName(entry,title);
+    AutomationProperties::SetName(entry,title);if(!identifier.empty())AutomationProperties::SetAutomationId(entry,identifier);
     auto setText=[local,weak=make_weak(entry)](hstring const& value){
         bool previous=std::exchange(local->formatting,true);
         struct Reset{bool& value;bool previous;~Reset(){value=previous;}} reset{local->formatting,previous};
-        if(auto control=weak.get())control.Text(value);
+        if(auto control=weak.get();control&&control.Text()!=value)control.Text(value);
     };
     entry.TextChanging([data,local](auto&&,auto&&){
         // Covers typing, paste, accessibility and IME edits, including after Enter.
         if(!data->updating&&!local->formatting)local->editing=true;
     });
     Slider slider;slider.Minimum(0);slider.Maximum(1);slider.StepFrequency(0.001);slider.MinHeight(0);slider.Height(24);
+    // The adjacent field displays shared units; the default thumb tooltip
+    // exposes only normalized 0..1 positions.
+    slider.IsThumbToolTipEnabled(false);
     slider.Resources().Insert(box_value(L"SliderHorizontalHeight"),box_value(24.));
     for(auto key:{L"SliderHorizontalThumbWidth",L"SliderHorizontalThumbHeight",L"SliderInnerThumbWidth",L"SliderInnerThumbHeight"})
         slider.Resources().Insert(box_value(key),box_value(0.));
-    AutomationProperties::SetName(slider,title+L" slider");
+    AutomationProperties::SetName(slider,title+L" slider");if(!identifier.empty())AutomationProperties::SetAutomationId(slider,identifier+L"-slider");
     auto palette=object(data->state,L"palette");
     auto panelColor=color(str(palette,L"panel")),textColor=color(str(palette,L"text"));
     auto track=fill({255,uint8_t((int(panelColor.R)+textColor.R)/2),

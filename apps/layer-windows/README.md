@@ -239,3 +239,22 @@ captures the entire app window. Rust classifies sampled wheel pixels and compute
 expected colors. Four HSV/HLS cases include remembered hue with black paint.
 Reports remain under ignored artifacts/windows/color. This does not validate
 physical pointer capture, full-window visual parity or presentation performance.
+
+## Tool controls checks
+
+Tool Set projects shared groups and subtools. Its Drawing tool chooser exposes
+all primary drawing commands. Workspace's Tool Settings panel uses the shared
+numeric schema and command state in a retained native ScrollView.
+
+Run the fixture in a fresh isolated review instance with CAPY_TRACE_UI=1 and
+CAPY_SMOKE_TEST=1 (the latter supplies the controlled stroke for transform):
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-tools.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json
+~~~
+
+The fixture checks tool/schema projection, numeric edits, field/button/scroll
+retention, draft contexts, gradient and figure subtools, ruler toggles and
+transform cancellation. It leaves Tool Settings visible, allowing the Color
+fixture to additionally test a narrow fractional-width allocation. These checks
+do not establish physical input, full-editor parity or presentation acceptance.

@@ -172,9 +172,7 @@ struct View:std::enable_shared_from_this<View>{
                 Shapes::Ellipse ring;ring.Width(7);ring.Height(7);ring.StrokeThickness(width);ring.Stroke(fill(colorValue));marker.Children().Append(ring);
             }wheel.Children().Append(marker);
         }
-        wheel.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){
-            double width=e.NewSize().Width;if(std::abs(width-self->side)>.01){self->cancel();self->side=width;self->wheel.Height(width);self->refresh();}
-        }});
+        wheel.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->refresh();});
         wheel.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->wheel);
             if(self->pointer||!p.IsInContact()||(p.PointerDeviceType()==Microsoft::UI::Input::PointerDeviceType::Mouse&&!p.Properties().IsLeftButtonPressed()))return;
@@ -257,9 +255,14 @@ struct View:std::enable_shared_from_this<View>{
         for(int i=0;i<3;i++){auto swatch=colors.GetObjectAt(i);swatchColors[i].Color(rgba(array(swatch,L"rgba")));
             swatches[i].Background(flag(swatch,L"selected")?selected():clear());
             AutomationProperties::SetItemStatus(swatches[i],flag(swatch,L"selected")?L"Selected":L"");}
-        if(side<1||!root.XamlRoot())return;
-        image.Width(side);image.Height(side);
+        if(!root.XamlRoot())return;
         double scale=root.XamlRoot().RasterizationScale();
+        // Fractional dock widths must still allocate a square in device pixels.
+        // Independent XAML width/height rounding can otherwise clip one edge.
+        double nextSide=std::floor(wheel.ActualWidth()*scale)/scale;
+        if(std::abs(side-nextSide)>.01){cancel();side=nextSide;wheel.Height(side);}
+        if(side<1)return;
+        image.Width(side);image.Height(side);
         auto nextKey=O({{L"space",S(str(view,L"space"))},{L"hue",array(view,L"hue_color")},{L"size",N(side)},{L"scale",N(scale)}}).Stringify();
         if(nextKey!=key){
             try{

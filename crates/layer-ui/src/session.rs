@@ -6651,7 +6651,8 @@ mod tests {
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
                 let available = platform == Platform::Gtk
-                    || (panel == Panel::Color && platform == Platform::Windows)
+                    || (matches!(panel, Panel::ToolSettings | Panel::Color)
+                        && platform == Platform::Windows)
                     || (matches!(panel, Panel::ToolSettings | Panel::Color)
                         && matches!(platform, Platform::Ios | Platform::Mac));
                 assert_eq!(
@@ -8689,6 +8690,7 @@ mod tests {
             .chain(PRIMARY_MENU)
             .flat_map(|s| s.iter())
             .chain(catalog.layer_commands)
+            .chain(catalog.tool_commands)
         {
             assert!(session.state.commands.iter().any(|c| c.id == *id));
         }
