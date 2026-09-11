@@ -13,6 +13,27 @@ Arguments are logical width, height, pixel scale, output directory and theme.
 a hardware adapter. Captures wait for GPU readiness, fonts/images and layout.
 The native scenario must use the same theme, document, workspace and camera.
 
+For routine Mac visual work, open the built app and capture its frontmost editor
+window directly. This captures the composited Metal canvas and native controls,
+without clicking menus or running an XCTest session:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun swift tools/visual/mac-capture.swift artifacts/ui/parity/mac
+```
+
+Screen capture permission is required. Keep the editor frontmost and unobscured.
+The command captures the screen inside its exact window bounds, preserving system
+corner pixels rather than producing transparent corners, and writes the PNG and
+its measured logical/pixel dimensions. Use those dimensions and the app's theme for the Chrome
+capture. Mac top-level menus intentionally live in the OS menu bar; keep the full
+image diff and document this platform adaptation. Use direct editor action/state
+and canvas-output checks for routine behavioral coverage. Reserve UI automation
+for targeted app input/lifecycle regressions; trust macOS menu mechanics.
+Inspect each pair before comparison: a macOS permission dialog or another window
+covering the editor makes the fixture invalid and must not be counted as parity
+evidence. Captures can include system corner backgrounds; keep artifacts local.
+
 Compare a native screenshot exported from the Apple launch test:
 
 ```sh

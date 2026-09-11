@@ -6,6 +6,8 @@ Swift editor components. [The Apple goal and acceptance tracker](apple-acceptanc
 is the current objective and evidence matrix. The review below records the
 original source analysis; its iPad-first development sequence and tool/device
 availability observations are historical, not the current acceptance scope.
+The agreed Mac adaptation uses the OS menu bar for top-level menus and moves
+Zen right of the native window controls; the canvas remains behind the header.
 
 Reviewed September 10, 2026 against commit `e5669eb`. This is a source/design
 review and proposed development sequence. No iPad app, device build, or physical
