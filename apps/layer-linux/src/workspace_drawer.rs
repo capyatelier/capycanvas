@@ -174,6 +174,7 @@ struct View {
     connection: gtk::DrawingArea,
     connection_geometry: Rc<Cell<Option<DrawerConnection>>>,
     columns: Vec<gtk::Box>,
+    clips: Vec<gtk::Widget>,
     bodies: Vec<Body>,
 }
 impl View {
@@ -210,6 +211,7 @@ impl View {
         root.add_css_class("content-drawer");
         root.set_overflow(gtk::Overflow::Hidden);
         let mut columns = Vec::new();
+        let mut clips = Vec::new();
         let mut bodies = Vec::new();
         let mut effects = None;
         for panels in &drawer.columns {
@@ -257,7 +259,24 @@ impl View {
                 column.append(&widget);
                 bodies.push(body);
             }
-            let scroller = scroll(&column);
+            // A toolbar body may wrap beyond the available height. Preserve
+            // its natural height inside the viewport instead of clipping it
+            // to the one-tile minimum used for ordinary dock constraints.
+            let viewport = gtk::Viewport::builder()
+                .vscroll_policy(gtk::ScrollablePolicy::Natural)
+                .child(&column)
+                .build();
+            let scroller = scroll(&viewport);
+            clips.push(scroller.clone());
+            scroller
+                .downcast_ref::<gtk::ScrolledWindow>()
+                .unwrap()
+                .vadjustment()
+                .connect_value_changed(glib::clone!(
+                    #[weak]
+                    w,
+                    move |_| w.surface.queue_allocate()
+                ));
             let child = if let Some(tabs) = &drawer.tabs {
                 let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -315,6 +334,7 @@ impl View {
             connection,
             connection_geometry,
             columns,
+            clips,
             bodies,
         }
     }
@@ -364,6 +384,101 @@ impl Drawer {
     pub fn placement(&self) -> Option<DrawerPlacement> {
         self.presented.borrow().clone()
     }
+    pub fn tile_measurements(&self, w: &Workspace, out: &mut Vec<DrawerTileMeasurement>) {
+        if self.closing.get() {
+            return;
+        }
+        let view = self.view.borrow();
+        let Some(view) = view.as_ref() else { return };
+        let Some(placement) = self.placement() else {
+            return;
+        };
+        for body in &view.bodies {
+            let Body::Toolbar(bar) = body else { continue };
+            let Some(clip) = view.clips.iter().find(|c| bar.strip.is_ancestor(*c)) else {
+                continue;
+            };
+            let Some(clip) = clip.compute_bounds(&w.surface) else {
+                continue;
+            };
+            let clip = Bounds {
+                x: clip.x(),
+                y: clip.y(),
+                width: clip.width(),
+                height: clip.height(),
+            };
+            let Some(clip) = clip.intersection(placement.bounds) else {
+                continue;
+            };
+            let key = bar.key.borrow();
+            let Some(config) = key.as_ref() else { continue };
+            for (tile, button) in config.tiles().iter().zip(bar.buttons.borrow().iter()) {
+                if !button.is_mapped() {
+                    continue;
+                }
+                let Some(b) = button.compute_bounds(&w.surface) else {
+                    continue;
+                };
+                let Some(bounds) = (Bounds {
+                    x: b.x(),
+                    y: b.y(),
+                    width: b.width(),
+                    height: b.height(),
+                })
+                .intersection(clip) else {
+                    continue;
+                };
+                out.push(DrawerTileMeasurement {
+                    column: self.id,
+                    anchor: TileAnchor {
+                        panel: bar.panel,
+                        tile: tile.id,
+                    },
+                    bounds,
+                });
+            }
+        }
+    }
+    pub fn tile_button(&self, anchor: TileAnchor) -> Option<gtk::Button> {
+        let view = self.view.borrow();
+        view.as_ref()?.bodies.iter().find_map(|body| {
+            let Body::Toolbar(bar) = body else {
+                return None;
+            };
+            if bar.panel != anchor.panel {
+                return None;
+            }
+            let key = bar.key.borrow();
+            let index = key
+                .as_ref()?
+                .tiles()
+                .iter()
+                .position(|t| t.id == anchor.tile)?;
+            bar.buttons.borrow().get(index).cloned()
+        })
+    }
+    pub fn mark_tile_origin(&self, origin: Option<(TileAnchor, Edge)>) {
+        let view = self.view.borrow();
+        let Some(view) = view.as_ref() else { return };
+        for body in &view.bodies {
+            let Body::Toolbar(bar) = body else { continue };
+            if origin.is_some_and(|(a, _)| a.panel == bar.panel) {
+                bar.strip.add_css_class("drawer-source");
+            } else {
+                bar.strip.remove_css_class("drawer-source");
+            }
+            let key = bar.key.borrow();
+            let Some(config) = key.as_ref() else { continue };
+            for (tile, button) in config.tiles().iter().zip(bar.buttons.borrow().iter()) {
+                customization::drawer_origin(
+                    button,
+                    origin
+                        .filter(|(a, _)| a.panel == bar.panel && a.tile == tile.id)
+                        .map(|(_, edge)| edge),
+                );
+            }
+        }
+    }
     pub fn is_closed(&self) -> bool {
         self.state.borrow().is_none()
     }
@@ -375,6 +490,13 @@ impl Drawer {
             DrawerAnchor::Tile { panel, tile } => w
                 .zen
                 .drawer_button(TileAnchor { panel, tile })
+                .or_else(|| {
+                    w.columns
+                        .drawers
+                        .borrow()
+                        .iter()
+                        .find_map(|d| d.tile_button(TileAnchor { panel, tile }))
+                })
                 .or_else(|| w.customization.drawer_button(TileAnchor { panel, tile })),
             DrawerAnchor::Column { column, origin, .. } => w.columns.button(column, origin),
         }) else {
@@ -401,12 +523,13 @@ impl Drawer {
         let view = view.as_ref()?;
         let layout = w.surface.imp().layout.borrow();
         let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-        let partial = w
-            .gpu
-            .borrow()
-            .as_ref()
-            .is_some_and(|g| g.session.state().partial_zen());
-        let sizing = state.placement(&layout, viewport, &vec![0.0; view.columns.len()], partial)?;
+        let place = |heights: &[f32]| {
+            let gpu = w.gpu.borrow();
+            let ui = gpu.as_ref()?.session.state();
+            ui.customization
+                .drawer_placement(state, &layout, viewport, heights, ui.partial_zen())
+        };
+        let sizing = place(&vec![0.0; view.columns.len()])?;
         let heights: Vec<_> = view
             .columns
             .iter()
@@ -420,12 +543,17 @@ impl Drawer {
                     }
             })
             .collect();
-        state.placement(&layout, viewport, &heights, partial)
+        place(&heights)
     }
     pub fn geometry(&self, w: &Workspace) -> Option<DrawerPlacement> {
-        let target = self
+        let Some(target) = self
             .target(w)
-            .or_else(|| self.closing.get().then(|| self.placement()).flatten())?;
+            .or_else(|| self.closing.get().then(|| self.placement()).flatten())
+        else {
+            // A scrolled-out origin has no visible child or chrome hit region.
+            self.presented.borrow_mut().take();
+            return None;
+        };
         let end = if self.closing.get() {
             target.closed()
         } else {
@@ -458,6 +586,9 @@ impl Drawer {
             .and_then(|s| s.anchor.tile().map(|a| (a, result.direction)));
         if self.id == 0 {
             w.customization.mark_drawer_origin(origin);
+            for parent in w.columns.drawers.borrow().iter() {
+                parent.mark_tile_origin(origin);
+            }
             w.zen
                 .mark_drawer_origin(origin.map(|(anchor, _)| (anchor, &result)));
         }
@@ -498,6 +629,9 @@ impl Drawer {
                     if drawer.id == 0 {
                         w.customization.mark_drawer_origin(None);
                         w.zen.mark_drawer_origin(None);
+                        for parent in w.columns.drawers.borrow().iter() {
+                            parent.mark_tile_origin(None);
+                        }
                     }
                     drawer.view.borrow_mut().take();
                     drawer.state.borrow_mut().take();

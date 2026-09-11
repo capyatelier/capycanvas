@@ -9,6 +9,15 @@ pub struct TileAnchor {
     pub tile: u32,
 }
 
+/// Visible, clipped tile bounds measured by a host inside a column drawer.
+/// Transient geometry only; the core validates ownership and chooses placement.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DrawerTileMeasurement {
+    pub column: u32,
+    pub anchor: TileAnchor,
+    pub bounds: Bounds,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DrawerAnchor {
@@ -355,6 +364,17 @@ impl ContentDrawer {
         heights: &[f32],
         partial_zen: bool,
     ) -> Option<DrawerPlacement> {
+        self.place(layout, viewport, heights, partial_zen, None)
+    }
+
+    fn place(
+        &self,
+        layout: &DockLayout,
+        viewport: [f32; 2],
+        heights: &[f32],
+        partial_zen: bool,
+        measured_tile: Option<Bounds>,
+    ) -> Option<DrawerPlacement> {
         if heights.len() != self.columns.len()
             || self.columns.is_empty()
             || !viewport
@@ -385,6 +405,9 @@ impl ContentDrawer {
                 .bounds
                 .intersection(column.content)?;
             (anchor, layout.group_edge(group.group), Axis::Vertical)
+        } else if let Some(anchor) = measured_tile.filter(|_| !partial_zen) {
+            let group = layout.panel_group(self.anchor.tile()?.panel)?;
+            (anchor, layout.group_edge(group), Axis::Vertical)
         } else {
             let tile_anchor = self.anchor.tile()?;
             let group = resolved
@@ -522,6 +545,76 @@ impl ContentDrawer {
             direction,
             columns,
         })
+    }
+}
+
+impl CustomizationState {
+    fn accepts_drawer_tile(&self, m: &DrawerTileMeasurement) -> bool {
+        self.column_drawers.iter().any(|d| {
+            matches!(d.anchor, DrawerAnchor::Column { column, .. } if column == m.column)
+                && d.tabs.as_ref().is_some_and(|t| t.active == m.anchor.panel)
+        })
+    }
+
+    pub(crate) fn measure_drawer_tiles(
+        &mut self,
+        layout: &DockLayout,
+        measurements: Vec<DrawerTileMeasurement>,
+    ) -> Result<(), String> {
+        let mut accepted = Vec::with_capacity(measurements.len());
+        for m in measurements {
+            if ![m.bounds.x, m.bounds.y, m.bounds.width, m.bounds.height]
+                .into_iter()
+                .all(f32::is_finite)
+                || m.bounds.width <= 0.
+                || m.bounds.height <= 0.
+            {
+                return Err("Invalid drawer tile bounds".into());
+            }
+            if self.accepts_drawer_tile(&m)
+                && layout
+                    .panel(m.anchor.panel)
+                    .is_ok_and(|p| p.tiles().iter().any(|t| t.id == m.anchor.tile))
+                && !accepted
+                    .iter()
+                    .any(|a: &DrawerTileMeasurement| a.anchor == m.anchor)
+            {
+                accepted.push(m);
+            }
+        }
+        self.drawer_tiles = accepted;
+        Ok(())
+    }
+
+    pub(crate) fn drawer_tile_at(&self, point: [f32; 2]) -> Option<TileAnchor> {
+        self.drawer_tiles.iter().rev().find_map(|m| {
+            (self.accepts_drawer_tile(m) && m.bounds.contains(point[0], point[1]))
+                .then_some(m.anchor)
+        })
+    }
+
+    /// All hosts use this for current drawer geometry, including live projected
+    /// toolbar origins. Normal dock and partial-Zen origins need no measurements.
+    pub fn drawer_placement(
+        &self,
+        drawer: &ContentDrawer,
+        layout: &DockLayout,
+        viewport: [f32; 2],
+        heights: &[f32],
+        partial_zen: bool,
+    ) -> Option<DrawerPlacement> {
+        let measured = drawer.anchor.tile().and_then(|anchor| {
+            self.drawer_tiles
+                .iter()
+                .find(|m| m.anchor == anchor && self.accepts_drawer_tile(m))
+        });
+        drawer.place(
+            layout,
+            viewport,
+            heights,
+            partial_zen,
+            measured.map(|m| m.bounds),
+        )
     }
 }
 

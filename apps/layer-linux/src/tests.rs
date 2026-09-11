@@ -199,6 +199,446 @@ fn assert_drawer_connected(w: &Workspace) {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_nested_tool_drawers() {
+    let app = native_test_app("art.capycanvas.NestedDrawers");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(1800);
+    let original = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let output = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(output).unwrap();
+    for (theme, group) in [(Theme::Dark, 5), (Theme::Light, 8)] {
+        let mut workspace = original.clone();
+        workspace
+            .layout
+            .move_panel(
+                viewport,
+                Panel::Toolbar,
+                DockTarget::Tab { group, index: None },
+            )
+            .unwrap();
+        let long = workspace
+            .layout
+            .add_toolbar(Some(group), "Long tools", &vec![ToolbarControl::Color; 180])
+            .unwrap();
+        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Pen,
+        });
+        w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group,
+                panel: Panel::Toolbar,
+            },
+        });
+        pump(350);
+        let column = state(&w)
+            .workspace
+            .layout
+            .collapsed_column_for_group(group)
+            .unwrap();
+        let parent_name = format!("column-drawer-{column}");
+        let parent = || find_named(w.surface.upcast_ref(), &parent_name).unwrap();
+        let tiles = state(&w)
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .to_vec();
+        let button = |id| {
+            find_named(&parent(), &format!("tile-{id}"))
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap()
+        };
+        click(&button(tiles[0].id));
+        pump(80);
+        assert!(state(&w).customization.drawer.is_none());
+        click(&button(tiles[0].id));
+        pump(300);
+        assert!(
+            state(&w).customization.drawer.is_some(),
+            "{:?}",
+            state(&w).host_error
+        );
+        let b = button(tiles[0].id).compute_bounds(&w.surface).unwrap();
+        let p = w.drawer.placement().unwrap();
+        assert!((p.anchor.x - b.x()).abs() <= 1.);
+        assert!((p.anchor.y - b.y()).abs() <= 1.);
+        assert!(p.connection().is_some());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+        assert!(button(tiles[0].id).has_css_class(if group == 5 {
+            "drawer-origin-right"
+        } else {
+            "drawer-origin-left"
+        }));
+        let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+        assert!(
+            !w.chrome_event(ChromeEvent::Contact {
+                position: point,
+                canvas: false
+            })
+            .handled
+        );
+        assert!(state(&w).customization.drawer.is_some());
+        click(&button(tiles[0].id));
+        pump(260);
+        assert!(state(&w).customization.drawer.is_none());
+        let color = tiles
+            .iter()
+            .find(|t| t.control == ToolbarControl::Color)
+            .unwrap();
+        click(&button(color.id));
+        pump(300);
+        assert_eq!(
+            state(&w).customization.drawer.as_ref().unwrap().columns,
+            [vec![Panel::Color]]
+        );
+        capture_reference(&w, &format!("{output}/columns-nested-{theme:?}.png"), 1.);
+        w.window.unmaximize();
+        pump(350); // Wait for the compositor's restore-size configure first.
+        w.window.set_default_size(640, 480);
+        pump(350);
+        assert_eq!(
+            (w.surface.width(), w.surface.height()),
+            (640, 480),
+            "small viewport must actually be allocated; window minimum {:?}, maximized {}",
+            w.window.measure(gtk::Orientation::Horizontal, -1),
+            w.window.is_maximized()
+        );
+        for drawer in w.drawers() {
+            let p = drawer
+                .placement()
+                .expect("drawer remains reachable on a small viewport");
+            assert!(p.bounds.x >= WORKSPACE_SPACING - 1. && p.bounds.y >= HEADER_HEIGHT - 1.);
+            assert!(
+                p.bounds.x + p.bounds.width <= w.surface.width() as f32 - WORKSPACE_SPACING + 1.
+            );
+            assert!(
+                p.bounds.y + p.bounds.height <= w.surface.height() as f32 - WORKSPACE_SPACING + 1.
+            );
+        }
+        capture_reference(
+            &w,
+            &format!("{output}/columns-nested-small-{theme:?}.png"),
+            1.,
+        );
+        w.window
+            .set_default_size(viewport[0] as i32, viewport[1] as i32);
+        pump(350);
+        w.chrome_event(ChromeEvent::Contact {
+            position: [viewport[0] * 0.5, viewport[1] - 50.],
+            canvas: true,
+        });
+        pump(260);
+        assert!(state(&w).customization.drawer.is_none());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+
+        // The same projection supports a long toolbar. Move a still-visible
+        // source by scrolling and check that the child follows in native pixels.
+        w.dispatch(UiAction::SelectPanelTab { group, panel: long });
+        pump(300);
+        let id = state(&w).workspace.layout.panel(long).unwrap().tiles()[65].id;
+        let origin = button(id);
+        let mut ancestor = origin.parent().unwrap();
+        while !ancestor.is::<gtk::ScrolledWindow>() {
+            ancestor = ancestor.parent().unwrap();
+        }
+        let scroller = ancestor.downcast::<gtk::ScrolledWindow>().unwrap();
+        scroller.vadjustment().set_value(24.);
+        pump(100);
+        click(&origin);
+        pump(300);
+        assert!(
+            state(&w).customization.drawer.is_some(),
+            "origin {:?}, scroll {:?}, viewport {:?}; {:?}",
+            origin.compute_bounds(&w.surface),
+            scroller.vadjustment().value(),
+            scroller.compute_bounds(&w.surface),
+            state(&w).host_error
+        );
+        let before = w.drawer.placement().unwrap();
+        scroller.vadjustment().set_value(48.);
+        pump(100);
+        let after = w.drawer.placement().unwrap();
+        let b = origin.compute_bounds(&w.surface).unwrap();
+        assert!((after.anchor.y - b.y()).abs() <= 1., "{after:?} vs {b:?}");
+        assert!((after.anchor.y - before.anchor.y + 24.).abs() <= 1.);
+        let child = find_named(w.surface.upcast_ref(), "tool-drawer").unwrap();
+        let picked = w
+            .surface
+            .pick(
+                (after.bounds.x + 10.) as f64,
+                (after.bounds.y + 40.) as f64,
+                gtk::PickFlags::DEFAULT,
+            )
+            .unwrap();
+        assert!(
+            picked == child || picked.is_ancestor(&child),
+            "parent must not cover child"
+        );
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::CloseExpanded,
+        });
+        scroller.vadjustment().set_value(0.);
+        pump(260);
+        let first = state(&w).workspace.layout.panel(long).unwrap().tiles()[0].id;
+        click(&button(first));
+        pump(260);
+        assert!(w.drawer.placement().is_some());
+        scroller.vadjustment().set_value(48.);
+        pump(120);
+        assert!(
+            w.drawer.placement().is_none(),
+            "clipped origin must not leave an invisible hit region"
+        );
+        assert!(
+            !find_named(w.surface.upcast_ref(), "tool-drawer")
+                .unwrap()
+                .is_mapped()
+        );
+        scroller.vadjustment().set_value(0.);
+        pump(120);
+        assert!(w.drawer.placement().is_some());
+        // Switching the parent tab removes its obsolete tool drawer.
+        w.dispatch(UiAction::SelectPanelTab {
+            group,
+            panel: Panel::Toolbar,
+        });
+        pump(300);
+        assert!(state(&w).customization.drawer.is_none());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+    }
+    w.window.close();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
+fn native_collapsed_drop_and_resize() {
+    let app = native_test_app("art.capycanvas.ColumnGestures");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(1800);
+    let original = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    for source in [
+        DockItem::Panel {
+            panel: Panel::Properties,
+        },
+        DockItem::Group { group: 8 },
+        DockItem::Panel {
+            panel: Panel::Toolbar,
+        },
+    ] {
+        for slot in 0..3 {
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: original.clone(),
+            });
+            w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
+            pump(180);
+            let source_bounds = match source {
+                DockItem::Panel { panel } if panel != Panel::Toolbar => {
+                    let groups = w.groups.borrow();
+                    let tab = &groups
+                        .iter()
+                        .find(|g| g.id == 8)
+                        .unwrap()
+                        .tabs
+                        .iter()
+                        .find(|(p, _)| *p == panel)
+                        .unwrap()
+                        .1;
+                    let b = tab.compute_bounds(&w.surface).unwrap();
+                    Bounds {
+                        x: b.x(),
+                        y: b.y(),
+                        width: b.width(),
+                        height: b.height(),
+                    }
+                }
+                _ => {
+                    let group = match source {
+                        DockItem::Group { group } => group,
+                        DockItem::Panel {
+                            panel: Panel::Toolbar,
+                        } => 2,
+                        _ => unreachable!(),
+                    };
+                    let g = w
+                        .resolved()
+                        .groups
+                        .into_iter()
+                        .find(|g| g.id == group)
+                        .unwrap();
+                    if let Some(grip) = g.tiles.as_ref().and_then(|t| t.grip) {
+                        Bounds {
+                            x: g.bounds.x + grip.x,
+                            y: g.bounds.y + grip.y,
+                            ..grip
+                        }
+                    } else {
+                        Bounds {
+                            x: g.bounds.x + g.bounds.width - 20.,
+                            y: g.bounds.y,
+                            width: 20.,
+                            height: TAB_BAR_HEIGHT,
+                        }
+                    }
+                }
+            };
+            let start = [
+                source_bounds.x + source_bounds.width * 0.5,
+                source_bounds.y + source_bounds.height * 0.5,
+            ];
+            assert!(
+                matches!(w.drag_target_at(start), Some(DragTarget::Dock(found)) if found == source),
+                "{source:?} at {start:?}"
+            );
+            w.workspace_drag_input(ContactPhase::Down, start, None);
+            w.workspace_drag_input(ContactPhase::Move, [600., 400.], None);
+            pump(80);
+            let col = w
+                .resolved()
+                .collapsed
+                .into_iter()
+                .find(|c| c.id == 4)
+                .unwrap();
+            let x = col.content.x + col.content.width * 0.5;
+            let y = match slot {
+                0 => col.groups[0].icons[0].bounds.y + 20.,
+                1 => col.groups[1].bounds.y - WORKSPACE_SPACING * 0.5,
+                _ => col.empty.y + 20.,
+            };
+            w.workspace_drag_input(ContactPhase::Move, [x, y], None);
+            let hint = w
+                .drop_hint
+                .borrow()
+                .clone()
+                .expect("collapsed insertion hint");
+            assert!(
+                match slot {
+                    0 => matches!(hint.target, DockTarget::Tab { group: 5, .. }),
+                    1 => matches!(
+                        hint.target,
+                        DockTarget::Split {
+                            group: 6,
+                            edge: Edge::Top
+                        }
+                    ),
+                    _ => matches!(
+                        hint.target,
+                        DockTarget::Split {
+                            group: 6,
+                            edge: Edge::Bottom
+                        }
+                    ),
+                },
+                "{source:?} slot {slot}: {hint:?}"
+            );
+            w.workspace_drag_input(ContactPhase::Up, [x, y], None);
+            pump(180);
+            let ui = state(&w);
+            let moved: Vec<_> = match source {
+                DockItem::Panel { panel } => vec![panel],
+                DockItem::Group { group } => original.layout.group_panels(group).unwrap().to_vec(),
+                _ => unreachable!(),
+            };
+            assert!(ui.workspace.layout.floating.is_empty());
+            for panel in moved {
+                let group = ui.workspace.layout.panel_group(panel).unwrap();
+                assert!(
+                    ui.workspace
+                        .layout
+                        .collapsed_column_for_group(group)
+                        .is_some()
+                );
+                assert!(
+                    find_named(w.surface.upcast_ref(), &format!("column-icon-{panel:?}"))
+                        .unwrap()
+                        .is_mapped()
+                );
+            }
+        }
+    }
+    for group in [5, 8] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original.clone(),
+        });
+        pump(150);
+        let root = original.layout.column_for_group(group).unwrap();
+        let width = || {
+            w.resolved()
+                .groups
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .bounds
+                .width
+        };
+        let before_width = width();
+        let band = original
+            .layout
+            .bands
+            .iter()
+            .find(|b| b.root.id() == root)
+            .unwrap();
+        let divider = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.id == band.id)
+            .unwrap();
+        let handle = w
+            .surface
+            .imp()
+            .children
+            .borrow()
+            .iter()
+            .find(|(s, _)| *s == Slot::Divider(band.id))
+            .unwrap()
+            .1
+            .clone();
+        let b = divider.bounds;
+        let drag = begin_workspace_drag(&w, &handle, b.width * 0.5, 20.);
+        let x = if divider.reversed {
+            divider.parent.x + divider.parent.width - TILE_SIZE * 0.5
+        } else {
+            divider.parent.x + TILE_SIZE * 0.5
+        };
+        let dx = (x - b.x - b.width * 0.5) as f64;
+        drag.update([dx * 0.5, 0.]);
+        drag.update([dx, 0.]);
+        pump(150);
+        assert!(state(&w).workspace.layout.is_collapsed(root));
+        let collapsed = state(&w).workspace;
+        drag.update([0., 0.]);
+        pump(80);
+        assert_eq!(
+            state(&w).workspace,
+            collapsed,
+            "native gesture must not oscillate"
+        );
+        drag.end();
+        let expand = find_named(w.surface.upcast_ref(), &format!("expand-column-{root}"))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        click(&expand);
+        pump(180);
+        assert!(!state(&w).workspace.layout.is_collapsed(root));
+        assert!((width() - before_width).abs() < 1.);
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_collapsed_columns() {
     let app = native_test_app("art.capycanvas.CollapsedColumns");
     let w = Workspace::new(&app);
