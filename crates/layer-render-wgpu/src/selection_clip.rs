@@ -167,7 +167,9 @@ impl SelectionClip {
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("packed brush selection"),
                 size: bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             self.binding = None;

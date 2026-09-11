@@ -24,6 +24,237 @@ fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
 }
 
 #[test]
+fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump() {
+    use layer_core::DefaultBrushPreset::*;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut reference = WgpuRasterizer::new_headless().unwrap();
+    let extent = [640, 384];
+    let view = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let frame =
+        |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
+            r.submit(FramePacket {
+                view,
+                document_extent: extent,
+                layers,
+                dabs,
+                dab_batches: batches,
+                time_seconds: 0.,
+                reset_layers: reset,
+                composite_all: false,
+            })
+            .unwrap();
+        };
+    let raw = |r: &WgpuRasterizer| {
+        let l = &r.paint_layers[0];
+        let mut channels = vec![
+            l.pages
+                .iter()
+                .map(|p| (p.coordinate, page_bytes(r, &p.active().texture)))
+                .collect::<Vec<_>>(),
+        ];
+        channels.push(
+            l.material_pages
+                .iter()
+                .map(|p| (p.coordinate, page_bytes(r, &p.wetness.texture)))
+                .collect(),
+        );
+        channels.push(
+            l.watercolor_wetness_pages
+                .iter()
+                .map(|p| (p.coordinate, page_bytes(r, &p.active().texture)))
+                .collect(),
+        );
+        channels
+    };
+    for preset in [GPen, WetRound, WatercolorWash] {
+        let mut layer = Layer::paint(LayerId(1), "live transform");
+        layer.properties.offset = Point { x: 5., y: 7. };
+        let mut b = batch(1);
+        b.style = preset_style(preset);
+        b.damage = Rect {
+            min: Point { x: 70., y: 70. },
+            max: Point { x: 160., y: 160. },
+        };
+        let mut d = dab([0.8, 0.1, 0.6, 0.7]);
+        d.center = Point { x: 115., y: 115. };
+        d.radii = [40.; 2];
+        d.material = [0.5, 0.8, 1., 0.8];
+        let layers = std::slice::from_ref(&layer);
+        frame(&mut r, layers, &[d], &[b.clone()], true);
+        let original = r.readback_srgb_rgba8().unwrap();
+        let original_raw = raw(&r);
+        let selection = Selection::polygon(vec![
+            Point { x: 115.25, y: 0. },
+            Point { x: 300., y: 0. },
+            Point { x: 300., y: 300. },
+            Point { x: 115.25, y: 300. },
+        ])
+        .unwrap();
+        let mut preview = layer_render::TransformPreview {
+            transaction: 1,
+            layer: layer.id,
+            selection: Some(selection.clone()),
+            transform: ImageTransform::default(),
+        };
+        let matrices = [
+            Affine::translation(Point { x: 310., y: 150. }),
+            Affine::around(d.center, [1.4, 0.7], 0.37, Point { x: 100., y: 50. }),
+            Affine::translation(Point { x: -500., y: 0. }),
+            Affine::IDENTITY,
+            Affine::translation(Point {
+                x: 270.5,
+                y: 110.25,
+            }),
+        ];
+        for affine in matrices {
+            preview.transform.affine = affine;
+            r.set_transform_preview(Some(&preview)).unwrap();
+            frame(&mut r, layers, &[], &[], false);
+            let live = r.readback_srgb_rgba8().unwrap();
+            let mut expected = layer.clone();
+            let mut op = operation(20, affine, Some(selection.clone()));
+            op.kind = LayerOperationKind::Transform(preview.transform);
+            expected.operations.push(op.clone());
+            let operation = DabBatch {
+                damage: op.bounds(extent),
+                ..op_batch(0, &op)
+            };
+            frame(
+                &mut reference,
+                &[expected],
+                &[d],
+                &[b.clone(), operation],
+                true,
+            );
+            assert_eq!(
+                live,
+                reference.readback_srgb_rgba8().unwrap(),
+                "{preset:?} {affine:?}"
+            );
+            let captured = r.transforms.as_ref().unwrap().storage_bytes();
+            let composed = r.metrics.composited_pixels;
+            frame(&mut r, layers, &[], &[], false);
+            assert!(
+                r.transform_damage.is_empty(),
+                "unchanged preview does no raster work"
+            );
+            assert_eq!(r.metrics.composited_pixels, composed);
+            assert_eq!(r.transforms.as_ref().unwrap().storage_bytes(), captured);
+            r.submit(FramePacket {
+                view: ViewState {
+                    document_to_surface: [1.5, 0., 0., 1.5, 30., -20.],
+                    ..view
+                },
+                document_extent: extent,
+                layers,
+                dabs: &[],
+                dab_batches: &[],
+                time_seconds: 0.,
+                reset_layers: false,
+                composite_all: false,
+            })
+            .unwrap();
+            assert!(r.transform_damage.is_empty());
+            assert_eq!(
+                r.metrics.composited_pixels, composed,
+                "camera-only update keeps the transformed document"
+            );
+            // Other tools/mask passes reuse selection_clip. They must not
+            // mutate the selection held by the transform's immutable source.
+            let unrelated = selection.translated(Point { x: 200., y: 0. });
+            let mut encoder = r.device.create_command_encoder(&Default::default());
+            r.selection_clip
+                .prepare(
+                    &r.device,
+                    &mut encoder,
+                    extent,
+                    &std::sync::Arc::new(unrelated),
+                )
+                .unwrap();
+            r.queue.submit([encoder.finish()]);
+        }
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, layers, &[], &[], false);
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), original);
+        assert_eq!(
+            raw(&r),
+            original_raw,
+            "{preset:?} cancel restores sparse pigment and wetness"
+        );
+
+        // A new preview may be committed as an ordinary history operation.
+        preview.transaction += 1;
+        r.set_transform_preview(Some(&preview)).unwrap();
+        frame(&mut r, layers, &[], &[], false);
+        let before_commit = r.readback_srgb_rgba8().unwrap();
+        let captures = r.transforms.as_ref().unwrap().source_captures;
+        let mut op = operation(21, preview.transform.affine, preview.selection.clone());
+        op.kind = LayerOperationKind::Transform(preview.transform);
+        let operation = DabBatch {
+            damage: op.bounds(extent),
+            ..op_batch(0, &op)
+        };
+        layer.operations.push(op);
+        r.set_transform_preview(None).unwrap();
+        frame(&mut r, &[layer], &[], &[operation], false);
+        assert_eq!(
+            r.readback_srgb_rgba8().unwrap(),
+            before_commit,
+            "{preset:?} apply must not jump"
+        );
+        assert_eq!(
+            r.transforms.as_ref().unwrap().source_captures,
+            captures,
+            "apply reuses the matching preview result"
+        );
+    }
+}
+
+#[test]
+fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pixels() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layer = Layer::paint(LayerId(1), "remove preview target");
+    submit(
+        &mut r,
+        &[layer],
+        &[dab([1., 0., 0., 1.])],
+        &[batch(1)],
+        true,
+    );
+    r.set_transform_preview(Some(&layer_render::TransformPreview {
+        transaction: 1,
+        layer: LayerId(1),
+        selection: None,
+        transform: ImageTransform {
+            affine: Affine::translation(Point { x: 20., y: 0. }),
+            ..Default::default()
+        },
+    }))
+    .unwrap();
+    submit(
+        &mut r,
+        &[Layer::paint(LayerId(1), "remove preview target")],
+        &[],
+        &[],
+        false,
+    );
+    r.set_transform_preview(None).unwrap();
+    submit(
+        &mut r,
+        &[Layer::paint(LayerId(2), "empty remaining")],
+        &[],
+        &[],
+        false,
+    );
+    assert!(!r.transforms.as_ref().unwrap().has_preview());
+    assert!(r.readback_srgb_rgba8().unwrap().iter().all(|v| *v == 0));
+}
+
+#[test]
 fn ordered_transforms_preserve_wetness_and_match_combined_replay() {
     use layer_core::DefaultBrushPreset::*;
     let mut r = WgpuRasterizer::new_headless().unwrap();
@@ -283,6 +514,30 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
         layers[1].properties.clipped = clipped;
         layers[2].operations.clear();
         let before = render(&mut r, &layers, &dabs, &brushes, true, false);
+        let mut preview = layer_render::TransformPreview {
+            transaction: 1,
+            layer: LayerId(1),
+            selection: None,
+            transform: ImageTransform {
+                affine: Affine::translation(Point { x: 150., y: 40. }),
+                ..Default::default()
+            },
+        };
+        for x in [150., 300., 70.] {
+            preview.transform.affine.0[4] = x;
+            r.set_transform_preview(Some(&preview)).unwrap();
+            let live = render(&mut r, &layers, &[], &[], false, false);
+            assert!(live != before);
+            assert!(
+                live == render(&mut r, &layers, &[], &[], false, true),
+                "live clipped={clipped} cache invalidation"
+            );
+        }
+        r.set_transform_preview(None).unwrap();
+        assert!(
+            render(&mut r, &layers, &[], &[], false, false) == before,
+            "cancel clipped={clipped} cache invalidation"
+        );
         let op = operation(10, Affine::translation(Point { x: 180., y: -40. }), None);
         let change = DabBatch {
             damage: op.bounds(extent),
@@ -317,6 +572,16 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
 #[test]
 #[ignore = "hardware capture + transform + composition benchmark; release, serial"]
 fn ordered_transform_latency() {
+    measure_transform_latency(false);
+}
+
+#[test]
+#[ignore = "hardware live transform + composition benchmark; release, serial"]
+fn live_transform_latency() {
+    measure_transform_latency(true);
+}
+
+fn measure_transform_latency(live: bool) {
     use layer_core::DefaultBrushPreset::*;
     use std::time::Instant;
     let mut r = WgpuRasterizer::new_headless().unwrap();
@@ -358,6 +623,7 @@ fn ordered_transform_latency() {
         (WetRound, true),
         (WatercolorWash, true),
     ] {
+        r.set_transform_preview(None).unwrap();
         let mut layer = Layer::paint(LayerId(1), "capture benchmark");
         layer.asset = Some(asset.clone());
         let mut b = batch(1);
@@ -392,7 +658,7 @@ fn ordered_transform_latency() {
             .unwrap()
         });
         let delta = Point { x: 1., y: 1. };
-        layer.operations = vec![
+        let operations = vec![
             operation(10, Affine::translation(delta), selected.clone()),
             operation(
                 11,
@@ -401,22 +667,51 @@ fn ordered_transform_latency() {
             ),
         ];
         let batches = [0, 1].map(|i| DabBatch {
-            damage: layer.operations[i].bounds(extent),
-            ..op_batch(i as u32, &layer.operations[i])
+            damage: operations[i].bounds(extent),
+            ..op_batch(i as u32, &operations[i])
         });
+        if !live {
+            layer.operations = operations;
+        }
         r.telemetry = telemetry::Telemetry::new(r.device(), r.queue());
         let mut cpu = Vec::new();
         let mut completed = Vec::new();
         let mut scratch = 0;
+        let mut captures = 0;
         for i in 0..160 {
             r.set_telemetry_enabled(i >= 40);
             let start = Instant::now();
+            if live {
+                let t = i as f32 * 0.04;
+                r.set_transform_preview(Some(&layer_render::TransformPreview {
+                    transaction: 1,
+                    layer: layer.id,
+                    selection: selected.clone(),
+                    transform: ImageTransform {
+                        affine: Affine::around(
+                            Point { x: 1024., y: 768. },
+                            [1. + t.sin() * 0.02; 2],
+                            t.cos() * 0.01,
+                            Point {
+                                x: t.sin() * 5.,
+                                y: t.cos() * 3.,
+                            },
+                        ),
+                        ..Default::default()
+                    },
+                }))
+                .unwrap();
+            }
             r.submit(FramePacket {
                 view,
                 document_extent: extent,
                 layers: std::slice::from_ref(&layer),
                 dabs: &[],
-                dab_batches: &batches[i % 2..i % 2 + 1],
+                dab_batches: if live {
+                    &[]
+                } else {
+                    &batches[i % 2..i % 2 + 1]
+                },
                 reset_layers: false,
                 time_seconds: 0.,
                 composite_all: false,
@@ -426,9 +721,17 @@ fn ordered_transform_latency() {
             r.wait_idle().unwrap();
             let elapsed = start.elapsed().as_secs_f32() * 1000.;
             if i == 0 {
+                captures = r.transforms.as_ref().unwrap().source_captures;
                 eprintln!(
-                    "{preset:?} selected={}: first complete {elapsed:.3}ms",
+                    "{preset:?} live={live} selected={}: first complete {elapsed:.3}ms",
                     selected.is_some()
+                );
+            }
+            if live {
+                assert_eq!(
+                    r.transforms.as_ref().unwrap().source_captures,
+                    captures,
+                    "one source capture per live transaction"
                 );
             }
             if i >= 40 {
@@ -451,7 +754,7 @@ fn ordered_transform_latency() {
             percentile(completed),
         );
         eprintln!(
-            "{preset:?} selected={}: CPU median/p95/p99 {cpu:.3?}ms, GPU {gpu:.3?}ms, complete {completed:.3?}ms; capture+uniform storage {scratch}B",
+            "{preset:?} live={live} selected={}: CPU median/p95/p99 {cpu:.3?}ms, GPU {gpu:.3?}ms, complete {completed:.3?}ms; capture+uniform storage {scratch}B",
             selected.is_some()
         );
         assert!(completed[2] < 8.333);

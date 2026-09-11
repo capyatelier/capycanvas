@@ -964,11 +964,64 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   in this cached-driver run were 0.85–3.56ms; this does not replace the cold
   compilation warning above. Reproduce with ignored release test
   `layer_tests::transforms::ordered_transform_latency`, serially on an idle GPU.
-- Still required before exposing Operation: interactive source/preview lifecycle,
-  selection/linked-mask transforms, dirty old/new preview footprint propagation,
-  preview cancel/commit, shared handles and numeric settings, GTK rendering/input,
+- Still required before exposing Operation: selection/linked-mask transforms,
+  shared handles and numeric settings, GTK rendering/input,
   and end-to-end latency/visual tests. Existing painting is unchanged; this is a
   tested rendering foundation, **not completion of the Operation milestone**.
+
+### Live transform renderer milestone
+
+- `CanvasEngine` now accepts a disposable, absolute transform request with a
+  transaction identity, paint-layer target and immutable selection. It does not
+  change history. Document edits, undo/redo and new paint contacts cancel it.
+  GTK forwards changed requests to its GPU owner; browser and native-host
+  adapters forward the same contract. These are renderer/engine APIs, not yet
+  an exposed Operation tool or completed GTK interaction.
+- The existing ordered-transform implementation now separates source capture
+  from rendering. It captures pigment, present wetness channels and packed
+  selection once, retaining source bindings. Every update samples that original,
+  not the previous preview. The old and new footprints are redrawn through the
+  same shader; unrelated tiles remain unchanged. Unchanged previews and camera
+  updates do not recapture, rasterize or recompose the document.
+- Cancel uses the shader's exact identity path and removes pages created only
+  for the preview. Obsolete preview-only pages are also pruned while dragging.
+  A matching committed operation keeps the already-rendered result without an
+  extra capture/resample. Other edits restore the original before executing.
+  Deleting the target safely discards the preview. Layer IDs and damage feed
+  the existing filter dependency cache, including clipped filters and groups.
+- Pixel tests compare live output with independently restarted committed
+  operations across translation, scale/rotation, fractional selection, identity,
+  off-canvas moves and tile crossings. They verify exact cancel of pigment and
+  wetness, Apply without a visual jump or recapture, unchanged-frame reuse,
+  filtered/masked composition, and survival when another operation reuses the
+  general selection buffer. No extra CPU canvas raster path exists.
+- Warm 2048×1536 live benchmark, 40 warmups and 120 measured absolute updates;
+  source capture occurs once and its count stays constant. Includes transform
+  and composition, not GTK event/presentation latency:
+
+  | Source | CPU submit median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | Ordinary / whole layer | 0.184 / 0.189 / 1.056 | 0.120 / 0.121 / 0.121 | 0.351 / 0.357 / 1.233 |
+  | Ordinary / selected | 0.186 / 0.260 / 0.475 | 0.109 / 0.110 / 0.110 | 0.344 / 0.424 / 0.662 |
+  | Wet round / selected | 0.336 / 0.587 / 0.797 | 0.205 / 0.209 / 0.210 | 0.604 / 0.857 / 1.075 |
+  | Watercolor / selected | 0.467 / 0.552 / 0.645 | 0.230 / 0.231 / 0.232 | 0.773 / 0.863 / 0.961 |
+
+  Retained capture/parameter storage is 12.02/12.77/15.79/18.79MiB respectively,
+  excluding ordinary paint pages and driver overhead. Selected transactions
+  retain an additional packed snapshot (about 0.76MiB here), so mask/selection
+  work cannot mutate their input. This also adds a small capture-time copy to
+  selected committed transforms. Their repeat GPU p99 is 0.342/0.638/0.664ms
+  for ordinary/wet/watercolor, versus 0.337/0.637/0.663ms in the previous run;
+  completed p99 remains below 2.02ms. These small differences include run-to-run
+  variation, not a claim of zero cost. First live updates in this cached-driver
+  run take 1.49–3.05ms; the earlier cold-pipeline warning still applies.
+- Validation: 28 engine and 183 shared UI tests; 94 GPU suite tests plus the
+  target-deletion regression; workspace/Wasm checks and strict renderer/engine/
+  GTK/native-host Clippy. This does not establish platform UI readiness. Still
+  pending: controller/handles/numeric controls, transformed selection and linked
+  masks, pipeline readiness before interaction, GTK visual/end-to-end checks,
+  remaining menus/file workflows, collapsible columns, final default layout and
+  human approval. The full workspace goal remains active.
 
 ### GTK staged startup milestone
 

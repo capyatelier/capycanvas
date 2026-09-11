@@ -1,12 +1,20 @@
 //! Ordered layer transforms. Pigment and both persistent wetness channels use
 //! immutable GPU captures; stroke-local coverage/reservoirs are not artwork.
 use super::*;
-use pixel_transform::{PixelTransform, TransformTarget};
+use pixel_transform::{PixelTransform, TransformSource, TransformTarget};
 
 pub(super) struct PaintTransforms {
     color: PixelTransform,
     scalar: Option<PixelTransform>,
     captures: [Option<wgpu::Texture>; 3],
+    sources: [Option<TransformSource>; 3],
+    selection: Option<wgpu::Buffer>,
+    cut: layer_core::Rect,
+    original_pages: [Vec<[u32; 2]>; 3],
+    preview: Option<layer_render::TransformPreview>,
+    preview_regions: [PixelRect; 2],
+    #[cfg(test)]
+    pub source_captures: u64,
 }
 impl PaintTransforms {
     pub fn new(r: &WgpuRasterizer) -> Self {
@@ -14,6 +22,14 @@ impl PaintTransforms {
             color: PixelTransform::new(&r.device),
             scalar: None,
             captures: Default::default(),
+            sources: Default::default(),
+            selection: None,
+            cut: layer_core::Rect::EMPTY,
+            original_pages: Default::default(),
+            preview: None,
+            preview_regions: [PixelRect::EMPTY; 2],
+            #[cfg(test)]
+            source_captures: 0,
         }
     }
     pub fn begin_frame(&mut self) {
@@ -24,6 +40,7 @@ impl PaintTransforms {
     }
     pub fn storage_bytes(&self) -> u64 {
         self.color.storage_bytes()
+            + self.selection.as_ref().map_or(0, wgpu::Buffer::size)
             + self
                 .scalar
                 .as_ref()
@@ -53,12 +70,43 @@ impl PaintTransforms {
         if transform.affine == layer_core::Affine::IDENTITY {
             return Ok(());
         }
+        self.capture_source(
+            r,
+            encoder,
+            layer,
+            operation.coverage.initial.as_ref(),
+            extent,
+        )?;
+        let regions = transform
+            .affected_regions(self.cut)
+            .map(|b| pixel_rect(b, extent));
+        self.render_source(r, encoder, layer, transform, &regions)
+    }
+    fn capture_source(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut wgpu::CommandEncoder,
+        layer: LayerId,
+        selection: Option<&layer_core::Selection>,
+        extent: [u32; 2],
+    ) -> Result<(), GpuRasterError> {
+        self.sources = Default::default();
+        self.cut = layer_core::Rect::EMPTY;
         let index = r
             .paint_layers
             .iter()
             .position(|l| l.id == layer)
             .ok_or(GpuRasterError::MissingPaintLayer(layer))?;
         let stored = &r.paint_layers[index];
+        self.original_pages = [
+            stored.pages.iter().map(|p| p.coordinate).collect(),
+            stored.material_pages.iter().map(|p| p.coordinate).collect(),
+            stored
+                .watercolor_wetness_pages
+                .iter()
+                .map(|p| p.coordinate)
+                .collect(),
+        ];
         let source_bounds = stored
             .pages
             .iter()
@@ -70,6 +118,10 @@ impl PaintTransforms {
         if source_bounds.is_empty() {
             return Ok(());
         }
+        #[cfg(test)]
+        {
+            self.source_captures += 1;
+        }
         let mut cut = layer_core::Rect {
             min: layer_core::Point {
                 x: source_bounds.min_x as f32,
@@ -80,7 +132,7 @@ impl PaintTransforms {
                 y: source_bounds.max_y as f32,
             },
         };
-        if let Some(s) = &operation.coverage.initial {
+        if let Some(s) = selection {
             if !s.inverted {
                 let b = s.bounds();
                 cut.min.x = cut.min.x.max(b.min.x);
@@ -95,11 +147,16 @@ impl PaintTransforms {
                 &std::sync::Arc::new(s.clone()),
             )?;
         }
-        let regions = transform
-            .affected_regions(cut)
-            .map(|b| pixel_rect(b, extent));
-        if regions.iter().all(|b| b.is_empty()) {
-            return Ok(());
+        self.cut = cut;
+        if selection.is_some() {
+            let source = r.selection_clip.buffer.as_ref().unwrap();
+            let target = self
+                .selection
+                .get_or_insert_with(|| selection_capture(&r.device, source.size()));
+            if target.size() < source.size() {
+                *target = selection_capture(&r.device, source.size());
+            }
+            encoder.copy_buffer_to_buffer(source, 0, target, 0, source.size());
         }
         let material = !stored.material_pages.is_empty();
         let watercolor = !stored.watercolor_wetness_pages.is_empty();
@@ -179,9 +236,45 @@ impl PaintTransforms {
                     }
                 }
             }
+            let pass = if channel == 0 {
+                &mut self.color
+            } else {
+                self.scalar
+                    .get_or_insert_with(|| PixelTransform::scalar(&r.device))
+            };
+            self.sources[channel] = Some(
+                pass.source(
+                    &r.device,
+                    capture,
+                    [source_bounds.min_x as i32, source_bounds.min_y as i32],
+                    selection.and(self.selection.as_ref()),
+                )
+                .map_err(GpuRasterError::InvalidTransform)?,
+            );
         }
+        Ok(())
+    }
+    fn render_source(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut wgpu::CommandEncoder,
+        layer: LayerId,
+        transform: layer_core::ImageTransform,
+        regions: &[PixelRect],
+    ) -> Result<(), GpuRasterError> {
+        if self.sources[0].is_none() || regions.iter().all(|b| b.is_empty()) {
+            return Ok(());
+        }
+        let index = r
+            .paint_layers
+            .iter()
+            .position(|l| l.id == layer)
+            .ok_or(GpuRasterError::MissingPaintLayer(layer))?;
+        let material = self.sources[1].is_some();
+        let watercolor = self.sources[2].is_some();
         let coordinates: std::collections::BTreeSet<_> = regions
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|b| !b.is_empty())
             .flat_map(page_coordinates)
             .collect();
@@ -253,18 +346,7 @@ impl PaintTransforms {
                 self.scalar
                     .get_or_insert_with(|| PixelTransform::scalar(&r.device))
             };
-            let source = pass
-                .source(
-                    &r.device,
-                    self.captures[channel].as_ref().unwrap(),
-                    [source_bounds.min_x as i32, source_bounds.min_y as i32],
-                    operation
-                        .coverage
-                        .initial
-                        .as_ref()
-                        .and(r.selection_clip.buffer.as_ref()),
-                )
-                .map_err(GpuRasterError::InvalidTransform)?;
+            let source = self.sources[channel].as_ref().unwrap();
             let pages: Vec<_> = match channel {
                 0 => stored
                     .pages
@@ -286,7 +368,8 @@ impl PaintTransforms {
                 .into_iter()
                 .filter_map(|(c, view)| {
                     let rect = regions
-                        .into_iter()
+                        .iter()
+                        .copied()
                         .map(|b| b.page_local(c))
                         .fold(PixelRect::EMPTY, PixelRect::union);
                     (!rect.is_empty()).then(|| TransformTarget {
@@ -297,7 +380,7 @@ impl PaintTransforms {
                     })
                 })
                 .collect();
-            pass.encode(&r.device, &r.queue, encoder, &source, transform, &targets)
+            pass.encode(&r.device, &r.queue, encoder, source, transform, &targets)
                 .map_err(GpuRasterError::InvalidTransform)?;
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
@@ -307,6 +390,137 @@ impl PaintTransforms {
         }
         Ok(())
     }
+
+    pub fn discard_preview(&mut self) {
+        self.preview = None;
+        self.preview_regions = [PixelRect::EMPTY; 2];
+    }
+    pub fn has_preview(&self) -> bool {
+        self.preview.is_some()
+    }
+    /// An identical committed operation can retain the already-rendered result.
+    /// Any intervening paint or parameter change takes the normal replay path.
+    pub fn consume_commit(&mut self, packet: FramePacket<'_>) -> Option<(LayerId, u32)> {
+        let preview = self.preview.as_ref()?;
+        let [batch] = packet.dab_batches else {
+            return None;
+        };
+        let DabBatchKind::LayerOperation(index) = batch.kind else {
+            return None;
+        };
+        if batch.layer_id != preview.layer || !packet.dabs.is_empty() {
+            return None;
+        }
+        let operation = packet
+            .layers
+            .iter()
+            .find(|l| l.id == preview.layer)?
+            .operations
+            .get(index as usize)?;
+        if operation.kind != layer_core::LayerOperationKind::Transform(preview.transform)
+            || operation.coverage.initial != preview.selection
+        {
+            return None;
+        }
+        let result = (preview.layer, index);
+        self.discard_preview();
+        Some(result)
+    }
+    /// Restore before persistent edits; the same identity shader copies exact
+    /// pigment/wetness, including fractional selection edges.
+    pub fn cancel_preview(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> Result<Option<(LayerId, PixelRect)>, GpuRasterError> {
+        let Some(previous) = self.preview.take() else {
+            return Ok(None);
+        };
+        let regions = self.preview_regions;
+        // Removing the target already discarded its pixels. There is nothing
+        // to restore, and cancellation must not turn deletion into a GPU error.
+        if r.paint_layers.iter().any(|l| l.id == previous.layer) {
+            self.render_source(r, encoder, previous.layer, Default::default(), &regions)?;
+        }
+        if let Some(layer) = r.paint_layers.iter_mut().find(|l| l.id == previous.layer) {
+            layer
+                .pages
+                .retain(|p| self.original_pages[0].contains(&p.coordinate));
+            layer
+                .material_pages
+                .retain(|p| self.original_pages[1].contains(&p.coordinate));
+            layer
+                .watercolor_wetness_pages
+                .retain(|p| self.original_pages[2].contains(&p.coordinate));
+        }
+        self.preview_regions = [PixelRect::EMPTY; 2];
+        Ok(Some((previous.layer, regions[0].union(regions[1]))))
+    }
+    pub fn update_preview(
+        &mut self,
+        r: &mut WgpuRasterizer,
+        encoder: &mut wgpu::CommandEncoder,
+        next: &layer_render::TransformPreview,
+        extent: [u32; 2],
+    ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
+        if self.preview.as_ref() == Some(next) {
+            return Ok(Vec::new());
+        }
+        let same_source = self.preview.as_ref().is_some_and(|p| {
+            p.transaction == next.transaction
+                && p.layer == next.layer
+                && p.selection == next.selection
+        });
+        let mut damage = Vec::with_capacity(2);
+        if !same_source {
+            damage.extend(self.cancel_preview(r, encoder)?);
+            self.capture_source(r, encoder, next.layer, next.selection.as_ref(), extent)?;
+        }
+        let regions = next
+            .transform
+            .affected_regions(self.cut)
+            .map(|b| pixel_rect(b, extent));
+        let affected = [
+            self.preview_regions[0],
+            self.preview_regions[1],
+            regions[0],
+            regions[1],
+        ];
+        self.render_source(r, encoder, next.layer, next.transform, &affected)?;
+        // Drop only pages created for a previous preview and no longer needed.
+        // Original sparse pages remain untouched outside the preview footprint.
+        let keep = |c: [u32; 2], original: &Vec<_>| {
+            original.contains(&c) || regions.iter().any(|b| !b.page_local(c).is_empty())
+        };
+        if let Some(layer) = r.paint_layers.iter_mut().find(|l| l.id == next.layer) {
+            layer
+                .pages
+                .retain(|p| keep(p.coordinate, &self.original_pages[0]));
+            layer
+                .material_pages
+                .retain(|p| keep(p.coordinate, &self.original_pages[1]));
+            layer
+                .watercolor_wetness_pages
+                .retain(|p| keep(p.coordinate, &self.original_pages[2]));
+        }
+        damage.push((
+            next.layer,
+            affected
+                .into_iter()
+                .fold(PixelRect::EMPTY, PixelRect::union),
+        ));
+        self.preview = Some(next.clone());
+        self.preview_regions = regions;
+        Ok(damage)
+    }
+}
+fn selection_capture(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("immutable transform selection"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 fn capture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {

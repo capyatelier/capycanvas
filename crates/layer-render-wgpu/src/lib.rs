@@ -623,6 +623,8 @@ pub struct WgpuRasterizer {
     unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
     transforms: Option<paint_transform::PaintTransforms>,
+    transform_preview: Option<layer_render::TransformPreview>,
+    transform_damage: Vec<(LayerId, PixelRect)>,
     thumbnails: thumbnails::Thumbnails,
     canvas_preview: canvas_preview::CanvasOverview,
     color_sampler: color_sample::ColorSampler,
@@ -916,6 +918,8 @@ impl WgpuRasterizer {
             unclipped,
             scene: None,
             transforms: None,
+            transform_preview: None,
+            transform_damage: Vec::with_capacity(2),
             filter_previews: None,
             effect_validation: None,
             validated_effects: None,
@@ -3631,6 +3635,18 @@ impl WgpuRasterizer {
 }
 
 impl CanvasRenderer for WgpuRasterizer {
+    fn set_transform_preview(
+        &mut self,
+        preview: Option<&layer_render::TransformPreview>,
+    ) -> Result<(), Self::Error> {
+        if preview.is_some_and(|p| p.transform.affine.inverse().is_none()) {
+            return Err(GpuRasterError::InvalidTransform("Invalid preview transform"));
+        }
+        if self.transform_preview.as_ref() != preview {
+            self.transform_preview = preview.cloned();
+        }
+        Ok(())
+    }
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,
@@ -3820,6 +3836,7 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        self.transform_damage.clear();
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
         }
@@ -3918,6 +3935,9 @@ impl CanvasRenderer for WgpuRasterizer {
         let resized = self.ensure_document(packet.document_extent, packet.layers)?;
         let reset = packet.reset_layers || resized;
         if reset {
+            if let Some(t) = &mut self.transforms {
+                t.discard_preview();
+            }
             for layer in &mut self.paint_layers {
                 layer.pages.clear();
                 layer.coverage_pages.clear();
@@ -4220,6 +4240,24 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
+        let committed_preview = self.transform_preview.is_none()
+            .then(|| {
+                self.transforms
+                    .as_mut()
+                    .and_then(|t| t.consume_commit(packet))
+            })
+            .flatten();
+        // Cancel a transform before new persistent edits, never paint into a
+        // disposable preview. A newly requested preview captures after replay.
+        if self.transforms.as_ref().is_some_and(|t| t.has_preview())
+            && (self.transform_preview.is_none() || !packet.dab_batches.is_empty())
+        {
+            let mut transforms = self.transforms.take().unwrap();
+            let result = transforms.cancel_preview(self, &mut encoder);
+            self.transforms = Some(transforms);
+            self.transform_damage.extend(result?);
+            self.transform_preview = None;
+        }
         // Persistent work is encoded before preview copies so prediction sees
         // this frame's committed ink.
         for (index, batch) in packet
@@ -4235,7 +4273,9 @@ impl CanvasRenderer for WgpuRasterizer {
                     .position(|l| l.id == batch.layer_id)
                     .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
                 let operation = &packet.layers[layer_index].operations[op as usize];
-                if matches!(operation.kind, layer_core::LayerOperationKind::Transform(_)) {
+                if committed_preview == Some((batch.layer_id, op)) {
+                    // Already present in the layer pages: no recapture/resample.
+                } else if matches!(operation.kind, layer_core::LayerOperationKind::Transform(_)) {
                     let mut transforms = self
                         .transforms
                         .take()
@@ -4511,6 +4551,39 @@ impl CanvasRenderer for WgpuRasterizer {
         self.preview_requires_base = new_preview_requires_base;
         self.preview_direct_to_composite = new_preview_direct_to_composite;
 
+        if let Some(preview) = self.transform_preview.clone() {
+            let mut transforms = self
+                .transforms
+                .take()
+                .unwrap_or_else(|| paint_transform::PaintTransforms::new(self));
+            let result = transforms.update_preview(
+                self,
+                &mut encoder,
+                &preview,
+                packet.document_extent,
+            );
+            self.transforms = Some(transforms);
+            self.transform_damage.extend(result?);
+        }
+        for &(layer, bounds) in &self.transform_damage {
+            let offset = scene::world_offset(packet.layers, layer, false);
+            dirty = dirty.union(pixel_rect(
+                layer_core::Rect {
+                    min: layer_core::Point {
+                        x: bounds.min_x as f32 + offset.x,
+                        y: bounds.min_y as f32 + offset.y,
+                    },
+                    max: layer_core::Point {
+                        x: bounds.max_x as f32 + offset.x,
+                        y: bounds.max_y as f32 + offset.y,
+                    },
+                },
+                packet.document_extent,
+            ));
+        }
+        if self.transform_damage.iter().any(|(_, b)| !b.is_empty()) {
+            self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
+        }
         if packet.composite_all || reset {
             dirty = PixelRect::full(packet.document_extent);
         }

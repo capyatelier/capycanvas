@@ -51,6 +51,7 @@ impl Frame {
     }
 }
 enum Command {
+    TransformPreview(Option<layer_render::TransformPreview>),
     Startup(u64, Box<(layer_core::Document, layer_core::BrushSnapshot)>),
     FinishStartupCache,
     Selection(Option<layer_core::Selection>),
@@ -88,6 +89,7 @@ enum Reply {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    transform_preview: Option<layer_render::TransformPreview>,
     initialized: bool,
     first_frame_sent: bool,
     pub(super) startup: layer_render_wgpu::StartupProgress,
@@ -297,6 +299,10 @@ impl RenderWorker {
                             continue;
                         }
                         match command {
+                            Command::TransformPreview(preview) => worker
+                                .renderer
+                                .set_transform_preview(preview.as_ref())
+                                .map_err(error)?,
                             Command::Startup(generation, inputs) => {
                                 let (document, brush) = *inputs;
                                 startup_input = Some((generation, document, brush));
@@ -440,6 +446,7 @@ impl RenderWorker {
             })
             .map_err(error)?;
         Ok(Self {
+            transform_preview: None,
             initialized: false,
             first_frame_sent: false,
             startup: Default::default(),
@@ -566,6 +573,16 @@ impl Drop for RenderWorker {
     }
 }
 impl CanvasRenderer for RenderWorker {
+    fn set_transform_preview(
+        &mut self,
+        preview: Option<&layer_render::TransformPreview>,
+    ) -> Result<(), Self::Error> {
+        if self.transform_preview.as_ref() != preview {
+            self.send(Command::TransformPreview(preview.cloned()))?;
+            self.transform_preview = preview.cloned();
+        }
+        Ok(())
+    }
     fn request_region(
         &mut self,
         request: layer_render::RegionRequest,
