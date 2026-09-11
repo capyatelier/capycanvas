@@ -43,6 +43,11 @@ import Foundation
         assert(!paused, "Input arriving during a frame must survive an idle reply")
         assert(store.canvasSubmitted && submissions == 1)
 
+        frames.tick(target: 2.5)
+        store.native!.complete(again: true)
+        await drainMainQueue()
+        assert(submissions == 1, "Canvas readiness must not publish accessibility changes on every frame")
+
         frames.tick(target: 3)
         frames.deactivate()
         store.native!.complete(revision: 2)

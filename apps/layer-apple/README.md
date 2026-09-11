@@ -12,6 +12,12 @@ visual and hardware performance evidence. Shared changes must build on both.
 See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
 for the shared-code boundaries, milestone matrix and remaining work.
 
+[Performance workflows and measurements](PERFORMANCE.md) include five opt-in
+synthetic drawing profiles shared by both targets and a ten-minute physical 4K
+watercolor baseline on each. CPU spikes, missing GPU observations and the Mac's
+current 90 Hz display leave performance acceptance open. Benchmark sessions use
+isolated storage; ordinary launches do not start synthetic input or recording.
+
 ## Build
 
 See the [Apple development guide](../../docs/development/apple.md) for prerequisites,

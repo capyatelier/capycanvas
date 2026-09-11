@@ -17,6 +17,53 @@ def header(**changes):
 
 
 class ReportChecks(unittest.TestCase):
+    def test_workload_interval_excludes_setup_and_reports_synthetic_source(self):
+        events = [record(9, 1, 1, 11), frame(10),
+                  record(11, 100_000_000, 2, 1, 200, 100),
+                  frame(110_000_000), record(7, 110_000_000, 4_000_000, 1),
+                  record(4, 110_000_000, 120_000_000),
+                  frame(160_000_000), record(4, 160_000_000, 170_000_000),
+                  record(11, 200_000_000, 3, 1, 240, 120),
+                  frame(210_000_000), record(11, 220_000_000, 4, 1)]
+        result = analyze(header(input_source="synthetic", workload={"name": "ink", "measurement_seconds": .1}), events)
+        self.assertEqual(result["input_source"], "synthetic")
+        workload = result["workload"]
+        self.assertTrue(workload["measurement_completed"])
+        self.assertTrue(workload["postlude_observed"])
+        self.assertEqual(workload["frames"]["owner_service_ms"]["count"], 2)
+        self.assertEqual(workload["gpu_samples_missing"], 1)
+        self.assertEqual(workload["gpu_queue_span_ms"]["max"], 4)
+        self.assertEqual(workload["delivered_nonpredicted_samples"], 40)
+        self.assertEqual(workload["presentation_intervals_including_pen_up_ms"]["max"], 50)
+        self.assertEqual(workload["first_presentation_after_start_ms"], 20)
+        self.assertEqual(workload["last_presentation_before_end_ms"], 30)
+
+    def test_completed_producer_does_not_conceal_missing_render_observations(self):
+        no_viewport = frame(300_000_000)
+        no_viewport[7] = 0
+        events = [record(11, 100_000_000, 2, 1), frame(110_000_000),
+                  record(4, 110_000_000, 120_000_000), no_viewport,
+                  frame(400_000_000), record(3, 400_000_000, 0, 0, 1, 1),
+                  frame(500_000_000), record(3, 500_000_000, 0, 0, 2, 1),
+                  record(4, 500_000_000, 0, 0, 2),
+                  record(0, 600_000_000, 0, 0), record(11, 700_000_000, 3, 1)]
+        result = analyze(header(workload={"name": "ink", "measurement_seconds": .6}), events)["workload"]
+        self.assertTrue(result["measurement_completed"])
+        self.assertEqual(result["actual_presentations"], 1)
+        self.assertEqual(result["last_presentation_before_end_ms"], 580)
+        self.assertEqual(result["admitted_frames_without_viewport"], 1)
+        self.assertEqual(result["missing_presentation_callbacks"], 1)
+        self.assertEqual(result["zero_time_presentations"], 1)
+        self.assertEqual(result["ticks_denied_admission"], 1)
+
+    def test_aborted_or_truncated_workload_is_not_a_completed_measurement(self):
+        source = header(input_source="synthetic", workload={"name": "ink", "measurement_seconds": 600})
+        for events in [[], [record(11, 100, 2, 1)],
+                       [record(11, 100, 2, 1), record(11, 200, 3, 1), record(11, 210, 5, 1)]]:
+            result = analyze(source, events)
+            self.assertFalse(result["workload"]["measurement_completed"])
+            self.assertTrue(any("no complete measurement" in warning for warning in result["warnings"]))
+
     def test_idle_gap_is_excluded_but_active_missed_frame_is_retained(self):
         times = [1_000_000, 9_000_000, 33_000_000, 1_000_000_000]
         events = [record(10, 0, 1), record(10, 40_000_000, 0), record(10, 999_000_000, 1)]
