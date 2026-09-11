@@ -12,6 +12,7 @@ public:
     ~SettingsView();
     void Apply(Json const& snapshot);
     bool IsOpen()const;
+    void CommitEdits();
     void Hide();
 private:
     struct Impl;

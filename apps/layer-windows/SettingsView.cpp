@@ -40,7 +40,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     TextBox search,shortcutSearch;
     TextBlock title,error;
     ScrollViewer scroller;
-    Bindings bindings;
+    Bindings bindings,commits;
     std::map<std::wstring,StackPanel> pageNodes;
     std::map<std::wstring,Button> tabs;
     std::map<std::wstring,FrameworkElement> rows;
@@ -70,7 +70,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         });
     }
     void build(J const& model){
-        bindings.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";shortcutKey=L"";editorKey=L"";
+        bindings.clear();commits.clear();pageNodes.clear();tabs.clear();rows.clear();resultsKey=L"";shortcutKey=L"";editorKey=L"";
         body=Grid();ColumnDefinition navigation;navigation.Width({192,GridUnitType::Pixel});
         ColumnDefinition main;main.Width({1,GridUnitType::Star});body.ColumnDefinitions().Append(navigation);body.ColumnDefinitions().Append(main);
         sidebar=StackPanel();sidebar.Spacing(6);sidebar.Margin({0,0,16,0});
@@ -136,7 +136,7 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             text.Children().Clear();
             auto numericField=number(data,titleText,object(kind,L"control"),
                 [data=data,id]{return num(object(rowFor(data,id),L"kind"),L"value");},
-                [data=data,id](double value){edit(data,id,N(value));},bindings);
+                [data=data,id](double value){edit(data,id,N(value));},bindings,&commits);
             if(!str(row,L"description").empty())text.Children().Append(description(data,str(row,L"description")));
             text.Children().InsertAt(0,numericField);Grid::SetColumnSpan(text,2);
         }else if(type==L"switch"){
@@ -184,12 +184,13 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
             control.PlaceholderText(str(kind,L"placeholder"));
             struct Draft{hstring text;bool changed=false;};
             auto draft=std::make_shared<Draft>();
-            control.TextChanged([data=data,draft](auto&& sender,auto&&){
+            control.TextChanging([data=data,draft](auto&& sender,auto&&){
                 if(!data->updating){draft->text=sender.template as<TextBox>().Text();draft->changed=true;}
             });
             auto commit=[data=data,id,draft,weak=make_weak(control)]{
                 if(weak.get()&&draft->changed){draft->changed=false;edit(data,id,S(draft->text));}
             };
+            commits.push_back(commit);
             control.LostFocus([commit](auto&&,auto&&){commit();});
             control.KeyDown([commit](auto&&,KeyRoutedEventArgs const& e){if(e.Key()==Windows::System::VirtualKey::Enter){commit();e.Handled(true);}});
             widget=control;
@@ -293,7 +294,11 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         for(auto const& [id,item]:tabs){
             item.Background(id==page?selected():clear());item.Visibility(query.empty()?Visibility::Visible:Visibility::Collapsed);
         }
-        title.Text(str(find(array(model,L"pages"),L"id",page),L"title"));error.Text(str(model,L"error"));
+        title.Text(str(find(array(model,L"pages"),L"id",page),L"title"));
+        auto message=str(model,L"error");
+        if(message.empty())message=str(snapshot,L"error");
+        if(message.empty())message=str(data->state,L"host_error");
+        error.Text(message);
         error.Visibility(error.Text().empty()?Visibility::Collapsed:Visibility::Visible);
         for(auto const& bind:bindings)bind();
         if(shortcutSearch.Text()!=str(model,L"shortcut_query"))shortcutSearch.Text(str(model,L"shortcut_query"));
@@ -309,4 +314,5 @@ SettingsView::SettingsView(Dispatch dispatch,Json catalog,XamlRoot root,Key key,
 SettingsView::~SettingsView()=default;
 void SettingsView::Apply(Json const& snapshot){impl->apply(snapshot);}
 bool SettingsView::IsOpen()const{return impl->showing;}
+void SettingsView::CommitEdits(){for(auto const& commit:impl->commits)commit();}
 void SettingsView::Hide(){impl->stopping=true;if(impl->showing)impl->dialog.Hide();}

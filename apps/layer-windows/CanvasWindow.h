@@ -62,7 +62,7 @@ private:
     bool transportFailed=false;
     bool statusFailed=false; // UI thread: readiness must not hide a reported error.
     Size desired;
-    bool closing=false, closed=false, resize=false, paused=false;
+    bool closing=false, closed=false, resize=false, paused=false, servicesReady=false;
     std::atomic<bool> rendererDone{false};
     uint64_t sequence=0;
     void Start();

@@ -52,6 +52,7 @@ pub struct CapyHost {
     cursor: CanvasCursor,
     scale: f32,
     blank_presented: bool,
+    services: Option<crate::settings::SettingsService>,
 }
 impl CapyHost {
     unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32) -> Result<Self, String> {
@@ -85,7 +86,15 @@ impl CapyHost {
             cursor: CanvasCursor::default(),
             scale,
             blank_presented: false,
+            services: None,
         })
+    }
+
+    fn poll_services(&mut self) -> Result<(), String> {
+        if let Some(service) = self.services.as_mut() {
+            service.poll(&mut self.native)?;
+        }
+        Ok(())
     }
 
     fn prepare_gpu(&mut self) -> Result<(), String> {
@@ -195,6 +204,64 @@ pub extern "C" fn capy_error() -> *const c_char {
     ERROR.with(|v| v.borrow().as_ptr())
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_start_services(
+    host: *mut CapyHost,
+    context: *mut c_void,
+    wake: Option<extern "C" fn(*mut c_void)>,
+) -> i32 {
+    guard(host, |host| {
+        if host.services.is_none() {
+            let context = context as usize;
+            host.services = Some(crate::settings::SettingsService::open(
+                &mut host.native,
+                move || {
+                    if let Some(wake) = wake {
+                        wake(context as *mut c_void);
+                    }
+                },
+            ));
+        }
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_poll_services(host: *mut CapyHost) -> i32 {
+    guard(host, |host| {
+        host.poll_services()?;
+        Ok(0)
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
+    let Some(host) = (unsafe { host.as_mut() }) else {
+        fail("Null canvas");
+        return -1;
+    };
+    // Cleanup must join the storage callback even when another host operation
+    // poisoned the renderer. Do not dispatch more actions into a poisoned host.
+    match catch_unwind(AssertUnwindSafe(|| {
+        if let Some(service) = host.services.as_mut() {
+            if host.poisoned {
+                service.stop_worker()
+            } else {
+                service.finish(&mut host.native)
+            }
+        } else {
+            Ok(())
+        }
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => {
+            fail(error);
+            -1
+        }
+        Err(_) => {
+            fail("Preferences shutdown failed");
+            -1
+        }
+    }
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_prepare_gpu(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
         host.prepare_gpu()?;
@@ -275,6 +342,7 @@ pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -
             fail(error);
             return Ok(1); // A valid action can be unavailable in the current state.
         }
+        host.poll_services()?;
         Ok(0)
     })
 }
@@ -283,6 +351,7 @@ pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) ->
     guard(host, |host| {
         host.native
             .input(serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?)?;
+        host.poll_services()?;
         Ok(0)
     })
 }
@@ -367,7 +436,14 @@ pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation:
 pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
     guard(host, |host| {
-        if let Some(snapshot) = host.native.take_snapshot() {
+        if let Some(mut snapshot) = host.native.take_snapshot() {
+            if snapshot.get("state").is_some() {
+                snapshot["windows_isolated_settings"] = serde_json::json!(
+                    std::env::var_os("CAPY_SETTINGS_DIRECTORY")
+                        .map(std::path::PathBuf::from)
+                        .is_some_and(|path| path.is_absolute())
+                );
+            }
             result = CString::new(snapshot.to_string()).map_err(err)?.into_raw();
         }
         Ok(0)

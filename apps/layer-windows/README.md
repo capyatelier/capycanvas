@@ -162,7 +162,7 @@ continues behind the header; native caption buttons and measured drag regions
 remain above it. Preferences uses native controls with the shared settings model,
 including image tiles, numeric policy, search, validation and shortcut editing.
 
-For a controlled review instance, set CAPY_TRACE_UI=1 before launch, then run:
+For a controlled review instance, set CAPY_TRACE_UI=1 and an absolute disposable CAPY_SETTINGS_DIRECTORY before launch, then run:
 
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-header-settings.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json
@@ -191,3 +191,28 @@ records and present-to-display latency distinct. It does not declare a 120 Hz
 or input-latency acceptance pass. Its tests use synthetic data. See the latest
 validation findings in ../../docs/windows-implementation.md for measured results
 and unresolved integration checks.
+
+## Private preferences storage
+
+Settings live in `%LOCALAPPDATA%\CapyAtelier\CapyCanvas\settings.json`.
+Windows uses the shared settings schema and migration rules. Writes run on a
+dedicated worker and replace the previous file atomically after flushing. An
+unreadable file is preserved as `settings.recovery.*.json` when a later change
+is saved. Save failures appear in the window and Preferences; drawing continues.
+A final save failure does not yet offer a Retry/Keep Open shutdown dialog.
+
+`CAPY_SETTINGS_DIRECTORY` overrides the storage directory and must be absolute.
+Use an owned, disposable directory under ignored artifacts for native UI tests.
+The header settings fixture refuses a profile without this override.
+
+The restart/failure fixture creates and owns its isolated profiles and review
+processes. Pass a built app executable; it validates close-time drafts, restart,
+locked-file recovery and preservation of unreadable files:
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-settings-storage.ps1 -Executable ./artifacts/windows/Review/CapyCanvas.exe
+~~~
+
+These local profiles and reports must never be committed. Native text drafts use
+the synchronous [TextChanging event](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.textbox.textchanging?view=windows-app-sdk-1.8)
+to keep formatting updates distinct from edits before close.

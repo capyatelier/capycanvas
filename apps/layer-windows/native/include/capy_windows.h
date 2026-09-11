@@ -22,6 +22,13 @@ __declspec(dllimport) CapyHost* capy_create(void* panel, uint32_t width, uint32_
 /* Prepare on the render worker, then park it for the first UI-thread capy_resize.
    Every subsequent resize also requires exclusive ownership on the UI thread. */
 __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
+/* Start/load on the render owner before queued user actions. Wake runs on the
+   storage thread and must only signal owned synchronization state. */
+__declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void (*wake)(void*));
+__declspec(dllimport) int32_t capy_poll_services(CapyHost*);
+/* Flush/join on the render owner before destroying the callback context.
+   Cleanup is required even after a renderer failure. */
+__declspec(dllimport) int32_t capy_finish_services(CapyHost*);
 __declspec(dllimport) void capy_destroy(CapyHost*);
 __declspec(dllimport) const char* capy_error(void);
 __declspec(dllimport) int32_t capy_resize(CapyHost*, uint32_t width, uint32_t height, float scale);

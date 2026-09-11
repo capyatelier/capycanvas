@@ -364,3 +364,44 @@ strict historical-image failure described above. The rebuilt WinUI app passes
 the header/Preferences and workspace fixtures, and closes with empty stderr.
 Shutdown with shortcut capture open also passes. These checkpoints do not imply
 that Windows has implemented the newly merged shared drawer functionality.
+
+### Windows preferences persistence checkpoint
+
+Windows restores shared settings before GPU startup from
+`%LOCALAPPDATA%\CapyAtelier\CapyCanvas\settings.json`. Missing files leave
+defaults untouched and do not cause an initial write. The shared settings
+migration and validation policy remains authoritative.
+
+A dedicated storage worker writes a bounded temporary file, flushes it, and
+atomically replaces the saved file. Its mailbox retains at most one in-flight
+write, one latest pending value and one completion. Superseded shared save
+requests are retired; the latest request completes after the write finishes.
+The render and UI threads perform no disk writes. Shutdown commits active
+Preferences drafts, drains accepted commands and joins storage before releasing
+the callback context.
+
+Unreadable or unsupported settings remain unchanged on load. A subsequent valid
+change preserves the original bytes in a recovery file before saving defaults
+with the new preference. Failed replacements leave the last saved file intact,
+report a recoverable error in the window and Preferences, and allow later saves.
+Shutdown does not yet offer a Retry/Keep Open flow when a final write fails.
+
+Native draft tracking uses synchronous text-change notifications so programmatic
+formatting can be distinguished from user edits. Numeric fields also retain
+paste and accessibility edits without depending on key-down events.
+
+All 12 Windows Rust tests pass, including bounded coalescing, shared request
+completion, migration, corruption recovery and a real Windows file-sharing
+failure. The rebuilt WinUI app passes isolated restart tests for active text and
+numeric drafts, rejection of an invalid closing draft, no restore/save echo,
+visible write errors and subsequent recovery, and exact preservation of an
+unsupported saved file. Controlled stroke and undo still complete after a save
+failure. Existing header/Preferences and workspace fixtures pass; review
+processes close with empty runtime stderr.
+
+The storage fixture owns disposable profiles under ignored artifacts and never
+uses the normal app profile. The header settings fixture now requires an
+explicit isolated profile. Raw settings, recovery files, snapshots, traces and
+reports remain private and local. Document/workspace persistence, complete
+workspace controls, physical input acceptance, visual parity and packaging
+remain open; the 120 Hz benchmark remains deferred.

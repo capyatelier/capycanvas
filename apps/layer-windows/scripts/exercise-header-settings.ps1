@@ -62,6 +62,7 @@ function Close-Preferences {
 }
 Wait-Until {Read-Model} 'Launch this review instance with CAPY_TRACE_UI=1 and pass its ui-state.json file' 30
 Wait-Until {(Read-Model).brush_ready} 'Shared brush startup did not finish before interaction checks' 45
+if(!(Read-Model).windows_isolated_settings){throw 'Launch this fixture with CAPY_SETTINGS_DIRECTORY pointing to a disposable profile.'}
 if(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)){throw 'Close Preferences before running this fixture.'}
 Invoke-Control 'View'
 $before=Toggle-State 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)

@@ -376,7 +376,19 @@ void CanvasWindow::Run() {
         } apartment;
         // Device/shader preparation must not hold the UI thread. The existing resize
         // handshake performs the first SetSwapChain only after preparation finishes.
-        bool prepared=capy_prepare_gpu(host)>=0;
+        bool prepared=capy_start_services(host,this,[](void* context) noexcept {
+            auto self=static_cast<CanvasWindow*>(context);
+            {std::lock_guard lock(self->mutex);self->servicesReady=true;}
+            self->wake.notify_one();
+        })>=0;
+        if(prepared){
+            if(auto snapshot=capy_snapshot(host)){
+                std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
+                auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
+                Publish(snapshot,model.HasKey(L"state"));
+            }
+            prepared=capy_prepare_gpu(host)>=0;
+        }
         if(!prepared) Fail(capy_error());
         else {std::lock_guard lock(mutex);resize=true;}
         bool dirty=true;
@@ -386,9 +398,10 @@ void CanvasWindow::Run() {
         bool probe=GetEnvironmentVariableW(L"CAPY_PRESENT_PROBE",nullptr,0)!=0;
         bool probeReady=false;
         for(;prepared;) {
+            bool pollServices=false;
             {
                 std::unique_lock lock(mutex);
-                wake.wait(lock,[&]{return closing||resize||dirty||transportFailed||!work.Empty()||pendingHover.has_value();});
+                wake.wait(lock,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value();});
                 if(closing) break;
                 if(resize) {
                     paused=true;resize=false;probeReady=false;
@@ -396,6 +409,15 @@ void CanvasWindow::Run() {
                     dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();});
                     wake.wait(lock,[&]{return !paused||closing;});
                     dirty=true;continue;
+                }
+                pollServices=std::exchange(servicesReady,false);
+            }
+            if(pollServices){
+                if(capy_poll_services(host)<0){Fail(capy_error());break;}
+                if(auto snapshot=capy_snapshot(host)){
+                    std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
+                    auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
+                    Publish(snapshot,model.HasKey(L"state"));
                 }
             }
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
@@ -450,15 +472,7 @@ void CanvasWindow::Run() {
                 Publish(snapshot,model.HasKey(L"state"));
                 if(model.HasKey(L"brush_ready")) {
                     bool ready=model.GetNamedBoolean(L"brush_ready");
-                    if(ready!=brushReady) {
-                        brushReady=ready;
-                        dispatcher.TryEnqueue([weak=weak_from_this(),ready]{
-                            if(auto self=weak.lock();self&&!self->statusFailed){
-                                self->status.Text(ready?L"":L"Preparing brushes…");
-                                self->status.Visibility(ready?Visibility::Collapsed:Visibility::Visible);
-                            }
-                        });
-                    }
+                    brushReady=ready;
                 }
                 if(!captured && !dirty && GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
                     std::ofstream("canvas-state.json") << snapshot;
@@ -483,7 +497,18 @@ void CanvasWindow::Run() {
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
       catch(std::exception const& error) {Fail(error.what());}
       catch(...) {Fail("Unexpected render worker failure");}
+    // UI close commits drafts before rejecting new work. Drain accepted commands
+    // so a final preferences edit reaches storage even when no next frame runs.
+    std::deque<CanvasWork> finalWork;
+    {std::lock_guard lock(mutex);finalWork=work.Take();}
+    space.notify_all();
+    for(auto& item:finalWork)if(auto command=std::get_if<CanvasCommand>(&item)){
+        auto result=command->input?capy_input(host,command->json.c_str()):capy_action(host,command->json.c_str());
+        if(result!=0)Fail(capy_error());
+        if(result<0)break;
+    }
     capy_suspend(host);
+    if(capy_finish_services(host)<0)Fail(capy_error());
     rendererDone.store(true);
     space.notify_all();
     dispatcher.TryEnqueue([weak=weak_from_this()] {
@@ -504,7 +529,9 @@ void CanvasWindow::Fail(std::string message) {
     });
 }
 void CanvasWindow::Stop() {
-    {std::lock_guard lock(mutex);if(closing)return;closing=true;}
+    {std::lock_guard lock(mutex);if(closing)return;}
+    if(settings)settings->CommitEdits();
+    {std::lock_guard lock(mutex);closing=true;}
     if(settings)settings->Hide();
     wake.notify_all();space.notify_all();
     if(inputController) {
@@ -583,6 +610,12 @@ void CanvasWindow::Fullscreen() {
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
+    if(!statusFailed){
+        auto message=str(model,L"error");
+        if(message.empty())message=str(state,L"host_error");
+        if(message.empty()&&!flag(model,L"brush_ready"))message=L"Preparing brushes…";
+        status.Text(message);status.Visibility(message.empty()?Visibility::Collapsed:Visibility::Visible);
+    }
     root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
     auto foreground=color(str(object(state,L"palette"),L"text",L"#fafafb"));
     window.AppWindow().TitleBar().ButtonForegroundColor(foreground);
