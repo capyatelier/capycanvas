@@ -4,7 +4,7 @@ The native Android host projects the same Rust tool, color and workspace models
 as GTK. The shared engine owns drawing, selection, snapping and transforms;
 Compose supplies widgets and Android owns input, surfaces and file transport.
 
-## Completed port milestone
+## Ported features
 
 - Partial Zen renders the shared edge-toolbar clusters with their stable tile
   identities and configured sizes, preserving the saved dock layout. All four
@@ -27,17 +27,37 @@ Compose supplies widgets and Android owns input, surfaces and file transport.
   shared camera geometry/actions. The renderer facade now forwards canvas-preview
   and color-sample requests, fixing the previously inert Eyedropper path.
 - Toolbar divider slots render as separators without action buttons.
+- All eight application menus use shared models, including File, Edit, Layer,
+  Select, Filter, View, Window and Help. Models are published before GPU setup,
+  so opening a menu never waits for shader compilation. Closing a menu releases
+  its input capture before the next canvas contact.
+- New, Open, Save, Save As, Close and PNG Export use Android's document picker.
+  Rust owns document validation, dirty checkpoints and unsaved-change decisions.
+  File reads, project encoding and candidate GPU preparation run off the render
+  owner. A replacement is adopted only if its approved document epoch/revision
+  still matches; the existing drawing survives a failed or cancelled open.
+- Document replacement invalidates thumbnail, Navigator and filter-preview
+  caches. Workspace persistence uses only the shared committed layout model.
+  Image-import failures are visible to the user.
 
 ## Validation
 
-The Wacom MovinkPad 14 (Android 15, ARM64, landscape 2880×1800) passes all six
-`AndroidFeatureParityTest` tests in `artifacts/android/feature-parity/drawer-device-final.txt`.
-Coverage includes Zen on four edges, six tool families, displayed HSV/HLS color
-accuracy, nested collapsed-column drawers, outside contact without paint, actual
-GPU Eyedropper color sampling, Navigator pixels and camera gestures. Native-host
-checks cover shared drawer queries and clipped/scrolled source tiles. ARM64
-application/test builds and Android lint pass. Screenshots are collected under
-`artifacts/android/feature-parity/`.
+Device coverage runs on the Wacom MovinkPad 14 (Android 15, ARM64,
+landscape 2880×1800). `AndroidFeatureParityTest` checks Zen on four edges, six
+tool families, displayed HSV/HLS color accuracy, nested collapsed-column
+drawers, outside contact without paint, actual GPU Eyedropper color sampling,
+Navigator pixels and camera gestures. It also verifies painted pixels for filled
+figures, Move, Undo, flood fill, gradients and rulers, and saves/reopens/exports a
+512×384 drawing through the real Android file picker. The exported PNG is decoded
+and checked for the expected dimensions and painted pixels. Cancelling New must
+preserve unsaved paint.
 
-Android document workflows and pixel/gesture validation of the remaining newly
-exposed drawing tools are the next milestone; they are not claimed complete here.
+Additional device regressions cover pre-GPU menus/gray UI, stable workspace size
+across system-bar transitions, touch navigation/surface recreation, palm rejection,
+physical eraser input and camera-only updates. Shared host/UI tests exercise
+document adoption/checkpoints and drawer geometry. Build, lint, instrumentation
+logs and screenshots are recorded under `artifacts/android/feature-parity/`.
+
+The completed milestone passes 14 tablet tests (`menu-contact-device.txt`),
+226 shared host/UI tests (`shared-retest.txt`), ARM64 app/test builds and Android
+lint (`menu-contact-build.txt`).

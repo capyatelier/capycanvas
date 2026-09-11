@@ -32,11 +32,30 @@ pub(crate) struct Surface {
     _instance: wgpu::Instance,
     _window: Window,
 }
-fn error(e: impl std::fmt::Display) -> String {
+pub(crate) fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
 impl App {
+    pub(crate) fn project_adopted(&mut self) {
+        self.cursor = Default::default();
+        // The file worker has already rendered this candidate and waited for
+        // its canvas/current-brush shaders. Do not discard the first contact
+        // merely because the adopted window has not ticked another frame yet.
+        self.host.startup = layer_render_wgpu::StartupProgress {
+            canvas_ready: true,
+            brush_ready: true,
+            complete: false,
+        };
+        if let Some(surface) = &mut self.surface {
+            surface.presenter = ViewportPresenter::for_renderer(
+                self.host.session.renderer_mut().0.as_ref().unwrap(),
+                surface.config.format,
+            );
+        }
+        self.blank_presented = true;
+    }
+
     fn attach(
         &mut self,
         env: &JNIEnv,
@@ -44,6 +63,7 @@ impl App {
         cache_directory: &str,
     ) -> Result<(), String> {
         self.surface = None;
+        self.cache_directory = cache_directory.into();
         let window = NonNull::new(unsafe {
             ndk_sys::ANativeWindow_fromSurface(
                 env.get_native_interface().cast(),
@@ -208,10 +228,10 @@ impl App {
 
 // The Kotlin host owns this handle and never exposes it to UI callers. Calls
 // are serialized on its render Looper, including lifecycle and final disposal.
-unsafe fn app<'a>(handle: jlong) -> &'a mut App {
+pub(crate) unsafe fn app<'a>(handle: jlong) -> &'a mut App {
     unsafe { &mut *(handle as *mut App) }
 }
-fn fail(env: &mut JNIEnv, result: Result<(), String>) {
+pub(crate) fn fail(env: &mut JNIEnv, result: Result<(), String>) {
     if let Err(message) = result {
         let _ = env.throw_new("java/lang/IllegalStateException", message);
     }
@@ -231,7 +251,7 @@ fn string(env: &mut JNIEnv, result: Result<String, String>) -> jstring {
         }
     }
 }
-fn read(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
+pub(crate) fn read(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
     env.get_string(value).map(Into::into).map_err(error)
 }
 

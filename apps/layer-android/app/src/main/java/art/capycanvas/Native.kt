@@ -24,6 +24,14 @@ internal object Native {
     @JvmStatic external fun navigatorPreview(handle: Long, now: Long, visible: Boolean): Array<Any>?
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
     @JvmStatic external fun importLayer(handle: Long, name: String, width: Int, height: Int, rgba: ByteArray)
+    @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
+    /** File worker only; consumes the detached descriptor, retains the task. */
+    @JvmStatic external fun projectWork(task: Long, fd: Int, width: Int, height: Int)
+    @JvmStatic external fun projectAdopt(handle: Long, task: Long, location: String)
+    @JvmStatic external fun projectFree(task: Long)
+    @JvmStatic external fun documentComplete(handle: Long, request: Int, success: Boolean, error: String)
+    @JvmStatic external fun documentClose(handle: Long, request: Int, decision: String)
+    @JvmStatic external fun documentPixels(handle: Long, request: Int): Array<Any>?
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */

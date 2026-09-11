@@ -497,7 +497,13 @@ impl NativeHost {
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
             "partial_zen": state.partial_zen(), "zen_toolbars": zen,
+            "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id": menu, "label": menu.label(), "model": self.session.application_menu(menu)})),
             "color_panel": self.session.state().colors.view(),
+            "document_options": {"extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
+                "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
+                "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
+                "new_title": layer_ui::DocumentRequest::New.title(),
+                "unsaved_description": layer_ui::UNSAVED_DESCRIPTION, "discard_label": layer_ui::DISCARD_DOCUMENT_LABEL},
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
             "toolbar_manager": self.session.toolbar_manager(),
@@ -522,6 +528,12 @@ impl NativeHost {
                 mode: layer_core::EffectInstallMode,
             },
             Catalog,
+            ApplicationMenu {
+                menu: layer_ui::ApplicationMenu,
+            },
+            ApplicationLink {
+                link: layer_ui::ApplicationLink,
+            },
             RendererStats,
             FilterPreviews {
                 request: u64,
@@ -604,6 +616,8 @@ impl NativeHost {
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::ApplicationMenu { menu } => json!(self.session.application_menu(menu)),
+            Query::ApplicationLink { link } => json!(link.url()),
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
                 request,

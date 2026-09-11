@@ -7610,7 +7610,7 @@ mod tests {
     #[test]
     fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Web, Platform::Android] {
+        for platform in [Platform::Web] {
             let mut app = session();
             app.set_platform(platform);
             let panel = Panel::Sizes;

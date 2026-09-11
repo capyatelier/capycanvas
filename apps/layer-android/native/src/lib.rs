@@ -4,3 +4,6 @@
 mod android;
 #[cfg(target_os = "android")]
 mod app;
+
+#[cfg(target_os = "android")]
+mod documents;

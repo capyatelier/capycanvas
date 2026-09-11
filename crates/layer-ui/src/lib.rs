@@ -428,10 +428,17 @@ impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
             Self::NewDocument | Self::OpenDocument | Self::SaveDocument | Self::SaveDocumentAs => {
-                matches!(platform, Platform::Gtk | Platform::Mac | Platform::Ios)
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android
+                )
             }
-            Self::CloseDocument => matches!(platform, Platform::Gtk | Platform::Mac),
-            Self::ExportDocument | Self::Website | Self::SourceCode => platform == Platform::Gtk,
+            Self::CloseDocument => {
+                matches!(platform, Platform::Gtk | Platform::Mac | Platform::Android)
+            }
+            Self::ExportDocument | Self::Website | Self::SourceCode => {
+                matches!(platform, Platform::Gtk | Platform::Android)
+            }
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }
