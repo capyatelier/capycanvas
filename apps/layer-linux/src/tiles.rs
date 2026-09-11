@@ -32,6 +32,13 @@ mod imp {
         }
     }
     impl WidgetImpl for TileStrip {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            if self.tabbed.get() && self.vertical.get() {
+                gtk::SizeRequestMode::HeightForWidth
+            } else {
+                gtk::SizeRequestMode::ConstantSize
+            }
+        }
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let size = self.style.get().size()
                 [usize::from(orientation == gtk::Orientation::Vertical)]

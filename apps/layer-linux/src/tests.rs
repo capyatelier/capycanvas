@@ -199,6 +199,172 @@ fn assert_drawer_connected(w: &Workspace) {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_nested_tool_drawers() {
+    let app = native_test_app("art.capycanvas.NestedDrawers");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(1800);
+    let original = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let output = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(output).unwrap();
+    for (theme, group) in [(Theme::Dark, 5), (Theme::Light, 8)] {
+        let mut workspace = original.clone();
+        workspace
+            .layout
+            .move_panel(
+                viewport,
+                Panel::Toolbar,
+                DockTarget::Tab { group, index: None },
+            )
+            .unwrap();
+        let long = workspace
+            .layout
+            .add_toolbar(Some(group), "Long tools", &vec![ToolbarControl::Color; 180])
+            .unwrap();
+        w.dispatch(UiAction::RestoreWorkspace { workspace });
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Pen,
+        });
+        w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+        w.dispatch(UiAction::Customize {
+            action: CustomizationAction::ToggleColumnDrawer {
+                group,
+                panel: Panel::Toolbar,
+            },
+        });
+        pump(350);
+        let column = state(&w)
+            .workspace
+            .layout
+            .collapsed_column_for_group(group)
+            .unwrap();
+        let parent_name = format!("column-drawer-{column}");
+        let parent = || find_named(w.surface.upcast_ref(), &parent_name).unwrap();
+        let tiles = state(&w)
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .tiles()
+            .to_vec();
+        let button = |id| {
+            find_named(&parent(), &format!("tile-{id}"))
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap()
+        };
+        click(&button(tiles[0].id));
+        pump(80);
+        assert!(state(&w).customization.drawer.is_none());
+        click(&button(tiles[0].id));
+        pump(300);
+        assert!(
+            state(&w).customization.drawer.is_some(),
+            "{:?}",
+            state(&w).host_error
+        );
+        let b = button(tiles[0].id).compute_bounds(&w.surface).unwrap();
+        let p = w.drawer.placement().unwrap();
+        assert!((p.anchor.x - b.x()).abs() <= 1.);
+        assert!((p.anchor.y - b.y()).abs() <= 1.);
+        assert!(p.connection().is_some());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+        assert!(button(tiles[0].id).has_css_class(if group == 5 {
+            "drawer-origin-right"
+        } else {
+            "drawer-origin-left"
+        }));
+        let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+        assert!(
+            !w.chrome_event(ChromeEvent::Contact {
+                position: point,
+                canvas: false
+            })
+            .handled
+        );
+        assert!(state(&w).customization.drawer.is_some());
+        click(&button(tiles[0].id));
+        pump(260);
+        assert!(state(&w).customization.drawer.is_none());
+        let color = tiles
+            .iter()
+            .find(|t| t.control == ToolbarControl::Color)
+            .unwrap();
+        click(&button(color.id));
+        pump(300);
+        assert_eq!(
+            state(&w).customization.drawer.as_ref().unwrap().columns,
+            [vec![Panel::Color]]
+        );
+        capture_reference(&w, &format!("{output}/columns-nested-{theme:?}.png"), 1.);
+        w.chrome_event(ChromeEvent::Contact {
+            position: [viewport[0] * 0.5, viewport[1] - 50.],
+            canvas: true,
+        });
+        pump(260);
+        assert!(state(&w).customization.drawer.is_none());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+
+        // The same projection supports a long toolbar. Move a still-visible
+        // source by scrolling and check that the child follows in native pixels.
+        w.dispatch(UiAction::SelectPanelTab { group, panel: long });
+        pump(300);
+        let id = state(&w).workspace.layout.panel(long).unwrap().tiles()[65].id;
+        let origin = button(id);
+        let mut ancestor = origin.parent().unwrap();
+        while !ancestor.is::<gtk::ScrolledWindow>() {
+            ancestor = ancestor.parent().unwrap();
+        }
+        let scroller = ancestor.downcast::<gtk::ScrolledWindow>().unwrap();
+        scroller.vadjustment().set_value(24.);
+        pump(100);
+        click(&origin);
+        pump(300);
+        assert!(
+            state(&w).customization.drawer.is_some(),
+            "origin {:?}, scroll {:?}, viewport {:?}; {:?}",
+            origin.compute_bounds(&w.surface),
+            scroller.vadjustment().value(),
+            scroller.compute_bounds(&w.surface),
+            state(&w).host_error
+        );
+        let before = w.drawer.placement().unwrap();
+        scroller.vadjustment().set_value(48.);
+        pump(100);
+        let after = w.drawer.placement().unwrap();
+        let b = origin.compute_bounds(&w.surface).unwrap();
+        assert!((after.anchor.y - b.y()).abs() <= 1., "{after:?} vs {b:?}");
+        assert!((after.anchor.y - before.anchor.y + 24.).abs() <= 1.);
+        let child = find_named(w.surface.upcast_ref(), "tool-drawer").unwrap();
+        let picked = w
+            .surface
+            .pick(
+                (after.bounds.x + 10.) as f64,
+                (after.bounds.y + 40.) as f64,
+                gtk::PickFlags::DEFAULT,
+            )
+            .unwrap();
+        assert!(
+            picked == child || picked.is_ancestor(&child),
+            "parent must not cover child"
+        );
+        // Switching the parent tab removes its obsolete tool drawer.
+        w.dispatch(UiAction::SelectPanelTab {
+            group,
+            panel: Panel::Toolbar,
+        });
+        pump(300);
+        assert!(state(&w).customization.drawer.is_none());
+        assert_eq!(state(&w).customization.column_drawers.len(), 1);
+    }
+    w.window.close();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_collapsed_columns() {
     let app = native_test_app("art.capycanvas.CollapsedColumns");
     let w = Workspace::new(&app);

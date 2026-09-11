@@ -26,7 +26,7 @@ mod drawers;
 mod zen;
 pub use drawers::{
     ContentDrawer, DrawerAnchor, DrawerConnection, DrawerDismissal, DrawerPlacement, DrawerTabs,
-    TileAnchor,
+    DrawerTileMeasurement, TileAnchor,
 };
 pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
@@ -670,6 +670,9 @@ pub enum UiAction {
     },
     MeasurePanels {
         measurements: Vec<PanelMeasurement>,
+    },
+    MeasureDrawerTiles {
+        measurements: Vec<DrawerTileMeasurement>,
     },
     MeasureColumnScroll {
         column: u32,

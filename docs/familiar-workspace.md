@@ -1355,8 +1355,31 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - Nested collapsed subcolumns retain their state when a containing column also
   collapses. Drawer/context anchors resolve to the visible outer strip until it
   expands, not to a hidden child strip.
-- Still required for columns: nested tool drawers opened from tiles inside a
-  collapsed toolbar drawer, final constrained-viewport and native incoming-drop/
+- Still required for columns: final constrained-viewport and native incoming-drop/
   resize interaction coverage, and the final presentation audit. This is not the
   full GTK approval milestone. Region refinements, complete menus/file workflows,
   final default layout and full workspace validation remain outstanding.
+
+### Nested toolbar content drawers
+
+- Tiles inside a collapsed column's toolbar drawer now use the ordinary shared
+  tool-selection and drawer lifecycle. First press selects a tool, the next opens
+  its controls; Color opens directly. Dismissing the child does not dismiss its
+  persistent parent. Switching the parent tab removes an obsolete child.
+- GTK reports visible, clipped tile bounds after allocating parent drawers, then
+  allocates the tool drawer in the same frame. Shared Rust validates ownership,
+  chooses placement and handles outside/origin contacts. Scroll and animation
+  update the measurements; they are neither persisted nor workspace undo edits.
+  The child stays above its parent and reuses the existing connected-tile styling
+  and panel preview producers. No additional canvas/GPU work is introduced.
+- A native overflow test exposed a missing height-for-width request on toolbar
+  bodies. GTK now advertises it and preserves natural content height inside
+  drawer scroll viewports. The test scrolls a 180-tile toolbar on both sides,
+  checking its still-visible source and child anchor move together.
+- The shared UI suite passes 207 tests and strict UI/GTK Clippy. Workspace and
+  Wasm checks pass (the workspace retains existing non-Metal Apple warnings).
+  Native nested-drawer tests pass on the private Wayland GPU display, with
+  critical warnings fatal, as do collapsed columns, tool drawers, panel expansion,
+  Zen and stacked-divider regressions. Dark/light images were visually inspected at
+  `artifacts/familiar-workspace/columns-nested-{Dark,Light}.png` (ignored).
+  These are GTK interaction checks, not physical-device or frame-rate claims.

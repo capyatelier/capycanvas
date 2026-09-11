@@ -390,8 +390,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !facts
                         .drawer_connection
                         .is_some_and(|b| b.contains(position[0], position[1]))
-                    && !drawer
-                        .placement(
+                    && !self
+                        .state
+                        .customization
+                        .drawer_placement(
+                            drawer,
                             &self.state.workspace.layout,
                             viewport,
                             &vec![0.0; drawer.columns.len()],
@@ -414,6 +417,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     } else {
                         self.layout(viewport)
                             .tile_at(&self.state.workspace.layout, position)
+                            .or_else(|| self.state.customization.drawer_tile_at(position))
                             .is_none()
                     };
                 }
@@ -1168,6 +1172,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         );
         let (mut changed, wake) = match action {
+            UiAction::MeasureDrawerTiles { measurements } => {
+                self.state
+                    .customization
+                    .measure_drawer_tiles(&self.state.workspace.layout, measurements)?;
+                // Allocation facts do not change workspace history or rebuild
+                // widgets. The host can position the child in this same frame.
+                return Ok(UiChange::default());
+            }
             UiAction::MeasureColumnScroll { column, offset } => {
                 if !offset.is_finite()
                     || offset < 0.
@@ -1886,6 +1898,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => None,
                 })
                 .collect();
+            changed |= CUSTOMIZATION;
+        }
+        if let Some(anchor) = self
+            .state
+            .customization
+            .drawer
+            .as_ref()
+            .and_then(|d| d.anchor.tile())
+            && let Some(group) = self.state.workspace.layout.panel_group(anchor.panel)
+            && self
+                .state
+                .workspace
+                .layout
+                .collapsed_column_for_group(group)
+                .is_some()
+            && !self.state.customization.column_drawers.iter().any(|d| {
+                d.tabs
+                    .as_ref()
+                    .is_some_and(|t| t.group == group && t.active == anchor.panel)
+            })
+        {
+            self.state.customization.drawer = None;
             changed |= CUSTOMIZATION;
         }
         if was_expanded && !self.state.customization.has_drawer() && was_zen {
@@ -7555,6 +7589,151 @@ mod tests {
         .unwrap();
         assert!(s.state.customization.column_drawers.is_empty());
         assert!(!s.state.workspace.layout.is_collapsed(4));
+    }
+
+    #[test]
+    fn collapsed_toolbar_tiles_use_live_origins_and_keep_the_parent_drawer() {
+        let viewport = [1200., 900.];
+        for group in [5, 8] {
+            let mut s = session();
+            s.set_platform(Platform::Gtk);
+            s.dispatch(UiAction::MovePanel {
+                panel: Panel::Toolbar,
+                target: DockTarget::Tab { group, index: None },
+                viewport,
+            })
+            .unwrap();
+            s.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })
+                .unwrap();
+            s.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group,
+                    panel: Panel::Toolbar,
+                },
+            })
+            .unwrap();
+            let DrawerAnchor::Column { column, .. } =
+                s.state.customization.column_drawers[0].anchor
+            else {
+                panic!()
+            };
+            let tile = s
+                .state
+                .workspace
+                .layout
+                .panel(Panel::Toolbar)
+                .unwrap()
+                .tiles()[0]
+                .id;
+            let anchor = TileAnchor {
+                panel: Panel::Toolbar,
+                tile,
+            };
+            let activate = UiAction::ActivateTile {
+                panel: anchor.panel,
+                tile,
+            };
+            s.dispatch(activate.clone()).unwrap(); // First press selects Brush.
+            assert!(s.state.customization.drawer.is_none());
+            assert!(s.dispatch(activate.clone()).is_err()); // No visible native origin yet.
+            let before = s.state.workspace.clone();
+            let measure = |s: &mut UiSession<Recorder>, y| {
+                s.dispatch(UiAction::MeasureDrawerTiles {
+                    measurements: vec![DrawerTileMeasurement {
+                        column,
+                        anchor,
+                        bounds: Bounds {
+                            x: if group == 5 { 80. } else { 1000. },
+                            y,
+                            width: 36.,
+                            height: 36.,
+                        },
+                    }],
+                })
+                .unwrap()
+            };
+            measure(&mut s, 200.);
+            assert_eq!(s.state.workspace, before);
+            s.dispatch(activate.clone()).unwrap();
+            let placement = |s: &UiSession<Recorder>| {
+                s.state
+                    .customization
+                    .drawer_placement(
+                        s.state.customization.drawer.as_ref().unwrap(),
+                        &s.state.workspace.layout,
+                        viewport,
+                        &[400., 450.],
+                        false,
+                    )
+                    .unwrap()
+            };
+            let first = placement(&s);
+            assert_eq!(
+                first.direction,
+                if group == 5 { Edge::Right } else { Edge::Left }
+            );
+            assert!(first.connection().is_some());
+            measure(&mut s, 160.); // Scrolling/animation updates the same open drawer.
+            let current = placement(&s);
+            assert_eq!(current.anchor.y, 160.);
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            let reply = s
+                .input(UiInput::Chrome {
+                    event: ChromeEvent::Contact {
+                        position: [current.anchor.x + 4., 164.],
+                        canvas: false,
+                    },
+                    facts: ChromeFacts {
+                        content_drawer: Some(current.bounds),
+                        ..Default::default()
+                    },
+                    viewport,
+                })
+                .unwrap();
+            assert!(!reply.handled);
+            assert!(s.state.customization.drawer.is_some());
+            s.dispatch(activate.clone()).unwrap(); // Original tile closes only its child.
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            s.dispatch(activate.clone()).unwrap();
+            let reply = s
+                .input(UiInput::Chrome {
+                    event: ChromeEvent::Contact {
+                        position: [600., 850.],
+                        canvas: true,
+                    },
+                    facts: ChromeFacts {
+                        content_drawer: Some(placement(&s).bounds),
+                        ..Default::default()
+                    },
+                    viewport,
+                })
+                .unwrap();
+            assert!(reply.handled);
+            assert!(s.state.customization.drawer.is_none());
+            assert_eq!(s.state.customization.column_drawers.len(), 1);
+            s.dispatch(activate.clone()).unwrap();
+            let other = if group == 5 {
+                Panel::Brushes
+            } else {
+                Panel::Layers
+            };
+            s.dispatch(UiAction::SelectPanelTab {
+                group,
+                panel: other,
+            })
+            .unwrap();
+            assert!(s.state.customization.drawer.is_none());
+            // Old bounds from the hidden tab must not create a phantom origin.
+            assert!(
+                s.state
+                    .customization
+                    .drawer_tile_at([current.anchor.x + 4., 164.])
+                    .is_none()
+            );
+            let projected = serde_json::to_value(&s.state.customization).unwrap();
+            assert!(projected.get("drawer_tiles").is_none());
+        }
     }
 
     #[test]

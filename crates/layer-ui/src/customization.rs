@@ -1275,6 +1275,8 @@ pub struct CustomizationState {
     pub expanded: Option<Panel>,
     pub drawer: Option<ContentDrawer>,
     pub column_drawers: Vec<ContentDrawer>,
+    #[serde(skip)]
+    pub(crate) drawer_tiles: Vec<DrawerTileMeasurement>,
     pub picker: Option<ToolPicker>,
     pub control: Option<PanelControl>,
     pub toolbar_prompt: Option<ToolbarPrompt>,
@@ -1461,8 +1463,9 @@ impl CustomizationState {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
                 let drawer = ContentDrawer::for_tile(layout, anchor)?;
-                if drawer
-                    .placement(
+                if self
+                    .drawer_placement(
+                        &drawer,
                         layout,
                         viewport,
                         &vec![0.0; drawer.columns.len()],
@@ -1477,6 +1480,9 @@ impl CustomizationState {
                     .as_ref()
                     .is_some_and(|d| d.anchor.tile() == Some(anchor));
                 self.expanded = None;
+                self.picker = None;
+                self.control = None;
+                self.toolbar_manager = None;
                 self.drawer = (!close).then_some(drawer);
             }
             SetColumnCollapsed { group, collapsed } => {
@@ -1495,6 +1501,7 @@ impl CustomizationState {
                 let DrawerAnchor::Column { column, .. } = next.anchor else {
                     unreachable!()
                 };
+                self.drawer_tiles.retain(|m| m.column != column);
                 let existing = self.column_drawers.iter().position(
                     |d| matches!(d.anchor, DrawerAnchor::Column { column: id, .. } if id == column),
                 );

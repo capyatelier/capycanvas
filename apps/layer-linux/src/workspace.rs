@@ -201,11 +201,15 @@ mod allocation {
                 .map(|w| {
                     w.drawers()
                         .into_iter()
+                        .filter(|d| d.id != 0)
                         .filter_map(|d| d.geometry(&w).map(|p| (d.id, p)))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
             for (slot, child) in self.children.borrow().iter() {
+                if matches!(slot, Slot::Drawer(0) | Slot::DrawerConnection(0)) {
+                    continue; // Allocate parents before measuring child origins.
+                }
                 let bounds = match slot {
                     // Native surface, input and cursor share full-window coordinates.
                     Slot::Canvas | Slot::ZenToolbars => Some(Bounds {
@@ -273,6 +277,21 @@ mod allocation {
                 }
             }
             if let Some(owner) = self.owner.borrow().upgrade() {
+                owner.measure_drawer_tiles();
+                let placement = owner.drawer.geometry(&owner);
+                for (slot, child) in self.children.borrow().iter() {
+                    let bounds = match slot {
+                        Slot::Drawer(0) => placement.as_ref().map(|p| p.bounds),
+                        Slot::DrawerConnection(0) => placement
+                            .as_ref()
+                            .and_then(|p| p.connection().map(|c| c.bounds)),
+                        _ => continue,
+                    };
+                    child.set_child_visible(bounds.is_some());
+                    if let Some(b) = bounds {
+                        allocate_at(child, b);
+                    }
+                }
                 owner.queue_panel_measurements();
                 owner.customization.present_popovers();
                 let scale = owner.area.scale_factor() as u32;
@@ -1789,9 +1808,12 @@ impl Workspace {
             != 0
         {
             self.customization.refresh(self);
+            self.columns.refresh_drawers(self, &state, regions);
             self.drawer
                 .refresh(self, &state, regions, state.customization.drawer.as_ref());
-            self.columns.refresh_drawers(self, &state, regions);
+            if state.customization.drawer.is_some() {
+                self.surface.raise_drawer(0);
+            }
         }
         if regions & (regions::LAYOUT | regions::SETTINGS | regions::BRUSH | regions::COMMANDS) != 0
         {
@@ -2119,6 +2141,21 @@ impl Workspace {
         std::iter::once(self.drawer.clone())
             .chain(self.columns.drawers.borrow().iter().cloned())
             .collect()
+    }
+    fn measure_drawer_tiles(&self) {
+        let mut measurements = Vec::new();
+        for drawer in self.columns.drawers.borrow().iter() {
+            drawer.tile_measurements(self, &mut measurements);
+        }
+        if let Some(g) = self.gpu.borrow_mut().as_mut() {
+            // Measurement-only dispatch: no widget refresh during allocation.
+            if let Err(error) = g
+                .session
+                .dispatch(UiAction::MeasureDrawerTiles { measurements })
+            {
+                eprintln!("Drawer measurement: {error}");
+            }
+        }
     }
     fn install_panel_drag(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, item: DockItem) {
         self.register_drag(widget, DragTarget::Dock(item));
