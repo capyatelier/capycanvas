@@ -10,7 +10,7 @@ struct MetalCanvas: UIViewRepresentable {
 }
 
 final class CanvasView: UIView {
-    override class var layerClass: AnyClass { CAMetalLayer.self }
+    override class var layerClass: AnyClass { ObservedMetalLayer.self }
     let store: EditorStore
     private var displayLink: CADisplayLink?
     private lazy var frames = CanvasFrameDriver(store: store)
@@ -70,6 +70,8 @@ final class CanvasView: UIView {
         metal.contentsScale = contentScaleFactor
         metal.drawableSize = extent
         let width = UInt32(extent.width), height = UInt32(extent.height)
+        store.native?.observeDisplay(width: width, height: height, scale: Float(contentScaleFactor),
+            maximumRefreshRate: window?.screen.maximumFramesPerSecond ?? 0)
         if !attached {
             store.native?.attach(metal, width: width, height: height, scale: Float(contentScaleFactor))
             attached = true

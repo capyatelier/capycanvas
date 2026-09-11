@@ -20,12 +20,12 @@ use layer_render::{
 };
 use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
+mod builtin_masks;
 mod canvas_preview;
 mod color_sample;
+mod deferred;
 mod paint_transform;
 pub mod pixel_transform;
-mod deferred;
-mod builtin_masks;
 use builtin_masks::builtin_masks;
 use deferred::Deferred;
 mod pipeline_device;
@@ -45,6 +45,8 @@ mod region_requests;
 mod scene;
 mod selection_clip;
 mod telemetry;
+mod frame_timing;
+pub use frame_timing::{GpuFrameSample, GpuFrameTimer, GpuFrameTimingStats};
 mod thumbnails;
 pub use present::ViewportPresenter;
 
@@ -67,29 +69,25 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
     // Paint operations use scene jobs while executing, but their result is
     // baked into the ordinary paint pages. Retained undo history must not keep
     // subsequent brush frames on the more expensive scene composition path.
-    packet
-        .dab_batches
-        .iter()
-        .any(|b| {
-            let DabBatchKind::LayerOperation(index) = b.kind else {
-                return false;
-            };
-            // Transforms write paint pages directly, without scene jobs.
-            !packet
-                .layers
-                .iter()
-                .find(|l| l.id == b.layer_id)
-                .and_then(|l| l.operations.get(index as usize))
-                .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
-        })
-        || packet.layers.iter().any(|l| {
-            l.mask.is_some()
-                || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
-                || l.properties.clipped
-                || l.properties.parent.is_some()
-                || l.properties.blend != layer_core::LayerBlend::Normal
-                || l.properties.offset != layer_core::Point::default()
-        })
+    packet.dab_batches.iter().any(|b| {
+        let DabBatchKind::LayerOperation(index) = b.kind else {
+            return false;
+        };
+        // Transforms write paint pages directly, without scene jobs.
+        !packet
+            .layers
+            .iter()
+            .find_map(|l| l.target_history(b.layer_id))
+            .and_then(|(_, operations)| operations.get(index as usize))
+            .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
+    }) || packet.layers.iter().any(|l| {
+        l.mask.is_some()
+            || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
+            || l.properties.clipped
+            || l.properties.parent.is_some()
+            || l.properties.blend != layer_core::LayerBlend::Normal
+            || l.properties.offset != layer_core::Point::default()
+    })
 }
 
 /// Native writes reuse staging resources. On web, Queue::write_buffer transfers
@@ -694,12 +692,16 @@ impl WgpuRasterizer {
         &self.queue
     }
 
-    #[deprecated(note = "Interactive hosts must use staged startup; headless tests should use new_headless")]
+    #[deprecated(
+        note = "Interactive hosts must use staged startup; headless tests should use new_headless"
+    )]
     pub fn new() -> Result<Self, GpuRasterError> {
         Self::new_headless()
     }
 
-    #[deprecated(note = "Interactive hosts must use staged startup; headless tests should use new_headless_async")]
+    #[deprecated(
+        note = "Interactive hosts must use staged startup; headless tests should use new_headless_async"
+    )]
     pub async fn new_async() -> Result<Self, GpuRasterError> {
         Self::new_headless_async().await
     }
@@ -758,7 +760,9 @@ impl WgpuRasterizer {
 
     /// Legacy blocking constructor. Interactive presenters use the staged
     /// constructor with their surface-compatible device and queue instead.
-    #[deprecated(note = "Interactive hosts must use from_wgpu_staged[_cached] and drive the four-stage startup lifecycle")]
+    #[deprecated(
+        note = "Interactive hosts must use from_wgpu_staged[_cached] and drive the four-stage startup lifecycle"
+    )]
     pub fn from_wgpu(
         adapter: wgpu::Adapter,
         device: wgpu::Device,
@@ -982,7 +986,9 @@ impl WgpuRasterizer {
         };
         if !staged {
             renderer.install_builtin_masks()?;
-            for pipeline in &renderer.scene_pipelines.pipeline { pipeline.compile(); }
+            for pipeline in &renderer.scene_pipelines.pipeline {
+                pipeline.compile();
+            }
         }
         if !staged {
             renderer.pipelines.compile_all();
@@ -2039,6 +2045,15 @@ impl WgpuRasterizer {
         view: &wgpu::TextureView,
         label: &'static str,
     ) {
+        self.encode_clear_value(encoder, view, label, 0.);
+    }
+    fn encode_clear_value(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        label: &'static str,
+        value: f32,
+    ) {
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2046,7 +2061,12 @@ impl WgpuRasterizer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: value as f64,
+                        g: value as f64,
+                        b: value as f64,
+                        a: value as f64,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -3644,7 +3664,9 @@ impl CanvasRenderer for WgpuRasterizer {
         preview: Option<&layer_render::TransformPreview>,
     ) -> Result<(), Self::Error> {
         if preview.is_some_and(|p| p.transform.affine.inverse().is_none()) {
-            return Err(GpuRasterError::InvalidTransform("Invalid preview transform"));
+            return Err(GpuRasterError::InvalidTransform(
+                "Invalid preview transform",
+            ));
         }
         if self.transform_preview.as_ref() != preview {
             self.transform_preview = preview.cloned();
@@ -3668,7 +3690,9 @@ impl CanvasRenderer for WgpuRasterizer {
             && let layer_core::SelectionShape::Pixels(pixels) = &selection.shape
         {
             if selection.affine.inverse().is_none() {
-                return Err(GpuRasterError::InvalidTransform("Invalid selection transform"));
+                return Err(GpuRasterError::InvalidTransform(
+                    "Invalid selection transform",
+                ));
             }
             if self
                 .display_selection
@@ -3798,7 +3822,9 @@ impl CanvasRenderer for WgpuRasterizer {
                 return Err(GpuRasterError::InvalidImage);
             }
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("immutable imported image"),
+                // Preserve encoded bytes; scene initialization performs the
+                // shared sRGB-to-linear conversion once on the GPU.
+                label: Some("immutable encoded sRGB image"),
                 size: wgpu::Extent3d {
                     width: image.width,
                     height: image.height,
@@ -3807,7 +3833,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: EXPORT_FORMAT,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -3960,6 +3986,28 @@ impl CanvasRenderer for WgpuRasterizer {
             self.preview_requires_base = false;
             self.preview_direct_to_composite = false;
         }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("layer incremental sparse frame"),
+            });
+        self.telemetry.begin(&self.device, &mut encoder);
+        let committed_preview = if self.transform_preview.is_none() {
+            self.transforms.as_mut().unwrap().consume_commit(packet)
+        } else {
+            Vec::new()
+        };
+        // Restore both targets before allocating or painting new pages. Cancel
+        // removes disposable preview pages, which must not swallow a new stroke.
+        if self.transforms.as_ref().is_some_and(|t| t.has_preview())
+            && (self.transform_preview.is_none() || !packet.dab_batches.is_empty())
+        {
+            let mut transforms = self.transforms.take().unwrap();
+            let result = transforms.cancel_preview(self, &mut encoder);
+            self.transforms = Some(transforms);
+            self.transform_damage.extend(result?);
+            self.transform_preview = None;
+        }
         self.ensure_persistent_pages(packet.dab_batches)?;
         self.ensure_destination_companions(packet.dab_batches);
         self.ensure_paint_state_pages(packet.dab_batches)?;
@@ -4087,12 +4135,6 @@ impl CanvasRenderer for WgpuRasterizer {
         }
 
         // Style records serve brush batches, then composition layers.
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("layer incremental sparse frame"),
-            });
-        self.telemetry.begin(&self.device, &mut encoder);
         let background_offset = self.prepare_uploads(packet, scene_required, &mut encoder)?;
         self.layer_masks.prepare(
             &self.device,
@@ -4151,7 +4193,12 @@ impl CanvasRenderer for WgpuRasterizer {
                 }
             }
         }
-        self.encode_mask_dabs(&mut encoder, packet.layers, original_batches)?;
+        self.encode_mask_dabs(
+            &mut encoder,
+            packet.layers,
+            original_batches,
+            &committed_preview,
+        )?;
         for batch in original_batches
             .iter()
             .filter(|b| layer_masks::MaskRenderer::is_mask(packet.layers, b.layer_id))
@@ -4247,24 +4294,6 @@ impl CanvasRenderer for WgpuRasterizer {
             }
         }
 
-        let committed_preview = self.transform_preview.is_none()
-            .then(|| {
-                self.transforms
-                    .as_mut()
-                    .and_then(|t| t.consume_commit(packet))
-            })
-            .flatten();
-        // Cancel a transform before new persistent edits, never paint into a
-        // disposable preview. A newly requested preview captures after replay.
-        if self.transforms.as_ref().is_some_and(|t| t.has_preview())
-            && (self.transform_preview.is_none() || !packet.dab_batches.is_empty())
-        {
-            let mut transforms = self.transforms.take().unwrap();
-            let result = transforms.cancel_preview(self, &mut encoder);
-            self.transforms = Some(transforms);
-            self.transform_damage.extend(result?);
-            self.transform_preview = None;
-        }
         // Persistent work is encoded before preview copies so prediction sees
         // this frame's committed ink.
         for (index, batch) in packet
@@ -4274,19 +4303,20 @@ impl CanvasRenderer for WgpuRasterizer {
             .filter(|(_, batch)| batch.kind != DabBatchKind::Preview)
         {
             if let DabBatchKind::LayerOperation(op) = batch.kind {
+                if layer_masks::MaskRenderer::is_mask(packet.layers, batch.layer_id) {
+                    continue;
+                }
                 let layer_index = packet
                     .layers
                     .iter()
                     .position(|l| l.id == batch.layer_id)
                     .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
                 let operation = &packet.layers[layer_index].operations[op as usize];
-                if committed_preview == Some((batch.layer_id, op)) {
+                if committed_preview.contains(&(batch.layer_id, op)) {
                     // Already present in the layer pages: no recapture/resample.
                 } else if matches!(operation.kind, layer_core::LayerOperationKind::Transform(_)) {
-                    let mut transforms = self
-                        .transforms
-                        .take()
-                        .expect("retained transform renderer");
+                    let mut transforms =
+                        self.transforms.take().expect("retained transform renderer");
                     let result = transforms.apply(
                         self,
                         &mut encoder,
@@ -4559,21 +4589,19 @@ impl CanvasRenderer for WgpuRasterizer {
         self.preview_direct_to_composite = new_preview_direct_to_composite;
 
         if let Some(preview) = self.transform_preview.clone() {
-            let mut transforms = self
-                .transforms
-                .take()
-                .expect("retained transform renderer");
+            let mut transforms = self.transforms.take().expect("retained transform renderer");
             let result = transforms.update_preview(
                 self,
                 &mut encoder,
                 &preview,
                 packet.document_extent,
+                packet.layers,
             );
             self.transforms = Some(transforms);
             self.transform_damage.extend(result?);
         }
         for &(layer, bounds) in &self.transform_damage {
-            let offset = scene::world_offset(packet.layers, layer, false);
+            let offset = layer_core::target_offset(packet.layers, layer);
             dirty = dirty.union(pixel_rect(
                 layer_core::Rect {
                     min: layer_core::Point {

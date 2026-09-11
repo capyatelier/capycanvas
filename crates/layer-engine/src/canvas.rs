@@ -289,18 +289,26 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         Ok(())
     }
 
+    /// Current disposable transform, including its startup shader dependency.
+    pub fn transform_preview(&self) -> Option<&layer_render::TransformPreview> {
+        self.transform_preview.as_ref()
+    }
+
     /// Disposable absolute pixel transform. History changes only on Apply.
     pub fn set_transform_preview(
         &mut self,
         preview: Option<layer_render::TransformPreview>,
     ) -> Result<(), DocumentError> {
-        if let Some(p) = &preview {
+        let companion = preview
+            .as_ref()
+            .and_then(|p| p.companion(&self.document().layers));
+        for p in preview.iter().chain(companion.iter()) {
             let doc = self.document();
             if self.has_active_stroke()
                 || doc.is_locked(p.layer)
                 || doc
-                    .layer(p.layer)
-                    .is_none_or(|l| l.kind != layer_core::LayerKind::Paint)
+                    .target_owner(p.layer)
+                    .is_none_or(|l| l.id == p.layer && l.kind != layer_core::LayerKind::Paint)
                 || p.transform.affine.inverse().is_none()
                 || p.selection.as_ref().is_some_and(|s| {
                     s.affine.inverse().is_none() || s.transformed(p.transform.affine).is_err()
@@ -322,7 +330,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         id: LayerId,
         operation: layer_core::LayerOperation,
     ) -> Result<(), DocumentError> {
-        self.append_operation(id, operation, None)
+        self.append_operations(vec![(id, operation)], None)
     }
 
     /// Commit the displayed pixels and moved selection as one undoable edit.
@@ -340,23 +348,26 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return Ok(false);
         }
         let selection = self.display_selection().map(|s| s.into_owned());
-        let mut coverage = layer_core::LayerMask::reveal_all(
-            self.allocate_layer_id(),
-            layer_core::Point::default(),
-        );
-        // The packed source selection itself carries inversion. Transform
-        // coverage defaults to zero whenever an explicit selection is present.
-        coverage.default_coverage = f32::from(preview.selection.is_none());
-        coverage.initial = preview.selection;
-        self.append_operation(
-            preview.layer,
-            layer_core::LayerOperation {
-                after_stroke: 0,
-                coverage,
-                kind: layer_core::LayerOperationKind::Transform(preview.transform),
-            },
-            Some(selection),
-        )?;
+        let companion = preview.companion(&self.document().layers);
+        let mut operations = Vec::with_capacity(2);
+        for target in std::iter::once(preview).chain(companion) {
+            let mut coverage = layer_core::LayerMask::reveal_all(
+                self.allocate_layer_id(),
+                layer_core::Point::default(),
+            );
+            // Inversion is in the immutable packed selection, not mask metadata.
+            coverage.default_coverage = f32::from(target.selection.is_none());
+            coverage.initial = target.selection;
+            operations.push((
+                target.layer,
+                layer_core::LayerOperation {
+                    after_stroke: 0,
+                    coverage,
+                    kind: layer_core::LayerOperationKind::Transform(target.transform),
+                },
+            ));
+        }
+        self.append_operations(operations, Some(selection))?;
         Ok(true)
     }
 
@@ -376,10 +387,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .map(std::borrow::Cow::Borrowed)
     }
 
-    fn append_operation(
+    fn append_operations(
         &mut self,
-        id: LayerId,
-        mut operation: layer_core::LayerOperation,
+        operations: Vec<(LayerId, layer_core::LayerOperation)>,
         // None preserves the selection; Some(None) explicitly clears it.
         selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
@@ -388,39 +398,48 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 "Finish the stroke first",
             ));
         }
-        let mut layer = self
-            .document()
-            .layer(id)
-            .ok_or(DocumentError::MissingLayer(id))?
-            .clone();
-        if layer.kind != layer_core::LayerKind::Paint || self.document().is_locked(id) {
-            return Err(DocumentError::InvalidLayerOperation(
-                "Select an unlocked paint layer",
-            ));
+        let mut layers = std::collections::BTreeMap::new();
+        let mut batches = Vec::with_capacity(operations.len());
+        for (id, mut operation) in operations {
+            let owner = self
+                .document()
+                .target_owner(id)
+                .ok_or(DocumentError::MissingLayer(id))?;
+            if (owner.id == id && owner.kind != layer_core::LayerKind::Paint)
+                || self.document().is_locked(id)
+            {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Select an unlocked paint layer",
+                ));
+            }
+            let layer = layers.entry(owner.id).or_insert_with(|| owner.clone());
+            let (strokes, history) = layer.target_history_mut(id).unwrap();
+            let index = history.len() as u32;
+            operation.after_stroke = strokes.len();
+            let damage = operation.bounds([self.document().width, self.document().height]);
+            history.push(operation);
+            batches.push(DabBatch {
+                stroke_id: StrokeId(0),
+                layer_id: id,
+                kind: DabBatchKind::LayerOperation(index),
+                stroke_start: false,
+                stroke_end: false,
+                first_dab: 0,
+                dab_count: 0,
+                style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
+                damage,
+            });
         }
-        let index = layer.operations.len() as u32;
-        operation.after_stroke = layer.strokes.len();
-        let damage = operation.bounds([self.document().width, self.document().height]);
-        layer.operations.push(operation);
-        let edit = Edit::ReplaceLayer(Box::new(layer));
-        self.editor
-            .perform(if let Some(selection) = selection_after {
-                Edit::Batch(vec![edit, Edit::SetSelection(selection)])
-            } else {
-                edit
-            })?;
+        let mut edits: Vec<_> = layers
+            .into_values()
+            .map(|l| Edit::ReplaceLayer(Box::new(l)))
+            .collect();
+        if let Some(selection) = selection_after {
+            edits.push(Edit::SetSelection(selection));
+        }
+        self.editor.perform(Edit::Batch(edits))?;
         self.transform_preview = None;
-        self.batches.push(DabBatch {
-            stroke_id: StrokeId(0),
-            layer_id: id,
-            kind: DabBatchKind::LayerOperation(index),
-            stroke_start: false,
-            stroke_end: false,
-            first_dab: 0,
-            dab_count: 0,
-            style: style_for(&BrushSnapshot::default(), StrokeTool::Brush),
-            damage,
-        });
+        self.batches.extend(batches);
         Ok(())
     }
 
@@ -545,14 +564,23 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     old.strokes != layer.strokes
                         || old.operations != layer.operations
                         || old.asset != layer.asset
-                        || old
-                            .mask
-                            .as_ref()
-                            .map(|m| (&m.initial, m.id, m.default_coverage))
-                            != layer
-                                .mask
-                                .as_ref()
-                                .map(|m| (&m.initial, m.id, m.default_coverage))
+                        || old.mask.as_ref().map(|m| {
+                            (
+                                &m.initial,
+                                m.id,
+                                m.default_coverage,
+                                &m.strokes,
+                                &m.operations,
+                            )
+                        }) != layer.mask.as_ref().map(|m| {
+                            (
+                                &m.initial,
+                                m.id,
+                                m.default_coverage,
+                                &m.strokes,
+                                &m.operations,
+                            )
+                        })
                 }),
                 _ => false,
             }
@@ -1186,31 +1214,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         }
         let mut strokes = Vec::new();
         for layer in &self.editor.document().layers {
-            for id in layer
-                .mask
-                .iter()
-                .chain(layer.operations.iter().map(|o| &o.coverage))
-                .flat_map(|m| m.strokes.iter())
-            {
-                if let Some(stroke) = self.editor.document().stroke(*id) {
-                    strokes.push(Replay::Stroke(stroke.id));
-                }
-            }
-            for index in 0..=layer.strokes.len() {
-                for (op, _) in layer
-                    .operations
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, o)| o.after_stroke == index)
-                {
-                    strokes.push(Replay::Operation(layer.id, op as u32));
-                }
-                if let Some(stroke) = layer
-                    .strokes
-                    .get(index)
-                    .and_then(|id| self.document().stroke(*id))
-                {
-                    strokes.push(Replay::Stroke(stroke.id));
+            for target in layer.masks().map(|m| m.id).chain([layer.id]) {
+                let (ink, operations) = layer.target_history(target).unwrap();
+                for index in 0..=ink.len() {
+                    for (op, _) in operations
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, o)| o.after_stroke == index)
+                    {
+                        strokes.push(Replay::Operation(target, op as u32));
+                    }
+                    if let Some(stroke) = ink.get(index).and_then(|id| self.document().stroke(*id))
+                    {
+                        strokes.push(Replay::Stroke(stroke.id));
+                    }
                 }
             }
         }
@@ -1773,6 +1790,88 @@ mod tests {
         engine.set_layer_opacity(initial.active_layer, 0.5).unwrap();
         engine.render_frame().unwrap();
         assert!(engine.backend.transform.is_none());
+    }
+
+    #[test]
+    fn linked_mask_transform_commits_both_histories_and_selection_as_one_edit() {
+        use layer_core::{Affine, ImageTransform, LayerMask, LayerOperationKind, Selection};
+        for primary_mask in [false, true] {
+            let (_, consumer) = input_queue(32);
+            let mut doc = Document::new("linked transform", 128, 128);
+            doc.layers[0].properties.offset = Point { x: 7., y: 3. };
+            doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: 15., y: 11. }));
+            doc.selection = Some(
+                Selection::polygon(vec![
+                    Point { x: 20., y: 20. },
+                    Point { x: 60., y: 20. },
+                    Point { x: 60., y: 60. },
+                ])
+                .unwrap(),
+            );
+            let before = doc.clone();
+            let target = if primary_mask {
+                LayerId(9)
+            } else {
+                doc.active_layer
+            };
+            let origin = doc.layer_offset(target);
+            let preview = layer_render::TransformPreview {
+                transaction: 1,
+                layer: target,
+                selection: doc.selection.as_ref().map(|s| {
+                    s.translated(Point {
+                        x: -origin.x,
+                        y: -origin.y,
+                    })
+                }),
+                transform: ImageTransform {
+                    affine: Affine::around(
+                        Point { x: 30., y: 30. },
+                        [1.2, 0.7],
+                        0.2,
+                        Point { x: 5., y: 8. },
+                    ),
+                    ..Default::default()
+                },
+            };
+            let companion = preview.companion(&doc.layers).unwrap();
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                doc,
+                consumer,
+                view(128, 128),
+                ViewTransform::IDENTITY,
+            )
+            .unwrap();
+            engine.render_frame().unwrap();
+            engine.set_transform_preview(Some(preview.clone())).unwrap();
+            let moved = engine.display_selection().unwrap().into_owned();
+            assert!(engine.commit_transform().unwrap());
+            let layer = &engine.document().layers[0];
+            for p in [&preview, &companion] {
+                let (_, ops) = layer.target_history(p.layer).unwrap();
+                assert_eq!(ops.len(), 1);
+                assert_eq!(ops[0].kind, LayerOperationKind::Transform(p.transform));
+                assert_eq!(ops[0].coverage.initial, p.selection);
+            }
+            assert_eq!(engine.batches.len(), 2);
+            assert_eq!(engine.document().selection.as_ref(), Some(&moved));
+            assert!(engine.undo().unwrap());
+            assert_eq!(engine.document().layers, before.layers);
+            assert_eq!(engine.document().selection, before.selection);
+            assert!(!engine.can_undo());
+            assert!(engine.redo().unwrap());
+            engine.build_full_scene();
+            assert_eq!(
+                engine
+                    .batches
+                    .iter()
+                    .filter(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+                    .map(|b| b.layer_id)
+                    .collect::<Vec<_>>(),
+                [LayerId(9), before.active_layer]
+            );
+        }
     }
 
     #[test]

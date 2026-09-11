@@ -634,7 +634,9 @@ impl Scene {
                     && (unidentified_paint
                         || self.images.preview_layer == Some(l.id)
                         || r.preview_layer_id == Some(l.id)
-                        || r.transform_damage.iter().any(|(id, _)| *id == l.id)
+                        || r.transform_damage.iter().any(|(id, _)| {
+                            *id == l.id || l.mask.as_ref().is_some_and(|m| m.id == *id)
+                        })
                         || packet.dab_batches.iter().any(|b| {
                             b.layer_id == l.id
                                 || l.mask.as_ref().is_some_and(|m| m.id == b.layer_id)

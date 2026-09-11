@@ -480,9 +480,11 @@ impl Input {
         // shader becomes ready. Navigation and native controls remain active.
         let ready = workspace.gpu.borrow().as_ref().is_some_and(|g| {
             let engine = g.session.engine();
-            engine
-                .backend()
-                .paint_ready(engine.document(), engine.brush())
+            engine.backend().paint_ready(
+                engine.document(),
+                engine.brush(),
+                engine.transform_preview().is_some(),
+            )
         });
         let mut deferred = self.deferred_contacts.borrow_mut();
         if event.phase == PenPhase::Down && !ready {

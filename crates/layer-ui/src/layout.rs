@@ -4,6 +4,10 @@
 use crate::{PanelConfig, PanelContent, TileStyle, ToolbarControl, ToolbarTile, WORKSPACE_SPACING};
 use serde::{Deserialize, Serialize};
 
+#[path = "layout_columns.rs"]
+mod columns;
+pub use columns::{CollapsedColumn, CollapsedColumnPlacement, CollapsedGroup, ColumnIcon};
+
 pub const TILE_SIZE: f32 = 36.0;
 /// Six standard toolbar tiles, including their five two-pixel gaps.
 pub const LAYERS_MIN_WIDTH: f32 = 6.0 * TILE_SIZE + 5.0 * 2.0;
@@ -638,6 +642,9 @@ pub struct DockLayout {
     pub panels: Vec<PanelConfig>,
     #[serde(default)]
     pub floating: Vec<FloatingGroup>,
+    /// Collapsing preserves the underlying dock tree and its expanded width.
+    #[serde(default)]
+    pub collapsed: Vec<CollapsedColumn>,
     /// Adding tabs opts a group into natural width; manual width resize opts out.
     #[serde(default)]
     pub fit_tab_groups: Vec<u32>,
@@ -901,6 +908,7 @@ pub struct ResolvedLayout {
     /// HUD strip inside the free area, above any bottom dock.
     pub status: Bounds,
     pub groups: Vec<GroupPlacement>,
+    pub collapsed: Vec<CollapsedColumnPlacement>,
     pub dividers: Vec<Divider>,
 }
 
@@ -1109,6 +1117,7 @@ impl Default for DockLayout {
         Self {
             panels: PanelConfig::defaults(),
             floating: Vec::new(),
+            collapsed: Vec::new(),
             fit_tab_groups: Vec::new(),
             measurements: Vec::new(),
             next_tile_id: initial_tile_id(),
@@ -1214,6 +1223,7 @@ impl DockLayout {
             }
             node(&floating.root, &mut ids, &mut panels, 0)?;
         }
+        self.validate_columns()?;
         for (i, group) in self.fit_tab_groups.iter().enumerate() {
             self.group_panels(*group)?;
             if self.fit_tab_groups[..i].contains(group) {
@@ -1335,6 +1345,7 @@ impl DockLayout {
     }
 
     fn detach(&mut self, panels: &[Panel]) {
+        self.detach_column_members(panels);
         self.bands = std::mem::take(&mut self.bands)
             .into_iter()
             .filter_map(|band| {
@@ -1586,6 +1597,7 @@ impl DockLayout {
         let defaults = Self::default();
         next.bands = defaults.bands;
         next.floating.clear();
+        next.collapsed.clear();
         next.fit_tab_groups.clear();
         let tools: Vec<_> = self
             .panels
@@ -1977,6 +1989,13 @@ impl DockLayout {
                     };
                 }
                 let id = next.allocate()?;
+                // A new stacked group belongs to the same collapsed column.
+                // Horizontal splits create a neighboring, independent column.
+                if edge.axis() == Axis::Vertical
+                    && let Some(column) = next.collapsed.iter_mut().find(|c| c.root == group)
+                {
+                    column.root = id;
+                }
                 let node = next
                     .node_mut(group)
                     .ok_or("The split target no longer exists")?;
@@ -2098,6 +2117,21 @@ impl DockLayout {
             geometry: &ResolvedLayout,
             widths: &mut Vec<(u32, f32)>,
         ) -> (f32, Option<f32>, usize) {
+            if let Some(column) = geometry.collapsed.iter().find(|c| c.id == node.id()) {
+                fn survivor<'a>(node: &DockNode, retained: &'a DockNode) -> Option<&'a DockNode> {
+                    retained.find(node.id()).or_else(|| match node {
+                        DockNode::Tabs { .. } => None,
+                        DockNode::Split { first, second, .. } => {
+                            survivor(first, retained).or_else(|| survivor(second, retained))
+                        }
+                    })
+                }
+                let now = survivor(node, retained).map(|n| {
+                    widths.push((n.id(), column.bounds.width));
+                    column.bounds.width
+                });
+                return (column.bounds.width, now, 0);
+            }
             let result = match node {
                 DockNode::Tabs { id, panels, .. } => {
                     let width = geometry
@@ -2148,7 +2182,17 @@ impl DockLayout {
             }
             result
         }
-        fn reweight(node: &mut DockNode, widths: &[(u32, f32)]) -> Option<f32> {
+        fn reweight(
+            node: &mut DockNode,
+            widths: &[(u32, f32)],
+            collapsed: &[CollapsedColumn],
+        ) -> Option<f32> {
+            if collapsed.iter().any(|c| c.root == node.id()) {
+                return widths
+                    .iter()
+                    .find(|(id, _)| *id == node.id())
+                    .map(|(_, w)| *w);
+            }
             match node {
                 DockNode::Tabs { .. } => (),
                 DockNode::Split {
@@ -2158,8 +2202,8 @@ impl DockLayout {
                     second,
                     ..
                 } => {
-                    let a = reweight(first, widths)?;
-                    let b = reweight(second, widths)?;
+                    let a = reweight(first, widths, collapsed)?;
+                    let b = reweight(second, widths, collapsed)?;
                     if *axis == Axis::Horizontal {
                         *fraction = a / (a + b).max(1.0);
                     }
@@ -2198,7 +2242,7 @@ impl DockLayout {
                 && now + 0.5 < was
             {
                 band.extent = now + WORKSPACE_SPACING;
-                reweight(&mut band.root, &widths);
+                reweight(&mut band.root, &widths, &self.collapsed);
             }
         }
     }
@@ -2305,6 +2349,7 @@ impl DockLayout {
             work_area: remaining,
             status: Bounds::default(),
             groups: Vec::new(),
+            collapsed: Vec::new(),
             dividers: Vec::new(),
         };
         for (band_index, band) in self.bands.iter().enumerate() {
@@ -2406,6 +2451,9 @@ impl DockLayout {
         result.work_area.height -= hud_height;
         for group in &mut result.groups {
             offset(&mut group.bounds);
+        }
+        for column in &mut result.collapsed {
+            column.translate([WORKSPACE_SPACING, top]);
         }
         for divider in &mut result.dividers {
             offset(&mut divider.bounds);
@@ -2978,6 +3026,15 @@ impl ResolvedLayout {
                 }
             });
         }
+        if docks_visible
+            && let Some(hint) = self
+                .collapsed
+                .iter()
+                .rev()
+                .find_map(|c| c.drop_hint([x, y]))
+        {
+            return Some(hint);
+        }
         // Free canvas has no drop indicator. Within the fixed snap reach,
         // prefer the closest panel boundary or the window edge.
         // The drawing workspace begins below the app title bar. Its top snap
@@ -3124,6 +3181,10 @@ impl ResolvedLayout {
             return edge;
         }
         y <= crate::HEADER_HEIGHT + WORKSPACE_PROXIMITY
+            || self
+                .collapsed
+                .iter()
+                .any(|c| c.bounds.distance_to(point) <= WORKSPACE_PROXIMITY)
             || (x >= self.status.x - WORKSPACE_PROXIMITY
                 && x <= self.status.x + self.status.width + WORKSPACE_PROXIMITY
                 && y >= self.status.y - WORKSPACE_PROXIMITY
@@ -3147,6 +3208,9 @@ fn finite_extent(value: f32) -> f32 {
 }
 
 fn tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
+    if layout.is_collapsed(node.id()) {
+        return TILE_SIZE;
+    }
     match node {
         DockNode::Tabs { id, .. } => layout.group_min_width(*id),
         DockNode::Split {
@@ -3169,6 +3233,9 @@ fn tab_min_width(node: &DockNode, layout: &DockLayout) -> f32 {
 // Intrinsic ribbon thickness, including ribbons nested beside other panels.
 // Use the same split fractions as allocation; no resize callbacks or feedback.
 fn ribbon_cross_min(node: &DockNode, ribbon_axis: Axis, length: f32, layout: &DockLayout) -> f32 {
+    if layout.is_collapsed(node.id()) {
+        return TILE_SIZE;
+    }
     let minimum = match node {
         DockNode::Tabs { panels, active, .. }
             if panels.len() == 1 && active.kind() == PanelKind::Tiles =>
@@ -3354,6 +3421,10 @@ fn resolve_node(
     layout: &DockLayout,
     result: &mut ResolvedLayout,
 ) {
+    if layout.is_collapsed(node.id()) {
+        result.collapsed.push(columns::resolve_column(node, bounds));
+        return;
+    }
     match node {
         DockNode::Tabs {
             id, panels, active, ..
@@ -3441,6 +3512,13 @@ fn resolve_node(
                 let a = minimum(first);
                 let b = minimum(second);
                 first_size = split_size(usable, *fraction, a, b);
+            }
+            if *axis == Axis::Horizontal {
+                if layout.is_collapsed(first.id()) {
+                    first_size = TILE_SIZE.min(usable);
+                } else if layout.is_collapsed(second.id()) {
+                    first_size = (usable - TILE_SIZE).max(0.);
+                }
             }
             let a = rest.strip(edge, first_size);
             let divider = rest.strip(edge, gap);

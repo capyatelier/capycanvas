@@ -256,6 +256,45 @@ pub struct TransformPreview {
     pub selection: Option<layer_core::Selection>,
     pub transform: layer_core::ImageTransform,
 }
+impl TransformPreview {
+    /// A linked paint/mask pair shares one world-space transform, but each has
+    /// its own local origin and immutable selection. Other layer kinds have no
+    /// raster pigment target to transform alongside their mask.
+    pub fn companion(&self, layers: &[Layer]) -> Option<Self> {
+        let owner = layers
+            .iter()
+            .find(|l| l.id == self.layer || l.mask.as_ref().is_some_and(|m| m.id == self.layer))?;
+        let mask = owner.mask.as_ref().filter(|m| m.linked)?;
+        if owner.kind != layer_core::LayerKind::Paint {
+            return None;
+        }
+        let target = if self.layer == owner.id {
+            mask.id
+        } else {
+            owner.id
+        };
+        let a = layer_core::target_offset(layers, self.layer);
+        let b = layer_core::target_offset(layers, target);
+        let delta = layer_core::Point {
+            x: a.x - b.x,
+            y: a.y - b.y,
+        };
+        let to = layer_core::Affine::translation(delta);
+        let from = layer_core::Affine::translation(layer_core::Point {
+            x: -delta.x,
+            y: -delta.y,
+        });
+        Some(Self {
+            layer: target,
+            selection: self.selection.as_ref().map(|s| s.translated(delta)),
+            transform: layer_core::ImageTransform {
+                affine: from.then(self.transform.affine).then(to),
+                ..self.transform
+            },
+            ..self.clone()
+        })
+    }
+}
 
 /// GPU command boundary implemented by the renderer owned by each platform.
 ///
@@ -364,6 +403,67 @@ impl std::error::Error for BackendError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_transform_maps_both_origins_into_the_same_world_motion() {
+        use layer_core::{Affine, ImageTransform, LayerMask, Point, Selection};
+        let mut parent = Layer::paint(LayerId(3), "parent");
+        parent.kind = layer_core::LayerKind::Group;
+        parent.properties.offset = Point { x: 19., y: -11. };
+        let mut paint = Layer::paint(LayerId(1), "paint");
+        paint.properties.parent = Some(parent.id);
+        paint.properties.offset = Point { x: 12., y: 8. };
+        paint.mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: -7., y: 23. }));
+        let mut layers = vec![paint, parent];
+        let selection = Selection::polygon(vec![
+            Point { x: 0., y: 0. },
+            Point { x: 12., y: 0. },
+            Point { x: 6., y: 8. },
+        ])
+        .unwrap();
+        for primary in [LayerId(1), LayerId(9)] {
+            let request = TransformPreview {
+                transaction: 7,
+                layer: primary,
+                selection: Some(selection.clone()),
+                transform: ImageTransform {
+                    affine: Affine::around(
+                        Point { x: 44., y: 12. },
+                        [-1.3, 0.7],
+                        0.6,
+                        Point { x: 2., y: -6. },
+                    ),
+                    ..Default::default()
+                },
+            };
+            let other = request.companion(&layers).unwrap();
+            assert_ne!(other.layer, primary);
+            let a = layer_core::target_offset(&layers, primary);
+            let b = layer_core::target_offset(&layers, other.layer);
+            let delta = Point {
+                x: a.x - b.x,
+                y: a.y - b.y,
+            };
+            assert_eq!(other.selection, Some(selection.translated(delta)));
+            for point in [Point::default(), Point { x: 50., y: 90. }] {
+                let p = request.transform.affine.map(point);
+                let q = other.transform.affine.map(Point {
+                    x: point.x + delta.x,
+                    y: point.y + delta.y,
+                });
+                assert!((p.x + a.x - q.x - b.x).abs() < 0.0001);
+                assert!((p.y + a.y - q.y - b.y).abs() < 0.0001);
+            }
+        }
+        layers[0].mask.as_mut().unwrap().linked = false;
+        let request = TransformPreview {
+            transaction: 1,
+            layer: LayerId(1),
+            selection: None,
+            transform: Default::default(),
+        };
+        assert!(request.companion(&layers).is_none());
+    }
 
     #[test]
     fn brush_contact_layout_is_a_gpu_friendly_80_bytes() {

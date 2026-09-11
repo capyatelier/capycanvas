@@ -308,18 +308,27 @@ mod tests {
         use crate::{PipelineDevice, WgpuRasterizer};
         use layer_render::CanvasRenderer;
         let temp = Temp::new();
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::VULKAN;
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-        assert!(adapter.features().contains(wgpu::Features::PIPELINE_CACHE));
+        let cache_features = adapter.features() & wgpu::Features::PIPELINE_CACHE;
+        if adapter.get_info().backend == wgpu::Backend::Vulkan {
+            assert!(
+                !cache_features.is_empty(),
+                "Vulkan must exercise driver cache persistence"
+            );
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::PIPELINE_CACHE,
+            required_features: cache_features,
             ..Default::default()
         }))
         .unwrap();
-        let mut reference =
-            WgpuRasterizer::from_wgpu_inner(adapter.clone(), device.clone().into(), queue.clone(), false).unwrap();
+        let mut reference = WgpuRasterizer::from_wgpu_inner(
+            adapter.clone(),
+            device.clone().into(),
+            queue.clone(),
+            false,
+        )
+        .unwrap();
         let doc = layer_core::Document::new("cached", 64, 64);
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         let dabs = [layer_render::Dab {
@@ -389,7 +398,7 @@ mod tests {
                 &temp.0,
             )
             .unwrap();
-            renderer.prepare_startup(&doc, &brush).unwrap();
+            renderer.prepare_startup(&doc, &brush, false).unwrap();
             assert!(!renderer.poll_startup().unwrap().complete);
             renderer.finish_startup_cache();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -399,7 +408,14 @@ mod tests {
             }
             renderer.submit(packet).unwrap();
             assert_eq!(renderer.readback_srgb_rgba8().unwrap(), expected);
-            assert!(fs::metadata(temp.0.join("startup.bin")).unwrap().len() > HEADER);
+            if cache_features.is_empty() {
+                assert!(
+                    !temp.0.join("startup.bin").exists(),
+                    "Unsupported driver caches must use the normal staged path"
+                );
+            } else {
+                assert!(fs::metadata(temp.0.join("startup.bin")).unwrap().len() > HEADER);
+            }
         }
         // A new device wrapper reads the saved driver blob, then releases it.
         let cached = PipelineDevice::cached(device, &adapter, &temp.0);

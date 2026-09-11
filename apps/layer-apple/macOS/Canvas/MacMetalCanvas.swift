@@ -27,7 +27,7 @@ final class MacCanvasView: NSView {
         self.store = store
         super.init(frame: .zero)
         wantsLayer = true
-        let metal = CAMetalLayer()
+        let metal = ObservedMetalLayer()
         metal.isOpaque = true
         metal.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         layer = metal
@@ -85,6 +85,8 @@ final class MacCanvasView: NSView {
         let next = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
         guard next != extent || !attached else { return }
         extent = next; layer.contentsScale = scale; layer.drawableSize = next
+        store.native?.observeDisplay(width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale),
+            maximumRefreshRate: window.screen?.maximumFramesPerSecond ?? 0)
         if !attached { store.native?.attach(layer, width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale)); attached = true; frames.activate() }
         else { store.native?.resize(width: UInt32(next.width), height: UInt32(next.height), scale: Float(scale)) }
         wake()

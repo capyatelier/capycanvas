@@ -24,6 +24,347 @@ fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
 }
 
 #[test]
+fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut reference = WgpuRasterizer::new_headless().unwrap();
+    let extent = [640, 384];
+    let frame =
+        |r: &mut WgpuRasterizer, layers: &[Layer], dabs: &[Dab], batches: &[DabBatch], reset| {
+            r.submit(FramePacket {
+                view: ViewState {
+                    width_px: extent[0],
+                    height_px: extent[1],
+                    ..view()
+                },
+                document_extent: extent,
+                layers,
+                dabs,
+                dab_batches: batches,
+                reset_layers: reset,
+                composite_all: false,
+                time_seconds: 0.,
+            })
+            .unwrap();
+        };
+    let mask_bytes = |r: &WgpuRasterizer, default: u8| {
+        let mut bytes = vec![default; extent[0] as usize * extent[1] as usize];
+        for ((id, c), page) in &r.layer_masks.pages {
+            if *id != LayerId(9) {
+                continue;
+            }
+            let pixels = page_bytes(r, &page.texture);
+            for y in 0..PAGE_SIZE {
+                for x in 0..PAGE_SIZE {
+                    let (gx, gy) = (c[0] * PAGE_SIZE + x, c[1] * PAGE_SIZE + y);
+                    if gx < extent[0] && gy < extent[1] {
+                        bytes[(gy * extent[0] + gx) as usize] =
+                            pixels[(y * PAGE_SIZE + x) as usize];
+                    }
+                }
+            }
+        }
+        bytes
+    };
+    for (default, inverted) in [(0., false), (1., false), (1., true)] {
+        for linked in [false, true] {
+            for primary_mask in [false, true] {
+                let mut paint = Layer::paint(LayerId(1), "masked paint");
+                paint.properties.offset = Point { x: 7., y: 5. };
+                let mut mask = LayerMask::reveal_all(LayerId(9), Point { x: 17., y: 13. });
+                mask.default_coverage = default;
+                mask.linked = linked;
+                mask.inverted = inverted;
+                paint.mask = Some(mask);
+                let mut color = dab([0.3, 0.6, 0.1, 0.8]);
+                color.center = Point { x: 115., y: 115. };
+                color.radii = [90.; 2];
+                let mut contact = color;
+                contact.radii = [45., 30.];
+                contact.color_rgba_linear = [1.; 4];
+                let mut mask_brush = batch(9);
+                mask_brush.style.mode = if default == 1. {
+                    DabMode::Erase
+                } else {
+                    DabMode::Paint
+                };
+                mask_brush.first_dab = 1;
+                let paint_brush = DabBatch {
+                    damage: Rect {
+                        min: Point::default(),
+                        max: Point { x: 220., y: 220. },
+                    },
+                    ..batch(1)
+                };
+                let brushes = [paint_brush.clone(), mask_brush.clone()];
+                let dabs = [color, contact];
+                frame(&mut r, std::slice::from_ref(&paint), &dabs, &brushes, true);
+                let original = r.readback_srgb_rgba8().unwrap();
+                let before_mask = mask_bytes(&r, (default * 255.) as u8);
+                let before_paint = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
+                let mut preview = layer_render::TransformPreview {
+                    transaction: 1,
+                    layer: if primary_mask { LayerId(9) } else { paint.id },
+                    selection: None,
+                    transform: ImageTransform {
+                        affine: Affine::translation(Point { x: 290., y: 20. }),
+                        interpolation: Interpolation::Nearest,
+                    },
+                };
+                for affine in [
+                    preview.transform.affine,
+                    Affine::around(
+                        Point { x: 100., y: 100. },
+                        [-1.2, 0.8],
+                        0.3,
+                        Point { x: 300., y: 50. },
+                    ),
+                    Affine::translation(Point { x: -500., y: 0. }),
+                ] {
+                    preview.transform.affine = affine;
+                    r.set_transform_preview(Some(&preview)).unwrap();
+                    frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
+                    let mut expected = paint.clone();
+                    let companion = preview.companion(std::slice::from_ref(&paint));
+                    let mut replay = brushes.to_vec();
+                    for (i, p) in std::iter::once(&preview)
+                        .chain(companion.as_ref())
+                        .enumerate()
+                    {
+                        let mut op =
+                            operation(20 + i as u64, p.transform.affine, p.selection.clone());
+                        op.kind = LayerOperationKind::Transform(p.transform);
+                        expected
+                            .target_history_mut(p.layer)
+                            .unwrap()
+                            .1
+                            .push(op.clone());
+                        replay.push(DabBatch {
+                            layer_id: p.layer,
+                            damage: op.bounds(extent),
+                            ..op_batch(0, &op)
+                        });
+                    }
+                    frame(&mut reference, &[expected], &dabs, &replay, true);
+                    assert!(
+                        r.readback_srgb_rgba8().unwrap()
+                            == reference.readback_srgb_rgba8().unwrap(),
+                        "preview replay default={default} inverse={inverted} linked={linked} primary_mask={primary_mask} {affine:?}"
+                    );
+                    if !primary_mask && !linked {
+                        assert_eq!(mask_bytes(&r, (default * 255.) as u8), before_mask);
+                    }
+                    if primary_mask && !linked {
+                        assert_eq!(
+                            page_bytes(&r, &r.paint_layers[0].pages[0].active().texture),
+                            before_paint
+                        );
+                    }
+                    if affine == Affine::translation(Point { x: 290., y: 20. })
+                        && (linked || primary_mask)
+                    {
+                        let moved = mask_bytes(&r, (default * 255.) as u8);
+                        for y in 0..extent[1] {
+                            for x in 0..extent[0] {
+                                let expected = if x >= 290 && y >= 20 {
+                                    before_mask[((y - 20) * extent[0] + x - 290) as usize]
+                                } else {
+                                    (default * 255.) as u8
+                                };
+                                assert_eq!(
+                                    moved[(y * extent[0] + x) as usize],
+                                    expected,
+                                    "translated mask at {x},{y}"
+                                );
+                            }
+                        }
+                    }
+                }
+                r.set_transform_preview(None).unwrap();
+                frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
+                assert_eq!(mask_bytes(&r, (default * 255.) as u8), before_mask);
+                assert_eq!(
+                    page_bytes(&r, &r.paint_layers[0].pages[0].active().texture),
+                    before_paint
+                );
+                assert!(r.readback_srgb_rgba8().unwrap() == original, "cancel");
+
+                // Cancelling on a new contact must restore before allocating
+                // its pages, for both mask ink and ordinary paint.
+                for id in [LayerId(9), LayerId(1)] {
+                    r.set_transform_preview(Some(&preview)).unwrap();
+                    frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
+                    let mut fresh = contact;
+                    fresh.center = Point { x: 540., y: 180. };
+                    let fresh_batch = DabBatch {
+                        layer_id: id,
+                        first_dab: 0,
+                        damage: Rect {
+                            min: Point { x: 490., y: 140. },
+                            max: Point { x: 590., y: 220. },
+                        },
+                        ..mask_brush.clone()
+                    };
+                    r.set_transform_preview(None).unwrap();
+                    frame(
+                        &mut r,
+                        std::slice::from_ref(&paint),
+                        &[fresh],
+                        std::slice::from_ref(&fresh_batch),
+                        false,
+                    );
+                    let replay = [
+                        brushes[0].clone(),
+                        brushes[1].clone(),
+                        DabBatch {
+                            first_dab: 2,
+                            ..fresh_batch
+                        },
+                    ];
+                    frame(
+                        &mut reference,
+                        std::slice::from_ref(&paint),
+                        &[color, contact, fresh],
+                        &replay,
+                        true,
+                    );
+                    assert_eq!(
+                        mask_bytes(&r, (default * 255.) as u8),
+                        mask_bytes(&reference, (default * 255.) as u8),
+                        "fresh mask page survives cancellation"
+                    );
+                    assert!(
+                        r.readback_srgb_rgba8().unwrap()
+                            == reference.readback_srgb_rgba8().unwrap(),
+                        "new contact cancels before painting {id:?}"
+                    );
+                    frame(&mut r, std::slice::from_ref(&paint), &dabs, &brushes, true);
+                }
+
+                preview.transform.affine = Affine::translation(Point { x: 290.5, y: 20.25 });
+                preview.transform.interpolation = Interpolation::Linear;
+                preview.transaction += 1;
+                r.set_transform_preview(Some(&preview)).unwrap();
+                frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
+                let live = r.readback_srgb_rgba8().unwrap();
+                let captures = r.transforms.as_ref().unwrap().source_captures();
+                let companion = preview.companion(std::slice::from_ref(&paint));
+                let mut commits = Vec::new();
+                for (i, p) in std::iter::once(&preview)
+                    .chain(companion.as_ref())
+                    .enumerate()
+                {
+                    let mut op = operation(20 + i as u64, p.transform.affine, p.selection.clone());
+                    op.kind = LayerOperationKind::Transform(p.transform);
+                    paint
+                        .target_history_mut(p.layer)
+                        .unwrap()
+                        .1
+                        .push(op.clone());
+                    commits.push(DabBatch {
+                        layer_id: p.layer,
+                        damage: op.bounds(extent),
+                        ..op_batch(0, &op)
+                    });
+                }
+                r.set_transform_preview(None).unwrap();
+                frame(&mut r, std::slice::from_ref(&paint), &[], &commits, false);
+                assert_eq!(
+                    r.transforms.as_ref().unwrap().source_captures(),
+                    captures,
+                    "Apply must reuse both captures"
+                );
+                assert!(
+                    r.readback_srgb_rgba8().unwrap() == live,
+                    "Apply must not jump"
+                );
+
+                let mut later = contact;
+                later.center = Point { x: 385., y: 115. };
+                let later_brush = DabBatch {
+                    first_dab: 0,
+                    damage: Rect {
+                        min: Point { x: 330., y: 75. },
+                        max: Point { x: 440., y: 155. },
+                    },
+                    ..mask_brush.clone()
+                };
+                frame(
+                    &mut r,
+                    std::slice::from_ref(&paint),
+                    &[later],
+                    std::slice::from_ref(&later_brush),
+                    false,
+                );
+                let mut replay = brushes.to_vec();
+                replay.extend(commits);
+                replay.push(DabBatch {
+                    first_dab: 2,
+                    ..later_brush
+                });
+                frame(
+                    &mut reference,
+                    std::slice::from_ref(&paint),
+                    &[color, contact, later],
+                    &replay,
+                    true,
+                );
+                assert!(
+                    r.readback_srgb_rgba8().unwrap() == reference.readback_srgb_rgba8().unwrap(),
+                    "later mask ink must replay after transforms"
+                );
+
+                let before_apply = r.readback_srgb_rgba8().unwrap();
+                let mut coverage = paint.mask.take().unwrap();
+                coverage.offset.x -= paint.properties.offset.x;
+                coverage.offset.y -= paint.properties.offset.y;
+                let apply = LayerOperation {
+                    after_stroke: 0,
+                    coverage,
+                    kind: LayerOperationKind::ApplyMask,
+                };
+                let apply_batch = DabBatch {
+                    damage: apply.bounds(extent),
+                    ..op_batch(paint.operations.len() as u32, &apply)
+                };
+                paint.operations.push(apply);
+                frame(
+                    &mut r,
+                    std::slice::from_ref(&paint),
+                    &[],
+                    std::slice::from_ref(&apply_batch),
+                    false,
+                );
+                let applied = r.readback_srgb_rgba8().unwrap();
+                assert!(
+                    applied
+                        .iter()
+                        .zip(&before_apply)
+                        .all(|(a, b)| a.abs_diff(*b) <= 1),
+                    "Apply mask preserves appearance default={default} inverted={inverted} linked={linked} primary_mask={primary_mask}, max delta={:?}",
+                    applied
+                        .iter()
+                        .zip(&before_apply)
+                        .map(|(a, b)| a.abs_diff(*b))
+                        .max()
+                );
+                replay.push(apply_batch);
+                frame(
+                    &mut reference,
+                    std::slice::from_ref(&paint),
+                    &[color, contact, later],
+                    &replay,
+                    true,
+                );
+                assert!(
+                    applied == reference.readback_srgb_rgba8().unwrap(),
+                    "Apply mask retains its transform history"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump() {
     use layer_core::DefaultBrushPreset::*;
     let mut r = WgpuRasterizer::new_headless().unwrap();
@@ -191,7 +532,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
         r.set_transform_preview(Some(&preview)).unwrap();
         frame(&mut r, layers, &[], &[], false);
         let before_commit = r.readback_srgb_rgba8().unwrap();
-        let captures = r.transforms.as_ref().unwrap().source_captures;
+        let captures = r.transforms.as_ref().unwrap().source_captures();
         let mut op = operation(21, preview.transform.affine, preview.selection.clone());
         op.kind = LayerOperationKind::Transform(preview.transform);
         let operation = DabBatch {
@@ -207,7 +548,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             "{preset:?} apply must not jump"
         );
         assert_eq!(
-            r.transforms.as_ref().unwrap().source_captures,
+            r.transforms.as_ref().unwrap().source_captures(),
             captures,
             "apply reuses the matching preview result"
         );
@@ -510,13 +851,14 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
         .unwrap();
         r.readback_srgb_rgba8().unwrap()
     };
-    for clipped in [false, true] {
+    for (clipped, target) in [(false, 1), (true, 1), (false, 9), (true, 9)] {
         layers[1].properties.clipped = clipped;
         layers[2].operations.clear();
+        layers[2].mask.as_mut().unwrap().linked = target == 1;
         let before = render(&mut r, &layers, &dabs, &brushes, true, false);
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
-            layer: LayerId(1),
+            layer: LayerId(target),
             selection: None,
             transform: ImageTransform {
                 affine: Affine::translation(Point { x: 150., y: 40. }),
@@ -527,10 +869,12 @@ fn transform_damage_reaches_masks_groups_and_cached_clipped_filters() {
             preview.transform.affine.0[4] = x;
             r.set_transform_preview(Some(&preview)).unwrap();
             let live = render(&mut r, &layers, &[], &[], false, false);
-            assert!(live != before);
+            if target == 1 || x == 150. {
+                assert!(live != before);
+            }
             assert!(
                 live == render(&mut r, &layers, &[], &[], false, true),
-                "live clipped={clipped} cache invalidation"
+                "live target={target} clipped={clipped} cache invalidation"
             );
         }
         r.set_transform_preview(None).unwrap();
@@ -617,15 +961,34 @@ fn measure_transform_latency(live: bool) {
         values.sort_by(f32::total_cmp);
         [0.5, 0.95, 0.99].map(|p| values[(values.len() as f32 * p).ceil() as usize - 1])
     };
-    for (preset, selected) in [
-        (GPen, false),
-        (GPen, true),
-        (WetRound, true),
-        (WatercolorWash, true),
+    for (preset, selected, linked_mask) in [
+        (GPen, false, false),
+        (GPen, true, false),
+        (WetRound, true, false),
+        (WatercolorWash, true, false),
+        (GPen, true, true),
+        (WatercolorWash, true, true),
     ] {
+        if linked_mask && !live {
+            continue;
+        }
         r.set_transform_preview(None).unwrap();
         let mut layer = Layer::paint(LayerId(1), "capture benchmark");
         layer.asset = Some(asset.clone());
+        if linked_mask {
+            let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+            mask.default_coverage = 0.;
+            mask.initial = Some(
+                Selection::polygon(vec![
+                    Point { x: 128., y: 128. },
+                    Point { x: 1920., y: 128. },
+                    Point { x: 1920., y: 1408. },
+                    Point { x: 128., y: 1408. },
+                ])
+                .unwrap(),
+            );
+            layer.mask = Some(mask);
+        }
         let mut b = batch(1);
         b.style = preset_style(preset);
         b.damage = Rect {
@@ -721,15 +1084,15 @@ fn measure_transform_latency(live: bool) {
             r.wait_idle().unwrap();
             let elapsed = start.elapsed().as_secs_f32() * 1000.;
             if i == 0 {
-                captures = r.transforms.as_ref().unwrap().source_captures;
+                captures = r.transforms.as_ref().unwrap().source_captures();
                 eprintln!(
-                    "{preset:?} live={live} selected={}: first complete {elapsed:.3}ms",
+                    "{preset:?} live={live} linked_mask={linked_mask} selected={}: first complete {elapsed:.3}ms",
                     selected.is_some()
                 );
             }
             if live {
                 assert_eq!(
-                    r.transforms.as_ref().unwrap().source_captures,
+                    r.transforms.as_ref().unwrap().source_captures(),
                     captures,
                     "one source capture per live transaction"
                 );
@@ -754,7 +1117,7 @@ fn measure_transform_latency(live: bool) {
             percentile(completed),
         );
         eprintln!(
-            "{preset:?} live={live} selected={}: CPU median/p95/p99 {cpu:.3?}ms, GPU {gpu:.3?}ms, complete {completed:.3?}ms; capture+uniform storage {scratch}B",
+            "{preset:?} live={live} linked_mask={linked_mask} selected={}: CPU median/p95/p99 {cpu:.3?}ms, GPU {gpu:.3?}ms, complete {completed:.3?}ms; capture+uniform storage {scratch}B",
             selected.is_some()
         );
         assert!(completed[2] < 8.333);

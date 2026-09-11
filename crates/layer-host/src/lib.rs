@@ -97,14 +97,15 @@ impl NativeHost {
                 .0
                 .as_ref()
                 .ok_or("Missing native renderer")?;
-            if gpu.startup_needs_update(engine.document(), engine.brush()) {
+            let transform = engine.transform_preview().is_some();
+            if gpu.startup_needs_update(engine.document(), engine.brush(), transform) {
                 let (document, brush) = (engine.document().clone(), engine.brush().clone());
                 self.session
                     .renderer_mut()
                     .0
                     .as_mut()
                     .unwrap()
-                    .prepare_startup(&document, &brush)
+                    .prepare_startup(&document, &brush, transform)
                     .map_err(|e| e.to_string())?;
             }
             self.startup = self
@@ -413,7 +414,12 @@ impl NativeHost {
     fn paint_ready(&self) -> bool {
         let engine = self.session.engine();
         engine.backend().0.as_ref().is_some_and(|gpu| {
-            self.startup.brush_ready && !gpu.startup_needs_update(engine.document(), engine.brush())
+            self.startup.brush_ready
+                && !gpu.startup_needs_update(
+                    engine.document(),
+                    engine.brush(),
+                    engine.transform_preview().is_some(),
+                )
         })
     }
     /// Check the core revision before building any layout, panel models or JSON.
