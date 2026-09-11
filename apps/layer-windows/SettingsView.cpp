@@ -48,21 +48,20 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
     Dispatch report;
     XamlRoot xamlRoot{nullptr};
     hstring theme,editorKey,shortcutKey,resultsKey,revealed;
-    bool showing=false,built=false,stopping=false;
+    bool showing=false,closing=false,built=false,stopping=false;
     void init(){
         dialog.XamlRoot(xamlRoot);dialog.Title(box_value(L"Preferences"));dialog.CloseButtonText(L"Close");
         dialog.Resources().Insert(box_value(L"ContentDialogMaxWidth"),box_value(920.));
         dialog.Resources().Insert(box_value(L"ContentDialogMinWidth"),box_value(0.));
         dialog.Closing([weak=weak_from_this()](auto&&,ContentDialogClosingEventArgs const& e){
             if(auto self=weak.lock()){
-                if(self->stopping)return;
+                if(self->stopping){self->closing=true;return;}
                 auto model=preferences(self->data);
                 if(object(model,L"capture").Size()){e.Cancel(true);send(self->data,O({{L"type",S(L"cancel_shortcut")}}));}
                 else if(object(model,L"shortcut_editor").Size()){e.Cancel(true);send(self->data,O({{L"type",S(L"close_shortcut_editor")}}));}
-                else if(model.Size())self->data->dispatch(O({{L"type",S(L"close_settings")}}));
+                else {self->closing=true;if(model.Size())self->data->dispatch(O({{L"type",S(L"close_settings")}}));}
             }
         });
-        dialog.Closed([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->showing=false;});
         dialog.PreviewKeyDown([weak=weak_from_this()](auto&&,KeyRoutedEventArgs const& e){
             if(auto self=weak.lock())self->key(e,true);
         });
@@ -264,18 +263,24 @@ struct SettingsView::Impl : std::enable_shared_from_this<Impl> {
         }
     }
     fire_and_forget show(){
-        auto lifetime=shared_from_this();showing=true;
+        auto lifetime=shared_from_this();showing=true;closing=false;
         try{co_await dialog.ShowAsync();}
         catch(hresult_error const& failure){
-            showing=false;
+            showing=false;closing=false;
             data->dispatch(O({{L"type",S(L"close_settings")}}));
             report(to_string(failure.message()));
+            co_return;
         }
+        // The popup disappears before ShowAsync completes. A new shared open
+        // request may arrive during that closing animation; reconcile it only
+        // after the previous operation releases the window's dialog slot.
+        showing=false;closing=false;
+        if(!stopping&&preferences(data).Size())show();
     }
     void apply(J const& snapshot){
         if(!snapshot.HasKey(L"state"))return;
         data->state=object(snapshot,L"state");data->refreshPalette();data->model=snapshot;auto model=preferences(data);
-        if(!model.Size()){if(showing)dialog.Hide();return;}
+        if(!model.Size()){if(showing&&!closing)dialog.Hide();return;}
         data->updating=true;struct Reset{bool& value;~Reset(){value=false;}}reset{data->updating};
         if(!built||theme!=data->theme()){theme=data->theme();build(model);}
         dialog.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);

@@ -151,7 +151,7 @@ fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
 #[test]
 fn imported_ramp_uses_the_srgb_transfer_curve() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
-    let alphas = [255, 192, 127, 64, 1, 0];
+    let alphas: Vec<u8> = (0..=255).rev().collect();
     let extent = [256, alphas.len() as u32];
     let asset = AssetId("test:srgb-ramp".into());
     let bytes: Vec<u8> = alphas

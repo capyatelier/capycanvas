@@ -63,6 +63,10 @@ impl CapyHost {
         native.resize(width, height, scale)?;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;
+        // GPU optimization is independent of Rust/C++ debugging. DXC's -Od
+        // fragment storage-buffer code can be rejected by drivers; retain API
+        // validation while using the same optimized shaders as Release.
+        descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
         let instance = wgpu::Instance::new(descriptor);
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::SwapChainPanel(panel))

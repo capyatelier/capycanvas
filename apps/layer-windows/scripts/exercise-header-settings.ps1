@@ -52,7 +52,8 @@ function Edit-Text([string]$Name,[string]$Value) {
 function Open-Preferences {
     $script:scope=$root
     Invoke-Control 'Preferences'
-    $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+    Wait-Until {Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)} 'Preferences did not become visible after an open request'
+    $script:scope=Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
 }
 function Close-Preferences {
     Invoke-Control 'Close'
@@ -60,6 +61,7 @@ function Close-Preferences {
     Wait-Until {!(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
 }
 Wait-Until {Read-Model} 'Launch this review instance with CAPY_TRACE_UI=1 and pass its ui-state.json file' 30
+Wait-Until {(Read-Model).brush_ready} 'Shared brush startup did not finish before interaction checks' 45
 if(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)){throw 'Close Preferences before running this fixture.'}
 Invoke-Control 'View'
 $before=Toggle-State 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)
@@ -118,6 +120,9 @@ Toggle-Control 'Live stroke preview'
 Wait-Until {(Read-Model).state.settings.feedback -eq $feedback} 'Preview restoration failed'
 Close-Preferences
 
+# Reopen as soon as the popup disappears, while the previous close animation
+# may still own the window's ContentDialog slot.
+1..3 | ForEach-Object {Open-Preferences;Close-Preferences}
 Open-Preferences
 Invoke-Control 'Keyboard Shortcuts'
 Edit-Text 'Search shortcuts' 'Undo'
@@ -142,6 +147,7 @@ Wait-Until {Find-Control 'Full screen' ([System.Windows.Automation.ControlType]:
     exclusive_icon_tiles='passed'
     shared_settings_search='passed'
     dependent_settings_controls='passed'
+    dialog_reopen_roundtrip='passed'
     shortcut_editor_cancel='passed'
     fullscreen_roundtrip='passed'
     input_method='native UI Automation; not OS pointer or keyboard delivery'

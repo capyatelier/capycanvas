@@ -314,16 +314,41 @@ display recorded about 60.00 presents/s and 50.35 displayed frames/s. Of 1,195
 records, 1,003 reported reaching display; 192 did not report a display time.
 Display interval p99 was 33.47 ms. Present-to-display p99 was 31.40 ms, which
 excludes input and earlier drawing work and is not an input-latency result.
-This run overlapped renderer GPU tests. It does not pass the presentation gate;
-a clean repeat has been requested with GPU tests and builds paused.
+This run overlapped renderer GPU tests and is not an uncontended baseline.
 
-The upstream integration passes 273 core/engine/UI/host/Windows tests. The
-serial hardware D3D12 renderer suite passes 101 tests, skips 16 explicitly ignored
-benchmarks, and fails three tests: viewport pipeline creation, the imported sRGB
-ramp, and the runtime-filter pixel reference. These failures remain under
-investigation. Native Preferences opening also needs an isolated recheck after
-one fixture timeout during concurrent GPU validation. The integration has not
-been accepted or published.
+The subsequent uncontended 20-second trace recorded 2,396 canvas frames, all
+reported displayed, at 119.95 displayed frames/s on the nominal 120 Hz display.
+Display interval p99 was 8.59 ms, with a maximum of 16.70 ms. Present-to-display
+p99 was 7.60 ms. This establishes a steady unchanged-content baseline, not
+sustained painting performance or input-to-present latency. It does not by itself
+complete the performance acceptance criteria.
+
+Further 120 Hz benchmarking is deferred until the rest of the app is complete.
+The continuous probe is stopped; development and bounded correctness checks
+continue without the external display.
+
+The initial upstream integration passed 273 core/engine/UI/host/Windows tests.
+Its serial hardware D3D12 suite reported 101 passes, 16 ignored benchmarks and
+three failures. Two renderer failures are now corrected: Windows debug builds
+keep GPU shader optimization enabled while retaining API validation, and image
+initialization explicitly quantizes linear paint bytes before UNORM storage.
+The actual selection-outline test and an expanded independent oracle covering
+all 65,536 color-byte/alpha pairs pass. The import change matches the subsequent
+upstream correction.
+
+The targeted filter suite reports 14 passes, three ignored benchmarks and one
+remaining strict historical-PNG failure. That reference also fails on this
+machine's Vulkan backend; upstream documents the same unresolved reference
+contract on Vulkan and Metal. The saved image and tolerance are unchanged.
+Complete rendering parity remains unaccepted.
+
+The native Preferences failure was reproduced as a close/reopen race, including
+without concurrent GPU work. The popup disappears before its ShowAsync operation
+finishes; a new shared open request is now reconciled after that operation
+completes. The native fixture passes theme, color validation, retained controls,
+icon selection, search, dependent controls, three rapid dialog reopen cycles,
+shortcut cancellation and fullscreen. Local tracing used to identify the race
+has been removed from production source.
 
 The presentation analyzer reports actual display intervals separately from
 submission intervals and present-to-display latency. Synthetic checks cover

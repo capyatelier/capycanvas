@@ -715,6 +715,11 @@ impl WgpuRasterizer {
     pub async fn new_headless_async() -> Result<Self, GpuRasterError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = wgpu::Backends::PRIMARY;
+        // Keep D3D12 shaders optimized even in a Rust debug build. DXC's -Od
+        // output for fragment storage-buffer reads can be rejected by drivers.
+        // API validation remains enabled; this matches the interactive host.
+        #[cfg(target_os = "windows")]
+        instance_descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
         let instance = wgpu::Instance::new(instance_descriptor);
         #[cfg(not(target_arch = "wasm32"))]
         let indexed_adapter = std::env::var("LAYER_GPU_INDEX")
