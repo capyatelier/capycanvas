@@ -48,6 +48,7 @@ pub struct NativeHost {
     last_camera_revision: Option<u64>,
     document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
+    application_menus_subscribed: bool,
 }
 
 impl NativeHost {
@@ -75,6 +76,7 @@ impl NativeHost {
             last_camera_revision: None,
             document_view_revision: 0,
             last_durable_workspace: None,
+            application_menus_subscribed: false,
         })
     }
     /// Invalidate host input and snapshot caches after shared document adoption.
@@ -449,6 +451,13 @@ impl NativeHost {
         }
         Some(snapshot)
     }
+    fn application_menus(&self) -> Value {
+        json!(layer_ui::ApplicationMenu::ALL.map(|id| {
+            let mut model = json!(self.session.application_menu(id));
+            model["id"] = json!(id);
+            model
+        }))
+    }
     fn snapshot(&self) -> Value {
         let layout = self.session.layout(self.logical);
         let state = self.session.state();
@@ -499,6 +508,7 @@ impl NativeHost {
             "partial_zen": state.partial_zen(), "zen_toolbars": zen,
             "color_panel": self.session.state().colors.view(),
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
+            "application_menus": self.application_menus_subscribed.then(|| self.application_menus()),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
             "toolbar_manager": self.session.toolbar_manager(),
             "panel_measurements": self.session.state().workspace.layout.measurements,
@@ -524,6 +534,11 @@ impl NativeHost {
                 library: bool,
             },
             Catalog,
+            ApplicationMenus {
+                #[serde(default)]
+                subscribe: bool,
+            },
+            ApplicationLink { link: layer_ui::ApplicationLink },
             RendererStats,
             FilterPreviews {
                 request: u64,
@@ -606,6 +621,14 @@ impl NativeHost {
                 json!(self.session.state().filter_load)
             }
             Query::Catalog => json!(layer_ui::ui_catalog()),
+            Query::ApplicationMenus { subscribe } => {
+                if self.application_menus_subscribed != subscribe {
+                    self.application_menus_subscribed = subscribe;
+                    self.last_snapshot = None;
+                }
+                self.application_menus()
+            }
+            Query::ApplicationLink { link } => json!({"url": link.url()}),
             Query::RendererStats => json!(self.session.renderer_stats()),
             Query::FilterPreviews {
                 request,
@@ -763,6 +786,35 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn subscribed_application_menus_follow_actions_without_entering_camera_patches() {
+        use layer_ui::{ApplicationMenu, CommandId, Platform};
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.resize(1200, 900, 1.).unwrap();
+            assert!(host.take_snapshot().unwrap()["application_menus"].is_null());
+            let menus = host.query(json!({"type":"application_menus", "subscribe":true})).unwrap();
+            assert_eq!(menus.as_array().unwrap().len(), ApplicationMenu::ALL.len());
+            for (id, menu) in ApplicationMenu::ALL.into_iter().zip(menus.as_array().unwrap()) {
+                let mut expected = json!(host.session.application_menu(id));
+                expected["id"] = json!(id);
+                assert_eq!(*menu, expected);
+            }
+            assert_eq!(host.take_snapshot().unwrap()["application_menus"], menus);
+            assert!(host.take_snapshot().is_none());
+            host.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
+            let next = host.take_snapshot().unwrap();
+            let select = next["application_menus"].as_array().unwrap().iter().find(|m| m["id"] == "select").unwrap();
+            assert!(select["sections"][0][1]["enabled"].as_bool().unwrap());
+            host.dispatch(UiAction::Invoke { command: CommandId::ZoomIn }).unwrap();
+            let camera = host.take_snapshot().unwrap();
+            assert!(camera.get("camera").is_some());
+            assert!(camera.get("application_menus").is_none(), "No menu rebuild at camera input rate");
+            for link in [layer_ui::ApplicationLink::Website, layer_ui::ApplicationLink::SourceCode] {
+                assert_eq!(host.query(json!({"type":"application_link", "link":link})).unwrap()["url"], link.url());
+            }
+        }
+    }
     #[test]
     fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();

@@ -112,6 +112,15 @@ import SwiftUI
     func importLayer(_ url: URL) { native?.importLayer(url); wake?() }
     func customize(_ action: [String: Any]) { dispatch(["type": "customize", "action": action]) }
     func input(_ value: [String: Any]) { native?.submit(1, JSON(value)); wake?() }
+    /// A captured chord is a complete input pair; closing its sheet cannot leave
+    /// a held key in the canvas interaction state.
+    func captureShortcut(key: String, command: Bool, shift: Bool, alt: Bool) {
+        guard !snapshot["preferences"]["capture"].isNull else { return }
+        for pressed in [true, false] {
+            input(["type": "key", "key": key, "pressed": pressed, "repeat": false,
+                "modifiers": ["command": command, "shift": shift, "alt": alt]])
+        }
+    }
     func command(_ id: String) -> JSON { state["commands"].array.first { $0["id"].string == id } ?? JSON() }
     func query(_ value: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
         guard let native else { completion(JSON()); return }

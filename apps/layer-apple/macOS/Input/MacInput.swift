@@ -144,10 +144,7 @@ import QuartzCore
         view?.wake()
     }
     func key(_ event: NSEvent, pressed: Bool) {
-        let names: [UInt16: String] = [36: "Enter", 48: "Tab", 51: "Backspace", 53: "Escape",
-            76: "Enter", 115: "Home", 116: "PageUp", 117: "Delete", 119: "End", 121: "PageDown",
-            123: "ArrowLeft", 124: "ArrowRight", 125: "ArrowDown", 126: "ArrowUp"]
-        let key = names[event.keyCode] ?? event.charactersIgnoringModifiers ?? ""
+        let key = AppleKeyName.name(event)
         guard !key.isEmpty else { return }
         sendKey(key, pressed: pressed, repeatKey: event.isARepeat, flags: event.modifierFlags)
     }

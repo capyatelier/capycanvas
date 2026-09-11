@@ -3,6 +3,18 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testShortcutConflictAndEditorEffect() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"keyboard_shortcuts"}]"#
+        app.launch()
+        checkShortcutConflictAndEditorEffect(in: app)
+    }
+
     @MainActor func testNewDrawingAndExportCancellation() throws {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

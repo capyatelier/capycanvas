@@ -7,6 +7,11 @@ struct EditorView<Canvas: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openWindow) private var openWindow
     @State private var lastWindowRequest: UInt64 = 0
+    @State private var lastLinkRequest: UInt64 = 0
+    @Environment(\.openURL) private var openURL
+    private var linkRequest: UInt64 {
+        store.state["requests"].array.first { $0["kind"]["type"].string == "open_link" }?["id"].uint ?? 0
+    }
     private var windowRequest: UInt64 {
         store.state["requests"].array.first { $0["kind"]["type"].string == "new_window" }?["id"].uint ?? 0
     }
@@ -76,31 +81,57 @@ struct EditorView<Canvas: View>: View {
             lastWindowRequest = id; openWindow(id: "editor")
             store.dispatch(["type": "complete_request", "id": id, "error": NSNull()])
         }
+        .onChange(of: linkRequest, initial: true) { _, id in
+            guard id > lastLinkRequest,
+                let request = store.state["requests"].array.first(where: { $0["id"].uint == id }) else { return }
+            lastLinkRequest = id
+            store.query(["type": "application_link", "link": request["kind"]["link"].raw]) { result in
+                guard let url = URL(string: result["url"].string) else {
+                    store.dispatch(["type": "complete_request", "id": id, "error": "Could not open the link"])
+                    return
+                }
+                openURL(url) { accepted in
+                    store.dispatch(["type": "complete_request", "id": id,
+                        "error": accepted ? NSNull() : "Could not open the link" as Any])
+                }
+            }
+        }
         .onChange(of: colorScheme) { _, _ in systemTheme() }
     }
     private func systemTheme() { store.dispatch(["type": "system_theme_changed", "theme": colorScheme == .dark ? "dark" : "light"]) }
     private var header: some View {
-        ZStack {
+        EditorHeaderLayout {
+            HStack(spacing: 6) {
+                Color.clear.frame(width: 36 + store.headerLeadingInset, height: 36)
+                if showsApplicationMenus {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
+                            ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
+                                let menu = store.snapshot["application_menus"][index]
+                                Menu { CatalogMenuItems(store: store, id: menu["id"].string) } label: {
+                                    Text(menu["title"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
+                                        .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                                }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["title"].string)
+                            }
+                        }.fixedSize()
+                        Menu {
+                            ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
+                                let menu = store.snapshot["application_menus"][index]
+                                Menu(menu["title"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
+                            }
+                        } label: {
+                            SharedIcon(name: "menu").frame(width: 36, height: 36)
+                                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                        }.buttonStyle(.plain).accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
+                    }
+                }
+            }
             let tab = store.state["tabs"][0]
             Text(verbatim: "\(tab["title"].string) · \(Int(tab["width"].number)) × \(Int(tab["height"].number))")
                 .accessibilityIdentifier("document-title")
                 .fontWeight(.semibold).padding(.horizontal, 8).frame(height: 36)
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-            HStack(spacing: 6) {
-                Color.clear.frame(width: 36, height: 36)
-                if showsApplicationMenus {
-                    let menus = [store.catalog["file_menu"]] + store.catalog["menus"].array
-                    ForEach(menus.indices, id: \.self) { index in
-                        let menu = menus[index]
-                        Menu { CatalogMenuItems(store: store, label: menu["label"].string) } label: {
-                            Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
-                                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                        }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
-                    }
-                }
-                Spacer()
-                IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
-            }.padding(.leading, store.headerLeadingInset)
+            IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
         }.padding(6).frame(height: 48)
     }
     private func panelGroup(_ group: JSON) -> some View {
@@ -165,20 +196,45 @@ struct MenuItems: View {
     @ObservedObject var store: EditorStore
     let sections: JSON
     var didInvoke: () -> Void = {}
+    var usesShortcuts = false
     var body: some View {
         ForEach(sections.array.indices, id: \.self) { i in
             if i > 0 { Divider() }
             ForEach(sections[i].array.indices, id: \.self) { j in
                 let item = sections[i][j]
                 if !item["sections"].array.isEmpty {
-                    Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke)) }.disabled(!item["enabled"].bool)
+                    Menu(item["label"].string) { AnyView(MenuItems(store: store, sections: item["sections"], didInvoke: didInvoke, usesShortcuts: usesShortcuts)) }.disabled(!item["enabled"].bool)
                 } else {
                     Button { store.dispatch(item["action"]); didInvoke() } label: {
                         if item["selected"].bool { Label(item["label"].string, systemImage: "checkmark") }
                         else { Text(item["label"].string) }
-                    }.disabled(!item["enabled"].bool)
+                    }.disabled(!item["enabled"].bool || item["action"].isNull)
+                        .help(item["hint"].string)
+                        .accessibilityIdentifier(item["action"]["type"].string == "invoke"
+                            ? "command-" + item["action"]["command"].string : "menu-action-" + item["label"].string)
+                        .keyboardShortcut(usesShortcuts ? menuShortcut(item["bindings"][0]) : nil)
                 }
             }
         }
+    }
+}
+
+/// Keep the title centered where space permits, clamping beside native menus.
+/// Narrow windows use the complete submenu list through ViewThatFits.
+private struct EditorHeaderLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 800, height: 36)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let title = subviews[1].sizeThatFits(.unspecified)
+        let trailing = subviews[2].sizeThatFits(.unspecified)
+        let available = max(0, bounds.width - title.width - trailing.width - 12)
+        let ideal = subviews[0].sizeThatFits(.unspecified)
+        let leading = ideal.width <= available ? ideal : subviews[0].sizeThatFits(ProposedViewSize(width: available, height: 36))
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(leading))
+        let center = max(leading.width + 6, (bounds.width - title.width) / 2)
+        subviews[1].place(at: CGPoint(x: bounds.minX + center, y: bounds.minY), proposal: ProposedViewSize(title))
+        subviews[2].place(at: CGPoint(x: bounds.maxX - trailing.width, y: bounds.minY), proposal: ProposedViewSize(trailing))
     }
 }

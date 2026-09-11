@@ -433,6 +433,7 @@ pub struct ContextMenuItem {
     pub action: Option<UiAction>,
     pub enabled: bool,
     pub hint: String,
+    pub bindings: Vec<KeyChord>,
     pub sections: Vec<Vec<ContextMenuItem>>,
 }
 impl ContextMenuItem {
@@ -443,6 +444,7 @@ impl ContextMenuItem {
             action: Some(action),
             enabled: true,
             hint: String::new(),
+            bindings: Vec::new(),
             sections: Vec::new(),
         }
     }
@@ -456,6 +458,7 @@ impl ContextMenuItem {
             action: None,
             enabled: sections.iter().any(|s| !s.is_empty()),
             hint: String::new(),
+            bindings: Vec::new(),
             sections,
         }
     }
@@ -470,7 +473,8 @@ impl ContextMenu {
         fn visit(sections: &mut [Vec<ContextMenuItem>], settings: &Settings, platform: Platform) {
             for item in sections.iter_mut().flatten() {
                 if let Some(action) = &item.action {
-                    let shortcut = settings.action_shortcut(action, platform);
+                    item.bindings = settings.action_keys(action, platform);
+                    let shortcut = item.bindings.iter().map(|key| key.label(platform)).collect::<Vec<_>>().join(" / ");
                     if !shortcut.is_empty() && item.hint != shortcut {
                         item.hint = if item.hint.is_empty() {
                             shortcut
