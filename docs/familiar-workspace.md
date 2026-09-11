@@ -214,10 +214,13 @@ drop eligibility and drawer selection; GTK only renders and forwards input.
   Expansion using the button restores the remembered ordinary width.
 - Dragging a collapsed column's edge holds the entire layout fixed until the
   pointer moves 36 logical pixels outward. It then opens at the column's minimum
-  width and holds that width until the pointer reaches the expanded edge. The
-  same drag can then resize normally or collapse the column again. Releasing
-  while waiting keeps the column expanded; cancellation restores the original
-  collapsed layout. Expansion and subsequent resizing form one undoable action.
+  width. Until the pointer reaches the expanded edge, moving back inside that
+  same 36-pixel opening distance collapses it again; crossing outward reopens it.
+  Only after reaching the expanded edge does normal resizing resume and use the
+  75%-of-minimum / 36-pixel-width collapse rule. Releasing before reaching the edge
+  keeps the current expanded or collapsed state; cancellation restores the original
+  collapsed layout. A reversed opening leaves no undo entry. Expansion and
+  subsequent resizing form one undoable action.
   GTK retains the resize cursor throughout the held gesture, including while
   the pointer is inside the expanded panel.
 - Double-clicking the **non-tab area of any docked panel group's tab bar** also

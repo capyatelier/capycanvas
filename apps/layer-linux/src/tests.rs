@@ -1344,14 +1344,24 @@ fn native_collapsed_divider_expansion() {
             .find(|d| d.id == band)
             .unwrap();
         let edge = (d.bounds.x + d.bounds.width * 0.5 - center) * outward;
-        for distance in [36., 0., -40., edge - 1.] {
+        for distance in [36., 40., edge - 1., 36.] {
             update(distance);
             assert_eq!(
                 state(&w).workspace,
                 expanded,
-                "expanded column waits for its edge"
+                "expanded column uses the opening threshold until it reaches its edge"
             );
         }
+        for _ in 0..3 {
+            for distance in [35., 0., -40., 35.] {
+                update(distance);
+                assert_eq!(state(&w).workspace, collapsed);
+                assert_eq!(w.resolved().work_area, geometry.work_area);
+            }
+            update(36.);
+            assert_eq!(state(&w).workspace, expanded);
+        }
+        update(edge);
         update(edge + 40.);
         assert!((width() - minimum - 40.).abs() < 1.);
         let threshold = minimum * 0.75 - TILE_SIZE;
@@ -10509,9 +10519,17 @@ fn native_divider_cursor_input() {
             serde_json::json!([{ "down": true }, { "point": [start[0] + outward * 18., start[1]] }]),
         );
         assert_eq!(cursor().as_deref(), Some("col-resize"));
-        for distance in [36., 40., 30.] {
+        for (distance, collapsed) in [
+            (36., false),
+            (40., false),
+            (35., true),
+            (36., false),
+            (35., true),
+            (40., false),
+            (36., false),
+        ] {
             perform(serde_json::json!([{ "point": [start[0] + outward * distance, start[1]] }]));
-            assert!(!state(&w).workspace.layout.is_collapsed(root));
+            assert_eq!(state(&w).workspace.layout.is_collapsed(root), collapsed);
             assert_eq!(
                 cursor().as_deref(),
                 Some("col-resize"),

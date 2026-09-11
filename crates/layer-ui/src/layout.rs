@@ -323,8 +323,13 @@ pub(crate) enum ResizeDragPhase {
         columns: [Option<u32>; 2],
         edge: f32,
     },
-    /// Opening an initially collapsed column waits at its minimum-width edge.
-    CatchUp { edge: f32, reversed: bool },
+    /// Use the original opening threshold until the pointer reaches the expanded edge.
+    CatchUp {
+        columns: [Option<u32>; 2],
+        collapsed_edge: f32,
+        edge: f32,
+        reversed: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
