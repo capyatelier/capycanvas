@@ -1576,10 +1576,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if !self.state.tool_settings.iter().any(|c| c.id == id) {
                     return Err("This setting is not used by the selected tool".into());
                 }
-                if id == "tolerance" {
-                    NumericControl::percent().validate(value, "Tolerance")?;
-                    self.region_tools.tolerance = value;
-                    self.region_tools.cancel();
+                if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. })
+                    && id != "opacity"
+                {
+                    self.region_tools.edit(&id, value)?;
                     self.refresh_tools();
                     return Ok(self.changed(BRUSH, false));
                 }
@@ -2684,13 +2684,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })
                 .collect()
         } else if let LayerCanvasTool::Region { fill, .. } = self.layer_interaction.tool {
-            let mut controls = vec![tool_settings::ToolSetting {
-                id: "tolerance",
-                label: "Tolerance",
-                group: "",
-                numeric: NumericControl::percent(),
-                value: self.region_tools.tolerance,
-            }];
+            let mut controls = self.region_tools.controls();
             if fill {
                 controls.extend(
                     tool_settings::controls(self.engine.configured_brush())
@@ -3382,12 +3376,47 @@ mod tests {
             invoke(&mut s, CommandId::AutoSelect);
             assert_eq!(s.state.tool_set.subtools.len(), 3);
             assert_eq!(s.state.tool_settings[0].id, "tolerance");
+            assert_eq!(s.state.tool_settings.len(), 4);
+            assert_eq!(s.region_tools.refinement.smoothing, 1.);
+            for (id, value) in [("gap_closing", 3.), ("expansion", -2.), ("smoothing", 0.75)] {
+                s.dispatch(UiAction::SetToolSetting {
+                    id: id.into(),
+                    value,
+                })
+                .unwrap();
+                assert_eq!(
+                    s.state
+                        .tool_settings
+                        .iter()
+                        .find(|c| c.id == id)
+                        .unwrap()
+                        .value,
+                    value
+                );
+            }
+            let refinement = s.region_tools.refinement;
+            for (id, value) in [
+                ("gap_closing", 33.),
+                ("expansion", -33.),
+                ("gap_closing", 1.5),
+                ("smoothing", f32::NAN),
+            ] {
+                assert!(
+                    s.dispatch(UiAction::SetToolSetting {
+                        id: id.into(),
+                        value
+                    })
+                    .is_err()
+                );
+                assert_eq!(s.region_tools.refinement, refinement);
+            }
             send(&mut s, PenPhase::Down);
             send(&mut s, PenPhase::Up);
             assert!(s.wants_continuous_frames());
             s.frame(1, 1).unwrap();
             let request = s.renderer_mut().region_requests[0].clone();
             assert_eq!(request.position, [48, 72]);
+            assert_eq!(request.refinement, refinement);
             assert_eq!(request.source, RegionSource::Composite);
             assert!(request.limit.is_none());
             s.renderer_mut().region_reply = Some(RegionResult {
@@ -3428,6 +3457,10 @@ mod tests {
             assert_eq!(request.position, [40, 60]);
             assert_eq!(request.source, RegionSource::Layer(id));
             assert_eq!(request.tolerance, 0.2);
+            assert_eq!(
+                request.refinement, refinement,
+                "Fill uses the same Rust settings"
+            );
             assert_eq!(
                 request.limit.as_ref().unwrap().affine,
                 layer_core::Affine::translation(Point { x: -8., y: -12. })

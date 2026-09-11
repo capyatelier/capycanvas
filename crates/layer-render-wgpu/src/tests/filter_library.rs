@@ -403,7 +403,10 @@ fn custom_preparation_replaces_kernel_at_runtime() {
     let lookup = &mut Arc::make_mut(&mut Arc::make_mut(&mut effect.program).lookups)[0];
     // Runtime-authored triangular kernel: the consumer's tap ABI is unchanged,
     // but no host-side algorithm or compiled preparation selector is involved.
-    lookup.wgsl = std::fs::read_to_string("tests/fixtures/triangle-prepare.wgsl")
+    lookup.wgsl = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/triangle-prepare.wgsl"
+    ))
         .unwrap()
         .into();
     lookup.entry = "triangle".into();

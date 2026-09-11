@@ -1830,11 +1830,12 @@ fn native_connected_tools() {
     native_pen_path(
         &w,
         &[
-            [750., 470.],
+            [1014., 470.],
             [1290., 470.],
             [1290., 1060.],
             [750., 1060.],
             [750., 470.],
+            [990., 470.],
         ],
     );
     w.dispatch(UiAction::Invoke {
@@ -1854,6 +1855,40 @@ fn native_connected_tools() {
     .downcast::<crate::number_control::NumberControl>()
     .unwrap();
     edit_number(&tolerance, "15");
+    native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
+    pump(350);
+    let selected_bounds = || {
+        let gpu = w.gpu.borrow();
+        let selection = gpu
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .selection
+            .as_ref()
+            .unwrap();
+        let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
+            panic!("raster selection")
+        };
+        pixels.bounds()
+    };
+    assert_eq!(
+        selected_bounds(),
+        [0, 0, 2048, 1536],
+        "the open line must actually leak before gap closing"
+    );
+    let setting = |id: &str| {
+        find_named(
+            &w.panel_widget(Panel::ToolSettings),
+            &format!("tool-setting-{id}"),
+        )
+        .unwrap()
+        .downcast::<crate::number_control::NumberControl>()
+        .unwrap()
+    };
+    edit_number(&setting("gap_closing"), "12");
+    edit_number(&setting("smoothing"), "100");
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(350);
     let selection = w
@@ -1897,6 +1932,8 @@ fn native_connected_tools() {
     });
     let reference_source = state(&w).tool_set.subtools[2].action.clone();
     w.dispatch(reference_source);
+    pump(100);
+    edit_number(&setting("expansion"), "2");
     native_pen_path(&w, &[[1000., 750.], [1000., 750.]]);
     pump(250);
     assert_eq!(
@@ -4709,6 +4746,16 @@ fn click(button: &gtk::Button) {
     pump(100);
 }
 fn edit_number(control: &crate::number_control::NumberControl, text: &str) {
+    if let Some(spin) = control
+        .first_child()
+        .and_then(|header| header.last_child())
+        .and_downcast::<gtk::SpinButton>()
+    {
+        spin.set_text(text);
+        spin.update();
+        pump(100);
+        return;
+    }
     let display: gtk::Button = find_css(control.upcast_ref(), "number-value")
         .unwrap()
         .downcast()
