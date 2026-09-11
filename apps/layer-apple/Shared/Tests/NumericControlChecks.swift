@@ -1,7 +1,7 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor func captureDefaultEditor(in app: XCUIApplication) {
+    @MainActor func captureDefaultEditor(in app: XCUIApplication, scenario: String = "initial") {
         let canvas = app.descendants(matching: .any)["canvas"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Metal ready"), evaluatedWith: canvas)
@@ -26,7 +26,7 @@ extension XCTestCase {
         closeConfiguration.click()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: closeConfiguration)
         waitForExpectations(timeout: 5)
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.02)).hover()
+        app.buttons["panel-tab-brushes"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).hover()
         let viewport = window.frame
         #else
         let viewport = app.frame
@@ -42,10 +42,44 @@ extension XCTestCase {
         let screenshot = XCUIScreen.main.screenshot()
         #endif
         let initial = XCTAttachment(screenshot: screenshot)
-        initial.name = "complete-editor-initial"; initial.lifetime = .keepAlways; add(initial)
+        initial.name = "complete-editor-" + scenario; initial.lifetime = .keepAlways; add(initial)
         let metadata = XCTAttachment(data: try! JSONSerialization.data(withJSONObject:
-            ["scenario": "initial", "theme": "light", "viewport": [viewport.width, viewport.height]]), uniformTypeIdentifier: "public.json")
-        metadata.name = "complete-editor-geometry"; metadata.lifetime = .keepAlways; add(metadata)
+            ["scenario": scenario, "theme": "light", "viewport": [viewport.width, viewport.height]]), uniformTypeIdentifier: "public.json")
+        metadata.name = "complete-editor-geometry-" + scenario; metadata.lifetime = .keepAlways; add(metadata)
+    }
+
+    @MainActor func checkEditorControlLayout(in app: XCUIApplication) {
+        func activate(_ element: XCUIElement) {
+            XCTAssertTrue(element.waitForExistence(timeout: 5))
+            XCTAssertTrue(element.isHittable)
+            #if os(macOS)
+            element.click()
+            #else
+            element.tap()
+            #endif
+        }
+        captureDefaultEditor(in: app)
+        for command in ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"] {
+            XCTAssertTrue(app.buttons["navigator-" + command].isHittable)
+        }
+        // The shared zoom step is sqrt(2); four steps put the paper behind the
+        // header on both viewport sizes, without changing document history.
+        for _ in 0..<4 { activate(app.buttons["navigator-zoom_in"]) }
+        captureDefaultEditor(in: app, scenario: "canvas-under-header")
+
+        let choice = app.buttons["property-blend"]
+        activate(choice)
+        // Multiply is the shared catalog's second blend mode.
+        activate(app.buttons["property-blend-option-1"])
+        expectation(for: NSPredicate(format: "value == %@", "Multiply"), evaluatedWith: choice)
+        waitForExpectations(timeout: 5)
+        expectation(for: NSPredicate(format: "value == %@", "Multiply"), evaluatedWith: app.buttons["Layer blend mode"])
+        waitForExpectations(timeout: 5)
+        let undo = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-commands-", "Undo")).firstMatch
+        activate(undo)
+        expectation(for: NSPredicate(format: "value == %@", "Normal"), evaluatedWith: choice)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 
     @MainActor func checkNumericToolControls(in app: XCUIApplication) {

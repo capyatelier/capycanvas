@@ -5,7 +5,7 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   const click=async selector=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);await settle();};
   const invoke=async id=>{await evaluate(`layerApp.dispatch({type:"invoke",command:${JSON.stringify(id)}})`);await settle();};
   const show=async panel=>{
-    await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("${panel}"));layerApp.dispatch({type:"select_panel_tab",group:group.id,panel:"${panel}"});})()`);await settle();
+    await evaluate(`(()=>{const group=layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes("${panel}"));if(group.active!=="${panel}")layerApp.dispatch({type:"select_panel_tab",group:group.id,panel:"${panel}"});})()`);await settle();
   };
   const pointer=async(selector,fx,fy,move)=>{
     const p=await evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width*${fx},y:r.y+r.height*${fy}}})()`);
@@ -19,6 +19,12 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   assert.equal(await evaluate('document.querySelectorAll(".header-menu").length'),8);
   assert.ok(await evaluate('!!document.querySelector(".commands-panel .tile-button")'));
   assert.ok((await canvasPixels()).white>10000);
+  for(let i=0;i<4;i++)await invoke("zoom_in");
+  const middle=await evaluate("Math.floor(innerWidth/2)");
+  const header=await call("Page.captureScreenshot",{format:"png",fromSurface:true,clip:{x:middle,y:2,width:1,height:1,scale:1}});
+  const headerPixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,'+${JSON.stringify(header.data)};await image.decode();const c=document.createElement('canvas');c.width=c.height=1;const ctx=c.getContext('2d');ctx.drawImage(image,0,0);return [...ctx.getImageData(0,0,1,1).data];})()`);
+  assert.deepEqual(headerPixel,[255,255,255,255],"Zoomed paper must composite through empty header space");
+  await invoke("fit_canvas");
   await invoke("fill");
   assert.ok(await evaluate('layerApp.state().tool_settings.some(f=>f.id.includes("gap"))'),"Fill exposes gap controls");
   assert.ok(await evaluate('!!document.querySelector(".tool-settings-control [data-tool-setting]")'));
@@ -39,9 +45,16 @@ export async function checkEditor({call,evaluate,settle,canvasPixels}) {
   console.log("color/tool controls passed");
   assert.ok(await evaluate('(()=>{const c=document.querySelector(".dock-group .color-wheel");return c.getContext("2d").getImageData(0,0,c.width,c.height).data.filter((v,i)=>i%4===3&&v>0).length>1000;})()'),"Color wheel contains rendered pixels");
   await show("navigator");
+  assert.ok(await evaluate(`([...document.querySelectorAll('.dock-group [data-navigator-command]')].every(button=>{
+    const r=button.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+    return r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight&&button.contains(hit);
+  }))`),"Every Navigator command must have an unobscured hit target in the default panel");
   const zoom=await evaluate('layerApp.state().camera.zoom');
-  await click('.dock-group [data-navigator-command="zoom_in"]');
+  await pointer('.dock-group [data-navigator-command="zoom_in"]',.5,.5);
   assert.ok(await evaluate('layerApp.state().camera.zoom')>zoom);
+  await pointer('.dock-group [data-navigator-command="flip_horizontal"]',.5,.5);
+  assert.equal(await evaluate('document.querySelector(\'.dock-group [data-navigator-command="flip_horizontal"]\').getAttribute("aria-pressed")'),"true");
+  await pointer('.dock-group [data-navigator-command="flip_horizontal"]',.5,.5);
   const pan=await evaluate('layerApp.state().camera.translation');
   await pointer(".dock-group .navigator-overview",.5,.5,[20,10]);
   assert.notDeepEqual(await evaluate('layerApp.state().camera.translation'),pan,"Navigator moves the camera");

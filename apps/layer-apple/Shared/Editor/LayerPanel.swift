@@ -71,6 +71,7 @@ struct LayerPanel: View {
                     }.padding(.horizontal, 6).frame(height: 24).background(palette["input"], in: RoundedRectangle(cornerRadius: 4))
                 }.buttonStyle(.plain)
                     .disabled(!view["controls"]["blend"].bool).accessibilityLabel("Layer blend mode")
+                    .accessibilityValue(current["blend_label"].string)
                     .frame(maxWidth: .infinity)
                     .popover(isPresented: $choosingBlend) {
                         ScrollView {

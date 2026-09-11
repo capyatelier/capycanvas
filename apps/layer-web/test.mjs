@@ -32,11 +32,10 @@ const chrome = spawn(
     "--force-color-profile=srgb",
     "--enable-gpu",
     "--enable-unsafe-webgpu",
-    "--use-angle=vulkan",
     // Offscreen Vulkan avoids Wayland's Vulkan swapchain incompatibility while
-    // retaining the hardware WebGPU renderer and capturable window contents.
-    "--enable-features=Vulkan",
-    "--disable-vulkan-surface",
+    // retaining hardware rendering. Other hosts use their native GPU backend.
+    ...(process.platform === "linux" ? ["--use-angle=vulkan",
+      "--enable-features=Vulkan", "--disable-vulkan-surface"] : []),
     "--window-size=1440,1000",
     "about:blank",
   ],

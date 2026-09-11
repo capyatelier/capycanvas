@@ -1232,3 +1232,81 @@ byte across 70 of 160 cases, maximum error 47), complete feature inventory,
 physical lifecycle/input matrix and sustained hardware performance gates remain
 open on both targets. A concurrent Android-only native time/battery header change
 was also pulled before publication; it does not change these tested Apple paths.
+
+## Editor control geometry and live header compositing
+
+The Apple tool rows now use the browser panel's padding, text-line sizing and
+spacing; numeric readouts use tabular digits. Properties uses a shared Apple
+button/popover control instead of the Mac menu style that discarded the custom
+label's appearance. Choice rows reserve the longest option's intrinsic width,
+capped at 60% of the row, and keep the label alongside it. The Layers blend
+control now exposes its current value to accessibility. Both targets retain a
+background plate behind Settings when paper extends under the header.
+
+The browser's fixed Navigator height clipped its controls in the default short
+panel. Its overview now fits the available height above six 32-point controls,
+matching the Apple layout. The surrounding background has its own cutout around
+the live GPU image, with no bitmap readback or separate preview renderer. Flip
+buttons also project the shared selected state. A later opaque-header CSS rule
+was removed so the canvas remains visible between the header's individual
+control backgrounds.
+
+The focused `testEditorControlLayout` workflow passes on Mac and iPad Simulator.
+It checks all Navigator targets, uses four actual zoom-in actions, selects
+Multiply in Properties, observes the same value in Layers and restores Normal
+through the in-app Undo control. It captures the initial editor and paper zoomed
+behind the header before changing document history. The Mac fixture moves the
+pointer back onto a panel tab to avoid a brush-hover mark in the capture. It does
+not address the system menu bar. The first Mac run reached Multiply but failed
+because the Layers button did not expose its value; the final projection and
+check use that accessibility value. No failed run is counted as a pass.
+
+The browser editor workflow passes with actual Navigator pointer hits and a
+rendered-pixel assertion that paper is visible through empty header space. An
+older fixture reselected already-active tabs and opened configuration over the
+controls; it now activates a tab only when needed. The remaining editor workflow
+also passes: color/tool actions, Navigator drag, partial Zen, collapsed columns,
+nested drawers, project Save/Open/New, PNG export, cancellation and persistence.
+The browser runner keeps Linux's offscreen Vulkan options while allowing native
+GPU backends on other hosts.
+
+Both native captures match local Chrome at 2× scale. Full-image comparisons with
+zero channel tolerance retain every pixel and intentionally still fail:
+
+| Native target / scenario | Logical viewport | Different pixels / total | Different fraction | Maximum channel error |
+| --- | --- | --- | --- | --- |
+| iPad Simulator / initial | 1376 × 1032 | 295,639 / 5,680,128 | 5.2048% | 219 |
+| iPad Simulator / canvas under header | 1376 × 1032 | 393,062 / 5,680,128 | 6.9199% | 219 |
+| macOS / initial | 1200 × 870 | 389,668 / 4,176,000 | 9.3311% | 255 |
+| macOS / canvas under header | 1200 × 870 | 522,018 / 4,176,000 | 12.5004% | 255 |
+
+The four edges of both the main paper rectangle and Navigator paper rectangle
+match Chrome exactly in each initial capture. Three fixed points four logical
+pixels below the top edge change from the shared gray surround to white paper
+after zooming on each native target. These are scoped geometry/compositing
+checks, not proof that every control meets the one-point alignment requirement.
+Remaining differences include text rasterization, tabs/grips, color controls,
+control details and the intentional Mac window/menu adaptation. Other themes,
+documents, UI states and physical-device visual coverage remain open.
+
+Before publication, the milestone integrates concurrent Windows Navigator,
+watercolor selection-boundary, native shader-worker shutdown and web/GTK
+fullscreen/system-status changes. All 32 Apple bridge, 15 host and 221 UI tests
+pass, with one host hardware check ignored. The focused selected-watercolor
+transport and shader-shutdown tests pass on the local native backend. Signed Mac
+and iPad builds and WebAssembly build pass; the integrated iPad app installs and
+launches. The browser editor workflow passes again after integration.
+
+The native UI workflows/captures precede that shared integration; no Apple view
+or tested property-action implementation changed in it. All four Chrome
+references were recaptured afterward. Three match their earlier references
+exactly; the Mac initial reference differs in 653 pixels with a maximum channel
+error of 5. The table uses that later reference and applies no masking or extra
+tolerance. This checkpoint does not establish Apple coverage for the new
+fullscreen/system-status surfaces or close the complete feature inventory.
+
+The previous strict filter-reference failure, physical input/lifecycle matrix,
+physical iPad automation setup and sustained hardware performance gates remain
+open. Capture bundles, logs, device/signing data and pixel reports stay in ignored
+local artifacts. Test editors and the temporary web server are closed; the
+original user editor is preserved.

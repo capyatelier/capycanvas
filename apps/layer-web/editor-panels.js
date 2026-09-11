@@ -137,7 +137,7 @@ export function createEditorPanels({ app, state, workspace, canvas, element, but
     overview.addEventListener("pointermove",e=>{if(contact===e.pointerId)send(e,"move");});
     overview.addEventListener("pointerup",e=>{if(contact===e.pointerId){send(e,"up");contact=null;}});
     for(const name of ["pointercancel","lostpointercapture"])overview.addEventListener(name,e=>{if(contact===e.pointerId){send(e,"cancel");contact=null;}});
-    return()=>{for(const[id,node]of buttons){const c=state().commands.find(c=>c.id===id);if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.disabled=!c.enabled;}queuePositions();};
+    return()=>{for(const[id,node]of buttons){const c=state().commands.find(c=>c.id===id);if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;}queuePositions();};
   }
   function visible(node) {
     if(!node.isConnected)return false;
@@ -148,6 +148,7 @@ export function createEditorPanels({ app, state, workspace, canvas, element, but
     return true;
   }
   function updatePositions() {
+    const cutout=({x,y,width,height})=>`polygon(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,${x}px ${y}px,${x}px ${y+height}px,${x+width}px ${y+height}px,${x+width}px ${y}px,${x}px ${y}px)`;
     positioning=false;const slots=[],surface=canvas.getBoundingClientRect(),scale=canvas.width/Math.max(1,surface.width);
     for(const record of navigators) {
       const {overview,hole}=record,container=overview.closest(".content-drawer, .dock-group");
@@ -157,9 +158,10 @@ export function createEditorPanels({ app, state, workspace, canvas, element, but
       let left=Math.max(r.left,surface.left),top=Math.max(r.top,surface.top),right=Math.min(r.right,surface.right),bottom=Math.min(r.bottom,surface.bottom);
       for(let p=overview.parentElement;p&&p!==workspace;p=p.parentElement){const style=getComputedStyle(p);if([style.overflowX,style.overflowY].some(v=>v!=="visible")){const b=p.getBoundingClientRect();left=Math.max(left,b.left);right=Math.min(right,b.right);top=Math.max(top,b.top);bottom=Math.min(bottom,b.bottom);}}
       if(right<=left||bottom<=top){container.classList.remove("gpu-overview-surface");continue;}
-      const image=g.image,c=container.getBoundingClientRect(),x=r.x-c.x+image.x,y=r.y-c.y+image.y,x2=x+image.width,y2=y+image.height;
+      const image=g.image,c=container.getBoundingClientRect(),x=r.x-c.x+image.x,y=r.y-c.y+image.y;
       container.classList.add("gpu-overview-surface");
-      container.style.setProperty("--overview-cutout",`polygon(evenodd,0 0,100% 0,100% 100%,0 100%,0 0,${x}px ${y}px,${x}px ${y2}px,${x2}px ${y2}px,${x2}px ${y}px,${x}px ${y}px)`);
+      container.style.setProperty("--overview-cutout",cutout({...image,x,y}));
+      overview.style.setProperty("--navigator-cutout",cutout(image));
       Object.assign(hole.style,{left:`${image.x}px`,top:`${image.y}px`,width:`${image.width}px`,height:`${image.height}px`});
       slots.push({bounds:[(r.x-surface.x)*scale,(r.y-surface.y)*scale,r.width*scale,r.height*scale],clip:[(left-surface.x)*scale,(top-surface.y)*scale,(right-left)*scale,(bottom-top)*scale],order:Number(getComputedStyle(container).zIndex)||0});
     }
