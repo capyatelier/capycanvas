@@ -53,7 +53,9 @@ platform, averages or reduced brush fidelity for acceptance.
 
 Provide reproducible build/install/test commands and evidence for functionality,
 visuals, persistence, lifecycle and performance. Pull other ports' changes,
-integrate them, validate both Apple targets, and commit/push at milestones.
+integrate them, validate both Apple targets, and commit/push completed major
+milestones to the shared `main` branch. Group supporting fixes and validation
+with their milestone rather than publishing each small task separately.
 Keep signing material, account/team/device identifiers and private local data
 out of GitHub. Completion requires demonstrated parity and performance on both
 platforms with no required work remaining.
@@ -1022,3 +1024,15 @@ GPU medians are 0.064 and 0.066 ms; two overviews reach GPU p99 0.338 ms. These
 are short Mac renderer measurements, excluding native UI compositing, physical
 presentation and input latency. They establish neither iPad performance nor
 the sustained workload/ten-minute gates, which remain open on both platforms.
+
+The milestone integrates the incoming Windows port, Android panel-drag repair,
+shared watercolor halo correction and built-in toolbar recovery. After the final
+shared UI change, all 265 Apple bridge/host/UI checks pass (30/15/220), with one
+host hardware check separately ignored. Both signed Apple builds and WebAssembly
+pass; the final physical iPad build installs and launches. The integrated Metal
+suite, run before the subsequent UI-only toolbar change, passes 113 checks and
+retains the known strict filter-reference failure, with 17 benchmarks ignored.
+Its differences remain 3,274 pixels across 70 of 160 cases, maximum error 47.
+This milestone does not close that filter gate or the broader visual and
+performance requirements. Local captures, device logs and signing identifiers
+remain outside tracked files.

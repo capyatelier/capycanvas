@@ -420,7 +420,8 @@ pub enum PanelKind {
 impl Panel {
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if matches!(self, Self::ToolSettings | Self::Color) && platform == crate::Platform::Windows {
+        if matches!(self, Self::ToolSettings | Self::Color) && platform == crate::Platform::Windows
+        {
             return true;
         }
         if matches!(
@@ -1506,6 +1507,37 @@ impl DockLayout {
             }
             _ => Err("Unknown tab group".into()),
         }
+    }
+
+    /// Explicit recovery of a missing built-in; ordinary Reset preserves the registry.
+    pub fn restore_builtin_toolbar(
+        &mut self,
+        panel: Panel,
+        group: Option<u32>,
+    ) -> Result<(), String> {
+        if !matches!(panel, Panel::Toolbar | Panel::Commands) {
+            return Err("Choose a built-in toolbar".into());
+        }
+        let mut next = self.clone();
+        if next.panel(panel).is_err() {
+            let preset = Self::editor_default();
+            let mut config = preset.panel(panel)?.clone();
+            let controls: Vec<_> = config.tiles().iter().map(|t| t.control).collect();
+            config.content = PanelContent::Toolbar {
+                name: next.unused_toolbar_name(panel.label()),
+                tiles: Vec::new(),
+            };
+            next.panels.push(config);
+            next.insert_tools(panel, None, &controls)?;
+        }
+        if let Some(group) = group {
+            next.add_panel_to_group(panel, group)?;
+        } else {
+            next.set_panel_visible(panel, true)?;
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
     }
 
     pub fn add_toolbar(
@@ -3889,6 +3921,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn restore_builtin_toolbar_recovers_legacy_registry_without_replacing_custom_tools() {
+        let mut layout = DockLayout::default();
+        let old_tools = layout.panel(Panel::Toolbar).unwrap().clone();
+        let custom = layout
+            .add_toolbar(None, "Commands", &[ToolbarControl::Color])
+            .unwrap();
+        layout
+            .restore_builtin_toolbar(Panel::Commands, None)
+            .unwrap();
+        assert_eq!(layout.panel(Panel::Toolbar).unwrap(), &old_tools);
+        assert_eq!(layout.panel(custom).unwrap().title(), "Commands");
+        assert_eq!(layout.panel(Panel::Commands).unwrap().title(), "Commands 2");
+        assert_eq!(
+            layout.group_edge(layout.panel_group(Panel::Commands).unwrap()),
+            Some(Edge::Top)
+        );
+        let controls = |layout: &DockLayout| {
+            layout
+                .panel(Panel::Commands)
+                .unwrap()
+                .tiles()
+                .iter()
+                .map(|t| t.control)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(controls(&layout), controls(&DockLayout::editor_default()));
+        let saved = serde_json::to_string(&layout).unwrap();
+        assert_eq!(serde_json::from_str::<DockLayout>(&saved).unwrap(), layout);
+        layout
+            .restore_builtin_toolbar(Panel::Commands, None)
+            .unwrap();
+        assert_eq!(serde_json::to_string(&layout).unwrap(), saved);
+        layout.validate().unwrap();
     }
 
     #[test]
