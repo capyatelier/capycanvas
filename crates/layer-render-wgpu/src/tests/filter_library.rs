@@ -174,6 +174,11 @@ fn imported_ramp_uses_the_srgb_transfer_curve() {
     layer.asset = Some(asset);
     submit(&mut r, extent, &[layer], 0., true, true, None);
     let output = image(&mut r);
+    assert_import_pixels(&bytes, &output);
+}
+
+fn assert_import_pixels(bytes: &[u8], output: &[u8]) {
+    assert_eq!(bytes.len(), output.len());
     for (index, (source, pixel)) in bytes
         .chunks_exact(4)
         .zip(output.chunks_exact(4))
@@ -204,12 +209,23 @@ fn imported_ramp_uses_the_srgb_transfer_curve() {
     }
 }
 
-/// Immutable pre-migration reference: sample actual full-resolution renders,
-/// including masked/clipped transparency, not a CPU reimplementation.
+/// Pre-migration filter algorithms with the corrected import contract. See
+/// fixtures/README.md for independent provenance; never update from this test.
 #[test]
 fn runtime_filter_pixel_reference() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
+    submit(
+        &mut r,
+        EXTENT,
+        std::slice::from_ref(&base),
+        0.,
+        true,
+        true,
+        None,
+    );
+    let input = image(&mut r);
+    assert_import_pixels(&artwork(EXTENT), &input);
     let sample = [64usize, 48usize];
     let columns = 8;
     let rows = (fixtures().len() * 4).div_ceil(columns);
@@ -255,7 +271,10 @@ fn runtime_filter_pixel_reference() {
             }
         }
     }
-    let path = "tests/fixtures/runtime-filters-v2.png";
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/runtime-filters-v3.png"
+    );
     let mut reader = png::Decoder::new(std::fs::File::open(path).unwrap())
         .read_info()
         .unwrap();
@@ -271,6 +290,11 @@ fn runtime_filter_pixel_reference() {
     if error > 1 {
         let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/performance/filter-reference");
+        png(
+            directory.join("input.png").to_str().unwrap(),
+            EXTENT,
+            &input,
+        );
         png(
             directory.join("actual.png").to_str().unwrap(),
             extent,
@@ -308,7 +332,7 @@ fn runtime_filter_pixel_reference() {
     }
     assert!(
         error <= 1,
-        "Runtime migration changed reference pixels: maximum byte error {error}"
+        "Filter output changed after validated import: maximum byte error {error}"
     );
 }
 
@@ -407,8 +431,8 @@ fn custom_preparation_replaces_kernel_at_runtime() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/triangle-prepare.wgsl"
     ))
-        .unwrap()
-        .into();
+    .unwrap()
+    .into();
     lookup.entry = "triangle".into();
     lookup.workgroup_size = [1, 1, 1];
     submit(&mut r, EXTENT, &layers, 0., false, true, None);
