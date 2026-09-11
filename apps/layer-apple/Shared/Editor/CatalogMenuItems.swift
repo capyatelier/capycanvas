@@ -12,6 +12,11 @@ struct CatalogMenuItems: View {
         }.filter { !$0.isEmpty })
         MenuItems(store: store, sections: sections, usesShortcuts: true)
             .disabled(!store.snapshot["preferences"].isNull)
+        if id == "file" {
+            Divider()
+            Button("Recovered Drawings…") { store.recovery.refresh(); store.recovery.presented = true }
+                .disabled(!store.snapshot["preferences"].isNull || store.projectFiles.busy)
+        }
     }
 }
 

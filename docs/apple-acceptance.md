@@ -105,7 +105,7 @@ build is only build evidence.
 | 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. User confirms basic Pencil pressure, pen-up and Undo/Redo; full lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
 | 3. Complete input contract and bounded transport | Coalescing, prediction and estimated corrections implemented with synthetic oracles. Basic physical Pencil/palm check passes; correction delivery, full sensors/navigation/interruption coverage remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
-| 5. Document/settings/workspace persistence and lifecycle | Atomic settings and per-scene workspace persistence implemented; Simulator restart passes. Manual Save/Open and shared checkpoint policy pass direct checks; recovery, picker delivery and full physical lifecycle matrix remain. | Same persistence; native restart and owner isolation pass. Manual Save/Open and unsaved close pass direct checks; recovery and full window/display/sleep/memory-pressure matrix remain. |
+| 5. Document/settings/workspace persistence and lifecycle | Atomic preferences and private artwork recovery implemented; Simulator settings/workspace and artwork restart checks pass. Manual Save/Open, recovery and checkpoint policy pass direct checks; provider delivery and full physical lifecycle matrix remain. | Same persistence and recovery; native restart and owner isolation pass. Manual Save/Open, recovery and unsaved close pass direct checks; full window/display/sleep/memory-pressure matrix remains. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
 | 7. Hardware performance, sustained sessions and delivery | Shared opt-in CPU/GPU/actual-presentation trace and local analyzer implemented; physical startup/idle instrumentation checked. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. | Same shared instrumentation and startup/idle check; display maximum is 90 Hz. Workload matrix, physical input latency, overhead calibration and ten-minute acceptance remain. |
 
@@ -1036,3 +1036,62 @@ Its differences remain 3,274 pixels across 70 of 160 cases, maximum error 47.
 This milestone does not close that filter gate or the broader visual and
 performance requirements. Local captures, device logs and signing identifiers
 remain outside tracked files.
+
+## Private artwork recovery on both Apple hosts
+
+Both apps now capture unsaved artwork through the shared project format and
+offer completed copies after restart, with a shared Recovered Drawings action
+and native picker. One immutable capture/write runs at a time; edits retain only
+the newest desired revision. Archives are synced before atomic generation
+manifests publish them. Failed writes retain the previous completed copy, corrupt
+records remain available for repair, and a stale discard cannot remove a newer
+generation. Runtime owner identities prevent a restored scene's initial blank
+canvas from overwriting the previous process's artwork.
+
+Recovery uses the existing document replacement flow. Save/Discard/Cancel
+protects the current drawing, including a manual save before opening the selected
+archive. Recovered content has no provider destination and stays unsaved through
+Undo to its initial state; only a completed manual save restores ordinary clean
+checkpoint behavior. Lifecycle flushing drains queued pen-up without requiring
+a drawable, then waits for settings/workspace and artwork storage. Cleanup follows
+authorized window/scene closure or final accepted Mac termination. Details and
+commands are in [Apple persistence](../apps/layer-apple/PERSISTENCE.md).
+
+The shared regression run passes 31 Apple bridge, 15 host and 220 UI checks,
+with one host hardware check ignored. After adding the lifecycle input drain,
+the focused Rust recovery check passes on both Apple policies with real Metal:
+queued pen-up commits without presentation, recovered GPU pixels match exactly,
+and automatic capture cannot acknowledge a manual save. Direct Swift checks use
+the actual coordinator and owner for both policies. They pass private permissions,
+cancelled capture, edits during an in-flight write, latest-revision flushing,
+stale discard, malformed-record isolation, failed-write retry, owner replacement,
+source migration and unsaved replacement/close decisions. The final replacement
+check covers both Mac saves and iPad staged exports and verifies that saving the
+current drawing preserves the selected recovery archive without another picker.
+The existing direct manual file and settings/workspace suites also pass.
+
+The focused restart UI workflow passes once on each of Mac and iPad Simulator
+after the recovery picker was made to wait for document readiness. It waits for
+a completed copy, terminates/relaunches the app, opens that copy through the actual
+in-app control, verifies the restored layer count and waits for a new durable
+copy. Captures show the picker and restored editor. An earlier Mac runner was
+blocked before test execution by renewed automation permission; subsequent
+executed failures exposed the readiness issue and are not counted as passes.
+No system menu coordinates or OS menu mechanics were tested.
+
+Both final signed builds and the WebAssembly build pass. The final physical iPad
+build installs and launches successfully. These checks establish completed-copy
+recovery, not physical background-task expiration, interrupted publication,
+multi-window/provider delivery or sustained storage cost. The full physical
+lifecycle and performance matrix remains open on both platforms. This milestone
+adds no Chrome parity or strict filter-reference pass; the previously reported
+visual/filter differences remain unresolved.
+
+Before publication, the milestone integrates concurrent shared transform upload
+buffer and transient GPU page reuse changes. All 13 affected Metal transform
+checks pass, with three benchmarks ignored. The recovery pixel/lifecycle check
+passes again with that renderer on both Apple policies, both signed Apple
+targets and WebAssembly build, and the integrated physical iPad app installs and
+launches. The earlier full regression and UI restart results precede this
+renderer integration; no additional OS UI automation was needed for the changed
+GPU paths.

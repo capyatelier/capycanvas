@@ -31,15 +31,16 @@ private struct MacEditorScene: View {
         DispatchQueue.main.async { EditorStore.confirmCloseAll { allowed in
             guard allowed else { sender.reply(toApplicationShouldTerminate: false); return }
             EditorStore.flushAll { saved in
-            if saved { sender.reply(toApplicationShouldTerminate: true) }
+            if saved { EditorStore.finishClosingAll { sender.reply(toApplicationShouldTerminate: true) } }
             else {
                 let alert = NSAlert()
-                alert.messageText = "Some settings or workspace changes could not be saved."
-                alert.informativeText = "You can return to the app or quit with the last saved settings."
+                alert.messageText = "Some changes could not be saved."
+                alert.informativeText = "You can return to the app to retry or quit with the last saved copies."
                 alert.addButton(withTitle: "Return to App"); alert.addButton(withTitle: "Quit Anyway")
                 let quit = alert.runModal() == .alertSecondButtonReturn
                 if !quit { EditorStore.resetCloseApprovals() }
-                sender.reply(toApplicationShouldTerminate: quit)
+                if quit { EditorStore.finishClosingAll { sender.reply(toApplicationShouldTerminate: true) } }
+                else { sender.reply(toApplicationShouldTerminate: false) }
             }
             }
         } }

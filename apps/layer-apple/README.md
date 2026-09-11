@@ -104,8 +104,11 @@ Support files. Settings propagate across live owners; each restored scene keeps
 its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
 failure/retry behavior and fast tests. Native New/Open/Save/Save As use the shared
 project format. Both targets support custom canvas dimensions and PNG export. GPU export
-readback and PNG encoding run on the file worker; automatic artwork recovery
-remains pending.
+readback and PNG encoding run on the file worker. Unsaved artwork also receives
+private recovery copies. Use **File → Recovered Drawings…** to open one; copies
+are offered after restart and retain unsaved status until you explicitly save.
+See [PERSISTENCE.md](PERSISTENCE.md) for atomic generations, lifecycle handling,
+reproducible checks and remaining physical-device/performance acceptance.
 
 Both targets now project the live shared application menus. Keyboard Shortcuts
 supports search, alternate bindings, conflict replacement and resets; Settings

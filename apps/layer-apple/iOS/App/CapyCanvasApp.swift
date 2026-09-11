@@ -30,7 +30,7 @@ private struct IPadEditorScene: View {
 @MainActor private enum PersistenceBackground {
     static func flush(_ store: EditorStore) {
         let lease = BackgroundLease()
-        lease.identifier = UIApplication.shared.beginBackgroundTask(withName: "Save settings and workspace") {
+        lease.identifier = UIApplication.shared.beginBackgroundTask(withName: "Save drawing recovery and preferences") {
             Task { @MainActor in lease.finish() }
         }
         store.flushPersistence { _ in lease.finish() }

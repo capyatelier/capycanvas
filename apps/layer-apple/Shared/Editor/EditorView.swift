@@ -81,6 +81,7 @@ struct EditorView<Canvas: View>: View {
         .tint(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255))
         .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))
         .modifier(ProjectFilesModifier(files: store.projectFiles))
+        .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
         .sheet(isPresented: Binding(get: { !store.snapshot["preferences"].isNull }, set: { if !$0 { store.dispatch(["type": "close_settings"]) } })) {
             SettingsView(store: store).modifier(StorageAlert(store: store))
