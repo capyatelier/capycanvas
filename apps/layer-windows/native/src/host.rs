@@ -1,5 +1,4 @@
 use layer_host::NativeHost;
-use layer_render::CanvasRenderer;
 use layer_render_wgpu::{ViewportPresenter, WgpuRasterizer};
 use layer_ui::{CanvasCursor, PointerButton};
 use std::{
@@ -131,67 +130,9 @@ impl CapyHost {
         let Some(target) = self.target.take() else {
             return Ok(1);
         };
-        if self.blank_presented {
-            let engine = self.native.session.engine();
-            let gpu = engine.backend().0.as_ref().ok_or("GPU is not prepared")?;
-            if gpu.startup_needs_update(engine.document(), engine.brush()) {
-                let (document, brush) = (engine.document().clone(), engine.brush().clone());
-                self.native
-                    .session
-                    .renderer_mut()
-                    .0
-                    .as_mut()
-                    .unwrap()
-                    .prepare_startup(&document, &brush)
-                    .map_err(err)?;
-            }
-            self.native.startup = self
-                .native
-                .session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .unwrap()
-                .poll_startup()
-                .map_err(err)?;
-            if self.native.startup.canvas_ready {
-                let previous = self.native.session.state().revision;
-                let change = self.native.session.frame(now, presentation)?;
-                self.native.dirty = change.canvas_wake;
-                self.native.apply_change(previous, change);
-            }
-        } else {
-            // Show paper before background shader preparation, retaining the
-            // engine's pending replay for the first fully initialized frame.
-            let view = self.native.session.state().camera.view();
-            let document = self.native.session.engine().document();
-            let extent = [document.width, document.height];
-            let layers: Vec<_> = document
-                .layers
-                .iter()
-                .filter(|l| l.kind == layer_core::LayerKind::Background)
-                .cloned()
-                .collect();
-            self.native
-                .session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .ok_or("GPU is not prepared")?
-                .submit(layer_render::FramePacket {
-                    time_seconds: 0.,
-                    view,
-                    document_extent: extent,
-                    layers: &layers,
-                    dabs: &[],
-                    dab_batches: &[],
-                    reset_layers: true,
-                    composite_all: true,
-                })
-                .map_err(err)?;
-        }
-        self.native.dirty |=
-            !self.native.startup.complete || self.native.session.wants_continuous_frames();
+        self.native
+            .prepare_canvas_frame(now, presentation, self.blank_presented)?;
+        self.native.dirty |= self.native.session.wants_continuous_frames();
         self.native
             .session
             .update_canvas_cursor(&mut self.cursor, false);

@@ -224,3 +224,9 @@ a development comparison, not a visual parity pass: header and layer structure,
 settings, docking/customization, other panels and native-frame accounting remain
 unfinished. Captures, raw reports, traces and build outputs remain ignored and
 local; only this sanitized validation summary is published.
+
+After merging upstream d4eafac, Windows delegates staged frame preparation to
+NativeHost::prepare_canvas_frame, shared with the Apple and Android presenters.
+The merged build passes 14 adapter/shared-host tests and the native workspace,
+controlled drawing and shutdown smoke checks. OS mouse automation still cannot
+target this window reliably; physical pointer delivery remains unverified.
