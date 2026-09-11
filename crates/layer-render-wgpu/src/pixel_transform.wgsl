@@ -1,6 +1,7 @@
 // Original premultiplied layer pixels are immutable for the whole transaction.
 // Sample color * selection together, never filter them independently (halos).
 struct Transform { linear:vec4<f32>, translation_source_origin:vec4<f32>, target_flags:vec4<f32> }
+override scalar:bool=false;
 @group(0) @binding(0) var<uniform> transform:Transform;
 @group(1) @binding(0) var source:texture_2d<f32>;
 // group 1, binding 1 and brush_selection_at come from selection_clip.wgsl.
@@ -11,7 +12,9 @@ struct Transform { linear:vec4<f32>, translation_source_origin:vec4<f32>, target
 }
 fn original(p:vec2<i32>)->vec4<f32> {
     if any(p<vec2(0)) || any(p>=vec2<i32>(textureDimensions(source))) {return vec4(0.);}
-    return textureLoad(source,p,0);
+    let color=textureLoad(source,p,0);
+    if scalar {return vec4(color.r);}
+    return color;
 }
 fn selected(p:vec2<i32>)->vec4<f32> {
     return original(p)*brush_selection_at(vec2<f32>(p)+transform.translation_source_origin.zw+vec2(.5));
@@ -36,5 +39,6 @@ fn transformed(local:vec2<f32>)->vec4<f32> {
         +transform.translation_source_origin.xy-transform.translation_source_origin.zw;
     let moved=transformed(source_position);
     let remainder=base*(1.-brush_selection_at(world));
+    if scalar {return max(moved,remainder);}
     return moved+remainder*(1.-moved.a);
 }

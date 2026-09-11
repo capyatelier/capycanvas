@@ -22,6 +22,7 @@ use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
 mod canvas_preview;
 mod color_sample;
+mod paint_transform;
 pub mod pixel_transform;
 mod deferred;
 mod builtin_masks;
@@ -69,7 +70,18 @@ fn needs_scene(packet: FramePacket<'_>) -> bool {
     packet
         .dab_batches
         .iter()
-        .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+        .any(|b| {
+            let DabBatchKind::LayerOperation(index) = b.kind else {
+                return false;
+            };
+            // Transforms write paint pages directly, without scene jobs.
+            !packet
+                .layers
+                .iter()
+                .find(|l| l.id == b.layer_id)
+                .and_then(|l| l.operations.get(index as usize))
+                .is_some_and(|o| matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
+        })
         || packet.layers.iter().any(|l| {
             l.mask.is_some()
                 || matches!(l.kind, LayerKind::Group | LayerKind::Effect)
@@ -177,6 +189,7 @@ pub enum GpuRasterError {
     MissingPaintLayer(LayerId),
     UnsupportedBrushFeature(&'static str),
     InvalidDabRange,
+    InvalidTransform(&'static str),
     MultiplePreviewLayers,
     SizeOverflow,
     MapFailed(String),
@@ -213,6 +226,7 @@ impl fmt::Display for GpuRasterError {
                 )
             }
             Self::InvalidDabRange => formatter.write_str("dab batch references an invalid range"),
+            Self::InvalidTransform(message) => formatter.write_str(message),
             Self::MultiplePreviewLayers => {
                 formatter.write_str("one frame cannot preview strokes on multiple layers")
             }
@@ -608,6 +622,7 @@ pub struct WgpuRasterizer {
     regions: Option<region_requests::RegionRequests>,
     unclipped: wgpu::Buffer,
     scene: Option<scene::Scene>,
+    transforms: Option<paint_transform::PaintTransforms>,
     thumbnails: thumbnails::Thumbnails,
     canvas_preview: canvas_preview::CanvasOverview,
     color_sampler: color_sample::ColorSampler,
@@ -887,6 +902,7 @@ impl WgpuRasterizer {
             regions: None,
             unclipped,
             scene: None,
+            transforms: None,
             filter_previews: None,
             effect_validation: None,
             validated_effects: None,
@@ -3652,6 +3668,10 @@ impl CanvasRenderer for WgpuRasterizer {
             + m.paint_state_storage_bytes
             + m.composite_storage_bytes
             + self.canvas_preview.storage_bytes()
+            + self
+                .transforms
+                .as_ref()
+                .map_or(0, paint_transform::PaintTransforms::storage_bytes)
             + self.layer_masks.pages.len() as u64 * PAGE_SIZE as u64 * PAGE_SIZE as u64;
         if let Some(scene) = &self.scene {
             t.effect_passes = scene.effect_passes;
@@ -3788,6 +3808,9 @@ impl CanvasRenderer for WgpuRasterizer {
     }
 
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+        if let Some(t) = &mut self.transforms {
+            t.begin_frame();
+        }
         self.last_style_base = packet.dab_batches.len();
         self.last_time_seconds = packet.time_seconds;
         if packet.reset_layers
@@ -4199,10 +4222,27 @@ impl CanvasRenderer for WgpuRasterizer {
                     .iter()
                     .position(|l| l.id == batch.layer_id)
                     .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
-                let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
-                scene.style_base = packet.dab_batches.len();
-                scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
-                self.scene = Some(scene);
+                let operation = &packet.layers[layer_index].operations[op as usize];
+                if matches!(operation.kind, layer_core::LayerOperationKind::Transform(_)) {
+                    let mut transforms = self
+                        .transforms
+                        .take()
+                        .unwrap_or_else(|| paint_transform::PaintTransforms::new(self));
+                    let result = transforms.apply(
+                        self,
+                        &mut encoder,
+                        batch.layer_id,
+                        operation,
+                        packet.document_extent,
+                    );
+                    self.transforms = Some(transforms);
+                    result?;
+                } else {
+                    let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
+                    scene.style_base = packet.dab_batches.len();
+                    scene.apply_operation(self, packet, layer_index, op as usize, &mut encoder)?;
+                    self.scene = Some(scene);
+                }
                 let bounds = packet.layers[layer_index].operations[op as usize]
                     .bounds(packet.document_extent);
                 let offset = scene::world_offset(packet.layers, batch.layer_id, false);

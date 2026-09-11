@@ -8,7 +8,8 @@ pub struct TransformSource {
     origin: [i32; 2],
 }
 pub struct TransformTarget<'a> {
-    /// Single-sample RGBA8Unorm render attachment, never aliasing the source.
+    /// Single-sample RGBA8Unorm (or R8Unorm for scalar mode) render attachment,
+    /// never aliasing the source.
     pub view: &'a wgpu::TextureView,
     /// Actual view extent and its origin in the same space as the source/matrix.
     pub extent: [u32; 2],
@@ -18,6 +19,7 @@ pub struct TransformTarget<'a> {
 }
 
 pub struct PixelTransform {
+    scalar: bool,
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     source_layout: wgpu::BindGroupLayout,
@@ -26,11 +28,20 @@ pub struct PixelTransform {
     stride: u32,
     capacity: u64,
     records: Vec<u8>,
+    next_record: u64,
 }
 impl PixelTransform {
     /// Construct on the renderer worker before interactive previews, then retain
     /// across transactions. Synchronous pipeline compilation is not frame work.
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::with_scalar(device, false)
+    }
+    /// The same resampling kernel for R8 wetness. Overlapping wetness uses max,
+    /// not color's source-over; a move must not invent extra water in overlap.
+    pub fn scalar(device: &wgpu::Device) -> Self {
+        Self::with_scalar(device, true)
+    }
+    fn with_scalar(device: &wgpu::Device, scalar: bool) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("affine transform parameters"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -93,9 +104,16 @@ impl PixelTransform {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fragment_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[("scalar", f64::from(scalar))],
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: super::COLOR_FORMAT,
+                    format: if scalar {
+                        wgpu::TextureFormat::R8Unorm
+                    } else {
+                        super::COLOR_FORMAT
+                    },
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -107,6 +125,7 @@ impl PixelTransform {
             cache: None,
         });
         Self {
+            scalar,
             pipeline,
             layout,
             source_layout,
@@ -121,6 +140,7 @@ impl PixelTransform {
                 * device.limits().min_uniform_buffer_offset_alignment,
             capacity: 0,
             records: Vec::new(),
+            next_record: 0,
         }
     }
     /// Input is linear premultiplied RGBA, optionally cropped to all content.
@@ -137,10 +157,14 @@ impl PixelTransform {
         if texture.dimension() != wgpu::TextureDimension::D2
             || texture.depth_or_array_layers() != 1
             || texture.sample_count() != 1
-            || !matches!(
-                texture.format(),
-                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float
-            )
+            || if self.scalar {
+                texture.format() != wgpu::TextureFormat::R8Unorm
+            } else {
+                !matches!(
+                    texture.format(),
+                    wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float
+                )
+            }
             || !texture
                 .usage()
                 .contains(wgpu::TextureUsages::TEXTURE_BINDING)
@@ -175,9 +199,13 @@ impl PixelTransform {
         });
         Ok(TransformSource { binding, origin })
     }
-    /// Pack every region before encoding any draw, so multiple tiles in one
-    /// submission never accidentally share the last tile's uniform values.
-    /// Finish/submit this encoder before the next encode call (queue writes).
+    /// Begin a submitted frame. Multiple encodes in that frame use distinct
+    /// uniform ranges. Submit the previous frame before calling this again.
+    pub fn begin_frame(&mut self) {
+        self.next_record = 0;
+    }
+    /// Each region and encode gets a distinct uniform offset; later queue writes
+    /// cannot change parameters of earlier operations in the same submission.
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -198,7 +226,11 @@ impl PixelTransform {
         let bytes = (targets.len() as u64)
             .checked_mul(u64::from(self.stride))
             .ok_or("Too many transform regions")?;
-        if bytes > device.limits().max_buffer_size || bytes > u64::from(u32::MAX) {
+        let end = self
+            .next_record
+            .checked_add(bytes)
+            .ok_or("Too many transform regions")?;
+        if end > device.limits().max_buffer_size || end > u64::from(u32::MAX) {
             return Err("Too many transform regions");
         }
         for target in targets {
@@ -219,8 +251,8 @@ impl PixelTransform {
         if targets.is_empty() {
             return Ok(());
         }
-        if bytes > self.capacity {
-            self.capacity = bytes
+        if end > self.capacity {
+            self.capacity = end
                 .next_power_of_two()
                 .min(device.limits().max_buffer_size)
                 .min(u64::from(u32::MAX))
@@ -267,7 +299,7 @@ impl PixelTransform {
             }
         }
         let (buffer, binding) = self.uniforms.as_ref().unwrap();
-        queue.write_buffer(buffer, 0, &self.records);
+        queue.write_buffer(buffer, self.next_record, &self.records);
         for (index, target) in targets.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("affine changed region"),
@@ -286,12 +318,17 @@ impl PixelTransform {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, binding, &[index as u32 * self.stride]);
+            pass.set_bind_group(
+                0,
+                binding,
+                &[self.next_record as u32 + index as u32 * self.stride],
+            );
             pass.set_bind_group(1, &source.binding, &[]);
             let [x, y, w, h] = target.region;
             pass.set_scissor_rect(x, y, w, h);
             pass.draw(0..3, 0..1);
         }
+        self.next_record = end;
         Ok(())
     }
     /// Retained scratch only; source/targets are owned by the transaction host.

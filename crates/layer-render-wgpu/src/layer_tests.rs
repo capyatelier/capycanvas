@@ -7,6 +7,8 @@ use layer_core::{
 use layer_render::{DabStyle, ViewState};
 #[path = "figure_tests.rs"]
 mod figures;
+#[path = "paint_transform_tests.rs"]
+mod transforms;
 
 fn view() -> ViewState {
     ViewState {
@@ -1375,7 +1377,11 @@ fn baked_operations_keep_the_ordinary_brush_path() {
     use layer_core::{DefaultBrushPreset::*, Figure, FigurePaint, FigureShape};
     let mut r = WgpuRasterizer::new().unwrap();
     let asset = AssetId::from("test:baked-operation");
-    let bytes = [60, 120, 180, 170].repeat(128 * 128);
+    // Nonuniform artwork makes a pure blender observable even after a
+    // transform moves the original selection boundary outside its footprint.
+    let bytes: Vec<_> = (0..128 * 128)
+        .flat_map(|i| [30 + (i % 128) as u8, 60 + (i / 128) as u8, 180, 170])
+        .collect();
     r.prepare_asset(
         &asset,
         HostImage {
@@ -1410,6 +1416,10 @@ fn baked_operations_keep_the_ordinary_brush_path() {
             erase: false,
         }),
         LayerOperationKind::ApplyMask,
+        LayerOperationKind::Transform(layer_core::ImageTransform {
+            affine: layer_core::Affine::translation(Point { x: 24., y: 8. }),
+            ..Default::default()
+        }),
     ] {
         for preset in [GPen, NaturalBlender, WatercolorWash] {
             for opacity in [1., 0.45] {
@@ -1429,7 +1439,7 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                         ..batch(1)
                     };
                     submit(&mut r, &[layer.clone()], &[], &[op], true);
-                    assert!(r.scene.is_some(), "operation executes through scene jobs");
+                    assert!(r.scene.is_some(), "image import initializes through scene jobs");
                     let before = r.readback_srgb_rgba8().unwrap();
                     if !keep_history {
                         // Reference: the same already-baked GPU pages without
@@ -1463,7 +1473,10 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                             assert!(r.preview_direct_to_composite);
                         }
                         let image = r.readback_srgb_rgba8().unwrap();
-                        assert_ne!(image, before, "brush must actually change the baked image");
+                        assert!(
+                            image != before,
+                            "{kind:?}, {preset:?}, opacity {opacity}, committed {committed}: brush must change the baked image"
+                        );
                         if keep_history {
                             assert_eq!(
                                 image,

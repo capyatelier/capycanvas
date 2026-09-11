@@ -157,14 +157,19 @@ impl MaskRenderer {
     }
 
     pub fn is_mask(layers: &[Layer], id: LayerId) -> bool {
-        layers
-            .iter()
-            .flat_map(|l| {
-                l.mask
+        Self::masks(layers).any(|m| m.id == id)
+    }
+    fn masks(layers: &[Layer]) -> impl Iterator<Item = &layer_core::LayerMask> {
+        layers.iter().flat_map(|l| {
+            l.mask.iter().chain(
+                l.operations
                     .iter()
-                    .chain(l.operations.iter().map(|o| &o.coverage))
-            })
-            .any(|m| m.id == id)
+                    // Transforms sample packed selection directly, without
+                    // duplicate R8 mask pages for that immutable selection.
+                    .filter(|o| !matches!(o.kind, layer_core::LayerOperationKind::Transform(_)))
+                    .map(|o| &o.coverage),
+            )
+        })
     }
     pub fn prepare(
         &mut self,
@@ -180,20 +185,10 @@ impl MaskRenderer {
             self.pages.clear();
         }
         self.pages.retain(|(id, _), _| Self::is_mask(layers, *id));
-        self.definitions = layers
-            .iter()
-            .flat_map(|l| {
-                l.mask
-                    .iter()
-                    .chain(l.operations.iter().map(|o| &o.coverage))
-            })
+        self.definitions = Self::masks(layers)
             .map(|m| (m.id, m.clone()))
             .collect();
-        for mask in layers.iter().flat_map(|l| {
-            l.mask
-                .iter()
-                .chain(l.operations.iter().map(|o| &o.coverage))
-        }) {
+        for mask in Self::masks(layers) {
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
                 needed.extend(page_coordinates(pixel_rect(selection.bounds(), extent)));

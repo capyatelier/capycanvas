@@ -816,6 +816,9 @@ impl Scene {
             let mask = self.mask_tile(r, &op.coverage, op.coverage.offset, c);
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             match op.kind {
+                LayerOperationKind::Transform(_) => {
+                    unreachable!("transforms execute against immutable captures")
+                }
                 LayerOperationKind::ApplyMask => {
                     let mut resolved = None;
                     if watercolor
