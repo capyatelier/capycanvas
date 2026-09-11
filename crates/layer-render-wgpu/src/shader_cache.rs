@@ -308,13 +308,17 @@ mod tests {
         use crate::{PipelineDevice, WgpuRasterizer};
         use layer_render::CanvasRenderer;
         let temp = Temp::new();
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::VULKAN;
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-        assert!(adapter.features().contains(wgpu::Features::PIPELINE_CACHE));
+        let cache_features = adapter.features() & wgpu::Features::PIPELINE_CACHE;
+        if adapter.get_info().backend == wgpu::Backend::Vulkan {
+            assert!(
+                !cache_features.is_empty(),
+                "Vulkan must exercise driver cache persistence"
+            );
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: wgpu::Features::PIPELINE_CACHE,
+            required_features: cache_features,
             ..Default::default()
         }))
         .unwrap();
@@ -404,7 +408,14 @@ mod tests {
             }
             renderer.submit(packet).unwrap();
             assert_eq!(renderer.readback_srgb_rgba8().unwrap(), expected);
-            assert!(fs::metadata(temp.0.join("startup.bin")).unwrap().len() > HEADER);
+            if cache_features.is_empty() {
+                assert!(
+                    !temp.0.join("startup.bin").exists(),
+                    "Unsupported driver caches must use the normal staged path"
+                );
+            } else {
+                assert!(fs::metadata(temp.0.join("startup.bin")).unwrap().len() > HEADER);
+            }
         }
         // A new device wrapper reads the saved driver blob, then releases it.
         let cached = PipelineDevice::cached(device, &adapter, &temp.0);

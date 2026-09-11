@@ -273,3 +273,18 @@ they are not representative drawing benchmarks. The probes precede integration
 of the incoming linked-mask/sparse-transform work. Early all-zero GPU traces are
 retained locally as rejected instrumentation evidence and excluded from timing
 distributions by the analyzer.
+
+
+The incoming linked-mask transform and sparse-capture work is now integrated.
+Both signed Apple builds pass after that merge; the merged physical iPad app
+installs and launches normally, all 15 Apple/shared-host tests pass, and the
+shared GPU crate checks for WebAssembly. The broader Metal GPU run passed 100
+tests, ignored 16 explicitly marked tests and reported two failures. One was a
+startup-cache test hardcoded to Vulkan; it now chooses the available backend,
+checks exact staged/eager pixels on Metal's unsupported-cache fallback and
+retains persistence assertions when driver caches are supported. Its isolated
+Metal run passes. The other, `runtime_filter_pixel_reference`, still fails with
+maximum channel error 255. The same failure reproduces in an isolated checkout
+of the pre-milestone `d263697` baseline, so it predates these instrumentation and
+merge changes. It remains an open rendering/visual acceptance issue; the fixture
+and tolerance were not changed. Full filter parity is not accepted.
