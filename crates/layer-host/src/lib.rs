@@ -339,38 +339,7 @@ impl NativeHost {
                 3 => PenPhase::Up,
                 _ => PenPhase::Cancel,
             };
-            let contact = match phase {
-                PenPhase::Hover => None,
-                PenPhase::Down => Some(ContactPhase::Down),
-                PenPhase::Move => Some(ContactPhase::Move),
-                PenPhase::Up => Some(ContactPhase::Up),
-                PenPhase::Cancel => Some(ContactPhase::Cancel),
-            };
             let position = [sample[0] as f32, sample[1] as f32];
-            let paint = if correction {
-                true
-            } else if predicted {
-                self.last_pen.is_some_and(|p| p.device_id == id) && tool != 3
-            } else if let Some(phase) = contact {
-                self.input(UiInput::Pointer {
-                    id,
-                    phase,
-                    kind: match tool {
-                        3 => PointerKind::Touch,
-                        1 => PointerKind::Mouse,
-                        _ => PointerKind::Pen,
-                    },
-                    button: match button {
-                        0 => PointerButton::Primary,
-                        1 => PointerButton::Pan,
-                        _ => PointerButton::Other,
-                    },
-                    position,
-                })?
-                .paint
-            } else {
-                false
-            };
             let event = PenEvent {
                 device_id: id,
                 sequence: if update[0] != 0 {
@@ -392,6 +361,7 @@ impl NativeHost {
                 tool: match tool {
                     1 => ToolKind::Mouse,
                     2 => ToolKind::Eraser,
+                    3 => ToolKind::Finger,
                     _ => ToolKind::Pen,
                 },
                 flags: SampleFlags(
@@ -414,39 +384,101 @@ impl NativeHost {
                 ),
             };
             if correction {
+                // Corrections refer to previously admitted sample tokens and never
+                // enter UI pointer ownership or replace the current cursor.
                 self.sequence += 1;
                 self.enqueue(event)?;
                 continue;
             }
-            if tool != 3 && !predicted {
-                self.session.cursor_input(if phase == PenPhase::Cancel {
+            self.pointer_event_inner(
+                event,
+                match button {
+                    0 => PointerButton::Primary,
+                    1 => PointerButton::Pan,
+                    _ => PointerButton::Other,
+                },
+                update[0] != 0,
+            )?;
+        }
+        Ok(())
+    }
+    /// Route a validated typed platform sample through shared input policy.
+    /// Capture-time coordinates, axes, timestamps and flags remain unchanged.
+    /// The host assigns engine sequence numbers, including inserted cancellations.
+    pub fn pointer_event(&mut self, event: PenEvent, button: PointerButton) -> Result<(), String> {
+        if !self.accepts_pointer_input(event.view_revision) {
+            return Ok(());
+        }
+        self.pointer_event_inner(event, button, false)
+    }
+    fn pointer_event_inner(
+        &mut self,
+        mut event: PenEvent,
+        button: PointerButton,
+        preserve_token: bool,
+    ) -> Result<(), String> {
+        let id = event.device_id;
+        let phase = event.phase;
+        let predicted = event.flags.0 & SampleFlags::PREDICTED.0 != 0;
+        let touch = event.tool == ToolKind::Finger;
+        let contact = match phase {
+            PenPhase::Hover => None,
+            PenPhase::Down => Some(ContactPhase::Down),
+            PenPhase::Move => Some(ContactPhase::Move),
+            PenPhase::Up => Some(ContactPhase::Up),
+            PenPhase::Cancel => Some(ContactPhase::Cancel),
+        };
+        let paint = if predicted {
+            self.last_pen.is_some_and(|p| p.device_id == id) && !touch
+        } else if let Some(phase) = contact {
+            self.input(UiInput::Pointer {
+                id,
+                phase,
+                kind: if touch {
+                    PointerKind::Touch
+                } else if event.tool == ToolKind::Mouse {
+                    PointerKind::Mouse
+                } else {
+                    PointerKind::Pen
+                },
+                button,
+                position: [event.surface_position.x, event.surface_position.y],
+            })?
+            .paint
+        } else {
+            false
+        };
+        if !preserve_token {
+            event.sequence = self.sequence + 1;
+        }
+        if !touch && !predicted {
+            self.session.cursor_input(if phase == PenPhase::Cancel {
+                None
+            } else {
+                Some(event)
+            });
+            self.dirty = true;
+        }
+        if !predicted && phase == PenPhase::Down {
+            if self.paint_ready() {
+                self.deferred_contacts.remove(&id);
+            } else {
+                self.deferred_contacts.insert(id);
+            }
+        }
+        let preparing = self.deferred_contacts.contains(&id);
+        if !predicted && matches!(phase, PenPhase::Up | PenPhase::Cancel) {
+            self.deferred_contacts.remove(&id);
+        }
+        if paint && !preparing && self.session.engine().backend().0.is_some() {
+            self.sequence += 1;
+            self.enqueue(event)?;
+            if !predicted {
+                self.last_pen = if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
                     None
                 } else {
                     Some(event)
-                });
-                self.dirty = true;
-            }
-            if phase == PenPhase::Down {
-                if self.paint_ready() {
-                    self.deferred_contacts.remove(&id);
-                } else {
-                    self.deferred_contacts.insert(id);
-                }
-            }
-            let preparing = self.deferred_contacts.contains(&id);
-            if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
-                self.deferred_contacts.remove(&id);
-            }
-            if paint && !preparing && self.session.engine().backend().0.is_some() {
-                self.sequence += 1;
-                self.enqueue(event)?;
-                if !predicted {
-                    self.last_pen = if matches!(phase, PenPhase::Up | PenPhase::Cancel) {
-                        None
-                    } else {
-                        Some(event)
-                    };
-                }
+                };
             }
         }
         Ok(())
@@ -1299,6 +1331,188 @@ mod tests {
         assert_eq!(app.take_snapshot().unwrap()["error"], "surface lost");
         app.resize(1600, 2560, 2.0).unwrap();
         assert!(app.take_snapshot().unwrap().get("layout").is_some());
+    }
+
+    #[test]
+    fn predicted_boundaries_cannot_end_a_deferred_real_contact() {
+        let mut app = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        app.resize(1600, 1000, 2.0).unwrap();
+        let mut event = PenEvent {
+            device_id: 1,
+            sequence: 99,
+            timestamp_ns: (1u64 << 54) + 1,
+            view_revision: app.session.state().camera.revision,
+            surface_position: Point { x: 400., y: 300. },
+            pressure: 0.5,
+            tilt_radians: [0.1, 0.2],
+            twist_radians: 0.3,
+            distance: 0.,
+            phase: PenPhase::Down,
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
+        };
+        app.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(app.deferred_contacts.contains(&1));
+        event.phase = PenPhase::Up;
+        event.flags = SampleFlags(SampleFlags::PRIMARY.0 | SampleFlags::PREDICTED.0);
+        app.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(app.deferred_contacts.contains(&1));
+        assert_eq!(
+            app.sequence, 0,
+            "Unavailable brushes must not create partial strokes"
+        );
+        event.flags = SampleFlags::PRIMARY;
+        app.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(!app.deferred_contacts.contains(&1));
+    }
+
+    #[test]
+    fn typed_touch_uses_the_same_shared_navigation_as_packed_input() {
+        let mut typed = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        let mut packed = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        for app in [&mut typed, &mut packed] {
+            app.resize(1600, 1000, 2.0).unwrap();
+        }
+        for (id, x, phase) in [(1, 400., 1), (2, 600., 1), (2, 750., 2), (2, 750., 3)] {
+            let event = PenEvent {
+                device_id: id,
+                sequence: 1,
+                timestamp_ns: 1_000_000,
+                view_revision: typed.session.state().camera.revision,
+                surface_position: Point { x, y: 300. },
+                pressure: 1.,
+                tilt_radians: [0., 0.],
+                twist_radians: 0.,
+                distance: 0.,
+                phase: match phase {
+                    1 => PenPhase::Down,
+                    2 => PenPhase::Move,
+                    _ => PenPhase::Up,
+                },
+                tool: ToolKind::Finger,
+                flags: SampleFlags::PRIMARY,
+            };
+            typed.pointer_event(event, PointerButton::Primary).unwrap();
+            packed
+                .pointer(
+                    id,
+                    3,
+                    0,
+                    &[x as f64, 300., 1., 0., 0., 0., 0., 1_000_000., phase as f64],
+                    false,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            json!(typed.session.state().camera),
+            json!(packed.session.state().camera)
+        );
+        assert_eq!(typed.sequence, 0);
+    }
+
+    #[test]
+    fn typed_samples_from_retired_or_closed_documents_do_not_acquire_contacts() {
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.resize(800, 600, 1.).unwrap();
+        let old_revision = host.session.state().camera.revision;
+        host.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ZoomIn,
+        })
+        .unwrap();
+        host.document_adopted();
+        assert!(host.session.state().camera.revision > old_revision);
+        let mut event = PenEvent {
+            device_id: 1,
+            sequence: 1,
+            timestamp_ns: 1_000_000,
+            view_revision: old_revision,
+            surface_position: Point { x: 400., y: 300. },
+            pressure: 0.5,
+            tilt_radians: [0.; 2],
+            twist_radians: 0.,
+            distance: 0.,
+            phase: PenPhase::Down,
+            tool: ToolKind::Pen,
+            flags: SampleFlags::PRIMARY,
+        };
+        host.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(host.deferred_contacts.is_empty());
+        host.session.require_document_idle().unwrap();
+        host.session.request_document_close().unwrap();
+        assert!(host.session.state().document_file.close_ready);
+        event.view_revision = host.session.state().camera.revision;
+        host.pointer_event(event, PointerButton::Primary).unwrap();
+        assert!(host.deferred_contacts.is_empty());
+        host.session.require_document_idle().unwrap();
+    }
+
+    #[test]
+    #[ignore = "Requires an explicitly selected hardware GPU"]
+    fn estimated_input_tokens_reach_committed_stroke_corrections() {
+        let gpu = layer_render_wgpu::WgpuRasterizer::new_headless().unwrap();
+        assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
+        let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        host.session = UiSession::from_project(
+            Renderer(Some(gpu)),
+            layer_ui::new_drawing(64, 48).unwrap(),
+            None,
+            [64, 48],
+        )
+        .unwrap();
+        host.session.frame(0, 0).unwrap();
+        assert!(host.paint_ready());
+        let revision = host.session.state().camera.revision;
+        for (token, pending, x, phase, time) in [
+            (9001, 1, 20., 1., 10_000_000.),
+            (9002, 0, 40., 2., 20_000_000.),
+            (9003, 0, 40., 3., 21_000_000.),
+        ] {
+            host.pointer_batch_updates(
+                PointerBatch {
+                    id: 7,
+                    tool: 0,
+                    button: 0,
+                    predicted: false,
+                    view_revision: revision,
+                    records: &[x, 24., 0.25, 0., 0., 0., 0., time, phase],
+                },
+                &[token, pending],
+                false,
+            )
+            .unwrap();
+            host.session.frame(time as u64, time as u64).unwrap();
+        }
+        assert!(host.last_pen.is_none());
+        let stroke = host.session.engine().document().strokes().next().unwrap();
+        let before = stroke.points[0];
+        assert_eq!(before.pressure, 0.25);
+        let count = stroke.points.len();
+        let camera = json!(host.session.state().camera);
+        host.pointer_batch_updates(
+            PointerBatch {
+                id: 7,
+                tool: 0,
+                button: 0,
+                predicted: false,
+                view_revision: revision,
+                records: &[24., 24., 0.9, 0.2, -0.3, 1.7, 0., 10_000_000., 1.],
+            },
+            &[9001, 0],
+            true,
+        )
+        .unwrap();
+        host.session.frame(30_000_000, 30_000_000).unwrap();
+        let stroke = host.session.engine().document().strokes().next().unwrap();
+        assert_eq!(stroke.points.len(), count);
+        assert_eq!(stroke.points[0].pressure, 0.9);
+        assert_eq!(stroke.points[0].tilt, [0.2, -0.3]);
+        assert_eq!(stroke.points[0].twist, 1.7);
+        assert!(stroke.points[0].position.x > before.position.x);
+        assert_eq!(host.session.engine().document().strokes().count(), 1);
+        assert!(host.last_pen.is_none());
+        assert!(host.deferred_contacts.is_empty());
+        assert_eq!(json!(host.session.state().camera), camera);
+        host.session.require_document_idle().unwrap();
     }
 
     #[test]

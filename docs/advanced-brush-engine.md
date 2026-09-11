@@ -167,6 +167,15 @@ display transform does not mutate stored paint, and pen-up does not change the
 result. Merging the layer down and creating a new watercolor layer is the
 explicit drying workflow.
 
+The outer band borrows color only from occupied wet-mask samples, never from
+nearby dry pigment. This keeps a separate opaque dry mark from recoloring or
+strengthening the watercolor halo. A layer mask clips the composed rim and
+outer band without changing pigment or wetness; disabling it restores both.
+The temporary drawing selection still limits deposited pigment/water, not the
+whole layer's display effect. A strict per-stroke selection boundary for that
+display effect remains a separate policy decision, not a reason to mask older
+artwork with the current selection.
+
 The 2026
 [Dripping Thin Films](https://research.adobe.com/publication/dripping-thin-films-for-real-time-digital-painting/)
 work is promising for an optional watercolor relaxation stage because it offers

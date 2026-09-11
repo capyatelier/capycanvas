@@ -228,6 +228,8 @@ pub struct UiCatalog {
     pub panels: Vec<PanelChoice>,
     pub toolbar: &'static [ToolbarControl],
     pub menus: &'static [MenuSpec],
+    /// Primary drawing tools for hosts that also expose a compact tool chooser.
+    pub tool_commands: &'static [CommandId],
     pub file_menu: MenuSpec,
     pub new_document: session::NewDocumentSpec,
     pub layer_commands: &'static [CommandId],
@@ -351,6 +353,7 @@ pub fn ui_catalog() -> UiCatalog {
         file_menu: FILE_MENU,
         new_document: session::new_document_spec(),
         layer_commands: &CommandId::LAYERS,
+        tool_commands: &CommandId::TOOLS,
         brush_categories: brush_categories().collect(),
         brush_sizes: BRUSH_SIZES,
         brush_size: NumericControl::brush_size(),
@@ -580,6 +583,26 @@ impl CommandId {
         Self::Website,
         Self::SourceCode,
     ];
+    pub const TOOLS: [Self; 18] = [
+        Self::Pen,
+        Self::Pencil,
+        Self::Brush,
+        Self::Eraser,
+        Self::Airbrush,
+        Self::Decoration,
+        Self::Blend,
+        Self::Liquify,
+        Self::Lasso,
+        Self::Move,
+        Self::ScaleRotate,
+        Self::Hand,
+        Self::Eyedropper,
+        Self::Gradient,
+        Self::Figure,
+        Self::Ruler,
+        Self::AutoSelect,
+        Self::Fill,
+    ];
     pub const LAYERS: [Self; 4] = [
         Self::AddLayer,
         Self::DeleteLayer,
@@ -656,6 +679,8 @@ impl CommandId {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CommandState {
     pub id: CommandId,
+    /// Use a native checkable menu item only for retained on/off commands.
+    pub checkable: bool,
     pub icon: Option<&'static str>,
     pub label: &'static str,
     pub enabled: bool,

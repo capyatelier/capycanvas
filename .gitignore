@@ -47,3 +47,20 @@ DerivedData/
 xcuserdata/
 *.xcresult/
 *.mobileprovision
+
+# Windows local tool state and generated build data.
+.vs/
+*.vcxproj.user
+/apps/layer-windows/Generated Files/
+/apps/layer-windows/x64/
+/apps/layer-windows/ipch/
+
+# Private Windows diagnostics, including accidental launches from the repo root.
+*.dmp
+*.etl
+*.wer
+canvas-state.json
+presentation-probe.json
+
+# Opt-in native UI test snapshots can contain user settings.
+ui-state.json

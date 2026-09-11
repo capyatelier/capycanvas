@@ -116,3 +116,10 @@ ring and field must have at least 20 samples. The report retains every count and
 the worst failures. This checks sampled color correctness only; it does not
 replace full-image Chrome comparisons or establish editor visual parity. The
 web renderer currently has no matching custom color-wheel fixture.
+
+A fixture may include `hue` alongside `rgba` to preserve the remembered hue of
+black, white or gray paint. The oracle applies that hue through shared color
+policy; it is not inferred from the screenshot. Existing fixtures may omit it.
+On Windows, pass the built `color_wheel_reference.exe` with `--oracle`.
+The comparator's test doubles use `--oracle-interpreter` so their tests run
+without relying on POSIX executable-script behavior.

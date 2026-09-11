@@ -348,6 +348,24 @@ prints a warning, is compiled out of production hosts, and must never supply
 hardware performance evidence. Keep local loader paths and machine logs in
 ignored artifacts. No runtime dependency or default backend selection changes.
 
+The full strict v3 comparison remained a failing cross-backend gate. Its reference,
+one-byte tolerance and all channels remain intact. Browser WebGPU has not yet
+been checked against v3; no cross-backend pixel-parity claim is made.
+
+### Windows D3D12 integration check
+
+A serial hardware D3D12 run at the Windows integration of 007284c reports 110
+passed, 2 failed and 17 ignored benchmark tests. The strict v3 sheet still fails
+with maximum channel error 255. Its reference and one-byte tolerance are
+unchanged.
+
+The new pointwise scalar oracle also fails in Curves: for source
+[113, 142, 121, 255], the output is [102, 152, 117, 255], while the independent
+red-channel expectation is 104 (pre-storage linear byte 34.500680587002336).
+The test stops at that first mismatch, so its Exposure loop was not evaluated
+in this run. This is evidence of a D3D12 mismatch; the cause has not been
+established. The independent imported ramp and Halftone endpoint tests pass.
+Raw failure images and GPU logs remain under ignored local artifacts.
 At that milestone the full strict v3 comparison remained a failing cross-backend
 gate. No tolerance or channels were relaxed. Browser WebGPU was not checked.
 
@@ -430,3 +448,17 @@ or exclusions; 17 hardware benchmarks remain separately ignored. This includes
 incremental/full equivalence, clipping, masks, preview crops, preparation
 invalidation/reuse, fusion, animation and the independent color checks. The v4
 sheet was visually inspected. The software alpha-oracle repeat also passes.
+
+### Windows D3D12 storage-conversion check
+
+The Windows integration through upstream 75c72f8 runs the complete renderer
+suite serially on hardware D3D12: 113 pass, one fails and 17 performance tests
+remain separately ignored. Curves and Exposure now pass the independent scalar
+oracle across all six alpha levels. The imported ramp across every alpha value,
+Halftone endpoints and both new watercolor regressions also pass.
+
+The strict v4 sheet still fails, with maximum channel error 30. The one-byte
+tolerance and all channels remain unchanged. This run does not establish the
+cause or full cross-backend parity; the remaining discrepancy needs independent
+isolation. Windows did not regenerate the reference or adjust expectations.
+Raw output and diagnostic images stay in ignored local artifacts.

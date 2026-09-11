@@ -17,6 +17,7 @@ parser.add_argument("image", type=Path)
 parser.add_argument("fixture", type=Path)
 parser.add_argument("--oracle", type=Path, default=Path("target/debug/examples/color_wheel_reference"))
 parser.add_argument("--output", type=Path, required=True)
+parser.add_argument("--oracle-interpreter", type=Path, help="Interpreter for a script oracle, including test doubles")
 parser.add_argument("--channel-tolerance", type=int, default=2)
 args = parser.parse_args()
 if not 0 <= args.channel_tolerance <= 255:
@@ -48,7 +49,12 @@ for y in range(math.ceil(top * scale), math.floor((top + wheel_height) * scale),
         for dx, dy in [(0,0),(-2,0),(2,0),(0,-2),(0,2)]:
             points.append([((x+0.5+dx)/scale-left)/wheel_width, ((y+0.5+dy)/scale-top)/wheel_height])
 request = {"space": fixture["space"], "rgba": fixture["rgba"], "points": points}
-oracle = subprocess.run([str(args.oracle.resolve())], input=json.dumps(request), text=True, capture_output=True, check=True)
+if "hue" in fixture:
+    request["hue"] = fixture["hue"]
+command = [str(args.oracle.resolve())]
+if args.oracle_interpreter:
+    command.insert(0, str(args.oracle_interpreter.resolve()))
+oracle = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True, check=True)
 reference = json.loads(oracle.stdout)
 markers = [reference["model"][key] for key in ["hue_marker", "field_marker"]]
 checked = {"hue": 0, "field": 0}

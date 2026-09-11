@@ -9,6 +9,9 @@ use std::io::Read;
 struct Request {
     space: ColorSpace,
     rgba: [f32; 4],
+    /// Achromatic paint retains a hue that cannot be recovered from RGBA alone.
+    #[serde(default)]
+    hue: Option<f32>,
     points: Vec<[f32; 2]>,
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,6 +23,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.apply(ColorAction::Space {
         space: request.space,
     })?;
+    if let Some(value) = request.hue {
+        state.apply(ColorAction::Component { index: 0, value })?;
+    }
     let geometry = ColorWheelGeometry::new(1.).unwrap();
     let samples: Vec<_> = request
         .points
