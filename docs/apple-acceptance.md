@@ -852,3 +852,13 @@ ink currently replay the scene: long strokes, 4K multilayer costs and sustained
 120 Hz performance remain unverified. The trace reports correction queueing and
 receipt/presentation proxies separately. See [Apple input details](../apps/layer-apple/INPUT.md)
 for the shared contract, exact bounds, limitations and reproducible checks.
+
+The parallel port's independent filter-reference reconciliation is integrated,
+and the WebAssembly build passes with the shared correction changes. Its sRGB
+import oracle passes on Metal. The strict `runtime_filter_pixel_reference`
+comparison against the new Vulkan-generated v3 fixture fails on this Mac with
+maximum channel error 255. That test constructs renderer packets directly and
+does not exercise the input-correction path. Full input/output/difference
+artifacts remain local; no channel masks, fixture replacement or tolerance
+relaxation was applied. Cross-backend filter parity remains an explicit failing
+gate and requires further investigation beyond this input milestone.
