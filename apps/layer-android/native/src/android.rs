@@ -67,6 +67,9 @@ impl App {
         .map_err(error)?;
         let [width, height] = self.host.session.state().camera.viewport;
         if self.host.session.engine().backend().0.is_none() {
+            // Readiness belongs to this GPU initialization, including hosts
+            // whose shared state otherwise defaults to eager rendering.
+            self.host.startup = Default::default();
             let adapter =
                 pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                     compatible_surface: Some(&surface),
