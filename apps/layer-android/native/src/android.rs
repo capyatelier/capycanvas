@@ -563,3 +563,27 @@ pub extern "system" fn Java_art_capycanvas_Native_number(
         .and_then(|value| serde_json::to_string(&value).map_err(error));
     string(&mut env, result)
 }
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_colorWheelHit(
+    mut env: JNIEnv,
+    _: JClass,
+    request: JString,
+) -> jstring {
+    #[derive(serde::Deserialize)]
+    struct Hit {
+        size: f32,
+        point: [f32; 2],
+        space: layer_ui::ColorSpace,
+    }
+    let result = read(&mut env, &request)
+        .and_then(|s| serde_json::from_str::<Hit>(&s).map_err(error))
+        .and_then(|hit| {
+            serde_json::to_string(
+                &layer_ui::ColorWheelGeometry::new(hit.size)
+                    .and_then(|geometry| geometry.hit(hit.point, hit.space)),
+            )
+            .map_err(error)
+        });
+    string(&mut env, result)
+}
