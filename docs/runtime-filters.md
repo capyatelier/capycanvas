@@ -326,3 +326,10 @@ The complete Vulkan renderer suite after this correction reports 103 passing
 tests, the one strict-reference failure above, and 16 ignored hardware benchmarks.
 This includes the GPU import oracle, all catalog algorithms, prepared-data reuse,
 dirty-region equivalence, clipping, masks, transforms and brush interactions.
+
+The merged explicit-rounding path was also checked on Metal. The filter-library
+suite passes 15 tests, including the 1,536-pixel transfer-curve oracle, with the
+same strict saved-reference failure at maximum channel error 255 and three
+ignored benchmarks. Both Apple builds and the Apple/host/UI suites pass. These
+checks validate the import correction on Metal; reconciling the historical PNG
+and demonstrating complete cross-backend parity remain open.

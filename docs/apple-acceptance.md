@@ -359,3 +359,12 @@ layer-added scenario. Tool Settings is currently implemented in GTK/shared
 models but absent from the web renderer, so its native captures are inspection
 evidence rather than matching Chrome fixtures. Complete visual, physical-input,
 persistence and sustained-performance acceptance remains open on both platforms.
+
+After integrating the subsequent shared collapsed-column interactions and
+explicit GPU import quantization, both signed Apple builds pass, as do all 223
+Apple/shared-host/shared-UI tests (9 + 8 + 206). The Metal filter-library checks
+pass 15 tests, including the transfer-curve oracle; the unchanged saved-reference
+failure remains at maximum channel error 255, with three explicitly ignored
+benchmarks. The control UI tests and visual captures above precede that merge;
+they do not validate the new collapsed-column UI, which Apple still needs to
+project. The final merged builds install/launch through the normal native paths.
