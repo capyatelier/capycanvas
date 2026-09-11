@@ -150,6 +150,10 @@ through dynamic states and existing host controls: it is a starting point, not
 a completeness proof. Track every entry's shared implementation, native service
 dependencies and separate iPad/Mac verification. Incoming shared features from
 other ports are in scope.
+The latest shared Operation/transform controller is integrated and expands the
+command catalog to 48 entries. Its specialized Apple controls remain unfinished.
+The layer pixel reports below were captured before this final shared integration;
+they do not establish acceptance of the new Operation workflows.
 
 The inventory now includes six layer states on each Apple platform: paint/paper,
 multiple checked rows, a mask with clipping/references and copied-mask state,
