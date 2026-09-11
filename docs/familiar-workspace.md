@@ -855,3 +855,74 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   frames or physical pen-to-display latency. Reproduce with `native_frame_pacing`,
   `LAYER_PACING_BRUSH=GPen` and optional `LAYER_PACING_RULER=visible` or `snap`.
   Reports: `/tmp/capy-ruler-{none,visible,snap}.json`.
+
+### Operation / transform foundation (not yet exposed)
+
+- Shared affine geometry and a GPU cut-and-place primitive are implemented.
+  The intended interaction follows [CSP's transform controls](https://help.clip-studio.com/en-us/manual_en/360_transform/Transform_using_the_Tool_Settings_palette.htm)
+  and [Krita's transform handles](https://docs.krita.org/en/reference_manual/tools/transform.html):
+  a persistent transform box, move/scale/rotate, numeric values, and explicit
+  apply/cancel. These editor controls are **not implemented yet**. No inert
+  Operation button has been added.
+- `ImageTransform` holds a document-space affine matrix and nearest/linear
+  interpolation. CPU work is geometry, validation and parameter packing only.
+  `PixelTransform` consumes an immutable premultiplied source texture, optional
+  existing packed selection coverage, and a batch of output regions. Each
+  preview resamples the original, never the previous preview. Source and output
+  must be separate resources; a cropped source must include all original content
+  needed as the unselected backdrop, not just the selected pixels.
+- Selection coverage weights each source texel before interpolation. This
+  prevents unselected colors bleeding into transformed edges. Out-of-source
+  samples are transparent, including extreme translations. Exact identity
+  returns the original unchanged. Other transforms use ordinary cut then
+  source-over: partially selected overlap can change fractional alpha; the
+  identity fast path does not claim to solve that general compositing tradeoff.
+- A single uniform upload assigns distinct dynamic offsets to all output
+  regions; source bindings and parameter storage are retained. Only supplied
+  scissor regions are written. Full-image and tiled output match byte-for-byte.
+  Submit an encoded batch before the next batch updates the shared uniform arena.
+  There are no production waits/readbacks, per-frame textures or per-tile
+  bind-group creations in this primitive.
+- At 2048×1536 an uncropped immutable RGBA8 source costs 12MiB. A separate full
+  preview image would cost another 12MiB unless existing output pages are reused;
+  optional full-image packed selection coverage costs about 1.5MiB. The primitive
+  itself owns neither image. Measured retained GPU parameter storage is 304B for
+  one target and 16,432B for 48 targets, with 12KiB CPU packing for the latter.
+  Bind-group/pipeline driver overhead is not included in these byte counts.
+- Workstation release microbenchmark, 120 measured updates after 40 warmups,
+  2048×1536 RGBA8. Matrices change every update except the copy baseline:
+
+  | Work | CPU encode/submit median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | Identity copy baseline | 0.013 / 0.017 / 0.859 | 0.011 / 0.012 / 0.013 | 0.055 / 0.066 / 0.916 |
+  | Whole-layer transform | 0.018 / 0.020 / 0.042 | 0.030 / 0.030 / 0.031 | 0.080 / 0.085 / 0.111 |
+  | Selected transform | 0.018 / 0.025 / 0.125 | 0.042 / 0.043 / 0.043 | 0.093 / 0.120 / 0.291 |
+  | Selected, 48 output tiles | 0.172 / 0.276 / 0.545 | 0.100 / 0.102 / 0.103 | 0.318 / 0.436 / 0.720 |
+  | Selected, one 256px region | 0.013 / 0.014 / 0.019 | 0.005 / 0.006 / 0.006 | 0.049 / 0.052 / 0.059 |
+
+  These measure the primitive, not source capture, composition, GTK input or
+  presentation. Completed latency includes a test-only GPU wait. First pipeline
+  creation took 33.1ms: compile on the renderer worker before live interaction,
+  never inside pointer processing. A preliminary build including unrelated
+  concurrent startup changes had a 15.464ms copy-baseline completion p99; the
+  table is from an isolated source snapshot. That difference is not attributed
+  to a transform optimization. Reproduce with the ignored release renderer test
+  `pixel_transform::tests::transform_latency` on an otherwise idle GPU.
+  A repeat gave selected full-layer GPU p99 0.045ms and 48-tile GPU p99 0.102ms,
+  with completion p99 0.258/0.647ms respectively; cached pipeline creation was
+  1.008ms. Both runs fit the primitive's warm budget, not a full editor frame.
+- Correctness tests compare 48 combinations of interpolation, transforms and
+  coverage against an independent double-precision pixel oracle, including
+  fractional/inverted selection, alpha, cropped/offset source, flips, rotation,
+  enlargement, reduction and extreme translation. Additional tests verify tile
+  seams, untouched scissor pixels, immutable input, invalid-input rejection and
+  retained allocation reuse.
+  The isolated build passes 30 core, 27 engine, 183 shared-UI and 82 GPU
+  correctness tests, plus strict all-target Clippy for core/renderer and
+  workspace/Wasm compilation. Hardware benchmarks are separate from these totals.
+- Still required before exposing Operation: ordered document-history integration,
+  source capture and preview lifecycle, selection/linked-mask transforms,
+  watercolor/material-channel handling, dirty old/new footprint propagation,
+  cancel/commit/undo, shared handles and numeric settings, GTK rendering/input,
+  and end-to-end latency/visual tests. Existing painting is unchanged; this is a
+  tested rendering foundation, **not completion of the Operation milestone**.

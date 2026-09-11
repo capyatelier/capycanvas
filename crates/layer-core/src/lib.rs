@@ -15,6 +15,8 @@ mod figures;
 pub use figures::{Figure, FigurePaint, FigureShape};
 mod rulers;
 pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
+mod affine;
+pub use affine::{Affine, ImageTransform, Interpolation};
 
 pub use presets::{
     BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,

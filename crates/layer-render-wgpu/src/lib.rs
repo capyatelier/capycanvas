@@ -22,6 +22,7 @@ use std::{borrow::Cow, fmt, mem, num::NonZeroU64, sync::mpsc, time::Duration};
 
 mod canvas_preview;
 mod color_sample;
+pub mod pixel_transform;
 mod effect_validation;
 mod effects;
 mod flood;
