@@ -3,7 +3,7 @@
 use crate::android::{app, error, fail, read};
 use jni::{
     JNIEnv,
-    objects::{JClass, JObject, JString},
+    objects::{JClass, JString},
     sys::{jboolean, jint, jlong},
 };
 use layer_core::{Project, ProjectLimits};
@@ -28,6 +28,7 @@ struct Environment {
 }
 enum Payload {
     Save(Option<Project>),
+    Export(Option<layer_render_wgpu::ExportReadback>),
     Open {
         environment: Option<Environment>,
         candidate: Option<Box<UiSession<Renderer>>>,
@@ -220,6 +221,17 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
                     out.flush().map_err(error)?;
                     out.get_ref().sync_all().map_err(error)
                 }
+                Payload::Export(readback) => {
+                    let image = readback
+                        .take()
+                        .ok_or("Export already encoded")?
+                        .finish()
+                        .map_err(error)?;
+                    let mut out = BufWriter::new(input.ok_or("Missing export output")?);
+                    image.write_png(&mut out)?;
+                    out.flush().map_err(error)?;
+                    out.get_ref().sync_all().map_err(error)
+                }
                 Payload::Open { .. } => {
                     prepare(t, input, width.max(0) as u32, height.max(0) as u32)
                 }
@@ -317,20 +329,16 @@ pub extern "system" fn Java_art_capycanvas_Native_documentClose(
     fail(&mut env, result);
 }
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_documentPixels(
+pub extern "system" fn Java_art_capycanvas_Native_projectExportTask(
     mut env: JNIEnv,
     _: JClass,
     handle: jlong,
     id: jint,
-) -> jni::sys::jobjectArray {
+    now: jlong,
+) -> jlong {
     let result = (|| {
         let a = unsafe { app(handle) };
-        if a.host.dirty
-            || !a.host.startup.canvas_ready
-            || a.host.session.engine().has_pending_document_edits()
-        {
-            return Ok(std::ptr::null_mut());
-        }
+        a.host.session.require_document_idle()?;
         if !a.host.session.state().requests.iter().any(|r| {
             r.id == id as u32
                 && matches!(
@@ -342,30 +350,37 @@ pub extern "system" fn Java_art_capycanvas_Native_documentPixels(
         }) {
             return Err("Export is no longer active".into());
         }
-        let renderer = a.host.session.renderer_mut();
-        renderer.request_readback(id as u64).map_err(error)?;
-        let image = renderer
-            .take_readback()
-            .ok_or("Export produced no image")?
-            .map_err(error)?;
-        let values = env
-            .new_object_array(2, "java/lang/Object", JObject::null())
-            .map_err(error)?;
-        let header = env
-            .new_string(serde_json::json!([image.width, image.height]).to_string())
-            .map_err(error)?;
-        let pixels = env.byte_array_from_slice(&image.bytes).map_err(error)?;
-        env.set_object_array_element(&values, 0, header)
-            .map_err(error)?;
-        env.set_object_array_element(&values, 1, pixels)
-            .map_err(error)?;
-        Ok(values.into_raw())
+        a.host.prepare_canvas_frame(now as u64, now as u64, true)?;
+        if !a.host.startup.canvas_ready || a.host.session.engine().has_pending_document_edits() {
+            return Ok(0);
+        }
+        let epoch = a.host.session.state().document_file.epoch;
+        let revision = a.host.session.engine().document().revision;
+        let gpu = a
+            .host
+            .session
+            .renderer_mut()
+            .0
+            .as_mut()
+            .ok_or("Canvas is unavailable")?;
+        if !gpu.export_ready() {
+            return Ok(0);
+        }
+        // Only submit a snapshot here. GPU wait, row packing and PNG encoding
+        // belong to projectWork; no document-sized byte arrays cross JNI.
+        let readback = gpu.begin_export_readback(id as u64).map_err(error)?;
+        Ok(Box::into_raw(Box::new(Task {
+            epoch,
+            revision,
+            request: id as u32,
+            payload: Payload::Export(Some(readback)),
+        })) as jlong)
     })();
     match result {
         Ok(value) => value,
         Err(e) => {
             fail(&mut env, Err(e));
-            std::ptr::null_mut()
+            0
         }
     }
 }

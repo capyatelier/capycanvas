@@ -11,7 +11,7 @@ crate-type = ["cdylib", "rlib"]
 layer-host = { path = "../../../crates/layer-host" }
 layer-core = { path = "../../../crates/layer-core" }
 layer-engine = { path = "../../../crates/layer-engine" }
-layer-render = { path = "../../../crates/layer-render" }
+layer-render = { path = "../../../crates/layer-render", features = ["png"] }
 layer-render-wgpu = { path = "../../../crates/layer-render-wgpu" }
 layer-ui = { path = "../../../crates/layer-ui" }
 serde = { version = "1", features = ["derive"] }
@@ -23,4 +23,3 @@ wgpu = "30.0.1"
 jni = "0.21"
 ndk-sys = "0.6"
 raw-window-handle = "0.6"
-

@@ -31,7 +31,7 @@ internal object Native {
     @JvmStatic external fun projectFree(task: Long)
     @JvmStatic external fun documentComplete(handle: Long, request: Int, success: Boolean, error: String)
     @JvmStatic external fun documentClose(handle: Long, request: Int, decision: String)
-    @JvmStatic external fun documentPixels(handle: Long, request: Int): Array<Any>?
+    @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long): Long
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String
     /** Pure shared color-wheel hit geometry, independent of the render thread. */

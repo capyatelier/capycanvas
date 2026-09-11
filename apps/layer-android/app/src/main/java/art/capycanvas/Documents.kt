@@ -6,7 +6,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
-import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,7 +20,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -91,48 +89,30 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     } ?: uri.lastPathSegment ?: document.optString("name", "Drawing.capy")
                     obj("uri" to uri.toString(), "name" to name)
                 }
-                if (kind == "export") {
-                    val data = withTimeout(30_000) {
-                        var image: Array<Any>? = null
-                        while (image == null) {
-                            image = host.withNative { Native.documentPixels(it, id) }
-                            if (image == null) { host.documentChanged(); delay(16) }
-                        }
-                        image
+                if (kind == "export") withTimeout(30_000) {
+                    while (task == 0L) {
+                        task = host.withNative { Native.projectExportTask(it, id, System.nanoTime()) }
+                        if (task == 0L) { host.documentChanged(); delay(16) }
                     }
+                } else task = host.withNative { Native.projectTask(it, id, location?.toString() ?: "null", approved.first, approved.second) }
+                if (kind == "save" || kind == "export") {
+                    // Finish encoding before opening/truncating the destination.
+                    temporary = withContext(Dispatchers.IO) { File.createTempFile("capy-save-", if (kind == "export") ".png" else ".capy", application.cacheDir) }
                     withContext(Dispatchers.IO) {
-                        val size = JSONArray(data[0] as String)
-                        val bitmap = Bitmap.createBitmap(size.getInt(0), size.getInt(1), Bitmap.Config.ARGB_8888)
-                        try {
-                            bitmap.setPremultiplied(false)
-                            bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(data[1] as ByteArray))
-                            application.contentResolver.openOutputStream(uri!!, "wt")?.use {
-                                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "PNG encoding failed" }; it.flush()
-                            } ?: error("The selected file cannot be written")
-                        } finally { bitmap.recycle() }
+                        val fd = ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_WRITE).detachFd()
+                        Native.projectWork(task, fd, 0, 0)
+                        application.contentResolver.openOutputStream(uri!!, "wt")?.use { output ->
+                            temporary!!.inputStream().use { it.copyTo(output) }; output.flush()
+                        } ?: error("The selected file cannot be written")
                     }
                     finish(id, true)
                 } else {
-                    task = host.withNative { Native.projectTask(it, id, location?.toString() ?: "null", approved.first, approved.second) }
-                    if (kind == "save") {
-                        // Finish encoding before opening/truncating the destination.
-                        temporary = withContext(Dispatchers.IO) { File.createTempFile("capy-save-", ".capy", application.cacheDir) }
-                        withContext(Dispatchers.IO) {
-                            val fd = ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_WRITE).detachFd()
-                            Native.projectWork(task, fd, 0, 0)
-                            application.contentResolver.openOutputStream(uri!!, "wt")?.use { output ->
-                                temporary!!.inputStream().use { it.copyTo(output) }; output.flush()
-                            } ?: error("The selected file cannot be written")
-                        }
-                        finish(id, true)
-                    } else {
-                        withContext(Dispatchers.IO) {
-                            val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error("The selected file cannot be read")
-                            Native.projectWork(task, fd, width, height)
-                        }
-                        host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
-                        host.documentChanged()
+                    withContext(Dispatchers.IO) {
+                        val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error("The selected file cannot be read")
+                        Native.projectWork(task, fd, width, height)
                     }
+                    host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
+                    host.documentChanged()
                 }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { finish(id, false) }

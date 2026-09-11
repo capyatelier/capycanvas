@@ -36,6 +36,8 @@ Compose supplies widgets and Android owns input, surfaces and file transport.
   File reads, project encoding and candidate GPU preparation run off the render
   owner. A replacement is adopted only if its approved document epoch/revision
   still matches; the existing drawing survives a failed or cancelled open.
+  PNG export submits a GPU snapshot on the owner, then waits, packs rows and
+  encodes sRGB PNG data on the file worker using the shared exporter.
 - Document replacement invalidates thumbnail, Navigator and filter-preview
   caches. Workspace persistence uses only the shared committed layout model.
   Image-import failures are visible to the user.
@@ -58,6 +60,7 @@ physical eraser input and camera-only updates. Shared host/UI tests exercise
 document adoption/checkpoints and drawer geometry. Build, lint, instrumentation
 logs and screenshots are recorded under `artifacts/android/feature-parity/`.
 
-The completed milestone passes 14 tablet tests (`menu-contact-device.txt`),
-226 shared host/UI tests (`shared-retest.txt`), ARM64 app/test builds and Android
-lint (`menu-contact-build.txt`).
+The integrated milestone passes 14 tablet tests (`worker-final-device.txt`),
+226 shared host/UI tests (`merged-shared-tests.txt`), four renderer/PNG checks
+(`png-encoder-tests.txt`), ARM64 app/test builds and Android lint
+(`worker-final-build.txt`).
