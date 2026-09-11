@@ -6,6 +6,15 @@ use layer_render_wgpu::{
 use layer_ui::CanvasCursor;
 use std::{ffi::c_void, time::Instant};
 
+/// Native layout in logical editor coordinates. Pixel scale and camera state
+/// are resolved on the render owner, including after display/surface changes.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub(crate) struct OverviewSlot {
+    pub bounds: [f32; 4],
+    pub clip: [f32; 4],
+    pub order: i32,
+}
+
 struct Surface {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
@@ -20,6 +29,7 @@ pub struct MetalHost {
     blank_presented: bool,
     timing_enabled: bool,
     timing: Option<GpuFrameTimer>,
+    overviews: Vec<OverviewSlot>,
 }
 
 fn error(e: impl std::fmt::Display) -> String {
@@ -27,6 +37,60 @@ fn error(e: impl std::fmt::Display) -> String {
 }
 
 impl MetalHost {
+    pub(crate) fn set_overviews(&mut self, mut slots: Vec<OverviewSlot>) -> Result<bool, String> {
+        if slots.len() > 32
+            || slots.iter().any(|s| {
+                !s.bounds.iter().chain(&s.clip).all(|v| v.is_finite())
+                    || s.bounds[2] <= 0.
+                    || s.bounds[3] <= 0.
+                    || s.clip[2] <= 0.
+                    || s.clip[3] <= 0.
+            })
+        {
+            return Err("Invalid Navigator geometry".into());
+        }
+        slots.sort_by_key(|s| s.order);
+        let changed = self.overviews != slots;
+        self.overviews = slots;
+        Ok(changed)
+    }
+
+    pub(crate) fn overview_placements(
+        &self,
+        host: &NativeHost,
+    ) -> Vec<layer_render_wgpu::OverviewPlacement> {
+        let state = host.session.state();
+        let document = host.session.engine().document();
+        let scale = state.camera.viewport[0] as f32 / host.logical[0];
+        let fg = state.palette.text.linear();
+        let bg = state.palette.panel.linear();
+        self.overviews
+            .iter()
+            .filter_map(|slot| {
+                let [x, y, w, h] = slot.bounds;
+                let g = layer_ui::NavigatorGeometry::new(
+                    &state.camera,
+                    [document.width, document.height],
+                    [w, h],
+                )?;
+                Some(layer_render_wgpu::OverviewPlacement {
+                    bounds: [
+                        (x + g.image.x) * scale,
+                        (y + g.image.y) * scale,
+                        g.image.width * scale,
+                        g.image.height * scale,
+                    ],
+                    clip: Some(slot.clip.map(|v| v * scale)),
+                    work_area: g.work_area.map(|[a, b]| [(x + a) * scale, (y + b) * scale]),
+                    outline_linear: [fg[0], fg[1], fg[2]],
+                    background_linear: [bg[0], bg[1], bg[2]],
+                    scale,
+                    opacity: 1.,
+                })
+            })
+            .collect()
+    }
+
     /// The platform retains its layer until detach has completed on this owner.
     #[cfg(target_vendor = "apple")]
     pub unsafe fn attach(
@@ -177,6 +241,13 @@ impl MetalHost {
         let scale = view.width_px as f32 / host.logical[0];
         host.session.update_canvas_cursor(&mut self.cursor, false);
         host.session.append_layer_overlay(&mut self.cursor.segments);
+        // Keep optional overview preparation behind the first paper frame.
+        // Image and outline sample this frame's live composition and camera.
+        let overviews = if self.blank_presented && host.startup.canvas_ready {
+            self.overview_placements(host)
+        } else {
+            Vec::new()
+        };
         let surface = self.surface.as_mut().unwrap();
         let gpu = host
             .session
@@ -214,6 +285,7 @@ impl MetalHost {
         surface
             .presenter
             .set_cursor(gpu.device(), &self.cursor.segments, scale);
+        surface.presenter.set_overviews(gpu, &overviews);
         surface.presenter.present(
             gpu,
             &target.texture.create_view(&Default::default()),

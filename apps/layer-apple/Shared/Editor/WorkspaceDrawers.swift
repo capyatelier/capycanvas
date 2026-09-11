@@ -131,6 +131,7 @@ private struct WorkspaceContentDrawer: View {
                 }.frame(width: placement["bounds"].rect.width, height: placement["bounds"].rect.height, alignment: .topLeading)
                     .background(palette["panel"]).clipShape(DrawerBodyShape(corners: connection["square_corners"]))
                     .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
+                    .modifier(NavigatorReveal())
                     .placed(placement["bounds"])
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier(drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id)

@@ -15,7 +15,6 @@ pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
     error: Option<CString>,
-    navigator_preview_epoch: Option<u64>,
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
 }
@@ -51,7 +50,6 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             host,
             metal: metal::MetalHost::default(),
             error: None,
-            navigator_preview_epoch: None,
             chrome_facts: Default::default(),
             dismissed_contacts: Default::default(),
         })))

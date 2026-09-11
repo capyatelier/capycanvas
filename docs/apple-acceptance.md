@@ -972,3 +972,53 @@ maximum error of 47. Full backend parity remains open; see the detailed
 WebAssembly build pass after this renderer change, and the integrated physical
 iPad app installs and launches. The configuration screenshots above contain
 blank artwork and establish no filter-output acceptance or performance claim.
+
+## Live GPU Navigator on both Apple hosts
+
+Navigator now uses the shared in-surface overview presenter already adopted by
+Android. Its image and work-area outline use the current GPU composition and
+camera in the existing Metal presentation pass. The Apple bitmap ABI, 15 Hz
+polling, worker decode and image-observable cache are removed. Native views send
+logical layout records only; the render owner resolves current document extent,
+display scale, clipping and stacking order. Layout updates are validated atomically
+with a 32-record/16 KiB transport limit, and identical records do not dirty an idle
+canvas. Optional GPU resources stay behind the initial paper presentation.
+
+The shared SwiftUI workspace reveals the Metal image after each relevant panel's
+background/clip/shadow, preserving higher panels and native controls. Direct
+captures verify docked and column-drawer previews on both platforms, plus Mac
+floating panels above and below Navigator. Those are compositing checks, not full
+visual acceptance. The current web host does not expose Navigator, so Chrome
+cannot supply this panel's complete reference. The unchanged configuration
+fixture still compares every pixel against Chrome: Mac differs at 7.3088% with
+maximum channel error 209; iPad differs at 3.9751% with maximum 204. Viewports,
+scale and sRGB handling remain as above, with only the required iPad raster
+rotation. Neither comparison passes; no masks or tolerances were introduced.
+
+All 30 Apple bridge checks pass. Navigator coverage includes live camera/document
+geometry, replacement with another aspect ratio, display-scale changes, valid
+clipping metadata, atomic rejection, ordering, idle behavior and unchanged
+document pixels/history during navigation on both platform policies. Three shared
+Metal overview checks pass, covering actual image pixels, transparency, clipped
+sampling, live paint, camera changes and resource reuse.
+
+The focused native workflow executes once and passes on each platform. Mac
+captures actual Navigator pixels before painting, after pen-up, Undo and Redo;
+Undo restores the initial pixels exactly and Redo restores the painted pixels
+exactly. iPad Simulator checks that a single finger leaves ink unchanged, then
+both hosts exercise zoom, rotation, reflection, overview dragging, Diagnostics
+and switching back. Simulator finger events are not Pencil evidence. The test
+uses native accessibility semantics for each platform; a stale Simulator runner
+was replaced before the current assertions were counted. No OS menu coordinates
+or menu mechanics are tested. Both signed Apple builds pass, and the physical
+iPad build installs and launches successfully.
+
+A release-mode Metal presentation benchmark uses 2048×1536 artwork, 40 warmup
+and 120 measured iterations per case. With one 256-pixel-wide overview, CPU
+submission median/p95/p99 are 0.015/0.021/0.031 ms and GPU queue spans are
+0.067/0.076/0.153 ms. With a moving camera/outline they are
+0.020/0.026/0.035 ms and 0.081/0.093/0.131 ms. The baseline and repeated baseline
+GPU medians are 0.064 and 0.066 ms; two overviews reach GPU p99 0.338 ms. These
+are short Mac renderer measurements, excluding native UI compositing, physical
+presentation and input latency. They establish neither iPad performance nor
+the sustained workload/ten-minute gates, which remain open on both platforms.

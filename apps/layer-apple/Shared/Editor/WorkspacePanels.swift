@@ -19,6 +19,8 @@ struct WorkspacePanels: View {
                     let expanded = workspace.expansion["group"].uint == group["id"].uint ? workspace.expansion : JSON()
                     WorkspacePanelGroup(store: store, group: group, expansion: expanded)
                         .environment(\.workspaceGesturesEnabled, workspace.expansion.isNull || !expanded.isNull)
+                        .environment(\.workspaceClip, (expanded.isNull ? group["bounds"] : expanded["bounds"]).rect)
+                        .environment(\.workspaceLayer, groups.firstIndex(where: { $0.workspaceGroupID == group.workspaceGroupID }) ?? 0)
                         .placed(expanded.isNull ? group["bounds"] : expanded["bounds"])
                         .allowsHitTesting(workspace.expansion.isNull || !expanded.isNull)
                     if workspace.expansion.isNull {
@@ -50,7 +52,13 @@ struct WorkspacePanels: View {
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .compositingGroup()
             .modifier(WorkspaceRootDrag(workspace: workspace))
+            .onPreferenceChange(NavigatorPlacements.self) { placements in
+                let ordered = placements.sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.json }
+                store.native?.navigatorPlacements(JSON(ordered))
+            }
+            .onDisappear { store.native?.navigatorPlacements(JSON([])) }
             .onPreferenceChange(WorkspaceSources.self) { workspace.sources = $0 }
             .onPreferenceChange(DrawerTileMeasurements.self) { store.contentDrawers.measureTiles($0) }
     }
@@ -88,6 +96,7 @@ private struct WorkspacePanelGroup: View {
             .clipShape(WorkspacePanelShape(expansion: expansion))
             .shadow(color: .black.opacity(expansion.isNull ? 0.16 : 0.4),
                 radius: expansion.isNull ? 4 : 12, y: expansion.isNull ? 2 : 8)
+            .modifier(NavigatorReveal())
             .accessibilityIdentifier("workspace-group-\(group["id"].uint)")
     }
     private func preview(tiles: JSON) -> some View {

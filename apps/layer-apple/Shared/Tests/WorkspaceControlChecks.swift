@@ -1,7 +1,7 @@
 import XCTest
 
 extension XCTestCase {
-    @MainActor private func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
+    @MainActor func workspaceViewport(in app: XCUIApplication) -> XCUIElement {
         #if os(macOS)
         return app.windows.firstMatch
         #else

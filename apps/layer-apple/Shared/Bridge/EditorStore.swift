@@ -23,7 +23,6 @@ import SwiftUI
     private(set) var native: NativeOwner?
     lazy var layerThumbnails = LayerThumbnails(store: self)
     lazy var filterPreviews = FilterPreviews(store: self)
-    lazy var navigatorImages = NavigatorImages(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
@@ -62,7 +61,6 @@ import SwiftUI
                 currentState = next["state"]
                 structuralSnapshot = next
                 filterPreviews.refresh()
-                navigatorImages.refresh()
                 camera.value = state["camera"]
                 projectFiles.receive(state)
                 contentDrawers.refresh()
