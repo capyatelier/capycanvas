@@ -180,7 +180,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     BackHandler(expanded != null) { host.customize(obj("type" to "close_expanded")) }
     BoxWithConstraints(Modifier.fillMaxSize().testTag("workspace").workspaceGestures(dock)
         .drawWithContent { drawContent(); host.recordUiDraw() }
-        .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft }) {
+        .onGloballyPositioned { dock.origin = it.boundsInRoot().topLeft; host.surfaceOrigin = dock.origin }) {
         dock.viewport = JSONArray(listOf(maxWidth.value, maxHeight.value))
         AndroidView(factory = { CanvasSurfaceView(it, host) }, modifier = Modifier.fillMaxSize())
         // SurfaceView punches through the window background. Cover its empty
@@ -226,7 +226,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
-                        PanelGroup(host, state, group, panels, dock, mod)
+                        val projected = expansion?.objectOrNull("tiles")?.let { JSONObject(group.toString()).put("tiles", it) } ?: group
+                        PanelGroup(host, state, projected, panels, dock, mod)
                         expansion?.getJSONObject("configuration")?.let { rect ->
                             Box(Modifier.placed(rect, density).background(colors.panel)) {
                                 panels[group.getString("active")]?.let { ConfigurePanel(host, it) { height -> dock.configurationHeight = height } }
@@ -315,7 +316,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
 
 @Composable private fun Header(host: CanvasHost, state: JSONObject, dock: DockInteraction) {
     val colors = LocalPalette.current
-    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).chromeRegion(dock).padding(6.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(48.dp).chromeRegion(dock).background(colors.surround).padding(6.dp)) {
         val showTitle = maxWidth >= 1100.dp
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.size(36.dp))

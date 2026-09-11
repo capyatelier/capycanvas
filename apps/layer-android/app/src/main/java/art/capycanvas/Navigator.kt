@@ -10,35 +10,48 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.math.roundToInt
 
 /** GPU overview and shared camera geometry; Compose only displays and routes input. */
-@Composable internal fun NavigatorPanel(host: CanvasHost) {
+@Composable internal fun NavigatorPanel(host: CanvasHost, availableHeight: Dp = 268.dp) {
     val density = LocalDensity.current.density
     val colors = LocalPalette.current
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var geometry by remember { mutableStateOf<JSONObject?>(null) }
-    val camera = host.cameraState.toString()
-    DisposableEffect(host) { host.navigatorVisible(true); onDispose { host.navigatorVisible(false) } }
-    LaunchedEffect(viewport, camera) {
+    val key = remember { Any() }
+    val order = LocalWorkspaceZ.current
+    val document = host.snapshot?.getJSONObject("state")?.array("tabs")?.optJSONObject(0)
+    val documentSize = document?.let { it.optInt("width") to it.optInt("height") }
+    DisposableEffect(host) { onDispose { host.navigatorPlacement(key, null) } }
+    LaunchedEffect(viewport, documentSize) {
         if (viewport.width > 0 && viewport.height > 0) geometry = host.awaitQuery(obj("type" to "navigator",
             "viewport" to JSONArray(listOf(viewport.width / density, viewport.height / density))))
     }
     Column {
-        val image = host.navigatorImage
-        Canvas(Modifier.fillMaxWidth().height(220.dp).testTag("navigator-overview").background(colors.surround)
-            .onSizeChanged { viewport = it }.pointerInput(host, density) {
+        Canvas(Modifier.fillMaxWidth().height((availableHeight - 48.dp).coerceIn(64.dp, 220.dp)).testTag("navigator-overview").background(colors.surround)
+            .onSizeChanged { viewport = it }
+            .onGloballyPositioned { coords ->
+                val origin = coords.positionInRoot() - host.surfaceOrigin
+                val clip = coords.boundsInRoot().translate(-host.surfaceOrigin)
+                fun rect(r: Rect) = JSONArray(listOf(r.left, r.top, r.width, r.height))
+                host.navigatorPlacement(key, if (clip.isEmpty) null else obj(
+                    "bounds" to JSONArray(listOf(origin.x, origin.y, coords.size.width, coords.size.height)),
+                    "clip" to rect(clip), "order" to order))
+            }.pointerInput(host, density) {
                 awaitEachGesture {
                     val down = awaitFirstDown(); down.consume()
                     fun send(phase: String, point: Offset) = host.dispatch(obj("type" to "navigator", "phase" to phase,
@@ -57,15 +70,10 @@ import kotlin.math.roundToInt
             }) {
             geometry?.let { g ->
                 val rect = g.getJSONObject("image")
-                if (image != null) drawImage(image, dstOffset = IntOffset((rect.number("x") * density).roundToInt(), (rect.number("y") * density).roundToInt()),
-                    dstSize = IntSize((rect.number("width") * density).roundToInt(), (rect.number("height") * density).roundToInt()))
-                val path = Path()
-                g.array("work_area").values().forEachIndexed { index, point ->
-                    point as JSONArray
-                    val x = point.getDouble(0).toFloat() * density; val y = point.getDouble(1).toFloat() * density
-                    if (index == 0) path.moveTo(x,y) else path.lineTo(x,y)
-                }
-                path.close(); drawPath(path, Color.Black, style = Stroke(3.dp.toPx())); drawPath(path, Color.White, style = Stroke(1.dp.toPx()))
+                // Clear this part of the native window to reveal the live
+                // overview in the existing SurfaceView below Compose.
+                drawRect(Color.Transparent, Offset(rect.number("x") * density, rect.number("y") * density),
+                    Size(rect.number("width") * density, rect.number("height") * density), blendMode = BlendMode.Clear)
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {

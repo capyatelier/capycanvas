@@ -23,9 +23,11 @@ Compose supplies widgets and Android owns input, surfaces and file transport.
   animation, Back handling and outside-contact dismissal without painting.
 - Collapsed columns expose expand, panel icons, context menus and column dragging.
   Tabbed column drawers support nested tool drawers with live clipped tile anchors.
-- Navigator shares one bounded GPU preview producer across projections and uses
-  shared camera geometry/actions. The renderer facade now forwards canvas-preview
-  and color-sample requests, fixing the previously inert Eyedropper path.
+- Navigator samples the live composition in the existing Vulkan canvas surface,
+  using shared camera geometry/actions. Native layout supplies visible bounds;
+  Compose clears only the image rectangle. Painting and camera gestures update
+  the overview in the same presentation pass, with no bitmap readback or polling.
+  The renderer facade forwards color-sample requests for Eyedropper.
 - Toolbar divider slots render as separators without action buttons.
 - All eight application menus use shared models, including File, Edit, Layer,
   Select, Filter, View, Window and Help. Models are published before GPU setup,
@@ -38,9 +40,17 @@ Compose supplies widgets and Android owns input, surfaces and file transport.
   still matches; the existing drawing survives a failed or cancelled open.
   PNG export submits a GPU snapshot on the owner, then waits, packs rows and
   encodes sRGB PNG data on the file worker using the shared exporter.
-- Document replacement invalidates thumbnail, Navigator and filter-preview
-  caches. Workspace persistence uses only the shared committed layout model.
+- Document replacement invalidates thumbnail and filter-preview caches; the
+  Navigator samples the replacement composition. Workspace persistence uses only the shared committed layout model.
   Image-import failures are visible to the user.
+- Fresh Android workspaces use the shared full editor preset, with separate Tools
+  and Commands ribbons and docked Tool Settings, Color and Navigator. Saved
+  workspaces and customized/deleted toolbars retain their existing configuration.
+- Fill and Auto Select expose shared Close gaps, Expansion and Edge smoothing
+  controls and use the new GPU region-refinement implementation.
+- Expanded toolbars use the shared expansion tile geometry; toolbar drawers use
+  the shared full content height. Compact Color and Navigator docks fit their
+  content to the available height. The header remains opaque over a zoomed canvas.
 
 ## Validation
 
@@ -64,3 +74,12 @@ The integrated milestone passes 14 tablet tests (`worker-final-device.txt`),
 226 shared host/UI tests (`merged-shared-tests.txt`), four renderer/PNG checks
 (`png-encoder-tests.txt`), ARM64 app/test builds and Android lint
 (`worker-final-build.txt`).
+
+
+The follow-up refresh adds device checks for the complete editor preset, live
+Navigator pixels while the pen remains down, and the shared region edge controls.
+A deliberately gapped outline leaks with gap closing disabled, then contains
+both Fill and Auto Select with gap closing enabled. Compact numeric controls are
+also checked within their correct panel when the full preset shows multiple
+brush-size fields. Refresh artifacts are under
+`artifacts/android/parity-refresh/`; the shared host/UI suite passes 229 tests.

@@ -187,7 +187,7 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                     }
                     var clip by remember { mutableStateOf(Rect.Zero) }
                     Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().onGloballyPositioned { clip = it.boundsInRoot().translate(-dock.origin) }) {
-                        CompositionLocalProvider(LocalDrawerColumn provides columnId, LocalDrawerClip provides clip) {
+                        CompositionLocalProvider(LocalDrawerColumn provides columnId, LocalDrawerClip provides clip, LocalWorkspaceZ provides (200 + (columnId ?: 100))) {
                             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
                                 .onSizeChanged { heights[index] = it.height / dock.density + tabHeight }, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 columns[index].values().forEach { panelId ->
@@ -212,7 +212,7 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
         geometry = host.awaitQuery(obj("type" to "drawer_toolbar", "panel" to panel.getString("id"), "width" to width, "height" to 800f))
     }
     geometry?.let { g ->
-        val height = (g.array("tiles").objects().maxOfOrNull { it.number("y") + it.number("height") } ?: 32f) + 4f
+        val height = g.number("content_height", 36.0).coerceAtLeast(36f)
         ToolRibbon(host, panel, g, dock, Modifier.fillMaxWidth().height(height.dp), true)
     }
 }

@@ -1429,19 +1429,23 @@ class AndroidHostTest {
     }
 
     @Test fun compactNumberInputAndVerticalRibbonStayUsable() {
-        compose.onNodeWithTag("number-value-Brush size").performClick()
-        val field = compose.onNodeWithTag("number-Brush size")
+        // The full editor shows brush size in Tool Settings as well as Sizes.
+        fun sizeNode(matcher: SemanticsMatcher) = compose.onNode(matcher and hasAnyAncestor(hasTestTag("group-${group("sizes").getInt("id")}")))
+        sizeNode(hasTestTag("number-value-Brush size")).performClick()
+        val field = sizeNode(hasTestTag("number-Brush size"))
         field.performTextReplacement("85/2")
         field.performImeAction()
         waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
-        compose.onNodeWithContentDescription("Increase Brush size").performClick()
+        sizeNode(hasContentDescription("Increase Brush size")).performClick()
         val step = host.catalog.getJSONObject("brush_size").number("step")
         waitState { it.getJSONObject("brush").number("diameter") == 42.5f + step }
-        compose.onNodeWithTag("number-value-Brush size").assertTextEquals("%.1f px".format(java.util.Locale.ROOT, 42.5f + step))
-        compose.onNodeWithContentDescription("Decrease Brush size").performClick()
+        sizeNode(hasTestTag("number-value-Brush size")).assertTextEquals("%.1f px".format(java.util.Locale.ROOT, 42.5f + step))
+        sizeNode(hasContentDescription("Decrease Brush size")).performClick()
         waitState { it.getJSONObject("brush").number("diameter") == 42.5f }
 
-        val grip = compose.onNodeWithContentDescription("Move toolbar")
+        action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "edge", "edge" to "top", "outer" to true), "viewport" to viewport()))
+        fun toolbarGrip() = compose.onNode(hasContentDescription("Move toolbar") and hasAnyAncestor(hasTestTag("group-${group("toolbar").getInt("id")}")))
+        val grip = toolbarGrip()
         val origin = grip.fetchSemanticsNode().boundsInRoot.topLeft
         val density = compose.activity.resources.displayMetrics.density
         grip.performTouchInput { swipe(center, androidx.compose.ui.geometry.Offset(density, 200 * density) - origin, 700) }
@@ -1451,7 +1455,7 @@ class AndroidHostTest {
         val toolbar = host.snapshot!!.array("panels").objects().first { it.getString("id") == "toolbar" }
         val lastTile = toolbar.array("tiles").objects().last().getInt("id")
         val tile = compose.onNodeWithTag("tile-toolbar-$lastTile").assertWidthIsEqualTo(36.dp).assertHeightIsEqualTo(36.dp)
-        assertTrue("Vertical ribbon grip is below its tools", grip.fetchSemanticsNode().boundsInRoot.top >= tile.fetchSemanticsNode().boundsInRoot.bottom)
+        assertTrue("Vertical ribbon grip is below its tools", toolbarGrip().fetchSemanticsNode().boundsInRoot.top >= tile.fetchSemanticsNode().boundsInRoot.bottom)
         capture("31-vertical-ribbon")
     }
 

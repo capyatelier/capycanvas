@@ -8,6 +8,7 @@ pub(crate) struct App {
     pub cursor: layer_ui::CanvasCursor,
     pub surface: Option<crate::android::Surface>,
     pub cache_directory: String,
+    pub overviews: Vec<crate::android::OverviewSlot>,
     pub instance: Option<wgpu::Instance>,
 }
 impl App {
@@ -15,6 +16,9 @@ impl App {
         let mut host = layer_host::NativeHost::new(layer_ui::Platform::Android)?;
         host.startup = Default::default();
         host.session.set_document_replacement(true);
+        host.dispatch(layer_ui::UiAction::RestoreWorkspace {
+            workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Android),
+        })?;
         Ok(Self {
             host,
             blank_presented: false,
@@ -25,6 +29,7 @@ impl App {
             surface: None,
             instance: None,
             cache_directory: String::new(),
+            overviews: Vec::new(),
         })
     }
 }

@@ -420,7 +420,10 @@ pub enum PanelKind {
 impl Panel {
     /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
-        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
+        if matches!(
+            self,
+            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
+        )
             && platform == crate::Platform::Android
         {
             return true;
@@ -1007,7 +1010,7 @@ impl DockLayout {
     /// The complete editor preset is enabled as hosts finish their native UI.
     /// This selects initial/reset geometry, never migrates a saved workspace.
     pub fn for_platform(platform: crate::Platform) -> Self {
-        if platform == crate::Platform::Gtk {
+        if matches!(platform, crate::Platform::Gtk | crate::Platform::Android) {
             Self::editor_default()
         } else {
             Self::default()

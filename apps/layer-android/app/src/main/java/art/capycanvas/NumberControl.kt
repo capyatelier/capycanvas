@@ -54,7 +54,7 @@ import org.json.JSONObject
         if (inline) listOf(control.number("min"), control.number("max")).map { resolve(it, obj("type" to "format")).getString("text") }
             .maxBy { it.length }.replace(Regex("[0-9]"), "8") else ""
     }
-    val fixedWidth = if (inline) with(LocalDensity.current) { measurer.measure(widest, LocalTextStyle.current).size.width.toDp() } + valuePadding * 2 else 0.dp
+    val fixedWidth = if (inline) with(LocalDensity.current) { measurer.measure(widest, LocalTextStyle.current).size.width.toDp() } + valuePadding * 2 + 2.dp else 0.dp
     fun apply(op: JSONObject): Boolean = try {
         val next = resolve(shown.number("value"), op)
         val changed = next.number("value") != shown.number("value")
@@ -98,7 +98,7 @@ import org.json.JSONObject
         if (editing) field()
         else Box(Modifier.then(if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(RoundedCornerShape(6.dp)).clickable(enabled = enabled) {
             val edit = shown.getString("edit"); text = TextFieldValue(edit, TextRange(0, edit.length)); editing = true
-        }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = Alignment.CenterEnd) { Text(shown.getString("text")) }
+        }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = Alignment.CenterEnd) { Text(shown.getString("text"), maxLines = 1, softWrap = false) }
     }
     if (inline) {
         Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
