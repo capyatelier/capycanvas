@@ -954,3 +954,10 @@ direct captures, without UI event automation or system-menu testing.
 The final workflow executes and passes once on each platform; both signed
 Apple builds pass. Broader editor states, physical lifecycle and sustained
 performance remain required beyond these targeted checks.
+
+The incoming Android editor-preset/live-Navigator changes are integrated. Their
+shared layout edits are conditional on Android and preserve Apple/Web fixture
+geometry. All 259 UI/host/Apple bridge regression checks pass (217/12/30), along
+with both integrated signed Apple builds and WebAssembly. The complete visual
+reports above remain separate from functional and performance acceptance.
+The integrated physical iPad build installs and launches successfully.
