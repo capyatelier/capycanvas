@@ -47,6 +47,14 @@ slider mappings and stepping resolve through Rust. The shared Apple control
 handles optimistic edits and local validation feedback; small AppKit/UIKit
 adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
 
+Enable **Workspace → Color panel** for the shared HSV square / HLS triangle,
+foreground/background/transparent paint slots, swap and component expressions.
+Rust owns color conversion, hue memory, normalized geometry, hit regions and
+drag clamping. Both native hosts share the gradient drawing and controls; their
+small input views latch the starting region for each mouse, Pencil or touch
+contact. Picking a color exits transparent paint using the previous paint slot.
+Channel edits update the current Rust state, preserving other queued changes.
+
 For reproducible Debug editor fixtures, `CAPY_INITIAL_ACTIONS` accepts a JSON
 array of shared actions at launch. For example, this opens Tool Settings without
 driving the Mac system menu bar:
@@ -66,7 +74,14 @@ xcrun swiftc apps/layer-apple/Shared/Editor/NumericEditState.swift \
 /tmp/capy-numeric-edit
 cargo test -p layer-apple apple_tool_panels
 cargo test -p layer-apple apple_transform_settings
+cargo test -p layer-apple apple_color_
 ```
+
+The focused `testColorControls` test checks native wheel contacts, color-space
+and paint-slot controls and expression entry on both targets. It retains full
+captures plus measured wheel geometry for the shared
+[color sampling check](../../tools/visual/README.md). The headless ABI tests
+verify resulting brush/eraser pixels and exact Undo without driving menus.
 
 ## Install and run
 

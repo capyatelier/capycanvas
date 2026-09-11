@@ -434,6 +434,7 @@ impl NativeHost {
             .filter_map(|&p| self.session.panel_view(p).ok())
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
+            "color_panel": self.session.state().colors.view(),
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
             "toolbar_manager": self.session.toolbar_manager(),

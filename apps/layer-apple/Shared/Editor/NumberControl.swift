@@ -6,6 +6,7 @@ struct NumberControl: View {
     let value: Double
     let control: JSON
     var identifier = ""
+    var valueOnly = false
     let change: (Double, @escaping @MainActor (String?) -> Void) -> Void
     @State private var field = NumericEditState()
     @State private var formatted = JSON()
@@ -18,31 +19,25 @@ struct NumberControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Text(label).padding(.leading, 6)
-                Spacer(minLength: 0)
-                if !slider { stepButton(-1) }
-                if showsEntry || !slider || field.dirty {
-                    NumericTextField(label: label,
-                        text: Binding(get: { field.text }, set: { field.text = $0; field.dirty = true }),
-                        focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
-                        color: palette["text"], identifier: "number-entry-" + key,
-                        submit: finish, cancel: cancel, step: step)
-                        .frame(width: slider ? 80 : 60)
-                        .padding(.horizontal, 6).frame(height: slider ? 24 : 32)
-                        .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(field.error == nil ? Color.clear : Color.red, lineWidth: 1))
-                        .onAppear { if showsEntry { editing = true } }
-                } else {
-                    Button { showsEntry = true } label: {
-                        Text(formatted["text"].string).padding(.horizontal, 6).frame(height: 24)
-                    }.buttonStyle(.plain).accessibilityLabel(label)
-                        .accessibilityValue(formatted["text"].string)
-                        .accessibilityIdentifier("number-value-" + key)
+            if valueOnly { numericEntry }
+            else {
+                HStack(spacing: 6) {
+                    Text(label).padding(.leading, 6)
+                    Spacer(minLength: 0)
+                    if !slider { stepButton(-1) }
+                    if showsEntry || !slider || field.dirty {
+                        numericEntry
+                    } else {
+                        Button { showsEntry = true } label: {
+                            Text(formatted["text"].string).padding(.horizontal, 6).frame(height: 24)
+                        }.buttonStyle(.plain).accessibilityLabel(label)
+                            .accessibilityValue(formatted["text"].string)
+                            .accessibilityIdentifier("number-value-" + key)
+                    }
+                    if !slider { stepButton(1) }
                 }
-                if !slider { stepButton(1) }
             }
-            if slider {
+            if slider && !valueOnly {
                 HStack(spacing: 6) {
                     stepButton(-1)
                     GeometryReader { geometry in
@@ -87,6 +82,19 @@ struct NumberControl: View {
                 if !field.dirty { field.text = formatted["edit"].string }
             } else if commit() { showsEntry = false }
         }
+    }
+    private var numericEntry: some View {
+        NumericTextField(label: label,
+            text: Binding(get: { field.text }, set: { field.text = $0; field.dirty = true }),
+            focused: $editing, fontSize: max(1, store.catalog["text_size_pt"].number * 4 / 3),
+            color: palette["text"], identifier: "number-entry-" + key,
+            submit: finish, cancel: cancel, step: step)
+            .frame(width: valueOnly ? nil : slider ? 80 : 60)
+            .padding(.horizontal, 6).frame(height: valueOnly || slider ? 24 : 32)
+            .background(palette["input"], in: RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(field.error == nil ? Color.clear : Color.red, lineWidth: 1)
+                .allowsHitTesting(false))
+            .onAppear { if showsEntry { editing = true } }
     }
     private func finish() -> Bool {
         guard commit() else { return false }

@@ -620,3 +620,107 @@ fn optional_gpu_timing_has_explicit_uninitialized_state_and_bounded_abi() {
         }
     }
 }
+
+#[test]
+fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
+    let close = |actual: &Value, expected: [f32; 4]| {
+        for i in 0..4 {
+            assert!(
+                (actual[i].as_f64().unwrap() - expected[i] as f64).abs() < 1e-5,
+                "{actual} != {expected:?}"
+            );
+        }
+    };
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let initial = app.request(3, Value::Null).unwrap();
+        let open = initial["workspace_menu"]["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|section| section.as_array().unwrap())
+            .find(|item| item["action"]["action"]["panel"] == "color")
+            .unwrap()["action"]
+            .clone();
+        app.action(open);
+        let snapshot = app.request(3, Value::Null).unwrap();
+        assert!(
+            snapshot["panels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "color")
+        );
+        let action = |value| app.action(json!({"type":"color","action":value}));
+        app.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
+        action(json!({"op":"component","index":0,"value":180}));
+        close(&app.state()["brush"]["color"], [0., 1., 1., 1.]);
+        action(json!({"op":"select","slot":"background"}));
+        for (index, value) in [0.25, 0.5, 0.75].into_iter().enumerate() {
+            action(json!({"op":"rgba_component","index":index,"value":value}));
+        }
+        close(&app.state()["brush"]["color"], [0.25, 0.5, 0.75, 1.]);
+        close(&app.state()["colors"]["foreground"], [0., 1., 1., 1.]);
+        action(json!({"op":"select","slot":"transparent"}));
+        action(json!({"op":"pick","part":"hue","point":[0.95,0.5],"size":1}));
+        assert_eq!(app.state()["colors"]["slot"], "background");
+        close(&app.state()["brush"]["color"], [0.25, 0.75, 0.5, 1.]);
+        action(json!({"op":"toggle_space"}));
+        action(json!({"op":"pick","part":"field","point":[0.5,0.5],"size":1}));
+        close(&app.state()["brush"]["color"], [1. / 3., 2. / 3., 0.5, 1.]);
+        let snapshot = app.request(3, Value::Null).unwrap();
+        assert_eq!(snapshot["color_panel"]["components"][1]["label"], "L");
+        assert_eq!(snapshot["color_panel"]["swatches"][1]["selected"], true);
+        action(json!({"op":"swap"}));
+        close(&app.state()["brush"]["color"], [0., 1., 1., 1.]);
+        close(
+            &app.state()["colors"]["foreground"],
+            [1. / 3., 2. / 3., 0.5, 1.],
+        );
+    }
+    for space in [0, 1] {
+        assert_eq!(capy_apple_color_hit(95., 50., 100., space), 1);
+        assert_eq!(capy_apple_color_hit(50., 50., 100., space), 2);
+        assert_eq!(capy_apple_color_hit(0., 0., 100., space), 0);
+        assert_eq!(capy_apple_color_hit(f32::NAN, 50., 100., space), 0);
+    }
+    assert_eq!(capy_apple_color_hit(50., 50., 0., 0), 0);
+    assert_eq!(capy_apple_color_hit(50., 50., 100., 2), 0);
+}
+
+#[test]
+fn apple_color_actions_change_real_paint_and_transparent_eraser_pixels() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
+        let brush = app.state()["brush"].clone();
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let painted = app.pixels();
+        let reds = |pixels: &[u8]| {
+            pixels
+                .chunks_exact(4)
+                .filter(|p| p[0] > 200 && p[1] < 50 && p[2] < 50)
+                .count()
+        };
+        assert!(
+            reds(&painted) > 0,
+            "Explicit color must reach the GPU brush"
+        );
+        app.action(json!({"type":"color","action":{"op":"select","slot":"transparent"}}));
+        assert_eq!(app.state()["brush"]["preset"], brush["preset"]);
+        assert_eq!(app.state()["brush"]["diameter"], brush["diameter"]);
+        app.stroke();
+        app.draw_frame();
+        assert!(
+            reds(&app.pixels()) < reds(&painted),
+            "Transparent paint must erase with the current tip"
+        );
+        app.invoke("undo");
+        app.draw_frame();
+        assert!(app.pixels() == painted);
+    }
+}

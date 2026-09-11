@@ -368,3 +368,37 @@ failure remains at maximum channel error 255, with three explicitly ignored
 benchmarks. The control UI tests and visual captures above precede that merge;
 they do not validate the new collapsed-column UI, which Apple still needs to
 project. The final merged builds install/launch through the normal native paths.
+
+The next shared Apple milestone adds the native Color panel on both platforms:
+HSV square, HLS triangle, foreground/background/transparent paint, swap and
+component expressions. Rust supplies normalized geometry, hue memory, colors,
+numeric specifications, hit policy and bounded picking; Apple shares rendering
+and controls, with small native contact adapters. RGBA channel edits apply to
+the current owner state so queued edits cannot overwrite other channels.
+
+Focused Mac and iPad Simulator tests pass for color-space switching, hue/field
+picking, expression entry, paint slots, a latched hue drag that exits transparent
+paint, empty-corner rejection and swap. Existing numeric-control workflows also
+pass on both. These checks found and fixed the outlined icon's incomplete hit
+area and an AppKit focus transition that discarded a click into an always-visible
+field. Temporary native event tracing was removed. Both signed apps build; the
+physical iPad app installs and launches. Physical Pencil input remains a separate
+acceptance requirement; Simulator touch does not establish it.
+
+Each native color capture is sampled against Rust's actual picker at matching
+normalized coordinates, after ICC conversion. Both platforms pass 758 HSV and
+587 HLS samples within two 8-bit channel levels. Mac HLS field maximum error is
+one level; the remaining ring/field maxima are two. Initial perceptual-gradient
+and mesh-gradient attempts failed the same check; explicit device-space linear
+gradients now reproduce display-encoded square and triangle interpolation. The
+checker excludes only the declared boundary neighborhood and marker radii, and
+rejects missing/transparent interior samples. This is sampled color correctness,
+not full-image parity: the web renderer still lacks a matching custom wheel.
+All captures, geometry metadata, reports and failed attempts remain local.
+
+All 226 shared/Apple tests pass (207 UI + 8 host + 11 Apple ABI), including actual
+Metal brush color, transparent erasing with the current tip and exact pixel Undo.
+The WebAssembly compile check, standalone numeric edit-state checks and nine
+visual-tool tests pass. Full feature inventory, remaining specialized panels,
+persistence, complete visual/input coverage and sustained hardware performance
+remain open on both platforms.
