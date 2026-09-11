@@ -100,8 +100,8 @@ build is only build evidence.
 | Milestone and shared gate | iPadOS evidence / remaining work | macOS evidence / remaining work |
 | --- | --- | --- |
 | 1. Shared host, Apple bridge and native target builds | Device/simulator builds pass; device signed and installed. | Native AppKit target and Rust Metal library build pass. |
-| 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. Physical Pencil, undo/redo and lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
-| 3. Complete input contract and bounded transport | Coalesced/predicted input foundation exists; corrections, sensors, palm/navigation, interruption and real Pencil evidence remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
+| 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. User confirms basic Pencil pressure, pen-up and Undo/Redo; full lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
+| 3. Complete input contract and bounded transport | Coalescing, prediction and estimated corrections implemented with synthetic oracles. Basic physical Pencil/palm check passes; correction delivery, full sensors/navigation/interruption coverage remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
 | 5. Document/settings/workspace persistence and lifecycle | Atomic settings and per-scene workspace persistence implemented; Simulator restart passes. Manual Save/Open and shared checkpoint policy pass direct checks; recovery, picker delivery and full physical lifecycle matrix remain. | Same persistence; native restart and owner isolation pass. Manual Save/Open and unsaved close pass direct checks; recovery and full window/display/sleep/memory-pressure matrix remain. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
@@ -862,3 +862,64 @@ does not exercise the input-correction path. Full input/output/difference
 artifacts remain local; no channel masks, fixture replacement or tolerance
 relaxation was applied. Cross-backend filter parity remains an explicit failing
 gate and requires further investigation beyond this input milestone.
+
+## Filter color isolation across backends
+
+The strict reference discrepancy is reproduced on both Metal and a local Vulkan
+SwiftShader numerical backend. Metal's full sheet also exactly matches the
+pre-migration implementation with identical corrected imports. New independent
+scalar tests cover the complete opaque Curves/Exposure channel ramp and
+Halftone's full ink/paper endpoints; both tests pass on both backends. They
+isolate color/storage behavior without generating expected images from renderer
+output. Partial alpha, spatial filtering and the full 160-case reference remain
+open. See [the filter investigation](runtime-filters.md) for numerical evidence.
+
+The software backend is admitted only by an explicit opt-in in renderer unit-test
+binaries. Production iPad and Mac hosts retain their hardware requirement.
+Software results establish no performance claim. Output-rounding experiments
+were reverted: neither solved the strict full-sheet comparison. The checked-in
+reference, one-byte tolerance and all compared channels remain unchanged.
+Both signed Apple builds and the production renderer library check pass with
+the test-only diagnostics present. This milestone changes no app rendering code.
+
+## Physical Pencil smoke check and resumed Mac workspace checks
+
+The user confirmed pressure response, persistent ink after pen-up, drawing with
+a resting palm and expected Undo/Redo on the physical iPad. Its four-minute Debug
+capture contains about nine seconds of pointer activity, five Pencil contacts,
+730 real pointer batches and 417 prediction batches. There are no frame errors,
+recorder drops, missing presentation callbacks or invalid/skipped GPU samples.
+Eight drawable callbacks report zero presentation time. No correction batches
+were observed; physical estimated-property coverage remains open.
+
+After readiness, owner CPU service is p50 3.70 ms, p95 8.01 ms, p99 11.79 ms and
+maximum 39.43 ms, with 17 of 672 submitted frames above 8.33 ms. Across the whole
+capture, continuous active presentation intervals are p50/p95 8.33 ms, p99
+16.67 ms and maximum 25.00 ms; 25 of 999 intervals exceed the analyzer's 120 Hz
+cadence allowance. These Debug measurements include profiler overhead and do
+not establish sustained performance. All receipt latency proxies, startup memory
+growth and missing/zero observations remain in the local full report. The
+required Release workload matrix, ten-minute sessions and physical latency
+measurements remain open on both platforms.
+
+After the user enabled XCTest, two focused Mac workflows execute and pass:
+collapsed column/tab/child drawer dismissal and expansion, plus control
+visibility and live panel tear-off. Initial failures came from the test harness:
+application-level coordinates have no finite Mac window extent, and XCTest
+cannot always derive a hit point for the visible SwiftUI scroll controls. The
+shared check now uses the actual editor window and a bounded, measured in-app
+click fallback, retaining assertions on the resulting editor state. No system
+menu coordinates or menu mechanics are tested. These interaction checks do not
+close the outstanding full-image visual or full-workflow acceptance gates.
+The separate Mac partial-Zen entry/exit check also passes with window-based
+containment; three focused Mac checks execute in total. The iPad test target
+compiles with the shared harness changes without interrupting the physical app.
+
+Direct Mac screen capture now succeeds without the permission dialog. A settled
+Brush size configuration fixture is compared with local hardware-WebGPU Chrome
+at 1200 by 870 logical pixels and 2x scale. The full sRGB image differs at
+25.3555% of pixels, maximum channel error 232. No masks, rescaling or cropping
+are applied by the comparator. The Mac OS window controls/menu arrangement is
+an intentional adaptation retained in the report; configuration control styles
+and heights, panel placement, toolbar color shape and other differences still
+fail visual acceptance. The source captures and complete report remain ignored.

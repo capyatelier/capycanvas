@@ -311,8 +311,43 @@ separate analytic, incremental, tile-edge, mask, clipping and preparation tests
 cover those behaviors. No production shader or execution path changed in this
 reconciliation, so there is no new renderer performance cost.
 
-The v3 reference passes on Vulkan. Earlier Metal checks passed the independent
-import oracle but failed v2; both old/current implementations also agreed there
-when given identical corrected inputs. **The new v3 fixture has not yet been
-rerun on Metal or browser WebGPU.** No cross-backend pixel-parity claim is made,
-and no tolerance relaxation or omission of transparent channels is authorized.
+The v3 reference passes on its original Vulkan validation host. Metal passes
+the independent import oracle but fails v3: 22,616 sampled pixels exceed one
+byte, across 148 of 160 cases, with maximum channel error 255. The pre-migration
+Metal renderer with identical corrected imports produces exactly the same sheet
+as the current Metal renderer. A separate Vulkan SwiftShader numerical run also
+fails v3 (23,594 pixels above one byte, maximum 255); it differs from Metal at
+6,531 pixels above one byte. This is not isolated to the Metal backend.
+
+Two independent scalar checks now isolate opaque Curves/Exposure ramps and
+Halftone's full ink/paper endpoints. They calculate expected pixels from input
+bytes and public filter parameters using double-precision transfer functions,
+curve interpolation and nearest eight-bit linear storage. Both checks pass on
+Metal and SwiftShader. They cover neither the full spatial filter algorithms nor
+partial-alpha composition. For example, the full-sheet Curves case at source
+pixel (15, 157) has a stored input red of 1/255. The curve yields approximately
+0.5581 linear byte units, rounding to 1 and exporting as encoded red 13 on both
+backends; the v3 reference has red 0 at that sample. For full Halftone ink, the
+declared green 0.07 similarly exports as 22 in the scalar and endpoint checks.
+These isolate color/storage discrepancies; they do not explain every difference.
+Explicitly rounding every filter output reduced but did not eliminate the full
+Metal mismatch. Flooring made it worse. Neither experiment is a production change.
+
+Run the independent checks with:
+
+```sh
+cargo test -p layer-render-wgpu scalar_color_oracles -- --test-threads=1
+```
+
+For numerical diagnostics only, renderer unit-test binaries accept CPU adapters
+when `LAYER_TEST_SOFTWARE_GPU=numerical` is explicitly set. Select the intended
+adapter with `WGPU_ADAPTER_NAME`; an unmatched name fails selection. On Apple,
+`--features wgpu/vulkan-portability` enables Vulkan in that test build. A local
+Vulkan loader and ICD must also be configured for the test process. This opt-in
+prints a warning, is compiled out of production hosts, and must never supply
+hardware performance evidence. Keep local loader paths and machine logs in
+ignored artifacts. No runtime dependency or default backend selection changes.
+
+The full strict v3 comparison remains a failing cross-backend gate. Its reference,
+one-byte tolerance and all channels remain intact. Browser WebGPU has not yet
+been checked against v3; no cross-backend pixel-parity claim is made.

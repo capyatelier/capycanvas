@@ -16,7 +16,7 @@ final class EditorLaunchTests: XCTestCase {
         app.launch()
         let section = app.descendants(matching: .any)["zen-toolbar-0"].firstMatch
         XCTAssertTrue(section.waitForExistence(timeout: 20))
-        XCTAssertTrue(app.frame.contains(section.frame))
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(section.frame))
         #if os(macOS)
         app.buttons["zen-button"].click()
         #else

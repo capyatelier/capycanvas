@@ -72,3 +72,19 @@ Late corrections to persistent ink currently replay the scene. Cost on long
 strokes, 4K multilayer documents and sustained hardware workloads remains open;
 no 120 Hz claim follows from these correctness checks. The shared trace analyzer
 reports correction receipts separately from ordinary and predicted batches.
+
+## Physical Pencil smoke check
+
+On the attached iPad, the user confirmed light/firm pressure response, strokes
+remaining after lifting, drawing with a resting palm and the expected Undo/Redo
+result. The four-minute Debug trace includes about nine seconds of pointer
+activity: five Pencil contacts with five pen-up batches, alongside hover and
+touch activity. It records 730 real pointer batches and 417 prediction batches,
+with no recorder overflow or frame errors. No correction batches were observed,
+so this session does not validate physical estimated-property delivery. Sensor
+ranges, orientation, interruption/recovery and the complete brush matrix still
+need physical coverage. The local trace contains no coordinates or artwork.
+
+This short user check establishes the reported basic behavior only. The Debug
+timings and uncalibrated presentation receipt proxies do not establish sustained
+120 Hz performance or physical input-to-pixel latency.

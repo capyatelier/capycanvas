@@ -10055,9 +10055,25 @@ fn native_frame_pacing() {
             stats.gpu.len(),
             stats.presented.len()
         );
+        let gpu_timestamps = std::env::var("LAYER_PACING_GPU_TIMESTAMPS").as_deref() != Ok("0");
+        if gpu_timestamps {
+            assert!(
+                stats.gpu.len() > 100,
+                "hardware timestamps must cover GPU rendering"
+            );
+        } else {
+            assert!(
+                stats.gpu.is_empty(),
+                "no query submissions in timestamp-free profiling"
+            );
+        }
+        assert_eq!(stats.thread_cpu.len(), stats.cpu.len());
         assert!(
-            stats.gpu.len() > 100,
-            "hardware timestamps must cover GPU rendering"
+            stats
+                .thread_cpu
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite() && *v >= 0.)
         );
         assert!(
             stats.presented.iter().filter(|p| p[3] == 1).count() > 100,
@@ -10066,6 +10082,7 @@ fn native_frame_pacing() {
         let report = serde_json::json!({
             "brush": name, "viewport": camera.viewport, "brush_size": 384, "stroke_seconds": 6,
             "startup_wait_ms": startup_wait_ms,
+            "gpu_timestamps": gpu_timestamps,
             "workspace": std::env::var("LAYER_PACING_WORKSPACE").unwrap_or_else(|_| "default".into()),
             "gtk_renderer": w.window.renderer().unwrap().type_().name(),
             "path": "app-owned Wayland Vulkan subsurface",
@@ -10081,6 +10098,7 @@ fn native_frame_pacing() {
             "main_dispatch_cpu": dispatch_cpu,
             "wake_lateness": stats.wake_lateness,
             "worker_cpu": stats.cpu, "worker_cpu_stages": stats.cpu_stages,
+            "worker_thread_cpu": stats.thread_cpu,
             "worker_gpu": stats.gpu, "canvas_presentation": stats.presented,
         });
         eprintln!(
@@ -10368,6 +10386,7 @@ fn native_compositor_input() {
         "events": &*events.borrow(), "input_cpu": stats.input_cpu, "input_handler_cpu": stats.input_handler_cpu,
         "wake_lateness": stats.wake_lateness, "worker_cpu": stats.cpu,
         "worker_cpu_stages": stats.cpu_stages, "worker_gpu": stats.gpu,
+        "worker_thread_cpu": stats.thread_cpu,
         "frame_handler_cpu": stats.frame_handler_cpu,
         "canvas_presentation": stats.presented,
     });
