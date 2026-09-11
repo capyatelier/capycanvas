@@ -5,7 +5,7 @@ restore actions. Both native apps share storage and owner coordination.
 Both apps expose New, Open, Save and Save As using the shared editable
 [`Project` format](../../docs/project-format.md), plus PNG export. Both protect
 window close with the shared unsaved-change decision; macOS also protects app
-termination. Automatic artwork recovery remains required.
+termination. Both also maintain private recovery copies of unsaved artwork.
 
 ## Artwork files
 
@@ -51,10 +51,52 @@ export is completed by the native picker. Source/sample allocations are shared
 with the snapshot, but large-document capture cost, GPU preparation, memory peaks
 and storage latency still require measurement.
 
-These manual operations do not implement artwork autosave or recovery. Restoring
-an artwork URL across launches, provider conflicts/file presenters, interruption
-during provider access, iPad multi-window lifecycle, and physical background-task
-expiration remain open. Enabling multiple iPad scenes is not lifecycle acceptance.
+Restoring a provider URL across launches, provider conflicts/file presenters,
+interruption during provider access, iPad multi-window lifecycle, and physical
+background-task expiration remain open. Recovery uses a private copy and does
+not restore access to the original provider destination.
+
+## Artwork recovery
+
+Unsaved changes schedule a recovery attempt after two seconds. Each editor keeps
+one capture/write in flight and the latest desired document revision; edits during
+a write schedule a subsequent snapshot instead of queuing full document copies.
+Capture requires an idle committed document and waits while a stroke, transform
+or other canvas operation is active. Pruning, compression and disk operations use
+the existing project worker. Recovery neither creates a manual Save request nor
+acknowledges its checkpoint. The full editable project format is reused, including
+embedded source assets, masks and effects; undo history is not stored.
+
+Files live in private `recovery/<runtime UUID>` directories under Application
+Support. The runtime identity is separate from the restored scene ID, so a new
+process's initial blank canvas cannot overwrite a previous drawing. Each archive
+has a generation UUID. Its contents and directory are synced before a small
+atomic `current.json` manifest publishes that generation; obsolete generations
+are reclaimed afterward. A failed or cancelled write preserves the previously
+published generation. Stale removals check the manifest generation, and a durable
+tombstone precedes archive deletion. Corrupt records remain untouched and are
+reported without hiding other valid records. No provider URL, bookmark, account
+or hardware identifier is stored in the recovery record.
+
+**File → Recovered Drawings…** is shared by the iPad menu and Mac OS File menu.
+Available copies are also offered after launch. Archives belonging to other live
+owners are excluded. Open dismisses the picker before entering the existing
+Save/Discard/Cancel replacement flow. A prepared candidate is adopted only if the
+current document still matches its approved epoch and revision. Recovered content
+is unsaved and has no user destination; even Undo back to its initial state cannot
+mark it clean. A successful manual save restores ordinary checkpoint behavior.
+The source recovery remains until the new owner publishes its own durable copy
+or the user saves/discards. A cancelled replacement leaves both drawings intact.
+
+Lifecycle flushing drains accepted input without acquiring a drawable, then waits
+for preferences and the recovery barrier. This includes pen-up queued immediately
+before a surface stops. Mac cleanup follows actual window close or final accepted
+application termination; iPad cleanup follows an authorized scene's view detachment.
+Cancelled termination does not consume recovery copies. Barriers retain the
+coordinator if the UI owner disappears while its write completes. The iPad uses
+the OS background-task allowance; a kill or allowance expiration before durable
+publication can still leave only the previous completed copy. Full physical
+expiration/interruption and sustained storage overhead remain acceptance work.
 
 ## Ownership and files
 
@@ -93,7 +135,7 @@ Lifecycle flushing places barriers across the owner and I/O queues. iPad uses a
 background-task allowance; Mac waits before responding to application termination.
 Failed saves are visible in the editor or active settings sheet and can be retried.
 These adapters do not guarantee completion after a forced kill before a write
-finishes; document journaling/recovery remains part of the broader goal.
+finishes; recovery preserves the last completed generation in that case.
 
 ## Checks
 
@@ -102,6 +144,7 @@ On an Apple Silicon development Mac, run from the repository root:
 ```sh
 bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/recovery.swift
 cargo test -p layer-apple project_ --lib
 cargo test -p layer-host workspace_persistence --lib
 ```
@@ -115,6 +158,22 @@ and export checkpoint preservation. They exercise editor effects without
 system-menu automation. The focused `testNewDrawingAndExportCancellation` UI
 check exercises the size form and native export cancellation separately.
 Physical file-provider delivery remains unverified.
+
+The recovery checks use actual Swift owners and the Metal bridge for both platform
+policies. They verify private file modes, cancelled capture, newest-revision flush
+under queued edits, stale removal, malformed-record isolation, failed-write retry,
+owner loss/restart, migration and Save/Discard/Cancel protection. The Rust recovery
+check drains pen-up without a drawable, compares exact recovered GPU pixels and
+checks that only a durable manual save clears the recovered document's dirty state.
+Save-before-recovery checks preserve the selected archive through both Mac saves
+and iPad staged exports, without requesting another Open location.
+
+The focused `testArtworkRecoveryAfterRestart` UI check passes on Mac and iPad
+Simulator. It waits for a completed private copy, terminates and relaunches the
+app, opens the offered drawing after document readiness, and verifies the restored
+layer count and a new recovery copy. It uses an isolated persistence namespace
+and actual in-app controls. This checks completed-copy restart; it does not model
+a physical background-task expiration or a kill during publication.
 
 The standalone settings tests use temporary directories. They verify complete old/new file
 generations under concurrent reads, private permissions, size limits, failed-write
@@ -133,5 +192,5 @@ persistence test environment variables.
 
 Remaining acceptance includes interrupted/background/termination delivery on
 physical devices, workspace retention across the complete window/surface matrix,
-bounded/coalesced storage work under sustained edits, document recovery and provider delivery,
+bounded storage work under sustained workloads, physical recovery and provider delivery,
 and storage overhead in the hardware performance workloads.

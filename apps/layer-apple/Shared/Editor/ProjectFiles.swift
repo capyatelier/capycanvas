@@ -28,6 +28,7 @@ import UIKit
     private var cancelled = false
     private var finishing = false
     private var externalURL: URL?
+    private var recovering: RecoveryRecord?
     private var closeCompletion: ((Bool) -> Void)?
     /// Dialog dependency keeps editor/file effects testable without driving
     /// platform panels. The app uses the native implementation by default.
@@ -90,6 +91,13 @@ import UIKit
         }
         externalURL = url; store?.invoke("open_document")
     }
+    func recover(_ record: RecoveryRecord) {
+        guard !busy, let url = store?.recovery.files.archive(record),
+            store?.command("open_document")["enabled"].bool == true else {
+            error = "Finish the current canvas operation before recovering a drawing"; return
+        }
+        recovering = record; openURL(url)
+    }
     func confirmClose(_ completion: @escaping (Bool) -> Void) {
         guard !busy, let native = store?.native else { completion(false); return }
         busy = true; blocksEditor = true; closeCompletion = completion
@@ -113,7 +121,7 @@ import UIKit
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error { self.report(error) }
-                if choice == "cancel" { self.externalURL = nil }
+                if choice == "cancel" { self.externalURL = nil; self.recovering = nil }
                 self.released()
             }
         }
@@ -231,6 +239,7 @@ import UIKit
         }
     }
     private func open(_ url: URL?, extent: [UInt32]? = nil) {
+        let recovery = recovering
         task(opening: true) { [weak self] task in
             NativeProjectTask.io.async {
                 do {
@@ -238,10 +247,15 @@ import UIKit
                     DispatchQueue.main.async {
                         guard let self else { return }
                         if self.cancelled { self.finish(); return }
-                        self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url) { [weak self] error in
+                        self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url,
+                            recovered: recovery != nil) { [weak self] error in
                             DispatchQueue.main.async {
                                 guard let self else { return }
-                                if let error { self.report(error) } else { self.destination = url; self.store?.layerThumbnails.reset() }
+                                if let error { self.report(error) } else {
+                                    self.destination = recovery == nil ? url : nil; self.store?.layerThumbnails.reset()
+                                    if let recovery { self.store?.recovery.didRestore(recovery) }
+                                }
+                                self.recovering = nil
                                 self.finish(error == nil)
                             }
                         }
@@ -257,7 +271,7 @@ import UIKit
     private func report(_ message: String) { if !cancelled { error = message } }
     private func finish(_ succeeded: Bool = false) {
         guard !finishing, let id = requestID else { return }
-        finishing = true; externalURL = nil
+        finishing = true
         // A durable save is already acknowledged by the owner. Other requests
         // complete only after the picker and worker have finished their effect.
         if store?.state["requests"].array.contains(where: { $0["id"].uint == id }) != true {
@@ -277,6 +291,7 @@ import UIKit
         if let state = store?.state {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
+            if requestID == nil { recovering = nil; externalURL = nil }
         }
     }
     private func chooseOpen(_ completion: @escaping (URL?) -> Void) {

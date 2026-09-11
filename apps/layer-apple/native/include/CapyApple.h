@@ -16,7 +16,8 @@ void capy_apple_string_free(char *text);
 typedef struct CapyProjectTask CapyProjectTask;
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
-CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t opening);
+/* kind: 0 manual save, 1 open, 2 private recovery capture (no save acknowledgment). */
+CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t kind);
 int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
@@ -24,6 +25,8 @@ int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyPr
 int32_t capy_project_new(const CapyProjectTask *task, uint32_t width, uint32_t height);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
+int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
+int32_t capy_apple_recovery_flush_input(CapyApple *app, uint64_t now);
 int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_document_complete(CapyApple *app, uint32_t id, uint32_t succeeded);
 int32_t capy_apple_document_close(CapyApple *app, uint32_t id, uint32_t decision);
@@ -55,21 +58,9 @@ typedef struct {
 CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app);
 void capy_filter_previews_read(const CapyFilterPreviews *previews, CapyFilterPreviewInfo *output);
 void capy_filter_previews_free(CapyFilterPreviews *previews);
-typedef struct CapyPreviewImage CapyPreviewImage;
-typedef struct { uint64_t epoch, revision; } CapyNavigatorKey;
-typedef struct {
-    CapyNavigatorKey key;
-    uint32_t width, height, stride;
-    const uint8_t *pixels;
-    size_t count;
-} CapyPreviewImageInfo;
-/* Owner-only observation; camera changes do not invalidate the image key. */
-void capy_apple_navigator_key(const CapyApple *app, CapyNavigatorKey *output);
-/* One shared 15Hz producer; 1 needs another poll, 0 idle, -1 error. Returns an
-   independent owned image, straight sRGB RGBA8, maximum dimension 256 pixels. */
-int32_t capy_apple_navigator_preview(CapyApple *app, uint64_t now, uint32_t visible, CapyPreviewImage **output);
-void capy_preview_image_read(const CapyPreviewImage *image, CapyPreviewImageInfo *output);
-void capy_preview_image_free(CapyPreviewImage *image);
+/* Logical editor bounds/clip/order records. Owner-only, maximum 32 slots.
+   The live overview is drawn in the existing Metal canvas presentation pass. */
+int32_t capy_apple_navigator_placements(CapyApple *app, const char *json);
 /* Stateless [Camera, documentExtent, viewport] -> shared geometry JSON. */
 char *capy_apple_navigator_geometry(const char *json);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,

@@ -5543,7 +5543,10 @@ mod tests {
                     .filter(|p| p.available_on(platform) && p.kind() == PanelKind::Content)
                     .count()
             );
-            assert_eq!(menu.sections[2].len(), 1);
+            assert_eq!(
+                menu.sections[2].len(),
+                1 + usize::from(Panel::Commands.available_on(platform))
+            );
             assert_eq!(
                 menu.sections[1]
                     .iter()
@@ -9867,11 +9870,8 @@ mod tests {
         let mut app = session();
         app.set_platform(Platform::Android);
         let viewport = [1200.0, 900.0];
-        app.dispatch(UiAction::DoubleClickPanelHandle {
-            group: 5,
-            viewport,
-        })
-        .unwrap();
+        app.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport })
+            .unwrap();
         assert_eq!(app.state.workspace.layout.collapsed.len(), 1);
         invoke(&mut app, CommandId::UndoWorkspace);
         assert!(app.state.workspace.layout.collapsed.is_empty());

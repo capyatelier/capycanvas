@@ -106,3 +106,12 @@ worker to apply Reset and makes its test tab visible independently of saved tab
 preferences. The startup pixel check samples an uncovered placeholder location
 before opening a menu, so floating panels cannot masquerade as a background-color
 failure.
+
+
+Missing built-in Tools/Commands bars can now be restored explicitly from the
+Window menu. The shared action installs preset tiles with fresh identities,
+chooses an unused title, and keeps existing toolbars and panel positions. Ordinary
+Reset still preserves customized/deleted toolbar choices. The Android Commands
+recovery test passes on the physical tablet, alongside all 220 shared UI tests
+and ARM64 build/lint; evidence is in `artifacts/web-parity/commands-android-*` and
+`artifacts/android/commands-restore-shared.txt`.

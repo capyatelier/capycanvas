@@ -149,6 +149,7 @@ pub fn new_drawing(width: u32, height: u32) -> Result<Project, String> {
 pub(super) struct DocumentFiles {
     pub assets: BTreeMap<AssetId, ProjectAsset>,
     pub(super) saved_checkpoint: u64,
+    pub(super) recovered: bool,
     replace_in_place: bool,
     replace_after: Option<bool>,
     pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
@@ -182,7 +183,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn refresh_file_state(&mut self) {
         self.state.document_file.revision = self.engine.document().revision;
-        self.state.document_file.modified = self.engine.checkpoint() != self.files.saved_checkpoint;
+        self.state.document_file.modified =
+            self.files.recovered || self.engine.checkpoint() != self.files.saved_checkpoint;
         self.state.document_file.busy = self.files.pending.is_some();
     }
 
@@ -284,6 +286,16 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// Capture only immutable source state. The host prunes, validates and
     /// compresses this on a worker. No GPU readback or full image copy.
+    pub fn capture_project_recovery(&self) -> Result<Project, String> {
+        self.require_document_idle()?;
+        Ok(Project {
+            document: self.engine.document().clone(),
+            assets: self.files.assets.clone(),
+        })
+    }
+
+    /// A manual save additionally reserves the checkpoint to acknowledge once
+    /// the destination is durable. Recovery never changes that checkpoint.
     pub fn capture_project_save(
         &mut self,
         id: u32,
@@ -297,10 +309,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("This save was already captured or is not a save request".into());
         }
         self.files.pending.as_mut().unwrap().1 = Some((self.engine.checkpoint(), location));
-        Ok(Project {
-            document: self.engine.document().clone(),
-            assets: self.files.assets.clone(),
-        })
+        self.capture_project_recovery()
     }
 
     /// Success acknowledges a completed write/open/export, never just a chosen
@@ -327,6 +336,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && let Some((checkpoint, location)) = snapshot
         {
             self.files.saved_checkpoint = checkpoint;
+            self.files.recovered = false;
             self.state.document_file.location = Some(location);
         }
         self.refresh_file_state();

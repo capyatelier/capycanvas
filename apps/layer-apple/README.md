@@ -104,8 +104,11 @@ Support files. Settings propagate across live owners; each restored scene keeps
 its own workspace. See [PERSISTENCE.md](PERSISTENCE.md) for ordering, atomic writes,
 failure/retry behavior and fast tests. Native New/Open/Save/Save As use the shared
 project format. Both targets support custom canvas dimensions and PNG export. GPU export
-readback and PNG encoding run on the file worker; automatic artwork recovery
-remains pending.
+readback and PNG encoding run on the file worker. Unsaved artwork also receives
+private recovery copies. Use **File → Recovered Drawings…** to open one; copies
+are offered after restart and retain unsaved status until you explicitly save.
+See [PERSISTENCE.md](PERSISTENCE.md) for atomic generations, lifecycle handling,
+reproducible checks and remaining physical-device/performance acceptance.
 
 Both targets now project the live shared application menus. Keyboard Shortcuts
 supports search, alternate bindings, conflict replacement and resets; Settings
@@ -246,22 +249,29 @@ Use [the shared visual tools](../../tools/visual/README.md) for matching local
 Chrome captures and complete image differences for either native target.
 
 Navigator and Diagnostics share their SwiftUI projections across Apple targets.
-Navigator uses Rust geometry, camera actions and an event-driven preview owner:
-one GPU readback at a time, a 256px maximum image dimension, at most 15 updates
-per second, and one worker decode awaiting UI acknowledgement. Camera-only
-changes reuse the image; the last document update remains scheduled through the
-refresh throttle. Images belong to a document epoch and survive editor teardown
-without borrowing GPU resources. Diagnostics queries the shared rows and bounded
-chart at 5Hz only while visible. Timing sampling is restored on GPU attachment
-and document replacement.
+Navigator uses Rust geometry and camera actions, with the shared GPU overview
+drawn in the existing Metal canvas presentation pass. The same live composition
+supplies the main canvas and preview, including its camera outline. Native layout
+submits logical bounds, visible clips and stacking order; Rust resolves current
+document dimensions and display scale. No preview bitmap, readback, worker decode
+or refresh timer remains. Native panels reveal the image at their own stacking
+position while retaining their controls, shadows and drawer clipping. Optional
+overview resources are prepared after the first paper presentation and reused.
+Diagnostics queries the shared rows and bounded chart at 5Hz only while visible.
+Timing sampling is restored on GPU attachment and document replacement.
 
 `EditorLaunchTests/testNavigatorAndDiagnostics` is the focused shared UI check
 for either scheme. It uses a disposable drawing, in-app navigation buttons and
-an overview drag, then switches to Diagnostics and back. The faster Metal
-regressions run with `cargo test -p layer-apple navigator -- --test-threads=1` and
-verify actual document pixels, history, preview ownership, final delivery and
-document replacement on both Apple platform policies. Full visual and physical
-performance acceptance remains in [the matrix](../../docs/apple-acceptance.md).
+an overview drag, then switches to Diagnostics and back. Mac also compares actual
+preview pixels after drawing, Undo and Redo. Simulator touch verifies the shared
+single-finger non-painting policy; it cannot synthesize physical Pencil evidence.
+The faster checks run with `cargo test -p layer-apple navigator -- --test-threads=1`
+and verify document pixels/history, live geometry, atomic bounded layout records,
+idle behavior, document replacement and display scaling on both Apple policies.
+`cargo test -p layer-render-wgpu overview -- --test-threads=1` checks actual GPU
+overview pixels, clipping, transparency, camera changes and resource reuse.
+Full visual and physical performance acceptance remains in
+[the matrix](../../docs/apple-acceptance.md).
 
 ## Implementation status
 

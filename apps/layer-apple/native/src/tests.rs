@@ -10,6 +10,8 @@ mod input;
 mod navigator;
 #[path = "workspace_tests.rs"]
 mod workspace;
+#[path = "recovery_tests.rs"]
+mod recovery;
 
 #[test]
 fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {

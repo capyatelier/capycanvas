@@ -3,6 +3,11 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testArtworkRecoveryAfterRestart() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkArtworkRecoveryAfterRestart(in: editorTestApplication())
+    }
+
 
 
     @MainActor func testPartialZenToolbar() throws {

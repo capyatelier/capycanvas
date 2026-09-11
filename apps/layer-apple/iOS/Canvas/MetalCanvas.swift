@@ -64,7 +64,10 @@ final class CanvasView: UIView {
             }
             becomeFirstResponder()
             setNeedsLayout()
-        } else { stop() }
+        } else {
+            if store.state["document_file"]["close_ready"].bool { store.recovery.close() }
+            stop()
+        }
     }
     override func layoutSubviews() {
         super.layoutSubviews()

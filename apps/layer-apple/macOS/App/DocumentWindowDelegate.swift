@@ -35,6 +35,10 @@ final class DocumentWindowDelegate: NSObject, NSWindowDelegate {
         }
         return false
     }
+    @MainActor func windowWillClose(_ notification: Notification) {
+        store?.recovery.close()
+        downstream?.windowWillClose?(notification)
+    }
     override func responds(to selector: Selector!) -> Bool {
         super.responds(to: selector) || (downstream?.responds(to: selector) ?? false)
     }

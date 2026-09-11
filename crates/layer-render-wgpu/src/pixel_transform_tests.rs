@@ -105,11 +105,13 @@ fn draw(
     transform: ImageTransform,
 ) {
     let v = t.create_view(&Default::default());
+    let mut uploads = Uploads::new(r.device(), 64 * 1024);
     let mut e = r.device().create_command_encoder(&Default::default());
     p.begin_frame();
     p.encode(
         r.device(),
         r.queue(),
+        &mut uploads,
         &mut e,
         source,
         transform,
@@ -121,6 +123,7 @@ fn draw(
         }],
     )
     .unwrap();
+    uploads.finish(&e);
     r.queue().submit([e.finish()]);
 }
 
@@ -439,6 +442,7 @@ fn transforms_match_independent_premultiplied_oracle_with_coverage_and_crop() {
 #[test]
 fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() {
     let r = WgpuRasterizer::new_headless().unwrap();
+    let mut uploads = Uploads::new(r.device(), 64 * 1024);
     let mut p = PixelTransform::new(r.device());
     let size = [520, 280];
     let pixels: Vec<_> = (0..size[0] * size[1])
@@ -450,6 +454,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     p.encode(
         r.device(),
         r.queue(),
+        &mut uploads,
         &mut empty,
         &source,
         ImageTransform::default(),
@@ -499,8 +504,17 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         .collect();
     let mut e = r.device().create_command_encoder(&Default::default());
     p.begin_frame();
-    p.encode(r.device(), r.queue(), &mut e, &source, transform, &targets)
-        .unwrap();
+    p.encode(
+        r.device(),
+        r.queue(),
+        &mut uploads,
+        &mut e,
+        &source,
+        transform,
+        &targets,
+    )
+    .unwrap();
+    uploads.finish(&e);
     r.queue().submit([e.finish()]);
     for (origin, t, _) in &tiles {
         let actual = read(&r, t);
@@ -527,6 +541,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         p.encode(
             r.device(),
             r.queue(),
+            &mut uploads,
             &mut e,
             &source,
             ImageTransform {
@@ -541,6 +556,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
             }],
         )
         .unwrap();
+        uploads.finish(&e);
         r.queue().submit([e.finish()]);
         assert_eq!(p.storage_bytes(), capacity);
         assert_eq!(p.records.as_ptr(), records);
@@ -559,6 +575,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         p.encode(
             r.device(),
             r.queue(),
+            &mut uploads,
             &mut e,
             &source,
             ImageTransform {
@@ -573,6 +590,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         p.encode(
             r.device(),
             r.queue(),
+            &mut uploads,
             &mut e,
             &source,
             transform,
@@ -613,6 +631,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
 fn transform_latency() {
     use std::time::Instant;
     let r = WgpuRasterizer::new_headless().unwrap();
+    let mut uploads = Uploads::new(r.device(), 64 * 1024);
     let start = Instant::now();
     let mut p = PixelTransform::new(r.device());
     eprintln!(
@@ -704,11 +723,20 @@ fn transform_latency() {
             if i >= 40 {
                 telemetry.begin(r.device(), &mut e);
             }
-            p.encode(r.device(), r.queue(), &mut e, source, transform, targets)
-                .unwrap();
+            p.encode(
+                r.device(),
+                r.queue(),
+                &mut uploads,
+                &mut e,
+                source,
+                transform,
+                targets,
+            )
+            .unwrap();
             if i >= 40 {
                 telemetry.end(&mut e);
             }
+            uploads.finish(&e);
             r.queue().submit([e.finish()]);
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             if i >= 40 {
@@ -743,6 +771,7 @@ fn transform_latency() {
 #[test]
 fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
     let r = WgpuRasterizer::new_headless().unwrap();
+    let mut uploads = Uploads::new(r.device(), 64 * 1024);
     let mut pass = PixelTransform::scalar(r.device());
     let texture = |usage| {
         r.device().create_texture(&wgpu::TextureDescriptor {
@@ -781,6 +810,7 @@ fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
     pass.encode(
         r.device(),
         r.queue(),
+        &mut uploads,
         &mut encoder,
         &binding,
         ImageTransform {
@@ -813,6 +843,7 @@ fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
         },
         output.size(),
     );
+    uploads.finish(&encoder);
     r.queue().submit([encoder.finish()]);
     read.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     wait(&r);

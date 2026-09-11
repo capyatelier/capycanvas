@@ -6,10 +6,32 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Return the retired session so a host can release it off the input queue.
     pub fn adopt_project(
         &mut self,
+        candidate: Box<Self>,
+        epoch: u64,
+        revision: u64,
+        location: Option<DocumentLocation>,
+    ) -> Result<Box<Self>, (String, Box<Self>)> {
+        self.adopt_project_inner(candidate, epoch, revision, location, false)
+    }
+
+    /// A private recovery copy has no durable user destination. Even Undo back
+    /// to its initial checkpoint must keep Save/Discard/Cancel protection.
+    pub fn adopt_recovered_project(
+        &mut self,
+        candidate: Box<Self>,
+        epoch: u64,
+        revision: u64,
+    ) -> Result<Box<Self>, (String, Box<Self>)> {
+        self.adopt_project_inner(candidate, epoch, revision, None, true)
+    }
+
+    fn adopt_project_inner(
+        &mut self,
         mut candidate: Box<Self>,
         epoch: u64,
         revision: u64,
         location: Option<DocumentLocation>,
+        recovered: bool,
     ) -> Result<Box<Self>, (String, Box<Self>)> {
         let checked = (|| {
             self.require_document_idle()?;
@@ -58,6 +80,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.camera.fit([d.width, d.height]);
         std::mem::swap(&mut self.files.assets, &mut candidate.files.assets);
         self.files.saved_checkpoint = self.engine.checkpoint();
+        self.files.recovered = recovered;
         self.state.document_file.location = location;
         self.state.document_file.epoch = next;
         self.state.document_file.close_ready = false;

@@ -3,6 +3,12 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testArtworkRecoveryAfterRestart() {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        checkArtworkRecoveryAfterRestart(in: app)
+    }
+
 
 
     @MainActor func testPartialZenToolbar() throws {

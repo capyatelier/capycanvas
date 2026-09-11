@@ -23,17 +23,17 @@ import SwiftUI
     private(set) var native: NativeOwner?
     lazy var layerThumbnails = LayerThumbnails(store: self)
     lazy var filterPreviews = FilterPreviews(store: self)
-    lazy var navigatorImages = NavigatorImages(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
+    lazy var recovery = ArtworkRecovery(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
 
-    init(platform: UInt32, scene: String = UUID().uuidString) {
+    init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared) {
         do {
-            native = try NativeOwner(platform: platform, scene: scene) { [weak self] snapshot, failure in
+            native = try NativeOwner(platform: platform, scene: scene, persistence: persistence) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
@@ -62,9 +62,9 @@ import SwiftUI
                 currentState = next["state"]
                 structuralSnapshot = next
                 filterPreviews.refresh()
-                navigatorImages.refresh()
                 camera.value = state["camera"]
                 projectFiles.receive(state)
+                recovery.observe(state["document_file"])
                 contentDrawers.refresh()
                 workspace.refresh()
             }
@@ -80,7 +80,10 @@ import SwiftUI
     }
     func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
         guard let native else { completion(false); return }
-        native.flushPersistence { succeeded in DispatchQueue.main.async { completion(succeeded) } }
+        native.flushPersistence { [weak self] succeeded in DispatchQueue.main.async {
+            guard let self else { completion(false); return }
+            self.recovery.flush { completion(succeeded && $0) }
+        } }
     }
     static func flushAll(_ completion: @escaping @MainActor (Bool) -> Void) {
         let stores = instances.allObjects
@@ -109,6 +112,14 @@ import SwiftUI
     }
     static func resetCloseApprovals() {
         for live in instances.allObjects { live.native?.documentRequest(closeDecision: 4) { _ in } }
+    }
+    static func finishClosingAll(_ completion: @escaping @MainActor () -> Void) {
+        let stores = instances.allObjects
+        guard !stores.isEmpty else { completion(); return }
+        var remaining = stores.count
+        for store in stores {
+            store.recovery.close { _ in remaining -= 1; if remaining == 0 { completion() } }
+        }
     }
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }

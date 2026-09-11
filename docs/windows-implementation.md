@@ -640,5 +640,18 @@ files, traces, dumps and binaries remain excluded from GitHub.
 PNG export and additional native windows remain disabled until implemented.
 Full workspace parity, physical pen validation, broader lifecycle/DPI/device
 recovery and release packaging remain open. The previously measured strict v4
-filter-sheet difference of 30 bytes remains unresolved; its one-byte tolerance
+filter-sheet maximum byte error of 30 remains unresolved; its one-byte tolerance
 is unchanged. No 120 Hz benchmark or input-latency acceptance is added here.
+
+Integration through upstream 80be3c1 preserves Apple's recovery and live
+Navigator work, shared missing-toolbar restoration, and reusable GPU transform
+uploads/pages. The merged build passes all 332 core/engine/UI/host/Windows unit
+tests, 13 targeted hardware D3D12 transform tests, the hardware background
+document test, and the bounded native input test. Three transform benchmarks
+remain ignored; the full renderer suite was not repeated for this integration.
+
+The merged native build also passes the document fixture's two launches, all
+five isolated settings-storage launches, and the combined header/Preferences
+and workspace review. All eight owned review launches exit with code zero
+within the unchanged shutdown bound. These checks do not add physical-input,
+visual workspace parity or 120 Hz presentation acceptance.

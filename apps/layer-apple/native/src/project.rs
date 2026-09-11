@@ -148,7 +148,12 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 )?),
                 project: None,
             }
-        } else {
+        } else if opening == 2 {
+            Payload::Save {
+                snapshot: Some(session.capture_project_recovery()?),
+                project: None,
+            }
+        } else if opening == 1 {
             let gpu = session
                 .engine()
                 .backend()
@@ -164,6 +169,8 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 }),
                 candidate: None,
             }
+        } else {
+            return Err("Unknown project task kind".into());
         };
         Ok(CapyProjectTask::new(
             payload,
@@ -193,6 +200,27 @@ pub unsafe extern "C" fn capy_apple_project_ready(app: *mut CapyApple) -> i32 {
         }
         app.host.session.require_document_idle()?;
         Ok(0)
+    })
+    .unwrap_or(-1)
+}
+
+/// # Safety
+/// Owner only. Drain accepted input without acquiring/presenting a drawable so
+/// a backgrounded or detached surface cannot strand the last pen-up batch.
+/// Returns 1 while preparation or a live interaction still prevents capture.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_recovery_flush_input(app: *mut CapyApple, now: u64) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|app| {
+        if app.host.session.engine().backend().0.is_some() {
+            app.host.prepare_canvas_frame(now, now, true)?;
+        }
+        Ok(i32::from(
+            app.host.session.require_document_idle().is_err()
+                || app.host.session.state().filter_load.pending,
+        ))
     })
     .unwrap_or(-1)
 }
@@ -381,6 +409,27 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
     title: *const c_char,
     uri: *const c_char,
 ) -> i32 {
+    unsafe { adopt_project(app, task, title, uri, false) }
+}
+
+/// # Safety
+/// Owner only after a successful worker read. Recovery retains unsaved status
+/// and never treats the private archive as the user's save destination.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_project_recover(
+    app: *mut CapyApple,
+    task: *const CapyProjectTask,
+) -> i32 {
+    unsafe { adopt_project(app, task, c"Untitled".as_ptr(), c"".as_ptr(), true) }
+}
+
+unsafe fn adopt_project(
+    app: *mut CapyApple,
+    task: *const CapyProjectTask,
+    title: *const c_char,
+    uri: *const c_char,
+    recovered: bool,
+) -> i32 {
     let (Some(app), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else {
         return -1;
     };
@@ -406,11 +455,16 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
             *candidate = Some(prepared);
             return Err("Document operation cancelled".into());
         }
-        match app
-            .host
-            .session
-            .adopt_project(prepared, task.epoch, task.revision, location)
-        {
+        let result = if recovered {
+            app.host
+                .session
+                .adopt_recovered_project(prepared, task.epoch, task.revision)
+        } else {
+            app.host
+                .session
+                .adopt_project(prepared, task.epoch, task.revision, location)
+        };
+        match result {
             Ok(retired) => state.payload = Payload::Retired { _session: retired },
             Err((error, prepared)) => {
                 *candidate = Some(prepared);

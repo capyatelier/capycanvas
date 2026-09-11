@@ -39,6 +39,10 @@ impl PaintTransforms {
     pub fn source_captures(&self) -> u64 {
         self.0.iter().map(|t| t.source_captures).sum()
     }
+    #[cfg(test)]
+    pub fn spare_page_bytes(&self) -> u64 {
+        self.0.iter().map(|t| t.spares.storage_bytes()).sum()
+    }
     pub fn apply(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -105,8 +109,36 @@ struct ImageTransformState {
     source_bounds: [PixelRect; 3],
     preview: Option<layer_render::TransformPreview>,
     preview_regions: [PixelRect; 2],
+    spares: PreviewPages,
     #[cfg(test)]
     pub source_captures: u64,
+}
+
+/// Pages which left the live preview footprint. Reuse within the transaction,
+/// not as document content; apply/cancel releases them. Capacity follows peak
+/// live footprints, not the accumulated area visited by the moving selection.
+#[derive(Default)]
+struct PreviewPages {
+    paint: Vec<LayerPage>,
+    material: Vec<CanvasMaterialPage>,
+    watercolor: Vec<WatercolorWetnessPage>,
+    masks: Vec<layer_masks::MaskPage>,
+}
+impl PreviewPages {
+    fn clear(&mut self) {
+        self.paint.clear();
+        self.material.clear();
+        self.watercolor.clear();
+        self.masks.clear();
+    }
+    fn storage_bytes(&self) -> u64 {
+        self.paint
+            .iter()
+            .map(|p| PAGE_BYTES * (1 + u64::from(p.secondary.is_some())))
+            .sum::<u64>()
+            + SCALAR_PAGE_BYTES
+                * (self.material.len() + 2 * self.watercolor.len() + self.masks.len()) as u64
+    }
 }
 impl ImageTransformState {
     pub fn new(device: &PipelineDevice) -> Self {
@@ -141,6 +173,7 @@ impl ImageTransformState {
             source_bounds: [PixelRect::EMPTY; 3],
             preview: None,
             preview_regions: [PixelRect::EMPTY; 2],
+            spares: PreviewPages::default(),
             #[cfg(test)]
             source_captures: 0,
         }
@@ -158,7 +191,8 @@ impl ImageTransformState {
         self.visibility.begin_frame();
     }
     pub fn storage_bytes(&self) -> u64 {
-        self.color.storage_bytes()
+        self.spares.storage_bytes()
+            + self.color.storage_bytes()
             + self.selection.as_ref().map_or(0, wgpu::Buffer::size)
             + self.scalar.storage_bytes()
             + self.visibility.storage_bytes()
@@ -207,6 +241,7 @@ impl ImageTransformState {
         selection: Option<&layer_core::Selection>,
         extent: [u32; 2],
     ) -> Result<(), GpuRasterError> {
+        self.spares.clear();
         self.sources = Default::default();
         self.cut = layer_core::Rect::EMPTY;
         let (background, pages) = source_pages(r, layer)?;
@@ -382,7 +417,11 @@ impl ImageTransformState {
         for c in coordinates {
             if let Some(background) = self.background {
                 if !r.layer_masks.pages.contains_key(&(layer, c)) {
-                    let page = layer_masks::MaskPage::new(&r.device);
+                    let page = self
+                        .spares
+                        .masks
+                        .pop()
+                        .unwrap_or_else(|| layer_masks::MaskPage::new(&r.device));
                     r.encode_clear_value(
                         encoder,
                         &page.view,
@@ -399,7 +438,14 @@ impl ImageTransformState {
                 .iter()
                 .all(|p| p.coordinate != c)
             {
-                let mut page = r.create_page(c, "transformed paint page");
+                let mut page = self
+                    .spares
+                    .paint
+                    .pop()
+                    .unwrap_or_else(|| r.create_page(c, "transformed paint page"));
+                page.coordinate = c;
+                page.active_secondary = false;
+                page.secondary_needs_clear = page.secondary.is_some();
                 r.encode_clear(encoder, &page.primary.view, "initialize transformed paint");
                 page.primary_needs_clear = false;
                 r.paint_layers[index].pages.push(page);
@@ -411,15 +457,23 @@ impl ImageTransformState {
                     .iter()
                     .all(|p| p.coordinate != c)
             {
-                let wetness = r.create_scalar_page_surface("transformed material wetness");
-                r.encode_clear(encoder, &wetness.view, "initialize transformed material");
-                r.paint_layers[index]
-                    .material_pages
-                    .push(CanvasMaterialPage {
+                let mut page = self
+                    .spares
+                    .material
+                    .pop()
+                    .unwrap_or_else(|| CanvasMaterialPage {
                         coordinate: c,
-                        wetness,
+                        wetness: r.create_scalar_page_surface("transformed material wetness"),
                         needs_clear: false,
                     });
+                page.coordinate = c;
+                page.needs_clear = false;
+                r.encode_clear(
+                    encoder,
+                    &page.wetness.view,
+                    "initialize transformed material",
+                );
+                r.paint_layers[index].material_pages.push(page);
             }
             if watercolor
                 && support[2].iter().any(|b| !b.page_local(c).is_empty())
@@ -428,28 +482,35 @@ impl ImageTransformState {
                     .iter()
                     .all(|p| p.coordinate != c)
             {
-                let primary = r.create_scalar_page_surface("transformed watercolor wetness A");
-                let secondary = r.create_scalar_page_surface("transformed watercolor wetness B");
+                let mut page =
+                    self.spares
+                        .watercolor
+                        .pop()
+                        .unwrap_or_else(|| WatercolorWetnessPage {
+                            coordinate: c,
+                            primary: r
+                                .create_scalar_page_surface("transformed watercolor wetness A"),
+                            secondary: r
+                                .create_scalar_page_surface("transformed watercolor wetness B"),
+                            active_secondary: false,
+                            primary_needs_clear: false,
+                            secondary_needs_clear: false,
+                        });
+                page.coordinate = c;
+                page.active_secondary = false;
+                page.primary_needs_clear = false;
+                page.secondary_needs_clear = false;
                 r.encode_clear(
                     encoder,
-                    &primary.view,
+                    &page.primary.view,
                     "initialize transformed watercolor A",
                 );
                 r.encode_clear(
                     encoder,
-                    &secondary.view,
+                    &page.secondary.view,
                     "initialize transformed watercolor B",
                 );
-                r.paint_layers[index]
-                    .watercolor_wetness_pages
-                    .push(WatercolorWetnessPage {
-                        coordinate: c,
-                        primary,
-                        secondary,
-                        active_secondary: false,
-                        primary_needs_clear: false,
-                        secondary_needs_clear: false,
-                    });
+                r.paint_layers[index].watercolor_wetness_pages.push(page);
             }
         }
         let stored = index.map(|i| &r.paint_layers[i]);
@@ -510,8 +571,16 @@ impl ImageTransformState {
                     })
                 })
                 .collect();
-            pass.encode(&r.device, &r.queue, encoder, source, transform, &targets)
-                .map_err(GpuRasterError::InvalidTransform)?;
+            pass.encode(
+                &r.device,
+                &r.queue,
+                &mut r.uploads,
+                encoder,
+                source,
+                transform,
+                &targets,
+            )
+            .map_err(GpuRasterError::InvalidTransform)?;
         }
         // The next stroke establishes fresh stroke-scoped accumulation. Keep
         // persistent wetness and the layer-level watercolor edge style intact.
@@ -526,6 +595,7 @@ impl ImageTransformState {
     pub fn discard_preview(&mut self) {
         self.preview = None;
         self.preview_regions = [PixelRect::EMPTY; 2];
+        self.spares.clear();
     }
     pub fn has_preview(&self) -> bool {
         self.preview.is_some()
@@ -584,6 +654,7 @@ impl ImageTransformState {
         }
         self.retain_pages(r, previous.layer, &[], None);
         self.preview_regions = [PixelRect::EMPTY; 2];
+        self.spares.clear();
         Ok(Some((previous.layer, regions[0].union(regions[1]))))
     }
     pub fn update_preview(
@@ -652,7 +723,7 @@ impl ImageTransformState {
         })
     }
     fn retain_pages(
-        &self,
+        &mut self,
         r: &mut WgpuRasterizer,
         id: LayerId,
         regions: &[PixelRect],
@@ -665,19 +736,28 @@ impl ImageTransformState {
             original.contains(&c) || regions.iter().any(|b| !b.page_local(c).is_empty())
         };
         if self.background.is_some() {
-            r.layer_masks
-                .pages
-                .retain(|(mask, c), _| *mask != id || keep(*c, &self.original_pages[0], regions));
+            self.spares.masks.extend(
+                r.layer_masks
+                    .pages
+                    .extract_if(.., |(mask, c), _| {
+                        *mask == id && !keep(*c, &self.original_pages[0], regions)
+                    })
+                    .map(|(_, page)| page),
+            );
         } else if let Some(layer) = r.paint_layers.iter_mut().find(|l| l.id == id) {
-            layer
-                .pages
-                .retain(|p| keep(p.coordinate, &self.original_pages[0], regions));
-            layer
-                .material_pages
-                .retain(|p| keep(p.coordinate, &self.original_pages[1], &support[1]));
-            layer
-                .watercolor_wetness_pages
-                .retain(|p| keep(p.coordinate, &self.original_pages[2], &support[2]));
+            self.spares.paint.extend(layer.pages.extract_if(.., |p| {
+                !keep(p.coordinate, &self.original_pages[0], regions)
+            }));
+            self.spares
+                .material
+                .extend(layer.material_pages.extract_if(.., |p| {
+                    !keep(p.coordinate, &self.original_pages[1], &support[1])
+                }));
+            self.spares
+                .watercolor
+                .extend(layer.watercolor_wetness_pages.extract_if(.., |p| {
+                    !keep(p.coordinate, &self.original_pages[2], &support[2])
+                }));
         }
     }
 }

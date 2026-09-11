@@ -2,11 +2,10 @@ import SwiftUI
 
 struct NavigatorPanel: View {
     @ObservedObject var store: EditorStore
-    @State private var viewer = UUID()
     private let commands = ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"]
     var body: some View {
         VStack(spacing: 2) {
-            NavigatorDrawing(store: store, camera: store.camera, images: store.navigatorImages)
+            NavigatorDrawing(store: store)
                 .frame(minHeight: 0, idealHeight: 164, maxHeight: .infinity)
             HStack(spacing: 2) {
                 ForEach(commands, id: \.self) { id in
@@ -17,22 +16,22 @@ struct NavigatorPanel: View {
                         .accessibilityAddTraits(command["selected"].bool ? .isSelected : [])
                 }
             }
-        }.padding(8).onAppear { store.navigatorImages.show(viewer) }
-            .onDisappear { store.navigatorImages.hide(viewer) }
+        }.padding(8)
     }
 }
 
 private struct NavigatorDrawing: View {
     @ObservedObject var store: EditorStore
-    @ObservedObject var camera: CameraReadout
-    @ObservedObject var images: NavigatorImages
+    @Environment(\.workspaceClip) private var clip
+    @Environment(\.workspaceLayer) private var order
+    @State private var identity = UUID()
     @State private var started = false
     @GestureState private var contact = false
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private func geometry(_ size: CGSize) -> JSON {
         let document = store.state["tabs"][0]
-        guard size.width > 8, size.height > 8, !camera.value.isNull,
-            let source = try? JSON([camera.value.raw, [document["width"].uint, document["height"].uint], [size.width, size.height]]).encoded(),
+        guard size.width > 8, size.height > 8, !store.camera.value.isNull,
+            let source = try? JSON([store.camera.value.raw, [document["width"].uint, document["height"].uint], [size.width, size.height]]).encoded(),
             let pointer = source.withCString({ capy_apple_navigator_geometry($0) }) else { return JSON() }
         defer { capy_apple_string_free(pointer) }
         return (try? JSON.decode(String(cString: pointer))) ?? JSON()
@@ -43,20 +42,14 @@ private struct NavigatorDrawing: View {
     var body: some View {
         GeometryReader { allocation in
             let model = geometry(allocation.size)
-            Canvas { context, _ in
-                guard !model.isNull else { return }
-                let imageBounds = model["image"].rect
-                if let image = images.image { context.draw(Image(decorative: image, scale: 1), in: imageBounds) }
-                context.clip(to: Path(imageBounds))
-                var outline = Path()
-                for (index, point) in model["work_area"].array.enumerated() {
-                    let point = CGPoint(x: point[0].number, y: point[1].number)
-                    if index == 0 { outline.move(to: point) } else { outline.addLine(to: point) }
-                }
-                outline.closeSubpath()
-                context.stroke(outline, with: .color(.white), lineWidth: 3)
-                context.stroke(outline, with: .color(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255)), lineWidth: 1.5)
-            }.background(palette["bg"]).contentShape(Rectangle())
+            let bounds = allocation.frame(in: .named("editor-workspace"))
+            let visible = bounds.intersection(clip)
+            Canvas { context, size in
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(palette["bg"]))
+            }.contentShape(Rectangle())
+                .preference(key: NavigatorPlacements.self, value: model.isNull || visible.isEmpty ? [:] : [identity:
+                    NavigatorPlacement(bounds: bounds, clip: visible,
+                        image: model["image"].rect.offsetBy(dx: bounds.minX, dy: bounds.minY), order: order)])
                 .gesture(DragGesture(minimumDistance: 0).updating($contact) { _, value, _ in value = true }.onChanged { event in
                     if !started { started = true; send("down", event.startLocation, allocation.size) }
                     if event.translation != .zero { send("move", event.location, allocation.size) }
@@ -66,7 +59,8 @@ private struct NavigatorDrawing: View {
                 .onChange(of: contact) { _, active in if !active && started { send("cancel"); started = false } }
                 .onDisappear { if started { send("cancel"); started = false } }
                 .accessibilityElement().accessibilityLabel("Navigator")
-                .accessibilityValue(images.image == nil ? "Preview pending" : "Preview ready")
+                .accessibilityAddTraits(.isImage)
+                .accessibilityValue(store.canvasSubmitted && store.snapshot["canvas_ready"].bool ? "Live preview" : "Preparing preview")
                 .accessibilityHint("Drag the work area to move the canvas")
                 .accessibilityIdentifier("navigator-overview")
         }

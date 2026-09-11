@@ -23,12 +23,6 @@ final class NativeOwner: @unchecked Sendable {
     private var lastSnapshotTime: UInt64 = 0
     private var bundledFiltersLoaded = false
     private var canvasReady = false
-    typealias NavigatorReceiver = @Sendable (NativePreviewImage, @escaping @Sendable () -> Void) -> Void
-    private var navigatorReceiver: NavigatorReceiver?
-    private var navigatorScheduled = false
-    private var navigatorDeliveryPending = false
-    private var navigatorNeedsUpdate = false
-    private var navigatorKey = CapyNavigatorKey()
     private var shadersReady = false
     private let trace: FrameTrace?
     private var latestTracedInput: UInt64 = 0
@@ -55,6 +49,7 @@ final class NativeOwner: @unchecked Sendable {
     private var storageErrors: [String: String] = [:]
     private var lastStorageStatus: Data?
     let receive: @Sendable (JSON?, String?) -> Void
+    var persistenceRoot: URL? { persistence.root }
 
     init(platform: UInt32, scene: String, persistence: EditorPersistence = .shared,
         receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
@@ -120,49 +115,13 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(FilterPreviewReply(status: JSON(), atlas: nil, error: error.localizedDescription)) }
         }
     }
-    func setNavigatorReceiver(_ receiver: NavigatorReceiver?) {
-        queue.async { [self] in
-            navigatorReceiver = receiver
-            if receiver != nil { navigatorNeedsUpdate = true; scheduleNavigator() }
+    func navigatorPlacements(_ value: JSON) {
+        perform { [self] in
+            let source = try value.encoded()
+            try check(source.withCString { capy_apple_navigator_placements(handle, $0) })
+            // Layout can settle after the canvas driver has gone idle.
+            receive(nil, nil)
         }
-    }
-    /// One scheduled poll and one image delivery at most. A stalled UI/decoder
-    /// cannot queue more bitmaps behind it. The shared producer also caps GPU
-    /// sampling to 15Hz and keeps a final update alive through its throttle.
-    private func scheduleNavigator() {
-        guard navigatorReceiver != nil, canvasReady, layer != nil, navigatorNeedsUpdate,
-            !navigatorScheduled, !navigatorDeliveryPending else { return }
-        navigatorScheduled = true
-        queue.asyncAfter(deadline: .now() + .milliseconds(33)) { [self] in
-            navigatorScheduled = false
-            guard navigatorReceiver != nil, layer != nil else { return }
-            var pointer: OpaquePointer?
-            let result = capy_apple_navigator_preview(handle, FrameTrace.now(), 1, &pointer)
-            navigatorNeedsUpdate = result == 1
-            if result < 0 {
-                receive(nil, capy_apple_error(handle).map(String.init(cString:)) ?? "Navigator preview failed")
-                return
-            }
-            if let pointer, let receiver = navigatorReceiver {
-                navigatorDeliveryPending = true
-                receiver(NativePreviewImage(pointer)) { [weak self] in
-                    self?.queue.async { [weak self] in
-                        guard let self else { return }
-                        self.navigatorDeliveryPending = false; self.scheduleNavigator()
-                    }
-                }
-            }
-            scheduleNavigator()
-        }
-    }
-    private func updateNavigator() {
-        guard navigatorReceiver != nil, canvasReady else { return }
-        var key = CapyNavigatorKey()
-        capy_apple_navigator_key(handle, &key)
-        if key.epoch != navigatorKey.epoch || key.revision != navigatorKey.revision {
-            navigatorKey = key; navigatorNeedsUpdate = true
-        }
-        scheduleNavigator()
     }
     private func restore(_ loaded: EditorPersistence.Loaded) {
         for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
@@ -259,6 +218,18 @@ final class NativeOwner: @unchecked Sendable {
         }
         queue.async(execute: poll)
     }
+    /// One attempt at a committed, idle snapshot. The recovery scheduler retries
+    /// after a later edit/idle interval; it never stalls input waiting for a stroke.
+    func recoveryTask(expected: (UInt64, UInt64), completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+        queue.async { [self] in
+            guard capy_apple_project_ready(handle) == 0 else { completion(nil, nil); return }
+            guard let pointer = capy_apple_project_task(handle, 2) else {
+                completion(nil, capy_apple_error(handle).map(String.init(cString:))); return
+            }
+            let task = NativeProjectTask(pointer)
+            completion(capy_project_matches(pointer, expected.0, expected.1) == 1 ? task : nil, nil)
+        }
+    }
     /// Poll only while document/export shaders prepare. GPU synchronization and
     /// pixel packing happen later on the file worker through the returned job.
     func exportTask(id: UInt64, completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
@@ -274,13 +245,14 @@ final class NativeOwner: @unchecked Sendable {
         }
         queue.async(execute: poll)
     }
-    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?,
+    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?, recovered: Bool = false,
         completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             do {
                 try title.withCString { name in
                     try (url?.absoluteString ?? "").withCString { uri in
-                        try check(opening ? capy_apple_project_adopt(handle, task.handle, name, uri)
+                        try check(recovered ? capy_apple_project_recover(handle, task.handle)
+                            : opening ? capy_apple_project_adopt(handle, task.handle, name, uri)
                             : capy_apple_project_saved(handle, task.handle, name, uri))
                     }
                 }
@@ -311,9 +283,16 @@ final class NativeOwner: @unchecked Sendable {
     /// acknowledgments. Lifecycle adapters can hold a background/termination
     /// allowance without synchronously blocking the UI or render owner.
     func flushPersistence(_ completion: @escaping @Sendable (Bool) -> Void) {
-        queue.async { [self] in
-            persistence.flush { [self] in queue.async { [self] in completion(storageErrors.isEmpty) } }
+        let deadline = DispatchTime.now() + .seconds(10)
+        @Sendable func poll() {
+            let result = persistence.root == nil ? 0 : capy_apple_recovery_flush_input(handle, FrameTrace.now())
+            do { try publish() } catch { receive(nil, error.localizedDescription) }
+            if result == 1 && DispatchTime.now() < deadline {
+                queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll); return
+            }
+            persistence.flush { [self] in queue.async { [self] in completion(result == 0 && storageErrors.isEmpty) } }
         }
+        queue.async(execute: poll)
     }
     private func perform(_ work: @escaping @Sendable () throws -> Void) {
         queue.async { [self] in
@@ -501,7 +480,6 @@ final class NativeOwner: @unchecked Sendable {
                     try publish(); lastSnapshotTime = now
                 }
                 if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
-                updateNavigator()
                 if let observation {
                     let state: UInt64 = (canvasReady ? 1 : 0) | (bundledFiltersLoaded ? 2 : 0)
                         | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)

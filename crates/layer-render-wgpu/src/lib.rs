@@ -27,7 +27,7 @@ mod export_readback;
 pub use export_readback::ExportReadback;
 mod deferred;
 mod paint_transform;
-pub mod pixel_transform;
+mod pixel_transform;
 use builtin_masks::builtin_masks;
 use deferred::Deferred;
 mod pipeline_device;

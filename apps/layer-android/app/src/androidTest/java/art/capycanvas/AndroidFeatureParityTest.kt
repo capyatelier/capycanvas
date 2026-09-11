@@ -252,6 +252,24 @@ class AndroidFeatureParityTest {
         compose.onNodeWithTag("color-wheel").assertIsDisplayed()
         capture("full-editor-preset")
     }
+    @Test fun restoreMissingCommandsToolbarPreservesSavedTools() {
+        action(obj("type" to "restore_workspace", "workspace" to savedWorkspace))
+        val layout = state().getJSONObject("workspace").getJSONObject("layout")
+        if (layout.array("panels").objects().any { it.getString("id") == "commands" }) {
+            action(obj("type" to "customize", "action" to obj("type" to "delete_toolbar", "panel" to "commands")))
+            action(obj("type" to "customize", "action" to obj("type" to "confirm_toolbar")))
+        }
+        val tools = state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }.toString()
+        compose.onNodeWithTag("application-menu-window").performClick()
+        compose.onNodeWithText("Restore Commands toolbar").performClick()
+        compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("layout").array("groups").objects().any { it.getString("active") == "commands" } }
+        val commands = host.snapshot!!.array("panels").objects().first { it.getString("id") == "commands" }
+        commands.array("tiles").objects().filter { it.getJSONObject("control").getString("kind") != "divider" }.forEach { shown("tile-commands-${it.getInt("id")}") }
+        assertEquals(tools, state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first { it.getString("id") == "toolbar" }.toString())
+        assertNull(host.actionError)
+        compose.activity.getExternalFilesDir(null)!!.resolve("commands-restored-workspace.json").writeText(state().getJSONObject("workspace").toString())
+        capture("commands-restored")
+    }
     @Test fun resetLayoutKeepsTabDraggingDockingAndSelectionUsable() {
         fun group(panel: String) = host.snapshot!!.getJSONObject("layout").array("groups").objects()
             .first { it.array("panels").values().contains(panel) }
