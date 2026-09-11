@@ -223,7 +223,7 @@ workspace.append(dropIndicator);
 
 function dispatch(action) {
   try {
-    if (["move_panel", "move_group", "move_tile", "double_click_panel_handle"].includes(action.type))
+    if (["move_panel", "move_group", "move_tile", "double_click_panel_handle", "reset_column_width"].includes(action.type))
       action = {
         ...action,
         viewport: [workspace.clientWidth, workspace.clientHeight],
@@ -745,6 +745,13 @@ workspace.addEventListener("dblclick", e => {
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
   const action = JSON.parse(node.dataset.workspaceDrag);
+  if (action.type === "drag_divider" && layout.dividers.some(d =>
+    d.id === action.id && d.band && d.axis === "horizontal")) {
+    e.preventDefault(); e.stopPropagation();
+    endWorkspaceGesture(null, true);
+    dispatch({ type: "reset_column_width", id: action.id });
+    return;
+  }
   if (action.type !== "drag_workspace") return;
   const group = app.panel_handle_target(action.item);
   if (group == null) return;

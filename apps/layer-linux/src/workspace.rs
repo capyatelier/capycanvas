@@ -2524,19 +2524,64 @@ impl Workspace {
     }
 
     fn install_workspace_drag(self: &Rc<Self>) {
+        let column_click = Rc::new(Cell::new(None::<(u32, u32, [f32; 2])>));
         let click = gtk::GestureClick::new();
         click.set_name(Some("panel-handle-double-click"));
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
         click.connect_pressed(glib::clone!(
             #[weak(rename_to = w)]
             self,
-            move |gesture, count, x, y| {
+            #[strong]
+            column_click,
+            move |gesture, mut count, x, y| {
+                let point = [x as f32, y as f32];
+                let target = w.drag_target_at(point);
+                if let Some(event) = gesture
+                    .current_event()
+                    .filter(|e| e.event_type() == gdk::EventType::ButtonPress)
+                {
+                    let column = match target {
+                        Some(DragTarget::Dock(DockItem::Group { group }))
+                            if w.surface
+                                .imp()
+                                .layout
+                                .borrow()
+                                .column_for_group(group)
+                                .is_some() =>
+                        {
+                            Some(group)
+                        }
+                        _ => None,
+                    };
+                    let previous =
+                        column_click.replace(column.map(|group| (group, event.time(), point)));
+                    if let Some(group) = column {
+                        // GTK may cancel a blank header's click sequence on
+                        // release. Keep the pair on the stable workspace using
+                        // GTK's own time/distance limits; drags clear it below.
+                        let settings = gtk::Settings::for_display(&w.surface.display());
+                        let double = previous.is_some_and(|(id, time, position)| {
+                            id == group
+                                && event.time().wrapping_sub(time)
+                                    <= settings.gtk_double_click_time().max(0) as u32
+                                && (point[0] - position[0])
+                                    .abs()
+                                    .max((point[1] - position[1]).abs())
+                                    <= settings.gtk_double_click_distance().max(0) as f32
+                        });
+                        count = if double {
+                            column_click.set(None);
+                            2
+                        } else {
+                            1
+                        };
+                    }
+                }
                 if count != 2 {
                     return;
                 }
-                let point = [x as f32, y as f32];
                 let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-                let action = match w.drag_target_at(point) {
+                let action = match target {
                     Some(DragTarget::Divider(id))
                         if w.resolved().dividers.iter().any(|d| {
                             d.id == id && d.band && d.axis == layer_ui::Axis::Horizontal
@@ -2571,6 +2616,8 @@ impl Workspace {
         pointer.connect_event(glib::clone!(
             #[weak(rename_to = w)]
             self,
+            #[strong]
+            column_click,
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |controller, event| {
@@ -2603,6 +2650,7 @@ impl Workspace {
                     .event_point(controller)
                     .or_else(|| w.workspace_drag.borrow().as_ref().map(|d| d.point));
                 if point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence)) {
+                    column_click.set(None);
                     glib::Propagation::Stop
                 } else {
                     glib::Propagation::Proceed

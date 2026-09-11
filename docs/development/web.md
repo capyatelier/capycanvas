@@ -65,6 +65,10 @@ For the editor workflow against the running development server:
 node apps/layer-web/test.mjs --headless --editor
 ```
 
+Use `node apps/layer-web/test.mjs --headless --columns` for real pointer checks
+of canvas-facing divider double-clicks: normal starting widths, recursive groups,
+collapsed columns, undo/redo, and resizing after a reset.
+
 Set `CHROME` to the browser executable and `LAYER_WEB_URL` if the server uses a
 different address. For example, macOS can use
 `CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'`.

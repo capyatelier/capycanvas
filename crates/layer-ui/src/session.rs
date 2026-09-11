@@ -7987,7 +7987,7 @@ mod tests {
                     .workspace
                     .layout
                     .panel_handle_target(DockItem::Group { group }),
-                None
+                Some(group)
             );
             let before = app.state.workspace.clone();
             app.dispatch(UiAction::DoubleClickPanelHandle { group, viewport })

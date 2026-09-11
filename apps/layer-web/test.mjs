@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { checkEditor } from "./editor.test.mjs";
+import { checkColumnSizing } from "./columns.test.mjs";
 import { checkFullscreen } from "./fullscreen.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
@@ -212,6 +213,9 @@ try {
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--settings-audit")) {
     await checkSettingsParity({ call, evaluate, settle });
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--columns")) {
+    await checkColumnSizing({ call, evaluate, settle });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--workspace")) {
     await checkWorkspace({ call, evaluate, settle });

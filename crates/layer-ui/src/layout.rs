@@ -2982,8 +2982,9 @@ impl DockLayout {
     }
 
     /// Empty headers and grips accept double-clicks, but tab labels do not.
-    /// Lone docked handles toggle built-in panel tabs or refit toolbars;
-    /// floating handles also restore sizes and cycle toolbar layouts.
+    /// Column headers accept whole groups regardless of tab count. Other
+    /// docked handles retain their singleton behavior; floating handles also
+    /// restore sizes and cycle toolbar layouts.
     pub fn panel_handle_target(&self, item: DockItem) -> Option<u32> {
         let group = match item {
             DockItem::Group { group } => group,
@@ -2995,7 +2996,8 @@ impl DockLayout {
         let lone = self.group_panels(group).ok()?.len() == 1;
         (lone
             || (matches!(item, DockItem::Group { .. })
-                && self.floating.iter().any(|f| f.root.id() == group)))
+                && (self.column_for_group(group).is_some()
+                    || self.floating.iter().any(|f| f.root.id() == group))))
         .then_some(group)
     }
 

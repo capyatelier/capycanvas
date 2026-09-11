@@ -880,6 +880,21 @@ mod tests {
     }
 
     #[test]
+    fn column_headers_accept_multiple_tabs_but_tab_buttons_do_not() {
+        let mut layout = DockLayout::default();
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            layout.bands[1].edge = edge;
+            assert_eq!(
+                layout.panel_handle_target(DockItem::Group { group: 8 }),
+                matches!(edge, Edge::Left | Edge::Right).then_some(8)
+            );
+            for &panel in layout.group_panels(8).unwrap() {
+                assert_eq!(layout.panel_handle_target(DockItem::Panel { panel }), None);
+            }
+        }
+    }
+
+    #[test]
     fn column_width_reset_restores_shipped_starting_widths() {
         let preset = DockLayout::editor_default();
         let mut layout = preset.clone();

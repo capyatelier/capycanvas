@@ -7,6 +7,9 @@ use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
+#[path = "toolbar_tiles_tests.rs"]
+mod toolbar_tiles;
+
 fn pump(ms: u64) {
     let until = Instant::now() + Duration::from_millis(ms);
     let context = glib::MainContext::default();
@@ -6963,6 +6966,16 @@ fn native_floating_gestures() {
         command: CommandId::ZenMode,
     });
     pump(120);
+    let strip = w.panel_widget(Panel::Toolbar);
+    let grip = find_css(&strip, "panel-grip").unwrap();
+    let origin = grip
+        .compute_point(&w.surface, &gtk::graphene::Point::new(10.0, 10.0))
+        .unwrap();
+    let drag = begin_workspace_drag(&w, &grip, 10.0, 10.0);
+    // Tearing off the default left toolbar shifts the adjacent sidebar.
+    // Resolve its snap point after that move, as the pointer preview does.
+    drag.update([(650. - origin.x()) as f64, (450. - origin.y()) as f64]);
+    pump(80);
     let left = w
         .resolved()
         .groups
@@ -6973,12 +6986,6 @@ fn native_floating_gestures() {
         left.bounds.x + left.bounds.width + 60.0,
         left.bounds.y + left.bounds.height * 0.5,
     ];
-    let strip = w.panel_widget(Panel::Toolbar);
-    let grip = find_css(&strip, "panel-grip").unwrap();
-    let origin = grip
-        .compute_point(&w.surface, &gtk::graphene::Point::new(10.0, 10.0))
-        .unwrap();
-    let drag = begin_workspace_drag(&w, &grip, 10.0, 10.0);
     let delta = [
         (point[0] - origin.x()) as f64,
         (point[1] - origin.y()) as f64,
@@ -11014,6 +11021,90 @@ fn native_divider_cursor_input() {
             serde_json::to_value(state(&w).workspace).unwrap(),
             serde_json::to_value(&after).unwrap()
         );
+    }
+    // Title bars must collapse both singleton and multi-tab columns. Actual
+    // tab buttons keep selection behavior, including on a double-click.
+    for group in [8, 5] {
+        for grip in [true, false] {
+            let mut workspace = original.clone();
+            for band in &mut workspace.layout.bands {
+                if band.root.id() != 2 {
+                    band.extent = 400.;
+                }
+            }
+            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            pump(150);
+            let root = state(&w).workspace.layout.column_for_group(group).unwrap();
+            let (header, tab) = {
+                let groups = w.groups.borrow();
+                let view = groups.iter().find(|g| g.id == group).unwrap();
+                (
+                    find_css(view.root.upcast_ref(), "dock-tabs").unwrap(),
+                    view.tabs[0].1.clone(),
+                )
+            };
+            let b = tab.compute_bounds(&w.surface).unwrap();
+            let point = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+            perform(serde_json::json!([
+                { "point": point }, { "down": true }, { "down": false },
+                { "down": true }, { "down": false }
+            ]));
+            assert!(
+                !state(&w).workspace.layout.is_collapsed(root),
+                "tab double-click must not collapse"
+            );
+            let b = header.compute_bounds(&w.surface).unwrap();
+            let point = [
+                b.x() + b.width() - if grip { 10. } else { 28. },
+                b.y() + b.height() * 0.5,
+            ];
+            assert!(
+                matches!(w.drag_target_at(point), Some(DragTarget::Dock(DockItem::Group { group: id })) if id == group)
+            );
+            let before = serde_json::to_value(state(&w).workspace).unwrap();
+            perform(serde_json::json!([
+                { "point": point }, { "down": true }, { "down": false },
+                { "down": true }, { "down": false }
+            ]));
+            assert!(
+                state(&w).workspace.layout.is_collapsed(root),
+                "group {group}, grip {grip}: double-click must collapse"
+            );
+            assert!(w.workspace_drag.borrow().is_none());
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(serde_json::to_value(state(&w).workspace).unwrap(), before);
+            // Separate clicks outside GTK's double-click interval stay clicks.
+            let interval = gtk::Settings::for_display(&w.surface.display())
+                .gtk_double_click_time()
+                .max(0) as u64;
+            for _ in 0..2 {
+                pump(interval + 20);
+                perform(serde_json::json!([
+                    { "point": point }, { "down": true }, { "down": false }
+                ]));
+                assert!(!state(&w).workspace.layout.is_collapsed(root));
+            }
+            // Recognizing a header click must not prevent a subsequent drag.
+            pump(interval + 20);
+            perform(serde_json::json!([
+                { "point": point }, { "down": true },
+                { "point": [800., 550.] }, { "down": false }
+            ]));
+            assert!(
+                state(&w)
+                    .workspace
+                    .layout
+                    .floating
+                    .iter()
+                    .any(|f| f.root.id() == group)
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(serde_json::to_value(state(&w).workspace).unwrap(), before);
+        }
     }
     std::fs::write(dir.join("finished"), "done").unwrap();
     pump(100);
