@@ -203,6 +203,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn navigator_updates_continuously(&self) -> bool {
         self.input_pending || self.engine.has_active_stroke() || self.wants_continuous_frames()
     }
+    /// Lets event-driven hosts sleep after the last image, including a final
+    /// document update that arrived inside the preview throttle interval.
+    pub fn navigator_preview_current(&self, revision: u64) -> bool {
+        self.navigator_preview.is_current(revision)
+    }
     pub fn set_platform(&mut self, platform: Platform) {
         self.state.platform = platform;
         self.state.palette = self.state.settings.palette(self.state.theme, platform);
@@ -2724,30 +2729,34 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.camera.input_transform(),
         );
     }
+    /// Reapply visibility-dependent sampling after a host attaches its GPU.
+    pub fn sync_renderer_telemetry(&mut self) {
+        self.engine.backend_mut().set_telemetry_enabled(
+            (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
+                && self
+                    .state
+                    .workspace
+                    .layout
+                    .panel_group(Panel::Stats)
+                    .is_none_or(|g| {
+                        self.state
+                            .workspace
+                            .layout
+                            .collapsed_column_for_group(g)
+                            .is_none()
+                    }))
+                || self
+                    .state
+                    .customization
+                    .drawer
+                    .iter()
+                    .chain(self.state.customization.column_drawers.iter())
+                    .any(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
+        );
+    }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
         if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
-            self.engine.backend_mut().set_telemetry_enabled(
-                (self.state.workspace.layout.active_panel(Panel::Stats) == Some(Panel::Stats)
-                    && self
-                        .state
-                        .workspace
-                        .layout
-                        .panel_group(Panel::Stats)
-                        .is_none_or(|g| {
-                            self.state
-                                .workspace
-                                .layout
-                                .collapsed_column_for_group(g)
-                                .is_none()
-                        }))
-                    || self
-                        .state
-                        .customization
-                        .drawer
-                        .iter()
-                        .chain(self.state.customization.column_drawers.iter())
-                        .any(|d| d.columns.iter().any(|c| c.contains(&Panel::Stats))),
-            );
+            self.sync_renderer_telemetry();
         }
         self.state.theme = self.state.settings.theme.unwrap_or(self.system_theme);
         if regions & regions::SETTINGS != 0 {
@@ -7154,7 +7163,7 @@ mod tests {
         ] {
             let mut app = session();
             app.set_platform(platform);
-            for panel in [Panel::ToolSettings, Panel::Color] {
+            for panel in [Panel::ToolSettings, Panel::Color, Panel::Navigator] {
                 let available = panel.available_on(platform);
                 assert_eq!(
                     !app.panel_view(panel).unwrap().controls.is_empty(),

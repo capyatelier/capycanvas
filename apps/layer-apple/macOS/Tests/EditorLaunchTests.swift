@@ -3,6 +3,19 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+
+    @MainActor func testNavigatorAndDiagnostics() throws {
+        let app = editorTestApplication()
+        #if os(iOS)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        #else
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        #endif
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_panel_visible","panel":"navigator","visible":true}},{"type":"customize","action":{"type":"add_panel","panel":"stats","group":9}},{"type":"select_panel_tab","group":9,"panel":"navigator"}]"#
+        app.launch()
+        checkNavigatorAndDiagnostics(in: app)
+    }
+
     @MainActor func testFilterSearchPreviewAndProperties() throws {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

@@ -15,6 +15,7 @@ pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
     error: Option<CString>,
+    navigator_preview_epoch: Option<u64>,
 }
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
@@ -48,6 +49,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             host,
             metal: metal::MetalHost::default(),
             error: None,
+            navigator_preview_epoch: None,
         })))
     })
     .ok()

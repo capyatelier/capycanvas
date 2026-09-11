@@ -71,6 +71,8 @@ impl MetalHost {
                 WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, cache)
                     .map_err(error)?,
             );
+            // Workspace restoration can select Diagnostics before GPU creation.
+            host.session.sync_renderer_telemetry();
         }
         let [width, height] = host.session.state().camera.viewport;
         let gpu = host.session.renderer_mut().0.as_ref().unwrap();

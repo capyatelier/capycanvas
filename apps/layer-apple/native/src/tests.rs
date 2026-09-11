@@ -4,6 +4,8 @@ use layer_render::CanvasRenderer;
 use serde_json::{Value, json};
 
 struct App(*mut CapyApple);
+#[path = "navigator_tests.rs"]
+mod navigator;
 
 #[test]
 fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {

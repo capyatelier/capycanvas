@@ -11,6 +11,11 @@ struct PanelControls: View {
                 AdjustmentPanel(store: store)
             }
         }
+        else if panel["id"].string == "navigator" {
+            if panel["controls"].array.contains(where: { $0["control"].string == "navigator" && $0["visible_in_panel"].bool }) {
+                NavigatorPanel(store: store)
+            }
+        }
         else { controls }
     }
     private var controls: some View {
@@ -29,6 +34,7 @@ struct PanelControls: View {
         case "tool_settings": ToolSettingsControls(store: store)
         case "color_wheel": ColorPanel(store: store)
         case "properties": LayerPropertiesPanel(store: store)
+        case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")
         case "size_presets": sizes

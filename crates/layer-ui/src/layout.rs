@@ -425,7 +425,7 @@ impl Panel {
         {
             return true;
         }
-        if matches!(self, Self::ToolSettings | Self::Color)
+        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
             && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
         {
             return true;
