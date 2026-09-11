@@ -209,6 +209,12 @@ drop eligibility and drawer selection; GTK only renders and forwards input.
   logical pixels), whichever happens first. Exactly 25% into the minimum does
   not trigger the percentage rule. Collapse stays latched during the resize
   gesture. Expansion restores the remembered ordinary width.
+- Dragging a collapsed column's edge holds the entire layout fixed until the
+  pointer moves 36 logical pixels outward. It then restores the saved expanded
+  width and holds that width until the pointer reaches the restored edge. The
+  same drag can then resize normally or collapse the column again. Releasing
+  while waiting keeps the column expanded; cancellation restores the original
+  collapsed layout. Expansion and subsequent resizing form one undoable action.
 - Double-clicking the **non-tab area of any docked panel group's tab bar** also
   collapses its containing column, whether the group has one tab or several.
   This replaces the existing docked single-panel header double-click toggle

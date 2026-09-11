@@ -1250,6 +1250,156 @@ fn native_collapsed_drop_and_resize() {
 
 #[test]
 #[ignore = "private Wayland display and GPU"]
+fn native_collapsed_divider_expansion() {
+    let app = native_test_app("art.capycanvas.ColumnResizeExpansion");
+    let w = fixture_workspace(&app);
+    w.window.present();
+    pump(1800);
+    let original = state(&w).workspace;
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    for group in [5, 8] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original.clone(),
+        });
+        pump(150);
+        let root = original.layout.column_for_group(group).unwrap();
+        let band = original
+            .layout
+            .bands
+            .iter()
+            .find(|b| b.root.id() == root)
+            .unwrap()
+            .id;
+        let width = || {
+            w.resolved()
+                .groups
+                .iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .bounds
+                .width
+        };
+        let saved_width = width();
+        w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+        pump(150);
+        let collapsed = state(&w).workspace;
+        let geometry = w.resolved();
+        let divider = geometry.dividers.iter().find(|d| d.id == band).unwrap();
+        let handle = || {
+            w.surface
+                .imp()
+                .children
+                .borrow()
+                .iter()
+                .find(|(s, _)| *s == Slot::Divider(band))
+                .unwrap()
+                .1
+                .clone()
+        };
+        let outward = if divider.reversed { -1. } else { 1. };
+        let center = divider.bounds.x + divider.bounds.width * 0.5;
+        let drag = begin_workspace_drag(&w, &handle(), 1., 20.);
+        let update = |distance: f32| {
+            drag.update([(distance * outward) as f64, 0.]);
+            pump(80);
+        };
+        for distance in [18., 35., -40., 35.] {
+            update(distance);
+            assert_eq!(state(&w).workspace, collapsed);
+            assert_eq!(
+                w.resolved().work_area,
+                geometry.work_area,
+                "canvas must not move before expansion"
+            );
+            assert_eq!(
+                w.resolved()
+                    .dividers
+                    .iter()
+                    .find(|d| d.id == band)
+                    .unwrap()
+                    .bounds,
+                divider.bounds
+            );
+        }
+        update(36.);
+        assert!(!state(&w).workspace.layout.is_collapsed(root));
+        assert!((width() - saved_width).abs() < 1.);
+        let expanded = state(&w).workspace;
+        let d = w
+            .resolved()
+            .dividers
+            .into_iter()
+            .find(|d| d.id == band)
+            .unwrap();
+        let edge = (d.bounds.x + d.bounds.width * 0.5 - center) * outward;
+        for distance in [36., 0., -40., edge - 1.] {
+            update(distance);
+            assert_eq!(
+                state(&w).workspace,
+                expanded,
+                "expanded column waits for its edge"
+            );
+        }
+        update(edge + 40.);
+        assert!((width() - saved_width - 40.).abs() < 1.);
+        let minimum = if group == 5 {
+            layer_ui::TOOL_PANEL_MIN_WIDTH
+        } else {
+            layer_ui::LAYERS_MIN_WIDTH
+        };
+        update(minimum * 0.75 - TILE_SIZE - 1.);
+        assert!(state(&w).workspace.layout.is_collapsed(root));
+        assert!(
+            (state(&w)
+                .workspace
+                .layout
+                .collapsed
+                .iter()
+                .find(|c| c.root == root)
+                .unwrap()
+                .expanded_width
+                - saved_width)
+                .abs()
+                < 1.
+        );
+        drag.end();
+        pump(100);
+
+        // A cancelled opening restores the complete collapsed layout. A release
+        // during the wait commits expansion as one undoable workspace action.
+        let before = state(&w).workspace;
+        for cancel in [true, false] {
+            let drag = begin_workspace_drag(&w, &handle(), 1., 20.);
+            drag.update([(36. * outward) as f64, 0.]);
+            pump(100);
+            assert!(!state(&w).workspace.layout.is_collapsed(root));
+            assert!((width() - saved_width).abs() < 1.);
+            if cancel {
+                w.workspace_drag_input(ContactPhase::Cancel, drag.origin, None);
+                pump(100);
+                assert_eq!(state(&w).workspace, before);
+            } else {
+                drag.end();
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::UndoWorkspace,
+                });
+                pump(100);
+                assert_eq!(state(&w).workspace, before);
+                w.dispatch(UiAction::Invoke {
+                    command: CommandId::RedoWorkspace,
+                });
+                pump(100);
+                assert!(!state(&w).workspace.layout.is_collapsed(root));
+                assert!((width() - saved_width).abs() < 1.);
+            }
+        }
+    }
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "private Wayland display and GPU"]
 fn native_collapsed_columns() {
     let app = native_test_app("art.capycanvas.CollapsedColumns");
     let w = fixture_workspace(&app);

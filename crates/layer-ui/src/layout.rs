@@ -313,14 +313,29 @@ pub fn tile_layout(
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum ResizeDragPhase {
+    #[default]
+    Resizing,
+    /// A collapse ends resizing for this gesture, avoiding threshold oscillation.
+    Collapsed,
+    /// A collapsed edge stays fixed while the pointer crosses the opening distance.
+    Expand {
+        columns: [Option<u32>; 2],
+        edge: f32,
+    },
+    /// Expansion restores the saved width before the pointer reaches that edge.
+    CatchUp { edge: f32, reversed: bool },
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ResizeDrag {
     offset: [f32; 2],
-    pub collapsed: bool,
+    pub phase: ResizeDragPhase,
 }
 impl ResizeDrag {
     pub fn new(pointer: [f32; 2], divider: Bounds) -> Self {
         Self {
-            collapsed: false,
+            phase: ResizeDragPhase::Resizing,
             offset: [
                 pointer[0] - divider.x - divider.width * 0.5,
                 pointer[1] - divider.y - divider.height * 0.5,
