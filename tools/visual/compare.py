@@ -12,6 +12,8 @@ parser.add_argument("candidate", type=Path)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--channel-tolerance", type=int, default=0)
 parser.add_argument("--allowed-different-fraction", type=float, default=0)
+parser.add_argument("--candidate-rotation", type=int, choices=[0, 90, 180, 270], default=0,
+    help="Counterclockwise orientation correction for raw device captures, after EXIF; never resamples")
 args = parser.parse_args()
 if not 0 <= args.channel_tolerance <= 255 or not 0 <= args.allowed_different_fraction <= 1:
     parser.error("Tolerance must be 0..255 and allowed fraction 0..1")
@@ -40,6 +42,9 @@ def read(path):
 
 reference, reference_profile = read(args.reference)
 candidate, candidate_profile = read(args.candidate)
+if args.candidate_rotation:
+    candidate = candidate.transpose({90: Image.Transpose.ROTATE_90,
+        180: Image.Transpose.ROTATE_180, 270: Image.Transpose.ROTATE_270}[args.candidate_rotation])
 if reference.size != candidate.size:
     raise SystemExit(f"Capture dimensions differ: {reference.size} vs {candidate.size}; capture again at matching dimensions")
 
@@ -64,6 +69,7 @@ report = {
     "reference": args.reference.name, "candidate": args.candidate.name,
     "dimensions": reference.size, "comparison_space": "sRGB",
     "input_profiles": [reference_profile, candidate_profile],
+    "candidate_rotation_counterclockwise": args.candidate_rotation,
     "pixels": pixels, "exact_different_pixels": exact_changed,
     "exact_different_fraction": exact_changed / pixels,
     "channel_tolerance": args.channel_tolerance,

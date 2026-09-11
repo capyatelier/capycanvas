@@ -38,6 +38,36 @@ when adding or removing Swift files. Edit those generators rather than generated
 project entries. Canonical icons/previews are currently in `apps/layer-web`;
 the Apple bundle stages them and the root filter library without separate art.
 
+Tool Set consumes shared figure, region, ruler and Operation choices. Painting
+keeps the complete catalog brush list, also used by the web host, so every brush
+remains reachable while Apple toolbar customization is being implemented.
+Enable **Workspace → Tool Settings panel** for the
+active tool's numeric fields and actions. Numeric expressions, units, ranges,
+slider mappings and stepping resolve through Rust. The shared Apple control
+handles optimistic edits and local validation feedback; small AppKit/UIKit
+adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
+
+For reproducible Debug editor fixtures, `CAPY_INITIAL_ACTIONS` accepts a JSON
+array of shared actions at launch. For example, this opens Tool Settings without
+driving the Mac system menu bar:
+
+```sh
+open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]' \
+  apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
+```
+
+Release builds ignore this variable. The focused `testNumericToolControls` test
+uses the same fixture on both platforms. Standalone edit-state checks need no
+GUI automation:
+
+```sh
+xcrun swiftc apps/layer-apple/Shared/Editor/NumericEditState.swift \
+  apps/layer-apple/tests/numeric-edit.swift -o /tmp/capy-numeric-edit
+/tmp/capy-numeric-edit
+cargo test -p layer-apple apple_tool_panels
+cargo test -p layer-apple apple_transform_settings
+```
+
 ## Install and run
 
 ```sh

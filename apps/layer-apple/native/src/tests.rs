@@ -427,6 +427,170 @@ fn stateless_numeric_input_uses_shared_policy_without_a_session() {
 }
 
 #[test]
+fn apple_tool_panels_edit_every_visible_brush_setting_through_the_abi() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        let snapshot = app.request(3, Value::Null).unwrap();
+        let menu_action = snapshot["workspace_menu"]["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s.as_array().unwrap())
+            .find(|item| item["action"]["action"]["panel"] == "tool_settings")
+            .expect("Tool Settings must be reachable from Workspace")["action"]
+            .clone();
+        app.action(menu_action);
+        let snapshot = app.request(3, Value::Null).unwrap();
+        assert!(
+            snapshot["panels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["id"] == "tool_settings"
+                    && p["controls"][0]["control"] == "tool_settings")
+        );
+        let catalog = app.request(2, json!({"type":"catalog"})).unwrap();
+        let mut edited = 0;
+        for category in catalog["brush_categories"].as_array().unwrap() {
+            for brush in category["brushes"].as_array().unwrap() {
+                app.action(json!({"type":"select_brush","id":brush["id"]}));
+                let state = app.state();
+                assert!(
+                    state["tool_set"]["subtools"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["preview"] == brush["id"] && item["selected"] == true)
+                );
+                for setting in state["tool_settings"].as_array().unwrap() {
+                    // Re-select to prevent a previous edit changing the schema.
+                    app.action(json!({"type":"select_brush","id":brush["id"]}));
+                    let resolved = app
+                        .request(
+                            4,
+                            json!({"control":setting["numeric"],
+                        "value":setting["value"],"operation":{"type":"position","position":0.37}}),
+                        )
+                        .unwrap();
+                    app.action(json!({"type":"set_tool_setting","id":setting["id"],"value":resolved["value"]}));
+                    let after = app.state();
+                    let actual = after["tool_settings"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|s| s["id"] == setting["id"])
+                        .unwrap();
+                    assert_eq!(
+                        actual["value"].as_f64().unwrap() as f32,
+                        resolved["value"].as_f64().unwrap() as f32,
+                        "{} {}",
+                        brush["label"],
+                        setting["id"]
+                    );
+                    edited += 1;
+                }
+            }
+        }
+        assert!(
+            edited > 100,
+            "Exercise the complete catalog, including wet and liquify controls"
+        );
+        app.invoke("ruler");
+        for id in ["snap_rulers", "show_rulers"] {
+            let before = app.state();
+            assert!(
+                before["tool_actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["command"] == id && a["checkable"] == true)
+            );
+            let checked = before["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["id"] == id)
+                .unwrap()["selected"]
+                .clone();
+            app.invoke(id);
+            let after = app.state();
+            assert_ne!(
+                after["commands"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c["id"] == id)
+                    .unwrap()["selected"],
+                checked
+            );
+        }
+    }
+}
+
+#[test]
+fn apple_transform_settings_and_actions_preserve_pixel_transactions() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let painted = app.pixels();
+        app.invoke("scale_rotate");
+        assert_eq!(app.state()["tool_settings"].as_array().unwrap().len(), 5);
+        for command in ["transform_aspect", "apply_transform", "cancel_transform"] {
+            assert!(
+                app.state()["tool_actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["command"] == command)
+            );
+        }
+        app.action(json!({"type":"set_tool_setting","id":"transform_x","value":48}));
+        app.draw_frame();
+        assert!(
+            app.pixels() != painted,
+            "Numeric edits must update the live GPU preview"
+        );
+        app.invoke("cancel_transform");
+        app.draw_frame();
+        assert!(
+            app.pixels() == painted,
+            "Cancel must restore all original document pixels"
+        );
+        app.invoke("scale_rotate");
+        app.action(json!({"type":"set_tool_setting","id":"transform_x","value":48}));
+        let before = app.state()["tool_settings"].clone();
+        let invalid = CString::new(
+            json!({"type":"set_tool_setting","id":"transform_width","value":0}).to_string(),
+        )
+        .unwrap();
+        assert!(unsafe { capy_apple_request(app.0, 0, invalid.as_ptr()) }.is_null());
+        assert!(
+            !unsafe { capy_apple_error(app.0) }.is_null(),
+            "Semantic rejection must return field feedback"
+        );
+        assert_eq!(
+            app.state()["tool_settings"],
+            before,
+            "Rejected scale must preserve accepted fields"
+        );
+        app.invoke("apply_transform");
+        app.draw_frame();
+        let transformed = app.pixels();
+        assert!(transformed != painted);
+        app.invoke("undo");
+        app.draw_frame();
+        assert!(app.pixels() == painted);
+        app.invoke("redo");
+        app.draw_frame();
+        assert!(app.pixels() == transformed);
+    }
+}
+
+#[test]
 fn optional_gpu_timing_has_explicit_uninitialized_state_and_bounded_abi() {
     for platform in [0, 1] {
         let app = App::new(platform);

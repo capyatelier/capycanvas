@@ -415,9 +415,13 @@ pub enum PanelKind {
 }
 
 impl Panel {
-    /// New native panel bodies remain GTK-only until their review is complete.
-    /// Keep their saved identities, but do not offer unimplemented host views.
+    /// Keep saved panel identities while hosts add their native projections.
     pub fn available_on(self, platform: crate::Platform) -> bool {
+        if self == Self::ToolSettings
+            && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
+        {
+            return true;
+        }
         !matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
             || matches!(platform, crate::Platform::Gtk | crate::Platform::Generic)
     }

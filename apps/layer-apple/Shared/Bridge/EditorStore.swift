@@ -28,6 +28,13 @@ import SwiftUI
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
                 DispatchQueue.main.async { self?.catalog = result ?? JSON() }
             }
+            #if DEBUG
+            // Deterministic editor fixtures exercise actions directly, without
+            // driving platform menu bars. Production builds have no override.
+            if let source = ProcessInfo.processInfo.environment["CAPY_INITIAL_ACTIONS"] {
+                for action in try JSON.decode(source).array { native?.submit(0, action) }
+            }
+            #endif
         } catch { failure = error.localizedDescription }
     }
     private func receive(_ next: JSON?, _ error: String?) {
@@ -50,6 +57,11 @@ import SwiftUI
     }
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }
+    func edit(_ value: [String: Any], completion: @escaping @MainActor (String?) -> Void) {
+        guard let native else { completion("The canvas session is unavailable"); return }
+        native.edit(JSON(value)) { error in DispatchQueue.main.async { completion(error) } }
+        wake?()
+    }
     func invoke(_ command: String) { dispatch(["type": "invoke", "command": command]) }
     func layer(_ action: [String: Any]) { dispatch(["type": "layer", "action": action]) }
     func importLayer(_ url: URL) { native?.importLayer(url); wake?() }
