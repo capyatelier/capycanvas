@@ -1223,6 +1223,228 @@ fn selected_wet_brush_does_not_dry_or_advect_unselected_wet_paint() {
 }
 
 #[test]
+fn watercolor_outer_edge_never_borrows_unwetted_dry_pigment() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layers = [Layer::paint(LayerId(1), "Mixed media")];
+    let extent = [512, 512];
+    let v = ViewState {
+        width_px: extent[0],
+        height_px: extent[1],
+        ..view()
+    };
+    let render = |r: &mut WgpuRasterizer, d: Dab, b: DabBatch, reset| {
+        r.submit(FramePacket {
+            view: v,
+            document_extent: extent,
+            layers: &layers,
+            dabs: &[d],
+            dab_batches: &[b],
+            reset_layers: reset,
+            time_seconds: 0.,
+            composite_all: reset,
+        })
+        .unwrap();
+    };
+    let at = |bytes: &[u8], p: Point| -> [u8; 4] {
+        bytes[(p.y as usize * 512 + p.x as usize) * 4..][..4]
+            .try_into()
+            .unwrap()
+    };
+    let mut wet = batch(1);
+    wet.style.execution = BrushExecution::Watercolor;
+    wet.style.rendering.accumulation = layer_core::BrushAccumulation::Uniform;
+    wet.style.rendering.wet_edge = 1.;
+    wet.style.rendering.burnt_edge = 1.;
+    wet.style.rendering.edge_width = 8.;
+    wet.style.wet_mix.amount_of_paint = 0.7;
+    wet.style.wet_mix.density = 0.9;
+    wet.style.wet_mix.attack = 0.8;
+    // Four stencil directions, both inside a page and across its boundary.
+    let directions = [[1., 0.], [-1., 0.], [0., 1.], [0., -1.]];
+    let capture = std::env::var_os("LAYER_WET_EDGE_CAPTURE");
+    let mut sheet = capture.as_ref().map(|_| vec![0; 1024 * 256 * 4]);
+    for (case, (seam, direction)) in [false, true]
+        .into_iter()
+        .flat_map(|seam| directions.map(|direction| (seam, direction)))
+        .enumerate()
+    {
+        let center = if seam {
+            Point {
+                x: 256. - direction[0] * 16.,
+                y: 256. - direction[1] * 16.,
+            }
+        } else {
+            Point { x: 64., y: 64. }
+        };
+        let offset = |distance| Point {
+            x: center.x + direction[0] * distance,
+            y: center.y + direction[1] * distance,
+        };
+        let damage = |p: Point, radius| Rect {
+            min: Point {
+                x: p.x - radius,
+                y: p.y - radius,
+            },
+            max: Point {
+                x: p.x + radius,
+                y: p.y + radius,
+            },
+        };
+        let mut blue = dab([0., 0., 1., 1.]);
+        blue.center = center;
+        blue.radii = [16.; 2];
+        blue.flow = 0.6;
+        blue.material = [0., 0., 1., 0.];
+        wet.damage = damage(center, 17.);
+        render(&mut r, blue, wet.clone(), true);
+        let before = r.readback_srgb_rgba8().unwrap();
+        let halo = at(&before, offset(19.));
+        assert!(
+            halo[2] > 200 && halo[3] > 0,
+            "blue halo must exist: {halo:?}"
+        );
+
+        // Both morphology stencils reach this opaque but entirely dry mark.
+        let mut red = dab([1., 0., 0., 1.]);
+        red.center = offset(32.);
+        red.radii = [8.; 2];
+        let mut dry = batch(1);
+        dry.stroke_id = StrokeId(2);
+        dry.damage = damage(red.center, 9.);
+        render(&mut r, red, dry, false);
+        let after = r.readback_srgb_rgba8().unwrap();
+        let coordinate = [red.center.x as u32 / 256, red.center.y as u32 / 256];
+        if let Some(page) = r.paint_layers[0]
+            .watercolor_wetness_pages
+            .iter()
+            .find(|page| page.coordinate == coordinate)
+        {
+            let water = page_bytes(&r, &page.active().texture);
+            assert_eq!(
+                water[(red.center.y as usize % 256) * 256 + red.center.x as usize % 256],
+                0
+            );
+        }
+        assert_eq!(at(&after, red.center), [255, 0, 0, 255]);
+        assert_eq!(
+            at(&after, offset(19.)),
+            halo,
+            "dry pigment contaminated wet edge: case {case}"
+        );
+        for y in 0..512 {
+            for x in 0..512 {
+                if (x as f32 - red.center.x).abs() > 9. || (y as f32 - red.center.y).abs() > 9. {
+                    let i = (y * 512 + x) * 4;
+                    assert_eq!(
+                        &after[i..i + 4],
+                        &before[i..i + 4],
+                        "outside dry mark: case {case}, ({x}, {y})"
+                    );
+                }
+            }
+        }
+        // Tight dirty-region updates must agree with a full recomposition.
+        r.submit(FramePacket {
+            view: v,
+            document_extent: extent,
+            layers: &layers,
+            dabs: &[],
+            dab_batches: &[],
+            reset_layers: false,
+            time_seconds: 0.,
+            composite_all: true,
+        })
+        .unwrap();
+        assert_eq!(r.readback_srgb_rgba8().unwrap(), after);
+        if let Some(sheet) = &mut sheet {
+            for (row, bytes) in [&before, &after].into_iter().enumerate() {
+                for y in 0..128 {
+                    let src = ((center.y as usize + y - 64) * 512 + center.x as usize - 64) * 4;
+                    let dst = ((row * 128 + y) * 1024 + case * 128) * 4;
+                    sheet[dst..dst + 512].copy_from_slice(&bytes[src..src + 512]);
+                }
+            }
+        }
+    }
+    if let (Some(path), Some(sheet)) = (capture, sheet) {
+        let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), 1024, 256);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&sheet)
+            .unwrap();
+    }
+}
+
+#[test]
+fn watercolor_mask_limits_live_edges_without_baking_or_drying_paint() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let mut layer = Layer::paint(LayerId(1), "Watercolor");
+    let mut wet = batch(1);
+    wet.style = preset_style(layer_core::DefaultBrushPreset::WatercolorWash);
+    wet.style.tip = BrushTip::AnalyticEllipse;
+    wet.style.transport = None;
+    wet.style.rendering.wet_edge = 1.;
+    wet.style.rendering.burnt_edge = 1.;
+    wet.style.rendering.edge_width = 8.;
+    let mut blue = dab([0., 0., 1., 1.]);
+    blue.center.x = 48.;
+    blue.radii = [16.; 2];
+    blue.flow = 0.6;
+    blue.material = [0., 0., 1., 0.];
+    submit(&mut r, &[layer.clone()], &[blue], &[wet], true);
+    let before = r.readback_srgb_rgba8().unwrap();
+    assert!(before[(64 * 128 + 67) * 4 + 3] > 0, "outside band exists");
+    let pigment = page_bytes(&r, &r.paint_layers[0].pages[0].active().texture);
+    let water = page_bytes(
+        &r,
+        &r.paint_layers[0].watercolor_wetness_pages[0]
+            .active()
+            .texture,
+    );
+
+    layer.mask = Some(left_mask(9));
+    submit(&mut r, &[layer.clone()], &[], &[], false);
+    let masked = r.readback_srgb_rgba8().unwrap();
+    for y in 0..128 {
+        for x in 0..128 {
+            let i = (y * 128 + x) * 4;
+            let expected = if x < 64 { &before[i..i + 4] } else { &[0; 4] };
+            assert_eq!(&masked[i..i + 4], expected, "mask at ({x}, {y})");
+        }
+    }
+    assert_eq!(
+        page_bytes(&r, &r.paint_layers[0].pages[0].active().texture),
+        pigment
+    );
+    assert_eq!(
+        page_bytes(
+            &r,
+            &r.paint_layers[0].watercolor_wetness_pages[0]
+                .active()
+                .texture
+        ),
+        water
+    );
+    layer.mask.as_mut().unwrap().enabled = false;
+    submit(&mut r, &[layer.clone()], &[], &[], false);
+    assert_eq!(
+        r.readback_srgb_rgba8().unwrap(),
+        before,
+        "disabling restores live edge"
+    );
+    layer.mask = None;
+    submit(&mut r, &[layer], &[], &[], false);
+    assert_eq!(
+        r.readback_srgb_rgba8().unwrap(),
+        before,
+        "removing restores live edge"
+    );
+}
+
+#[test]
 fn selection_clips_mask_paint_and_disposable_brush_previews() {
     use layer_core::DefaultBrushPreset::*;
     let mut r = WgpuRasterizer::new_headless().unwrap();

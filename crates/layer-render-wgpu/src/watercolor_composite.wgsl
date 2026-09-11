@@ -143,7 +143,6 @@ struct Band {
 fn sample_band(
     world: vec2<f32>,
     center_occupied: f32,
-    center_wetness: f32,
     center_color: vec4<f32>,
     radius: f32,
 ) -> Band {
@@ -156,12 +155,16 @@ fn sample_band(
         let sample_position = world + directions[index] * radius;
         let sample_wetness = wetness_at(sample_position);
         let sample_occupied = occupied(sample_wetness);
-        let sample_color = color_at(sample_position);
         band.minimum = min(band.minimum, sample_occupied);
         band.maximum = max(band.maximum, sample_occupied);
-        if sample_color.a > band.strongest_pigment {
-            band.strongest_pigment = sample_color.a;
-            band.source = sample_color;
+        // The outside band borrows pigment only from the wet union. Nearby
+        // opaque dry paint must not recolor or strengthen a watercolor halo.
+        if sample_occupied > 0.5 {
+            let sample_color = color_at(sample_position);
+            if sample_color.a > band.strongest_pigment {
+                band.strongest_pigment = sample_color.a;
+                band.source = sample_color;
+            }
         }
     }
     return band;
@@ -174,7 +177,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
     let center_wetness = wetness_at(world);
     let center_occupied = occupied(center_wetness);
     let width = clamp(style.edges.z, 1.0, 16.0);
-    let deep = sample_band(world, center_occupied, center_wetness, center, width * 2.0);
+    let deep = sample_band(world, center_occupied, center, width * 2.0);
 
     // A stable watercolor interior, including every overlap-density change,
     // and a region with no watercolor wetness need no near-band samples.
@@ -182,7 +185,7 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f3
         || (center_occupied < 0.5 && deep.maximum < 0.5) {
         return center * style.canvas_opacity.z;
     }
-    let near = sample_band(world, center_occupied, center_wetness, center, width);
+    let near = sample_band(world, center_occupied, center, width);
 
     // Morphology uses only the unioned watercolor wetness mask. Pigment alpha can
     // vary through pressure, glazing, or overlapping strokes without becoming
