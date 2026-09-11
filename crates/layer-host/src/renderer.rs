@@ -2,10 +2,10 @@ use layer_core::AssetId;
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
 use layer_render_wgpu::{GpuRasterError, WgpuRasterizer};
 
-/// Not a CPU fallback: until a Vulkan device is attached, only UI/viewport
+/// Not a CPU fallback: until a GPU device is attached, only UI/viewport
 /// bookkeeping is available. Pixel operations fail explicitly.
 #[derive(Default)]
-pub(crate) struct Renderer(pub Option<WgpuRasterizer>);
+pub struct Renderer(pub Option<WgpuRasterizer>);
 impl Renderer {
     fn gpu(&mut self) -> Result<&mut WgpuRasterizer, GpuRasterError> {
         self.0.as_mut().ok_or(GpuRasterError::AdapterUnavailable)

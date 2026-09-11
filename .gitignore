@@ -36,3 +36,11 @@ Thumbs.db
 *.log
 *.profraw
 *.profdata
+
+# Apple generated resources, Xcode user state and build products.
+/apps/layer-apple/Generated/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcresult/
+*.mobileprovision

@@ -1,0 +1,15 @@
+[package]
+name = "layer-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+layer-core = { path = "../layer-core" }
+layer-engine = { path = "../layer-engine" }
+layer-render = { path = "../layer-render" }
+layer-render-wgpu = { path = "../layer-render-wgpu" }
+layer-ui = { path = "../layer-ui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wgpu = "30.0.1"
