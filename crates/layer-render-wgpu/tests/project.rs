@@ -1,5 +1,6 @@
 //! Compare a live, incrementally painted scene with a fresh GPU replay after
-//! saving and reopening. Readback is test-only, never part of project saving.
+//! saving and reopening. Snapshots use renderer-retained immutable sources.
+//! Readback is test-only, never part of project saving.
 use layer_core::*;
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ToolKind, ViewTransform,
@@ -203,7 +204,9 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             100_000_000,
         );
         {
-            let checkpoint = Project::snapshot(live.document(), &initial.assets).unwrap();
+            let checkpoint =
+                Project::snapshot_with(live.document(), |id| live.backend().source_asset(id))
+                    .unwrap();
             let (mut replay, _) = engine(&checkpoint);
             let expected = image(&mut live, 190_000_000);
             let actual = image(&mut replay, 190_000_000);
@@ -218,7 +221,9 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
             200_000_000,
         );
         {
-            let checkpoint = Project::snapshot(live.document(), &initial.assets).unwrap();
+            let checkpoint =
+                Project::snapshot_with(live.document(), |id| live.backend().source_asset(id))
+                    .unwrap();
             let (mut replay, _) = engine(&checkpoint);
             let expected = image(&mut live, 290_000_000);
             let actual = image(&mut replay, 290_000_000);
@@ -313,7 +318,8 @@ fn project_reopen_matches_live_gpu_and_subsequent_wet_paint() {
                 None,
             );
         }
-        let project = Project::snapshot(live.document(), &initial.assets).unwrap();
+        let project =
+            Project::snapshot_with(live.document(), |id| live.backend().source_asset(id)).unwrap();
         let mut encoded = Vec::new();
         project.write(&mut encoded).unwrap();
         let decoded = Project::read(encoded.as_slice(), ProjectLimits::default()).unwrap();

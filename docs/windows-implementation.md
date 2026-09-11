@@ -450,3 +450,10 @@ fixtures, controlled drawing and normal close with empty runtime stderr.
 Physical wheel gestures/capture, full connected drawers, complete tool/panel
 functionality and whole-workspace visual parity remain open. The 120 Hz
 benchmark is still deferred. Captures, settings and raw reports stay local.
+
+After merging the portable source-retention and Android workspace updates, all
+304 core/engine/UI/host/Windows Rust tests pass. The shared GPU project fixture
+now snapshots assets through CanvasRenderer::source_asset and still passes exact
+D3D12 save/reopen and continued wet-paint comparisons. The merged WinUI build
+passes all four Color captures and its color, Preferences/header and workspace
+interaction checks, then closes with empty runtime stderr.
