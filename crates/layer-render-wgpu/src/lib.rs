@@ -3822,7 +3822,9 @@ impl CanvasRenderer for WgpuRasterizer {
                 return Err(GpuRasterError::InvalidImage);
             }
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("immutable imported image"),
+                // Preserve encoded bytes; scene initialization performs the
+                // shared sRGB-to-linear conversion once on the GPU.
+                label: Some("immutable encoded sRGB image"),
                 size: wgpu::Extent3d {
                     width: image.width,
                     height: image.height,
@@ -3831,7 +3833,7 @@ impl CanvasRenderer for WgpuRasterizer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: EXPORT_FORMAT,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });

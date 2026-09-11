@@ -116,8 +116,16 @@ fn figure_color(p: vec2<f32>) -> vec4<f32> {
         let mask=textureSampleLevel(back,sampling,v.uv,0.).a;
         return ink*mask;
     }
+    if op == 8u {
+        // Image initialization copies source texels 1:1 into paint pages. Decode
+        // encoded bytes explicitly before linear storage: hardware sRGB decode
+        // precision differs by backend and can change a rounded paint value.
+        let encoded = textureLoad(front, vec2<i32>(floor(v.uv * vec2<f32>(textureDimensions(front)))), 0);
+        let linear = select(pow((encoded.rgb + .055) / 1.055, vec3<f32>(2.4)), encoded.rgb / 12.92,
+            encoded.rgb <= vec3<f32>(.04045));
+        return vec4<f32>(linear * encoded.a, encoded.a);
+    }
     let raw = textureSample(front,sampling,v.uv);
-    if op == 8u { return vec4<f32>(raw.rgb * raw.a, raw.a); }
     if op == 6u || op == 11u {
         // Constant fills are the degenerate case (equal endpoint colors).
         let p = settings.extent.zw + v.uv * settings.rect.zw;

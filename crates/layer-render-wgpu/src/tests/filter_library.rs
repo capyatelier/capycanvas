@@ -145,6 +145,64 @@ fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
         .unwrap();
 }
 
+/// The import path must use the shared transfer curve before eight-bit linear
+/// composition, including dark values and partial alpha. Hardware sRGB decode
+/// approximations can move a value across a linear storage rounding boundary.
+#[test]
+fn imported_ramp_uses_the_srgb_transfer_curve() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let alphas = [255, 192, 127, 64, 1, 0];
+    let extent = [256, alphas.len() as u32];
+    let asset = AssetId("test:srgb-ramp".into());
+    let bytes: Vec<u8> = alphas
+        .into_iter()
+        .flat_map(|alpha| (0..=255u8).flat_map(move |v| [v, 255 - v, v.wrapping_mul(137), alpha]))
+        .collect();
+    r.prepare_asset(
+        &asset,
+        HostImage {
+            width: extent[0],
+            height: extent[1],
+            stride: 1024,
+            format: PixelFormat::Rgba8Srgb,
+            bytes: &bytes,
+        },
+    )
+    .unwrap();
+    let mut layer = Layer::paint(LayerId(1), "Ramp");
+    layer.asset = Some(asset);
+    submit(&mut r, extent, &[layer], 0., true, true, None);
+    let output = image(&mut r);
+    for (index, (source, pixel)) in bytes
+        .chunks_exact(4)
+        .zip(output.chunks_exact(4))
+        .enumerate()
+    {
+        let alpha = f64::from(source[3]) / 255.;
+        assert_eq!(pixel[3], source[3], "Alpha at pixel {index}");
+        for channel in 0..3 {
+            let encoded = f64::from(source[channel]) / 255.;
+            let linear = if encoded <= 0.04045 {
+                encoded / 12.92
+            } else {
+                ((encoded + 0.055) / 1.055).powf(2.4)
+            };
+            let stored = (linear * alpha * 255.).round() / 255.;
+            let straight = if alpha == 0. { 0. } else { stored / alpha };
+            let expected = ((if straight <= 0.0031308 {
+                straight * 12.92
+            } else {
+                1.055 * straight.powf(1. / 2.4) - 0.055
+            }) * 255.)
+                .round() as u8;
+            assert!(
+                pixel[channel].abs_diff(expected) <= 1,
+                "sRGB ramp at pixel {index}, channel {channel}: source={source:?}, actual={pixel:?}, expected={expected}"
+            );
+        }
+    }
+}
+
 /// Immutable pre-migration reference: sample actual full-resolution renders,
 /// including masked/clipped transparency, not a CPU reimplementation.
 #[test]
@@ -209,6 +267,44 @@ fn runtime_filter_pixel_reference() {
         .map(|(a, b)| a.abs_diff(*b))
         .max()
         .unwrap();
+    if error > 1 {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../artifacts/performance/filter-reference");
+        png(
+            directory.join("actual.png").to_str().unwrap(),
+            extent,
+            &pixels,
+        );
+        png(
+            directory.join("reference.png").to_str().unwrap(),
+            extent,
+            &reference,
+        );
+        let mut report = String::from("filter\tscope\tmaximum_channel_error\tpixels_above_one\n");
+        for (i, id) in fixtures().iter().enumerate() {
+            for scope in 0..4 {
+                let tile = i * 4 + scope;
+                let mut maximum = 0;
+                let mut differing = 0;
+                for y in 0..sample[1] {
+                    for x in 0..sample[0] {
+                        let offset = ((tile / columns * sample[1] + y) * extent[0] as usize
+                            + tile % columns * sample[0]
+                            + x)
+                            * 4;
+                        let error = (0..4)
+                            .map(|c| pixels[offset + c].abs_diff(reference[offset + c]))
+                            .max()
+                            .unwrap();
+                        maximum = maximum.max(error);
+                        differing += usize::from(error > 1);
+                    }
+                }
+                report.push_str(&format!("{}\t{scope}\t{maximum}\t{differing}\n", id.id()));
+            }
+        }
+        std::fs::write(directory.join("differences.tsv"), report).unwrap();
+    }
     assert!(
         error <= 1,
         "Runtime migration changed reference pixels: maximum byte error {error}"

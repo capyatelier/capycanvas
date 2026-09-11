@@ -264,3 +264,36 @@ Physical Android/iPad devices, Safari, other browsers, Windows and macOS were
 not tested for this migration. Resource compilation and user-authored shaders
 have no guaranteed latency. There is no CPU canvas fallback and no new rendering
 simulation or alternate brush path.
+
+
+## Cross-backend color evidence
+
+The forty-filter PNG reference remains a strict check with a one-byte channel
+threshold. Failure now writes the actual/reference contact sheets and a per-filter,
+per-mask-scope TSV report under ignored `artifacts/performance/filter-reference`.
+These diagnostics do not replace or regenerate the reference.
+
+On Metal, that saved reference also fails against its original `3f6d2d5`
+implementation, with a maximum channel error of 255. With identical explicit
+sRGB import decoding, the current implementation matches the original output
+exactly across all 160 filter/scope cases: zero differing channels. This isolates
+the remaining saved-reference discrepancy from subsequent filter migration and
+transform work; it does not establish cross-backend pixel parity or authorize a
+looser tolerance. The saved-reference test remains failing on the tested Metal
+hardware. Some large raw-channel errors occur near transparent blur edges;
+opaque color differences are also present and remain visible in the report.
+
+Imported image bytes now use the shared WGSL sRGB transfer curve before being
+stored as premultiplied linear paint. Initialization reads exact source texels
+and performs the conversion once on the GPU. Existing sampling for transforms
+and effects continues to operate on the resulting linear paint. This avoids
+backend differences in hardware sRGB decoding moving a value across the
+8-bit linear storage boundary. The unmodified Metal path mapped an opaque
+encoded channel of 97 to exported 98 (the reference calculation gives 96), and
+100 to 101 (reference 99). The new path passes a test of all 256 encoded values
+in each RGB channel at six alpha levels, checked against the standard transfer
+curve and existing linear storage quantization. No canvas readback or CPU
+conversion is added to drawing or import.
+
+The transfer reference is the
+[W3C sRGB specification](https://www.w3.org/Graphics/Color/srgb.pdf).

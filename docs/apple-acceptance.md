@@ -288,3 +288,28 @@ maximum channel error 255. The same failure reproduces in an isolated checkout
 of the pre-milestone `d263697` baseline, so it predates these instrumentation and
 merge changes. It remains an open rendering/visual acceptance issue; the fixture
 and tolerance were not changed. Full filter parity is not accepted.
+
+
+Filter investigation now separates a reproducible import-color issue from the
+saved-reference discrepancy. Shared GPU import explicitly decodes sRGB bytes
+before linear paint storage; all encoded channel values at six alpha levels
+match the transfer-curve reference within one exported byte. The original
+`3f6d2d5` filter implementation also fails against the saved PNG on Metal. With
+the same explicit import decoding, the original and current implementations
+match exactly across all 160 filter/scope cases. The PNG fixture and one-byte
+threshold remain unchanged and failing; this is not a full pixel parity pass.
+See [`docs/runtime-filters.md`](runtime-filters.md) for the evidence and new
+per-filter failure artifacts. Further cross-backend numerical investigation
+remains part of visual acceptance.
+
+
+The color-conversion milestone passes both signed Apple builds and all 15
+Apple/shared-host tests. Its broader GPU run passes 102 tests, with the known
+saved-reference failure and 16 explicitly ignored tests retained. After
+integrating the parallel transform-readiness and dock-topology work, both Apple
+builds, all 15 host tests, five GPU-startup tests, 51 shared-layout tests and the
+WebAssembly compile check pass. The merged iPad build installs and launches,
+and the merged Mac build launches. The new import-color check covers 1,536
+pixels (all 256 encoded values per channel at six alpha levels). GUI parity
+captures, full native controls and sustained input/performance acceptance remain
+open; these direct checks do not substitute for them.
