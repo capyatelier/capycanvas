@@ -480,6 +480,7 @@ pub struct HostRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostRequestKind {
     NewWindow,
+    OpenLink { link: crate::ApplicationLink },
     Document { request: crate::DocumentRequest },
     SaveSettings { settings: Box<Settings> },
 }
@@ -757,20 +758,20 @@ impl Settings {
                     ),
                     row(
                         Website,
-                        "Website",
+                        crate::ApplicationLink::Website.label(),
                         "",
                         PreferenceKind::Link {
-                            label: "capycanvas.art".into(),
-                            url: "https://capycanvas.art/".into(),
+                            label: crate::ApplicationLink::Website.display().into(),
+                            url: crate::ApplicationLink::Website.url().into(),
                         },
                     ),
                     row(
                         SourceCode,
-                        "Source code",
+                        crate::ApplicationLink::SourceCode.label(),
                         "",
                         PreferenceKind::Link {
-                            label: "github.com/capyatelier/capycanvas".into(),
-                            url: "https://github.com/capyatelier/capycanvas".into(),
+                            label: crate::ApplicationLink::SourceCode.display().into(),
+                            url: crate::ApplicationLink::SourceCode.url().into(),
                         },
                     ),
                 ],

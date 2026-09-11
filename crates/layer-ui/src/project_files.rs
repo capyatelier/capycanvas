@@ -6,11 +6,11 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Return the retired session so a host can release it off the input queue.
     pub fn adopt_project(
         &mut self,
-        mut candidate: Self,
+        mut candidate: Box<Self>,
         epoch: u64,
         revision: u64,
         location: Option<DocumentLocation>,
-    ) -> Result<Self, (String, Self)> {
+    ) -> Result<Box<Self>, (String, Box<Self>)> {
         let checked = (|| {
             self.require_document_idle()?;
             if epoch != self.state.document_file.epoch

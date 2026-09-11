@@ -41,11 +41,11 @@ mod workspace;
 pub use session::{LayerAction, LayerCanvasTool, LayersView, RegionSource};
 mod stats;
 pub use session::{
-    AdjustmentChoice, CANCEL_DOCUMENT_LABEL, CloseDecision, DEFAULT_DOCUMENT_EXTENT,
-    DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL, DocumentFileState,
-    DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice, FilterLoadState,
-    FilterPickerAction, FilterPickerState, LayerPropertiesView, MAX_NEW_DOCUMENT_DIMENSION,
-    PropertyControl, PropertyKind, UNSAVED_DESCRIPTION, new_drawing,
+    AdjustmentChoice, ApplicationLink, ApplicationMenu, CANCEL_DOCUMENT_LABEL, CloseDecision,
+    DEFAULT_DOCUMENT_EXTENT, DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL,
+    DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
+    MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, UNSAVED_DESCRIPTION, new_drawing,
 };
 pub use stats::{StatRow, StatsView};
 
@@ -157,22 +157,30 @@ pub const PRIMARY_MENU: &[&[CommandId]] = &[
         CommandId::About,
     ],
 ];
+pub const EDIT_MENU: MenuSpec = MenuSpec {
+    label: "Edit",
+    sections: &[
+        &[CommandId::Undo, CommandId::Redo],
+        &[CommandId::ClearLayer, CommandId::FillSelection],
+        &[CommandId::ScaleRotate],
+        &[CommandId::Settings],
+    ],
+};
+pub const VIEW_MENU: MenuSpec = MenuSpec {
+    label: "View",
+    sections: &[
+        &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
+        &[CommandId::RotateLeft, CommandId::RotateRight],
+        &[CommandId::FlipHorizontal, CommandId::FlipVertical],
+        &[CommandId::ShowRulers, CommandId::SnapRulers],
+        &[CommandId::ZenMode, CommandId::ToggleTheme],
+        &[CommandId::ResetLayout],
+    ],
+};
+/// Catalog used by hosts awaiting the expanded application-menu presentation.
 pub const MENUS: &[MenuSpec] = &[
-    MenuSpec {
-        label: "Edit",
-        sections: &[&[CommandId::Undo, CommandId::Redo]],
-    },
-    MenuSpec {
-        label: "View",
-        sections: &[
-            &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
-            &[CommandId::RotateLeft, CommandId::RotateRight],
-            &[CommandId::FlipHorizontal, CommandId::FlipVertical],
-            &[CommandId::ShowRulers, CommandId::SnapRulers],
-            &[CommandId::ZenMode, CommandId::ToggleTheme],
-            &[CommandId::ResetLayout],
-        ],
-    },
+    EDIT_MENU,
+    VIEW_MENU,
     MenuSpec {
         label: WORKSPACE_MENU_LABEL,
         sections: &[],
@@ -191,7 +199,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
         &[CommandId::CloseDocument],
     ],
 };
-pub const WORKSPACE_MENU_LABEL: &str = "Workspace";
+pub const WORKSPACE_MENU_LABEL: &str = "Window";
 pub const ZEN_ICON_SIZE: u32 = 28;
 
 #[derive(Clone, Debug, Serialize)]
@@ -386,6 +394,11 @@ pub enum CommandId {
     Fill,
     Undo,
     Redo,
+    ClearLayer,
+    FillSelection,
+    SelectAll,
+    Deselect,
+    InvertSelection,
     UndoWorkspace,
     RedoWorkspace,
     NewToolbar,
@@ -410,6 +423,8 @@ pub enum CommandId {
     NewWindow,
     KeyboardShortcuts,
     About,
+    Website,
+    SourceCode,
 }
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
@@ -417,12 +432,10 @@ impl CommandId {
             Self::NewDocument | Self::OpenDocument | Self::SaveDocument | Self::SaveDocumentAs => {
                 matches!(platform, Platform::Gtk | Platform::Mac | Platform::Ios)
             }
-            Self::CloseDocument => {
+            Self::CloseDocument | Self::ExportDocument => {
                 matches!(platform, Platform::Gtk | Platform::Ios | Platform::Mac)
             }
-            Self::ExportDocument => {
-                matches!(platform, Platform::Gtk | Platform::Ios | Platform::Mac)
-            }
+            Self::Website | Self::SourceCode => platform == Platform::Gtk,
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }
@@ -470,6 +483,9 @@ impl CommandId {
             Self::Fill => "fill",
             Self::Undo | Self::UndoWorkspace => "undo",
             Self::Redo | Self::RedoWorkspace => "redo",
+            Self::ClearLayer => "eraser",
+            Self::FillSelection => "fill",
+            Self::SelectAll | Self::Deselect | Self::InvertSelection => "lasso",
             Self::FitCanvas => "fit",
             Self::ZoomIn => "plus",
             Self::ZoomOut => "minus",
@@ -486,7 +502,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 61] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::SaveDocument,
@@ -519,6 +535,11 @@ impl CommandId {
         Self::Fill,
         Self::Undo,
         Self::Redo,
+        Self::ClearLayer,
+        Self::FillSelection,
+        Self::SelectAll,
+        Self::Deselect,
+        Self::InvertSelection,
         Self::UndoWorkspace,
         Self::RedoWorkspace,
         Self::NewToolbar,
@@ -541,6 +562,8 @@ impl CommandId {
         Self::NewWindow,
         Self::KeyboardShortcuts,
         Self::About,
+        Self::Website,
+        Self::SourceCode,
     ];
     pub const LAYERS: [Self; 4] = [
         Self::AddLayer,
@@ -582,6 +605,11 @@ impl CommandId {
             Self::Fill => "Fill",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
+            Self::ClearLayer => "Clear layer",
+            Self::FillSelection => "Fill selection",
+            Self::SelectAll => "Select all pixels",
+            Self::Deselect => "Deselect pixels",
+            Self::InvertSelection => "Invert selection",
             Self::UndoWorkspace => "Undo Workspace Change",
             Self::RedoWorkspace => "Redo Workspace Change",
             Self::NewToolbar => "New Toolbar…",
@@ -604,6 +632,8 @@ impl CommandId {
             Self::NewWindow => "New Window",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
+            Self::Website => ApplicationLink::Website.label(),
+            Self::SourceCode => ApplicationLink::SourceCode.label(),
         }
     }
 }

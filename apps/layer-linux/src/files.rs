@@ -115,6 +115,12 @@ impl Workspace {
                                 HostRequestKind::SaveSettings { settings } => {
                                     crate::preferences::persist(&w, settings).await
                                 }
+                                HostRequestKind::OpenLink { link } => {
+                                    gtk::UriLauncher::new(link.url())
+                                        .launch_future(Some(&w.window))
+                                        .await
+                                        .map_err(|e| e.to_string())
+                                }
                                 HostRequestKind::Document { .. } => unreachable!(),
                             };
                             w.dispatch(UiAction::CompleteRequest {

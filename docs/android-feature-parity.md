@@ -19,18 +19,25 @@ Compose supplies widgets and Android owns input, surfaces and file transport.
 - Native snapshots include panel views required by transient Zen and drawer
   projections, even when those panels are absent from ordinary dock groups.
 
+- Content drawers use the shared placement/connection geometry, native scrolling,
+  animation, Back handling and outside-contact dismissal without painting.
+- Collapsed columns expose expand, panel icons, context menus and column dragging.
+  Tabbed column drawers support nested tool drawers with live clipped tile anchors.
+- Navigator shares one bounded GPU preview producer across projections and uses
+  shared camera geometry/actions. The renderer facade now forwards canvas-preview
+  and color-sample requests, fixing the previously inert Eyedropper path.
+- Toolbar divider slots render as separators without action buttons.
+
 ## Validation
 
-The Wacom MovinkPad 14 (Android 15, ARM64, landscape 2880×1800) passes all three
-`AndroidFeatureParityTest` tests in `artifacts/android/feature-parity/color-device-tests.txt`.
-They check partial Zen on each edge without changing the saved layout, tool-set
-and settings schema projection for six tools, and color selection against actual
-rendered HSV/HLS pixels as well as slot selection/swap. Native-host tests pass
-10/10; ARM64 application/test builds and Android lint pass. Screenshots are named
-`parity-*` in the app's external files directory and are collected locally under
+The Wacom MovinkPad 14 (Android 15, ARM64, landscape 2880×1800) passes all six
+`AndroidFeatureParityTest` tests in `artifacts/android/feature-parity/drawer-device-final.txt`.
+Coverage includes Zen on four edges, six tool families, displayed HSV/HLS color
+accuracy, nested collapsed-column drawers, outside contact without paint, actual
+GPU Eyedropper color sampling, Navigator pixels and camera gestures. Native-host
+checks cover shared drawer queries and clipped/scrolled source tiles. ARM64
+application/test builds and Android lint pass. Screenshots are collected under
 `artifacts/android/feature-parity/`.
 
-These checks establish native controls and projection behavior. Pixel/gesture
-validation of every newly exposed drawing tool, content and collapsed-column
-drawers, Navigator/Eyedropper transport, and Android document workflows are the
-next port milestones. They are not claimed complete by this milestone.
+Android document workflows and pixel/gesture validation of the remaining newly
+exposed drawing tools are the next milestone; they are not claimed complete here.

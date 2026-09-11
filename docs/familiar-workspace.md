@@ -1507,3 +1507,59 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   the shared host policy rather than repeating a list that drifts as ports
   implement their native controls. Concurrent Android presentation work remains
   separately owned; no new device or frame-rate claim is made here.
+
+### Shared application menus and GTK projection
+
+- GTK's header now exposes File, Edit, Layer, Select, Filter, View, Window and
+  Help. The GNOME primary menu remains at the right. `ApplicationMenu` owns the
+  identities, grouped contents and current command state. Layer directly uses
+  the selected layer/mask's existing context model; Window reuses workspace
+  management; Filter projects the entire runtime catalog by category regardless
+  of the picker's search. Adding a runtime filter updates the menu too.
+- Edit exposes working Clear layer, Fill selection and Scale/rotate commands.
+  Select exposes Select all pixels, Deselect and Invert selection plus selection
+  tools. Commands are independently bindable and usable by toolbar tiles. Clear
+  layer explicitly erases the whole editing paint layer (not an implicit selected
+  region), and is disabled on locked, paper and mask targets. Fill requires a
+  selection and uses the existing GPU operation. Selection changes do not mark
+  artwork unsaved; paint edits retain ordinary undo/checkpoint behavior.
+- Grouping follows [Krita's Edit menu](https://docs.krita.org/en/reference_manual/main_menu/edit_menu.html)
+  and [Select menu](https://docs.krita.org/en/reference_manual/main_menu/select_menu.html),
+  using [GNOME's menu sections and native controls](https://developer.gnome.org/hig/patterns/controls/menus.html).
+  Unimplemented clipboard/selection-refinement operations are not inert menu
+  placeholders. Help provides shortcuts, Website, Source code and About. Link
+  metadata is shared with About; GTK launches only those core-defined URLs via
+  asynchronous `UriLauncher`. Tests do not launch an external browser.
+- GTK now uses the existing context-menu projector for application menus too.
+  This removes its separate command-action/accelerator cache and per-update
+  menu traversal. Models are resolved on opening with current state and shortcut
+  hints, not each drawing frame; Filter menu generation requests no previews.
+- The GTK menu test traverses every section/submenu in both themes and activates
+  theme toggles, selection, fill/clear/undo and filter insertion through native
+  actions. It also checks updated/removed shortcut hints on reopening. Inspected
+  captures are under ignored `artifacts/ui/menus/`. Shared tests verify layer and
+  Window model equivalence, runtime registration, selection undo/save semantics,
+  busy/locked-target restrictions and typed website requests.
+- Validation passes 214 shared UI tests, strict UI/GTK Clippy, workspace and
+  WebAssembly compilation, and native menu, preferences/shortcut and workspace
+  management tests.
+  The preferences fixture now edits a tool with a direct default binding rather
+  than assuming Brush still owns its family's B key. Existing non-Metal Apple
+  warnings remain; no new frame-rate or physical-input claim is made.
+- The workspace regression uses the core's Tool Set label and releases its
+  free-movement fixture in the canvas center. Its old fixed displacement landed
+  inside the neighboring sidebar's current snap zone; production docking
+  semantics are unchanged. Native context commands, floating movement/resizing,
+  tab grouping, visibility and workspace undo/redo pass in both themes.
+- The command ribbon and requested default dock layout are next. Region
+  refinements, historical filter-reference reconciliation and the integrated
+  visual/performance/user-approval gate still remain. The new eight-menu GTK
+  presentation is not yet rolled out to the other hosts; shared Rust/Wasm builds
+  remain compatible with their existing menu presentation.
+- Incoming Apple document-workflow changes are merged. Post-merge checks pass
+  41 core, 32 engine, 215 shared UI and 10 host tests, workspace/Wasm compilation,
+  strict UI/GTK Clippy and the native GTK document workflow. The two Apple Rust
+  bridge project-job tests also pass on Linux/Vulkan; this is not macOS/iPad UI
+  validation. Prepared/retired sessions are boxed on the file worker so adoption
+  returns a small ownership handle, including on failure, without moving a large
+  session through the error value or destroying GPU resources on the input queue.

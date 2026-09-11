@@ -31,14 +31,14 @@ enum Payload {
     },
     Open {
         environment: Option<Environment>,
-        candidate: Option<UiSession<Renderer>>,
+        candidate: Option<Box<UiSession<Renderer>>>,
     },
     Export {
         readback: Option<layer_render_wgpu::ExportReadback>,
         image: Option<layer_render::ReadbackImage>,
     },
     Retired {
-        _session: UiSession<Renderer>,
+        _session: Box<UiSession<Renderer>>,
     },
 }
 struct State {
@@ -365,7 +365,7 @@ unsafe fn prepare_project(task: *const CapyProjectTask, fd: i32, extent: [u32; 2
             UiSession::from_project(Renderer(Some(gpu)), project, None, environment.viewport)?;
         prepared.frame(0, 0)?;
         task.check_cancelled()?;
-        *candidate = Some(prepared);
+        *candidate = Some(Box::new(prepared));
         Ok(())
     })
 }
