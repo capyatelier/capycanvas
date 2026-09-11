@@ -14,6 +14,8 @@ final class NativeOwner: @unchecked Sendable {
     private let handle: OpaquePointer
     private var layer: CAMetalLayer?
     private var lastSnapshotTime: UInt64 = 0
+    private var bundledFiltersLoaded = false
+    private var canvasReady = false
     let receive: @Sendable (JSON?, String?) -> Void
 
     init(platform: UInt32, receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
@@ -45,7 +47,10 @@ final class NativeOwner: @unchecked Sendable {
         return try JSON.decode(String(cString: result))
     }
     private func publish() throws {
-        if let snapshot = try request(3) { receive(snapshot, nil) }
+        if let snapshot = try request(3) {
+            if !snapshot["canvas_ready"].isNull { canvasReady = snapshot["canvas_ready"].bool }
+            receive(snapshot, nil)
+        }
     }
     private func perform(_ work: @escaping @Sendable () throws -> Void) {
         queue.async { [self] in
@@ -63,20 +68,30 @@ final class NativeOwner: @unchecked Sendable {
         let lease = MetalLayerLease(layer)
         perform { [self] in
             let layer = lease.value
-            try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale))
-            self.layer = layer
-            // Packages use the same manifest and WGSL as every other host.
-            if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "filters") {
-                let manifest = try String(contentsOf: url, encoding: .utf8)
-                let names = try request(2, JSON(["type": "filter_package_modules", "manifest": manifest]))?.array ?? []
-                var modules: [String: String] = [:]
-                for name in names {
-                    modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
-                }
-                _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "replace"]))
+            let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("art.capycanvas.apple.shader-pipelines", isDirectory: true)
+            try cache.path.withCString {
+                try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale, $0))
             }
+            self.layer = layer
             try publish()
         }
+    }
+    private func loadBundledFilters() throws {
+        // Submit the optional catalog after paper/document readiness, allowing
+        // priority document and brush shaders to enter the compiler queue first.
+        if let url = Bundle.main.url(forResource: "manifest", withExtension: "json", subdirectory: "filters") {
+            let manifest = try String(contentsOf: url, encoding: .utf8)
+            let names = try request(2, JSON(["type": "filter_package_modules", "manifest": manifest]))?.array ?? []
+            var modules: [String: String] = [:]
+            for name in names {
+                modules[name.string] = try String(contentsOf: url.deletingLastPathComponent().appendingPathComponent(name.string), encoding: .utf8)
+            }
+            _ = try request(2, JSON(["type": "load_filter_package", "manifest": manifest, "modules": modules, "mode": "merge"]))
+        }
+        try check(capy_apple_finish_startup_cache(handle))
+        bundledFiltersLoaded = true
+        try publish()
     }
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
@@ -93,6 +108,18 @@ final class NativeOwner: @unchecked Sendable {
             }
         }
     }
+    func scroll(x: Float, y: Float, dx: Float, dy: Float, scale: Float, zoom: Bool, horizontal: Bool) {
+        perform { [self] in
+            try check(capy_apple_scroll(handle, x, y, dx, dy, scale, zoom ? 1 : 0, horizontal ? 1 : 0))
+            try publish()
+        }
+    }
+    func gesture(x: Float, y: Float, scale: Float, rotation: Float) {
+        perform { [self] in
+            try check(capy_apple_gesture(handle, x, y, scale, rotation))
+            try publish()
+        }
+    }
     /// One frame may be outstanding. Completion never means drawable presentation.
     func frame(now: UInt64, target: UInt64, completion: @escaping @Sendable (Bool, UInt64, [UInt64]) -> Void) {
         queue.async { [self] in
@@ -100,9 +127,13 @@ final class NativeOwner: @unchecked Sendable {
             do {
                 let result = capy_apple_frame(handle, now, max(now, target), &costs)
                 try check(result)
-                if now >= lastSnapshotTime + 33_000_000 {
+                // Always flush the final state before the display link sleeps.
+                // Throttling the pen-up frame can otherwise leave Undo/layers
+                // stale indefinitely, until an unrelated action wakes the UI.
+                if result == 0 || now >= lastSnapshotTime + 33_000_000 {
                     try publish(); lastSnapshotTime = now
                 }
+                if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
                 completion(result == 1, capy_apple_camera_revision(handle), costs)
             } catch {
                 receive(nil, error.localizedDescription)

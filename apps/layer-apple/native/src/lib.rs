@@ -1,6 +1,8 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
+#[cfg(test)]
+mod tests;
 use layer_host::{NativeHost, PointerBatch};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -136,7 +138,48 @@ pub unsafe extern "C" fn capy_apple_request(
     .unwrap_or(std::ptr::null_mut())
 }
 /// # Safety
+/// Valid exclusively owned handle, called on the serial owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_scroll(
+    app: *mut CapyApple,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    scale: f32,
+    zoom: u32,
+    horizontal: u32,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        a.host
+            .scroll([x, y], [dx, dy], scale, zoom != 0, horizontal != 0)
+    })
+    .map_or(-1, |_| 0)
+}
+
+/// # Safety
+/// Valid exclusively owned handle, called on the serial owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_gesture(
+    app: *mut CapyApple,
+    x: f32,
+    y: f32,
+    scale: f32,
+    rotation: f32,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| a.host.gesture([x, y], scale, rotation))
+        .map_or(-1, |_| 0)
+}
+
+/// # Safety
 /// Valid handle and retained CAMetalLayer; layer outlives attach through detach.
+/// Cache directory is a NUL-terminated UTF-8 path valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_attach(
     app: *mut CapyApple,
@@ -144,16 +187,38 @@ pub unsafe extern "C" fn capy_apple_attach(
     width: u32,
     height: u32,
     scale: f32,
+    cache_directory: *const c_char,
 ) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
     app.perform(|a| {
-        if layer.is_null() {
-            return Err("Missing Metal layer".into());
+        if layer.is_null() || cache_directory.is_null() {
+            return Err("Missing Metal layer or cache directory".into());
         }
+        let cache = unsafe { CStr::from_ptr(cache_directory) }
+            .to_str()
+            .map_err(|e| e.to_string())?;
         a.host.resize(width, height, scale)?;
-        unsafe { a.metal.attach(&mut a.host, layer) }
+        unsafe {
+            a.metal
+                .attach(&mut a.host, layer, std::path::Path::new(cache))
+        }
+    })
+    .map_or(-1, |_| 0)
+}
+/// # Safety
+/// Valid exclusively owned handle. Call after submitting the bundled filters.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_finish_startup_cache(app: *mut CapyApple) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        if let Some(gpu) = a.host.session.renderer_mut().0.as_mut() {
+            gpu.finish_startup_cache();
+        }
+        Ok(())
     })
     .map_or(-1, |_| 0)
 }

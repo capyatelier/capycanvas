@@ -271,12 +271,12 @@ pub enum SelectionShape {
     Pixels(Arc<SelectionPixels>),
 }
 
-/// Geometry or immutable GPU-produced coverage. Translation and inversion are
+/// Geometry or immutable GPU-produced coverage. Affine placement and inversion are
 /// metadata, so layer-local stroke snapshots never duplicate a selection image.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
     pub shape: SelectionShape,
-    pub offset: Point,
+    pub affine: crate::Affine,
     pub inverted: bool,
 }
 impl Selection {
@@ -288,14 +288,14 @@ impl Selection {
         }
         Ok(Self {
             shape: SelectionShape::Contours(vec![points.into()].into()),
-            offset: Point::default(),
+            affine: crate::Affine::IDENTITY,
             inverted: false,
         })
     }
     pub fn pixels(pixels: Arc<SelectionPixels>) -> Self {
         Self {
             shape: SelectionShape::Pixels(pixels),
-            offset: Point::default(),
+            affine: crate::Affine::IDENTITY,
             inverted: false,
         }
     }
@@ -334,27 +334,68 @@ impl Selection {
                 }
             }
         }
-        bounds.min.x += self.offset.x;
-        bounds.min.y += self.offset.y;
-        bounds.max.x += self.offset.x;
-        bounds.max.y += self.offset.y;
-        bounds
+        self.affine.bounds(bounds)
     }
     pub fn translated(&self, delta: Point) -> Self {
         Self {
             shape: self.shape.clone(),
-            offset: Point {
-                x: self.offset.x + delta.x,
-                y: self.offset.y + delta.y,
-            },
+            affine: self.affine.then(crate::Affine::translation(delta)),
             inverted: self.inverted,
         }
+    }
+    /// Compose placement without modifying geometry or resampling coverage.
+    /// GPU consumers sample the immutable source only when they need pixels.
+    pub fn transformed(&self, affine: crate::Affine) -> Result<Self, DocumentError> {
+        let affine = self.affine.then(affine);
+        if affine.inverse().is_none() {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Invalid selection transform",
+            ));
+        }
+        Ok(Self {
+            shape: self.shape.clone(),
+            affine,
+            inverted: self.inverted,
+        })
     }
 }
 
 #[cfg(test)]
 mod selection_tests {
     use super::*;
+    #[test]
+    fn affine_placement_keeps_source_and_composes_with_local_offsets() {
+        let pixels = Arc::new(SelectionPixels::new([8, 1], [2, 0, 4, 1], vec![0x4400]).unwrap());
+        let original = Selection::pixels(pixels.clone());
+        let transform = crate::Affine::around(
+            Point { x: 2., y: 3. },
+            [2., -3.],
+            0.4,
+            Point { x: 5., y: 7. },
+        );
+        let placed = original
+            .transformed(transform)
+            .unwrap()
+            .translated(Point { x: -12., y: 21. });
+        let SelectionShape::Pixels(shared) = &placed.shape else {
+            panic!("pixels")
+        };
+        assert!(Arc::ptr_eq(shared, &pixels));
+        assert_eq!(
+            placed.bounds(),
+            transform
+                .then(crate::Affine::translation(Point { x: -12., y: 21. }))
+                .bounds(original.bounds())
+        );
+        let restored = placed
+            .transformed(placed.affine.inverse().unwrap())
+            .unwrap();
+        for (a, b) in restored.affine.0.into_iter().zip(crate::Affine::IDENTITY.0) {
+            assert!((a - b).abs() < 0.0001);
+        }
+        assert!(original.transformed(crate::Affine([0.; 6])).is_err());
+        assert_eq!(original.affine, crate::Affine::IDENTITY);
+    }
     #[test]
     fn packed_coverage_validation_checks_all_nibbles_and_dimensions() {
         for value in 0..16 {
@@ -386,7 +427,7 @@ mod selection_tests {
         };
         assert!(Arc::ptr_eq(shared, &pixels));
         assert!(!original.inverted);
-        assert_eq!(original.offset, Point::default());
+        assert_eq!(original.affine, crate::Affine::IDENTITY);
         assert_eq!(
             moved.bounds(),
             Rect {
@@ -487,6 +528,16 @@ impl LayerOperation {
         }
     }
     fn validate(&self) -> Result<(), DocumentError> {
+        if self
+            .coverage
+            .initial
+            .as_ref()
+            .is_some_and(|s| s.affine.inverse().is_none())
+        {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Invalid selection transform",
+            ));
+        }
         let color_ok = |c: &[f32; 4]| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v));
         let valid = match &self.kind {
             LayerOperationKind::ApplyMask => true,

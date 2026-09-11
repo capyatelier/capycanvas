@@ -51,6 +51,7 @@ impl Requirements {
             self.compute.extend([
                 r.selection_clip.crossings.clone(),
                 r.selection_clip.fill.clone(),
+                r.selection_clip.resample.clone(),
             ]);
         }
         if mask {
@@ -227,6 +228,7 @@ impl WgpuRasterizer {
                 required.compute.extend([
                     self.selection_clip.crossings.clone(),
                     self.selection_clip.fill.clone(),
+                    self.selection_clip.resample.clone(),
                 ]);
             }
             required.enqueue(&startup.compiler, DOCUMENT);
@@ -303,7 +305,11 @@ impl WgpuRasterizer {
             {
                 startup.compiler.pipeline(p, OTHER);
             }
-            for p in [&self.selection_clip.crossings, &self.selection_clip.fill] {
+            for p in [
+                &self.selection_clip.crossings,
+                &self.selection_clip.fill,
+                &self.selection_clip.resample,
+            ] {
                 startup.compiler.pipeline(p, OTHER);
             }
             startup.others_queued = true;

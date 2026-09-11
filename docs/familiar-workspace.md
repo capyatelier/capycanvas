@@ -964,7 +964,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   in this cached-driver run were 0.85–3.56ms; this does not replace the cold
   compilation warning above. Reproduce with ignored release test
   `layer_tests::transforms::ordered_transform_latency`, serially on an idle GPU.
-- Still required before exposing Operation: selection/linked-mask transforms,
+- Still required before exposing Operation: linked-mask transforms,
   shared handles and numeric settings, GTK rendering/input,
   and end-to-end latency/visual tests. Existing painting is unchanged; this is a
   tested rendering foundation, **not completion of the Operation milestone**.
@@ -1018,10 +1018,66 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - Validation: 28 engine and 183 shared UI tests; 94 GPU suite tests plus the
   target-deletion regression; workspace/Wasm checks and strict renderer/engine/
   GTK/native-host Clippy. This does not establish platform UI readiness. Still
-  pending: controller/handles/numeric controls, transformed selection and linked
-  masks, pipeline readiness before interaction, GTK visual/end-to-end checks,
+  pending: controller/handles/numeric controls, linked-mask transforms,
+  pipeline readiness before interaction, GTK visual/end-to-end checks,
   remaining menus/file workflows, collapsible columns, final default layout and
   human approval. The full workspace goal remains active.
+
+### Affine selections and atomic transform application
+
+- Selection placement is now one affine transform, replacing translation-only
+  metadata. Contours and packed raster coverage remain immutable and shared
+  across previews and history. Layer offsets compose in that same coordinate
+  model; invalid/singular transforms are rejected.
+- Contours reuse the existing GPU scanline coverage initializer with transformed
+  geometry. Raster selections retain the translation-only copy path; rotation,
+  scale and reflection use one bounded WGSL bilinear resampling pass. Preparation
+  writes the existing packed four-sample coverage format, so every brush/mask/fill
+  consumer keeps its original constant-cost lookup. Changing consumers or drawing
+  with an unchanged selection does not regenerate coverage. The new shader uses
+  the shared four-stage compilation scheduler.
+- Raster-selection outlines sample the original GPU coverage through its inverse
+  placement at presentation time. Moving the outline needs only camera uniforms,
+  not a coverage image, readback, tracing or another GPU preparation. Contour
+  overlays consume the same displayed selection from the engine. An active pixel
+  transform moves that displayed selection provisionally; Cancel leaves the
+  document unchanged. Apply records pixels and selection together as one undo
+  entry, with no extra rasterization of a matching live result. This includes
+  inverted selections; identity Apply does not add history.
+- Serial 2048×1536 preparation benchmark, 40 warmups and 120 samples:
+
+  | Placement | CPU median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | Changing translation | 0.011 / 0.014 / 1.021 | 0.011 / 0.012 / 0.012 | 0.055 / 0.064 / 1.148 |
+  | Changing rotation/scale | 0.014 / 0.015 / 0.022 | 0.051 / 0.054 / 0.054 | 0.099 / 0.103 / 0.106 |
+  | Unchanged selection | 0.008 / 0.009 / 0.023 | 0.002 / 0.002 / 0.003 | 0.039 / 0.042 / 0.065 |
+
+  The new resampling costs about 0.04ms more GPU time than the existing copy
+  path, not zero. Unchanged timings are the benchmark's empty submission/timestamp
+  overhead: the preparation itself encodes no work. All three modes retain the
+  same 3MiB source/output storage at this extent, with no additional selection
+  channel. Presentation uniforms grow by 16 bytes. These are preparation timings,
+  not application presentation or physical-input latency. Repeat with ignored
+  release test `affine_selection_preparation_latency`.
+- Tests cover fractional coverage, holes, scaling/rotation/reflection, inversion,
+  off-canvas placement, exact agreement across fills/brushes/masks, unchanged
+  preparation reuse, retained GPU outline sources, and atomic Apply/undo/redo.
+  Validation passes 32 core, 29 engine, 183 shared UI and 97 GPU correctness
+  tests (16 separate GPU benchmarks ignored), strict all-target Clippy, workspace
+  and Wasm compilation. GTK connected-selection/fill input and dark/light captures
+  pass on the private Wayland display. No new native web/Android interaction run
+  is claimed.
+- Paired six-second GTK G-Pen runs (384px, synthetic input, actual Wayland
+  presentation feedback) remain at 119.96Hz both with and without a raster
+  selection. With selection, worker CPU median/p95/p99 is
+  0.248/0.544/0.696ms; GPU 0.152/0.229/0.377ms; GTK frame-handler p99 0.040ms.
+  Without selection, CPU is 0.318/0.608/0.736ms; GPU 0.133/0.299/0.455ms;
+  GTK handler p99 0.055ms. Selected/unselected runs have one/zero discarded
+  presentations, respectively; short-run tail variation is not evidence that
+  selection is faster. Raw reports remain local. The pacing test now rejects an
+  unknown workload name instead of succeeding with no measurements.
+  The remaining Operation UI, linked-mask transforms and cold-pipeline readiness
+  requirements still apply; this is not the GTK tool review milestone.
 
 ### GTK staged startup milestone
 
@@ -1035,9 +1091,10 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   preserved.
 - Native pipeline data uses a bounded, build/adapter/driver-keyed private cache.
   The old eager constructors are deprecated; tests and diagnostic bindings use
-  explicitly named headless constructors. The in-development Apple bridge still
-  needs to adopt the staged lifecycle; its old call now emits a deprecation
-  warning on an Apple build. No Apple runtime validation is claimed here.
+  explicitly named headless constructors. Incoming Apple-port work now also
+  uses the staged cached constructor and shares the native-host readiness gate
+  with Android. This source integration passes workspace/Wasm checks and eight
+  native-host unit tests; no physical Apple runtime validation is claimed here.
 - Representative startup measurements (milliseconds from workspace creation):
 
   | Measurement | Previous eager GTK | Staged, empty app cache | Staged, warm app cache |

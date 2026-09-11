@@ -1318,6 +1318,14 @@ impl Document {
                 Edit::SetMaskTarget(std::mem::replace(&mut self.active_mask, active))
             }
             Edit::SetSelection(selection) => {
+                if selection
+                    .as_ref()
+                    .is_some_and(|s| s.affine.inverse().is_none())
+                {
+                    return Err(DocumentError::InvalidLayerOperation(
+                        "Invalid selection transform",
+                    ));
+                }
                 Edit::SetSelection(std::mem::replace(&mut self.selection, selection))
             }
             Edit::SetRulers(rulers) => {

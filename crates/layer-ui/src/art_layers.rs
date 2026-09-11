@@ -1607,7 +1607,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (matrix[1] * p.x + matrix[3] * p.y + matrix[5]) / scale,
             ]
         };
-        let mut path = |points: &[Point], closed: bool, offset: Point| {
+        let mut path = |points: &[Point], closed: bool, affine: layer_core::Affine| {
             let mut distance = 0.;
             for (a, b) in points
                 .iter()
@@ -1618,14 +1618,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     points.len().saturating_sub(1)
                 })
             {
-                let from = transform(Point {
-                    x: a.x + offset.x,
-                    y: a.y + offset.y,
-                });
-                let to = transform(Point {
-                    x: b.x + offset.x,
-                    y: b.y + offset.y,
-                });
+                let from = transform(affine.map(*a));
+                let to = transform(affine.map(*b));
                 segments.push(layer_render::CursorSegment {
                     from,
                     to,
@@ -1636,16 +1630,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                 distance += (to[0] - from[0]).hypot(to[1] - from[1]);
             }
         };
-        if let Some(selection) = &self.engine.document().selection {
+        if let Some(selection) = self.engine.display_selection() {
             for contour in selection.contours() {
-                path(contour, true, selection.offset);
+                path(contour, true, selection.affine);
             }
         }
         if matches!(
             self.layer_interaction.tool,
             LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }
         ) {
-            path(&self.layer_interaction.path, false, Point::default());
+            path(
+                &self.layer_interaction.path,
+                false,
+                layer_core::Affine::IDENTITY,
+            );
         }
         if let Some(figure) = self.current_figure() {
             let guide = figure
@@ -1655,7 +1653,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .engine
                 .document()
                 .layer_offset(self.engine.document().active_layer);
-            path(&guide, figure.shape != FigureShape::Line, offset);
+            path(
+                &guide,
+                figure.shape != FigureShape::Line,
+                layer_core::Affine::translation(offset),
+            );
         }
     }
 }

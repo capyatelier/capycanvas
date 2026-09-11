@@ -82,21 +82,27 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         productReference=product, productType="com.apple.product-type.application")
     targets.append(target)
     test_action = ""
-    if platform == "iOS":
+    if platform in ("iOS", "macOS"):
         test_name = scheme + "Tests"
         test_product = obj(test_name + "product", "PBXFileReference", explicitFileType="wrapper.cfbundle", path=test_name + ".xctest", sourceTree="BUILT_PRODUCTS_DIR")
         products.append(test_product)
-        test_builds = [obj(test_name + name, "PBXBuildFile", fileRef=ref) for name, ref in refs.items() if name.startswith("iOS/Tests/")]
+        test_builds = [obj(test_name + name, "PBXBuildFile", fileRef=ref) for name, ref in refs.items() if name.startswith(platform + "/Tests/")]
         test_phase = obj(test_name + "sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=test_builds, runOnlyForDeploymentPostprocessing=0)
         proxy = obj(test_name + "proxy", "PBXContainerItemProxy", containerPortal=ident("project"), proxyType=1, remoteGlobalIDString=target, remoteInfo=scheme)
         dependency = obj(test_name + "dependency", "PBXTargetDependency", target=target, targetProxy=proxy)
-        test_target = obj(test_name, "PBXNativeTarget", buildConfigurationList=configs(test_name, {
-            "PRODUCT_NAME": test_name, "PRODUCT_BUNDLE_IDENTIFIER": "art.capycanvas.apple.ipad.tests",
+        test_settings = {
+            "PRODUCT_NAME": test_name, "PRODUCT_BUNDLE_IDENTIFIER": settings["PRODUCT_BUNDLE_IDENTIFIER"] + ".tests",
             "CODE_SIGN_STYLE": "Automatic", "SWIFT_VERSION": "5.0", "SDKROOT": "iphoneos",
             "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "TARGETED_DEVICE_FAMILY": "2",
             "IPHONEOS_DEPLOYMENT_TARGET": "18.0", "GENERATE_INFOPLIST_FILE": "YES",
             "TEST_TARGET_NAME": scheme, "ARCHS": "arm64", "CLANG_ENABLE_MODULES": "YES",
-        }), buildPhases=[test_phase], buildRules=[], dependencies=[dependency], name=test_name,
+        }
+        if platform == "macOS":
+            for key in ["TARGETED_DEVICE_FAMILY", "IPHONEOS_DEPLOYMENT_TARGET"]:
+                test_settings.pop(key)
+            test_settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0"})
+        test_target = obj(test_name, "PBXNativeTarget", buildConfigurationList=configs(test_name, test_settings),
+            buildPhases=[test_phase], buildRules=[], dependencies=[dependency], name=test_name,
             productName=test_name, productReference=test_product, productType="com.apple.product-type.bundle.ui-testing")
         targets.append(test_target)
         test_action = f'''<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{test_target}" BuildableName="{test_name}.xctest" BlueprintName="{test_name}" ReferencedContainer="container:CapyCanvas.xcodeproj"/></TestableReference></Testables></TestAction>'''

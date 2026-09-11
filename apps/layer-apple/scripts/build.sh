@@ -14,7 +14,14 @@ case "$CAPY_PLATFORM" in
     CAPY_SCHEME=CapyCanvas-iPad
     CAPY_OPTIONS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration "DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM")
     ;;
-  macos) CAPY_DEST='platform=macOS,arch=arm64'; CAPY_SCHEME=CapyCanvas-Mac; CAPY_OPTIONS+=(CODE_SIGNING_ALLOWED=NO) ;;
+  macos)
+    CAPY_DEST='platform=macOS,arch=arm64'; CAPY_SCHEME=CapyCanvas-Mac
+    if [[ -n "${CAPY_APPLE_TEAM:-}" ]]; then
+      CAPY_OPTIONS+=("DEVELOPMENT_TEAM=$CAPY_APPLE_TEAM" 'CODE_SIGN_IDENTITY=Apple Development')
+    else
+      CAPY_OPTIONS+=('CODE_SIGN_IDENTITY=-' CODE_SIGNING_ALLOWED=YES)
+    fi
+    ;;
   *) echo 'Usage: build.sh [simulator|device|macos]' >&2; exit 1 ;;
 esac
 exec xcodebuild -project "$CAPY_APP/CapyCanvas.xcodeproj" -scheme "$CAPY_SCHEME" \

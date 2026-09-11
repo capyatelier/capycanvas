@@ -2,6 +2,7 @@ import SwiftUI
 
 struct EditorView<Canvas: View>: View {
     @ObservedObject var store: EditorStore
+    var showsApplicationMenus = true
     @ViewBuilder let canvas: () -> Canvas
     @Environment(\.colorScheme) private var colorScheme
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
@@ -11,6 +12,9 @@ struct EditorView<Canvas: View>: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             canvas().ignoresSafeArea()
+            if !store.canvasSubmitted {
+                palette["bg"].ignoresSafeArea().allowsHitTesting(false)
+            }
             if !store.state.isNull {
                 if !store.snapshot["chrome_hidden"].bool { header }
                 ForEach(store.snapshot["layout"]["groups"].array.indices, id: \.self) { i in
@@ -31,7 +35,7 @@ struct EditorView<Canvas: View>: View {
                     IconTile(icon: zen["icon"].string, label: zen["tooltip"].string,
                         selected: zen["selected"].bool, size: CGFloat(store.catalog["zen_icon_size"].number)) { store.invoke("zen_mode") }
                         .frame(width: 36, height: 36).background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                        .offset(x: 6, y: 6).accessibilityIdentifier("zen-button")
+                        .offset(x: 6 + store.headerLeadingInset, y: 6).accessibilityIdentifier("zen-button")
                 }
             }
             if let failure = store.failure {
@@ -62,28 +66,18 @@ struct EditorView<Canvas: View>: View {
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             HStack(spacing: 6) {
                 Color.clear.frame(width: 36, height: 36)
-                ForEach(store.catalog["menus"].array.indices, id: \.self) { index in
-                    let menu = store.catalog["menus"][index]
-                    Menu {
-                        if menu["sections"].array.isEmpty {
-                            MenuItems(store: store, sections: store.snapshot["workspace_menu"]["sections"])
-                        } else {
-                            ForEach(menu["sections"].array.indices, id: \.self) { section in
-                                if section > 0 { Divider() }
-                                ForEach(menu["sections"][section].array.indices, id: \.self) { item in
-                                    let command = store.command(menu["sections"][section][item].string)
-                                    Button(command["label"].string) { store.invoke(command["id"].string) }.disabled(!command["enabled"].bool)
-                                }
-                            }
-                        }
-                    } label: {
-                        Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
-                            .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                    }.buttonStyle(.plain)
+                if showsApplicationMenus {
+                    ForEach(store.catalog["menus"].array.indices, id: \.self) { index in
+                        let menu = store.catalog["menus"][index]
+                        Menu { CatalogMenuItems(store: store, label: menu["label"].string) } label: {
+                            Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
+                                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
+                        }.buttonStyle(.plain)
+                    }
                 }
                 Spacer()
                 IconTile(icon: "settings", label: "Settings") { store.invoke("settings") }.frame(width: 36, height: 36)
-            }
+            }.padding(.leading, store.headerLeadingInset)
         }.padding(6).frame(height: 48)
     }
     private func panelGroup(_ group: JSON) -> some View {

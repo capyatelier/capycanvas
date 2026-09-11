@@ -143,66 +143,8 @@ impl App {
         }
         let clock = self.profiling.then(std::time::Instant::now);
         let elapsed = || clock.map_or(0, |c| c.elapsed().as_nanos() as i64);
-        if self.blank_presented {
-            let engine = self.host.session.engine();
-            let gpu = engine.backend().0.as_ref().unwrap();
-            if gpu.startup_needs_update(engine.document(), engine.brush()) {
-                let (document, brush) = (engine.document().clone(), engine.brush().clone());
-                self.host
-                    .session
-                    .renderer_mut()
-                    .0
-                    .as_mut()
-                    .unwrap()
-                    .prepare_startup(&document, &brush)
-                    .map_err(error)?;
-            }
-            self.host.startup = self
-                .host
-                .session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .unwrap()
-                .poll_startup()
-                .map_err(error)?;
-            if self.host.startup.canvas_ready {
-                let previous = self.host.session.state().revision;
-                let change = self.host.session.frame(now, presentation)?;
-                self.host.dirty = change.canvas_wake;
-                self.host.apply_change(previous, change);
-            }
-        } else {
-            // Submit paper immediately without consuming the engine's pending
-            // document replay. The first real frame retains its reset/history.
-            let view = self.host.session.state().camera.view();
-            let document = self.host.session.engine().document();
-            let extent = [document.width, document.height];
-            let layers: Vec<_> = document
-                .layers
-                .iter()
-                .filter(|l| l.kind == layer_core::LayerKind::Background)
-                .cloned()
-                .collect();
-            self.host
-                .session
-                .renderer_mut()
-                .0
-                .as_mut()
-                .unwrap()
-                .submit(layer_render::FramePacket {
-                    time_seconds: 0.,
-                    view,
-                    document_extent: extent,
-                    layers: &layers,
-                    dabs: &[],
-                    dab_batches: &[],
-                    reset_layers: true,
-                    composite_all: true,
-                })
-                .map_err(error)?;
-        }
-        self.host.dirty |= !self.host.startup.complete;
+        self.host
+            .prepare_canvas_frame(now, presentation, self.blank_presented)?;
         let view = self.host.session.state().camera.view();
         let surround = self.host.session.state().palette.surround_linear;
         let scale = self.host.session.state().camera.viewport[0] as f32 / self.host.logical[0];

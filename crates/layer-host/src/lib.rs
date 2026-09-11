@@ -82,6 +82,75 @@ impl NativeHost {
         self.dirty = true;
         Ok(())
     }
+    /// Shared staged GPU lifecycle. Presenters submit the first paper frame
+    /// before passing `has_presented = true`; it must not consume document replay.
+    pub fn prepare_canvas_frame(
+        &mut self,
+        now: u64,
+        presentation: u64,
+        has_presented: bool,
+    ) -> Result<(), String> {
+        if has_presented || self.startup.complete {
+            let engine = self.session.engine();
+            let gpu = engine
+                .backend()
+                .0
+                .as_ref()
+                .ok_or("Missing native renderer")?;
+            if gpu.startup_needs_update(engine.document(), engine.brush()) {
+                let (document, brush) = (engine.document().clone(), engine.brush().clone());
+                self.session
+                    .renderer_mut()
+                    .0
+                    .as_mut()
+                    .unwrap()
+                    .prepare_startup(&document, &brush)
+                    .map_err(|e| e.to_string())?;
+            }
+            self.startup = self
+                .session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .unwrap()
+                .poll_startup()
+                .map_err(|e| e.to_string())?;
+            if self.startup.canvas_ready {
+                let previous = self.session.state().revision;
+                let change = self.session.frame(now, presentation)?;
+                self.dirty = change.canvas_wake;
+                self.apply_change(previous, change);
+            }
+        } else {
+            let view = self.session.state().camera.view();
+            let document = self.session.engine().document();
+            let extent = [document.width, document.height];
+            let layers: Vec<_> = document
+                .layers
+                .iter()
+                .filter(|l| l.kind == layer_core::LayerKind::Background)
+                .cloned()
+                .collect();
+            self.session
+                .renderer_mut()
+                .0
+                .as_mut()
+                .ok_or("Missing native renderer")?
+                .submit(layer_render::FramePacket {
+                    time_seconds: 0.,
+                    view,
+                    document_extent: extent,
+                    layers: &layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: true,
+                    composite_all: true,
+                })
+                .map_err(|e| e.to_string())?;
+        }
+        self.dirty |= !self.startup.complete;
+        Ok(())
+    }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
         let previous = self.session.state().revision;
         let change = self.session.dispatch(action)?;
@@ -111,6 +180,44 @@ impl NativeHost {
             self.cancel_pen()?;
         }
         Ok(reply)
+    }
+    pub fn scroll(
+        &mut self,
+        anchor: [f32; 2],
+        delta: [f32; 2],
+        density: f32,
+        zoom: bool,
+        horizontal: bool,
+    ) -> Result<(), String> {
+        if !anchor
+            .into_iter()
+            .chain(delta)
+            .chain([density])
+            .all(f32::is_finite)
+            || density <= 0.0
+        {
+            return Err("Invalid native scroll".into());
+        }
+        let previous = self.session.state().revision;
+        let change = self
+            .session
+            .scroll(anchor, delta, density, zoom, horizontal)?;
+        self.apply_change(previous, change);
+        Ok(())
+    }
+    pub fn gesture(&mut self, anchor: [f32; 2], scale: f32, rotation: f32) -> Result<(), String> {
+        if !anchor
+            .into_iter()
+            .chain([scale, rotation])
+            .all(f32::is_finite)
+            || scale <= 0.0
+        {
+            return Err("Invalid native gesture".into());
+        }
+        let previous = self.session.state().revision;
+        let change = self.session.gesture(anchor, anchor, scale, rotation)?;
+        self.apply_change(previous, change);
+        Ok(())
     }
     fn cancel_pen(&mut self) -> Result<(), String> {
         if let Some(mut event) = self.last_pen.take() {
@@ -523,6 +630,38 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_navigation_preserves_camera_patches_and_rejects_nonfinite_input() {
+        let mut app = NativeHost::new(layer_ui::Platform::Mac).unwrap();
+        app.resize(2400, 1800, 2.0).unwrap();
+        app.take_snapshot().unwrap();
+        let anchor = [1200., 900.];
+        let before = app.session.state().camera.clone();
+        app.scroll(anchor, [30., -20.], 2., false, false).unwrap();
+        let patch = app.take_snapshot().unwrap();
+        assert!(
+            patch.get("state").is_none(),
+            "Wheel pan must not rebuild all editor models"
+        );
+        assert_ne!(patch["camera"], json!(before));
+        let zoom = app.session.state().camera.zoom;
+        app.gesture(anchor, 1.5, 0.2).unwrap();
+        assert!((app.session.state().camera.zoom - zoom * 1.5).abs() < 0.0001);
+        assert!(app.take_snapshot().unwrap().get("state").is_none());
+        let camera = json!(app.session.state().camera);
+        assert!(
+            app.scroll(anchor, [f32::NAN, 0.], 2., false, false)
+                .is_err()
+        );
+        assert!(app.gesture(anchor, 0., 0.).is_err());
+        assert_eq!(json!(app.session.state().camera), camera);
+        app.dispatch(UiAction::SetBrushSize { value: 42. }).unwrap();
+        app.scroll(anchor, [0., 1.], 2., false, false).unwrap();
+        assert_eq!(
+            app.take_snapshot().unwrap()["state"]["brush"]["diameter"],
+            42.
+        );
+    }
     #[test]
     fn stale_filter_preview_requests_do_not_touch_the_renderer() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();

@@ -18,7 +18,9 @@ void capy_apple_string_free(char *text);
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
-                         uint32_t width, uint32_t height, float scale);
+                         uint32_t width, uint32_t height, float scale,
+                         const char *cache_directory);
+int32_t capy_apple_finish_startup_cache(CapyApple *app);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_detach(CapyApple *app);
 /* Nine doubles per record: x/y physical pixels, pressure, tilt x/y radians,
@@ -27,6 +29,11 @@ int32_t capy_apple_detach(CapyApple *app);
 int32_t capy_apple_pointer(CapyApple *app, uint64_t id, uint32_t tool, uint32_t button,
                           const double *records, size_t count, uint32_t predicted,
                           uint64_t view_revision);
+/* Anchors are physical canvas pixels; wheel deltas are logical points.
+   Magnification is a multiplicative factor; rotation is in radians. */
+int32_t capy_apple_scroll(CapyApple *app, float x, float y, float dx, float dy,
+                          float scale, uint32_t zoom, uint32_t horizontal);
+int32_t capy_apple_gesture(CapyApple *app, float x, float y, float scale, float rotation);
 /* Returns 1 if more frames are needed, 0 when idle, -1 on error. Optional costs
    receives 5 nanosecond durations: paint, acquire, viewport, present, poll. */
 int32_t capy_apple_frame(CapyApple *app, uint64_t now_ns, uint64_t presentation_ns,

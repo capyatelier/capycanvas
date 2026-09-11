@@ -3663,6 +3663,9 @@ impl CanvasRenderer for WgpuRasterizer {
         if let Some(selection) = selection
             && let layer_core::SelectionShape::Pixels(pixels) = &selection.shape
         {
+            if selection.affine.inverse().is_none() {
+                return Err(GpuRasterError::InvalidTransform("Invalid selection transform"));
+            }
             if self
                 .display_selection
                 .as_ref()
