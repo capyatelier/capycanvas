@@ -297,3 +297,32 @@ conversion is added to drawing or import.
 
 The transfer reference is the
 [W3C sRGB specification](https://www.w3.org/Graphics/Color/srgb.pdf).
+
+### Explicit import quantization on Vulkan
+
+The incoming explicit-transfer change also exposed a storage-rounding difference
+on the Vulkan workstation. An opaque encoded channel of 18 reached linear paint
+as byte 1 instead of the reference's byte 2, exporting as 13 instead of 22. A
+temporary raw paint/composite sample localized the difference before export;
+those diagnostic reads were then removed. The import shader now explicitly
+rounds premultiplied linear RGBA to eight-bit values before storage. This stays
+inside the existing one-time initialization pass: no extra allocation, pass,
+readback or per-frame preparation. Vulkan permits either neighboring integer
+for normalized storage, with nearest preferred rather than mandatory; see
+[normalized fixed-point conversion](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fixedfpconv).
+
+The existing 1,536-pixel independent transfer-curve test passes with explicit
+rounding. An A/B run using the pre-merge hardware-decoding import path passes
+the saved filter reference but fails that transfer-curve test. Both the incoming
+unrounded explicit decode and the corrected rounded decode fail the saved filter
+reference, with maximum raw-channel error 99. Its PNG and one-byte threshold are
+unchanged. The sheets were visually inspected, but that does not waive the strict
+failure or establish cross-backend parity. Reconciling the corrected import
+contract with the historical reference remains an open validation item; it is
+not evidence of a runtime-filter migration regression. Metal must also rerun
+the explicit-rounding change before claiming its validation carries forward.
+
+The complete Vulkan renderer suite after this correction reports 103 passing
+tests, the one strict-reference failure above, and 16 ignored hardware benchmarks.
+This includes the GPU import oracle, all catalog algorithms, prepared-data reuse,
+dirty-region equivalence, clipping, masks, transforms and brush interactions.
