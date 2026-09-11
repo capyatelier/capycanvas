@@ -3,7 +3,7 @@
 Settings and workspace persistence use the existing versioned Rust models and
 restore actions. Both native apps share storage and owner coordination.
 Both apps expose New, Open, Save and Save As using the shared editable
-[`Project` format](../../docs/project-format.md), plus PNG export. Both protect
+[`Project` format](../../docs/reference/project-format.md), plus PNG export. Both protect
 window close with the shared unsaved-change decision; macOS also protects app
 termination. Both also maintain private recovery copies of unsaved artwork.
 

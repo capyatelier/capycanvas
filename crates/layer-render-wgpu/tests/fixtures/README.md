@@ -70,7 +70,7 @@ storage contract via the independent baseline; it is not a screenshot copied
 from the implementation under test or another backend. V3 remains recoverable
 in Git. Full cross-backend parity is still unproven: software Vulkan and native
 Vulkan continue to differ beyond the tolerance after explicit rounding. See the
-[cross-backend investigation](../../../../docs/runtime-filters.md).
+[cross-backend investigation](../../../../docs/reference/runtime-filters.md).
 
 All artwork and the triangular preparation example in this folder are authored
 for this project and use its MIT OR Apache-2.0 source-code licenses.

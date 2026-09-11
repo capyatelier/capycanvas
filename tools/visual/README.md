@@ -67,7 +67,7 @@ artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
 Use the same commands with a native Mac content capture and its matching logical
 dimensions/scale. Keep each platform's native/reference pair and results separate;
 an iPad comparison does not establish Mac parity. The initial launch fixture is
-only the first scenario in [the Apple acceptance matrix](../../docs/apple-acceptance.md).
+only the first scenario in [the Apple acceptance matrix](../../docs/history/apple-acceptance.md).
 
 The comparator honors declared image orientation without resampling, normalizes
 embedded ICC profiles to sRGB, checks matching pixel dimensions, compares every

@@ -9,34 +9,17 @@ Zen clears the native window controls. The iPad keeps its in-app menus, sharing
 the same menu item implementation and Rust catalog/actions.
 Both platforms are required at every milestone, with separate functional,
 visual and hardware performance evidence. Shared changes must build on both.
-See [the Apple goal and acceptance tracker](../../docs/apple-acceptance.md)
+See [the Apple goal and acceptance tracker](../../docs/history/apple-acceptance.md)
 for the shared-code boundaries, milestone matrix and remaining work.
 
 ## Build
 
-Install Xcode with the iOS SDK/simulator runtime and these Rust targets:
+See the [Apple development guide](../../docs/development/apple.md) for prerequisites,
+macOS/iPadOS build commands, signing and running in Xcode. Rerun
+`scripts/prepare.py` when shared assets change and `scripts/project.py` when adding
+or removing Swift files. Edit the generators rather than generated project entries.
 
-```sh
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
-bash apps/layer-apple/scripts/build.sh simulator
-bash apps/layer-apple/scripts/build.sh macos
-CAPY_APPLE_TEAM=YOUR_TEAM_ID bash apps/layer-apple/scripts/build.sh device
-```
-
-Run from the repository root. The scripts select `/Applications/Xcode.app`
-unless `DEVELOPER_DIR` is supplied, generate shared resource bundles and the
-deterministic Xcode project, then build. No global project generator is needed.
-`CAPY_CONFIGURATION=Release` selects optimized Swift and Rust builds.
-`CAPY_DESTINATION='id=DEVICE_UDID'` selects a particular physical device.
-`CAPY_DERIVED_DATA` optionally separates concurrent build directories.
-Mac builds use ad-hoc signing by default. Set `CAPY_APPLE_TEAM` for development
-signing with an installed certificate; Mac UI test runners must also be signed.
-
-After generating once, open `CapyCanvas.xcodeproj` to build/debug in Xcode.
-Rerun `scripts/prepare.py` when shared assets change and `scripts/project.py`
-when adding or removing Swift files. Edit those generators rather than generated
-project entries. Canonical icons/previews are currently in `apps/layer-web`;
-the Apple bundle stages them and the root filter library without separate art.
+## Shared editor controls
 
 Tool Set consumes shared figure, region, ruler and Operation choices. Painting
 keeps the complete catalog brush list, also used by the web host, so every brush
@@ -271,7 +254,7 @@ idle behavior, document replacement and display scaling on both Apple policies.
 `cargo test -p layer-render-wgpu overview -- --test-threads=1` checks actual GPU
 overview pixels, clipping, transparency, camera changes and resource reuse.
 Full visual and physical performance acceptance remains in
-[the matrix](../../docs/apple-acceptance.md).
+[the matrix](../../docs/history/apple-acceptance.md).
 
 ## Implementation status
 

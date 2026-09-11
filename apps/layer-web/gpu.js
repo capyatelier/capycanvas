@@ -85,7 +85,7 @@ export function showGpuNotice({ container, error, element, button }) {
     intro.append(" At the moment, the only supported browsers are:");
     const list = element("ul", "gpu-browsers");
     // Upstream WebGPU availability, not a browser allowlist. See the dated
-    // sources and real-device testing limits in docs/web-packaging.md.
+    // sources and real-device testing limits in docs/development/web-packaging.md.
     for (const [platform, browsers] of [
       ["iPadOS", "Safari (iPadOS 26+)"],
       ["Android", "Chrome (Android 12+)"],

@@ -13,7 +13,7 @@ if [[ "$capy_mode" != run && "$capy_mode" != test && "$capy_mode" != headless ]]
     exit 2
 fi
 if [[ ! -x "$ANDROID_HOME/platform-tools/adb" || ! -d "$ANDROID_NDK_HOME" ]]; then
-    echo "Install the Android SDK and NDK r29 first; see docs/android-implementation.md." >&2
+    echo "Install the Android SDK and NDK r29 first; see docs/development/android.md." >&2
     exit 1
 fi
 if ! adb get-state >/dev/null 2>&1; then

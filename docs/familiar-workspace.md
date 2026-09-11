@@ -1403,7 +1403,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 
 ### Editable-project foundation and faithful watercolor replay
 
-- The shared [project codec](project-format.md) now preserves editable document
+- The shared [project codec](reference/project-format.md) now preserves editable document
   history, source assets, masks, selections, transforms, rulers and exact runtime
   filter definitions. It prunes removed artwork and unused assets, rejects
   malformed/oversized input, and checks the compressed stream's checksum and
@@ -1894,7 +1894,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   not today's code under test. Its one-byte tolerance is unchanged, and the
   test now validates the input against the independent transfer oracle first.
   See [reference provenance](../crates/layer-render-wgpu/tests/fixtures/README.md)
-  and [the comparison results](runtime-filters.md#import-contract-and-reference-reconciliation).
+  and [the comparison results](reference/runtime-filters.md#import-contract-and-reference-reconciliation).
   The obsolete PNG is recoverable in Git history. Temporary baseline sources,
   generated diagnostics and machine-specific output remain outside the commit.
 - No production renderer code changes or additional runtime work. Metal and
@@ -1989,7 +1989,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   input runs with actual presentation feedback, not physical-input acceptance.
   The incoming Apple report separately confirms that the sRGB import oracle
   passes on Metal but the v3 filter-output reference fails (maximum channel
-  error 255); see [Apple acceptance](apple-acceptance.md). That cross-backend
+  error 255); see [Apple acceptance](history/apple-acceptance.md). That cross-backend
   failure is not waived by the passing Vulkan or GTK checks.
 
 ### Filter storage correction after integration
@@ -2007,7 +2007,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - Three paired benchmark repeats show approximately 0.014ms (2.6%) extra GPU
   time for a full-image five-filter edit, with effectively unchanged small-region
   painting. GPU p99 stays under 0.681ms; CPU tails vary in both directions and
-  are reported in [the full comparison](runtime-filters.md#explicit-filter-storage-conversion).
+  are reported in [the full comparison](reference/runtime-filters.md#explicit-filter-storage-conversion).
   This is not a zero-cost or complete presentation-latency claim.
 - The scalar tests also pass on software Vulkan. Full-image differences across
   backends remain after rounding and require further investigation; Metal and
@@ -2074,7 +2074,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   inspected. Strict renderer/GTK Clippy and the WebAssembly check pass. The
   incoming Metal report now tests v4: 111 tests pass and the strict reference
   still fails, with maximum channel error 47; it is no longer an untested v4
-  backend. The detailed counts remain in [runtime filter validation](runtime-filters.md).
+  backend. The detailed counts remain in [runtime filter validation](reference/runtime-filters.md).
 
 ### Transform resource reuse
 

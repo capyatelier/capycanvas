@@ -26,6 +26,6 @@ On web, serve this directory and call
 manifest, call with `'replace'`, and inspect `layerApp.state().filter_load` for
 completion. No application rebuild is needed. Android's matching host entry is
 `CanvasHost.loadFilters(manifest, modules, mode)`. These are programmatic loading
-interfaces, not a shader-editor UI. See [runtime filters](../../../docs/runtime-filters.md).
+interfaces, not a shader-editor UI. See [runtime filters](../../../docs/reference/runtime-filters.md).
 
 These files are covered by the repository's MIT OR Apache-2.0 source license.

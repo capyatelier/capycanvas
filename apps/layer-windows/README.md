@@ -24,25 +24,8 @@ commits.
 
 ## Build
 
-Install Rust stable for x86_64-pc-windows-msvc, Visual Studio C++ Build Tools
-(v143 or v145), Windows SDK 10.0.26100.0, and the official NuGet CLI. The CLI
-can be on PATH or under ~/.local/tools/nuget/nuget.exe.
-
-From the repository root:
-
-~~~powershell
-./apps/layer-windows/scripts/build.ps1
-./apps/layer-windows/scripts/build.ps1 -Configuration Release
-~~~
-
-The script restores the exact versions in packages.config into ignored
-artifacts/windows/packages. Use -PackagesDirectory to reuse an existing restore.
-Build output is artifacts/windows/Debug or artifacts/windows/Release.
-
-The shell constructs WinUI controls in C++ and uses WinUI's built-in metadata
-provider and native control templates. It does not require UWP application
-packaging or generated application XAML. The Windows App SDK runtime is copied
-beside the executable for unpackaged development.
+See the [Windows development guide](../../docs/development/windows.md) for prerequisites,
+NuGet setup, build commands and output locations.
 
 ## Diagnostics and privacy
 
@@ -57,7 +40,7 @@ crash dumps, generated binaries, user documents, desktop captures, or raw
 machine diagnostics belong in source control. Publish sanitized validation
 summaries only.
 
-The full acceptance plan is in ../../docs/windows-implementation.md.
+The full acceptance plan is in ../../docs/history/windows-implementation.md.
 
 ## Controlled rendering smoke test
 
@@ -204,7 +187,7 @@ Analyze a captured directory locally with:
 The analyzer keeps submission rate, displayed-frame rate, missing display
 records and present-to-display latency distinct. It does not declare a 120 Hz
 or input-latency acceptance pass. Its tests use synthetic data. See the latest
-validation findings in ../../docs/windows-implementation.md for measured results
+validation findings in ../../docs/history/windows-implementation.md for measured results
 and unresolved integration checks.
 
 ## Private preferences storage

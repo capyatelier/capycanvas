@@ -2,7 +2,7 @@
 
 This document specifies the brush behavior implemented in the current
 milestone. The destination-aware extension is specified in
-[gpu-brush-engine.md](gpu-brush-engine.md).
+[gpu-brush-engine.md](reference/gpu-brush-engine.md).
 
 ## Input and placement
 
@@ -97,4 +97,4 @@ copies. Export readback and completed-work waits are explicit cold or benchmark
 operations.
 
 The current measured results and exact workload are in
-[gpu-raster-benchmarks.md](gpu-raster-benchmarks.md).
+[gpu-raster-benchmarks.md](development/gpu-raster-benchmarks.md).

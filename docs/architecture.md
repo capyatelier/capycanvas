@@ -1,235 +1,126 @@
-# Portable core architecture
+# Architecture
 
-## Fixed boundaries
+[Technical documentation](README.md)
 
-1. Each platform owns native widgets, high-rate pen event retrieval, its window,
-   and surface presentation.
-2. Shared Rust owns the document, input interpretation, brush dynamics,
-   commands, undo/redo, AI request semantics, and toolkit-neutral UI state.
-3. `layer-render-wgpu` owns every canvas pixel and canvas GPU resource; platform
-   hosts own surface/image sharing and presentation synchronization. Painting
-   requires a hardware GPU; there is no software rasterizer, host-memory canvas,
-   or canvas-composition fallback.
-4. Input callbacks never wait for rendering, inference, disk, or the document.
-5. Render backends receive one borrowed packet per frame, not calls per contact.
-6. Predicted input is visual-only. AI output is a revision-tagged image layer.
-7. Shared APIs require neither threads nor a specific event loop and remain
-   suitable for `wasm32-unknown-unknown`.
+Capy Canvas separates what a drawing means from how it is displayed. Shared Rust
+code owns the document, tools and editor state. A platform client owns native
+controls and operating-system services. One GPU renderer implements painting and
+composition for every client.
 
-## Packages
+This separation lets a new client reuse drawing behavior without recreating the
+brush engine, layer rules or preference validation. It also lets the shared code
+be tested without launching a window.
+
+## The shared editor
+
+`Document`, in `layer-core`, describes the artwork: layers, strokes, source images,
+masks and other edits. `Editor` applies reversible edits and keeps undo/redo
+history. These types do not depend on a graphics API or a UI toolkit.
+
+`CanvasEngine`, in `layer-engine`, connects that model to drawing input. It
+interprets ordered pen samples, evaluates brush dynamics and produces work for a
+renderer. Brush dynamics are the rules that map inputs such as pressure to
+properties such as size or opacity.
+
+`UiSession`, in `layer-ui`, coordinates the engine with application behavior. It
+owns the active tools, camera, workspace, command availability, preferences and
+file-operation state. A frontend sends typed actions and renders the resulting
+views. It keeps native widget objects, focus and accessibility outside the session.
+
+Android, Apple and Windows use `NativeHost`, in `layer-host`, to share session and
+renderer integration. GTK and web integrate `UiSession` directly. The host layer
+is not another document model and does not own native surfaces or widgets.
+
+## From a pen event to a frame
 
 ```text
-native / Web frontend
-    ├── layer-ui ─────────────────────────► layer-engine ─────► layer-core
-    │          └──────────────────────────► layer-render           │
-    │                                                               │
-    ├── native input adapter ── PenEvent ingress ──────────────────┘
+Platform input callback
+    │ ordered pen records
+    ▼
+UiSession / CanvasEngine
+    ├── interpret the current tool and camera
+    ├── update the document
+    └── resolve brush contacts
+    │ FramePacket
+    ▼
+CanvasRenderer (implemented by WgpuRasterizer)
+    ├── update affected paint textures
+    ├── compose changed layer regions
+    └── prepare the visible canvas
     │
-    └── platform presenter ─────► layer-render-wgpu ──► wgpu
-                                      ▲       │
-                                      └───────┴── FramePacket
-
-headless validation and bindings
-    └── layer-ffi ───────────────► layer-engine + layer-render-wgpu
-        layer-bench ─────────────► layer-ffi
+    ▼
+Platform surface and presentation
 ```
 
-- `layer-core` owns persistent document, edit, geometry, brush preset, and AI
-  request semantics.
-- `layer-render` owns only resolved contact/batch records and the small
-  renderer-facing contract.
-- `layer-engine` owns the input queue, sample transforms, pressure and sensor
-  evaluation, deterministic contact placement, stroke construction, document
-  orchestration, and frame packet construction.
-- `layer-render-wgpu` owns brush raster, paint/erase, preview, color/material
-  pages, brush reservoir, composition, explicit readback, and the shared GPU
-  viewport presenter. Platform hosts supply its target surface or shared image.
-- `layer-ffi` exposes validated batched input and canvas/document commands. Its
-  explicit pixel copy is for export and tests, never presentation.
-- `layer-bench` exercises the public ABI with 15 legacy and 10 painter-focused
-  4096×4096 workloads, at least 32 visible layers, repeated fresh canvases, and
-  reports submission, completed GPU work, and resident canvas bytes.
-- `layer-ui` owns toolkit-free screen state, docking, camera/touch, typed
-  actions, validation, and multi-step flows. Native toolkits draw the controls.
+1. The platform collects the samples supplied by its input API, including any
+   history delivered with an event. It normalizes timestamps and pen axes and
+   preserves whether a sample is real, predicted or a correction.
+2. The shared editor decides whether the gesture paints, pans or operates another
+   tool. For a stroke, it converts input into document coordinates and places
+   brush contacts along the path. A resolved contact is called a *dab*.
+3. The engine builds a `FramePacket`, defined by `layer-render`. This packet
+   borrows the prepared batch data for submission and includes document changes
+   and the affected regions. It is not a bitmap or a complete document replay
+   on every frame.
+4. `WgpuRasterizer`, in `layer-render-wgpu`, records GPU commands to draw new dabs
+   into retained layer textures and update their composition. The shared viewport
+   presenter draws the canvas at the current zoom and rotation.
+5. The platform presents the result using its surface and frame scheduling rules.
+   Native integration must also handle resize, suspension and surface loss.
 
-`layer-render-wgpu` is one portable renderer implementation over Vulkan, Metal,
-D3D12, and WebGPU. Platform presenters supply surface integration but do not
-implement brush or canvas-pixel behavior.
+## CPU and GPU responsibilities
 
-## Runtime flow
+The CPU performs ordered, comparatively small operations: input interpretation,
+brush dynamics, document edits, layout, dependency tracking and command encoding.
+The GPU evaluates canvas pixels, including brush coverage, blending, masks,
+filters and composition. Native widgets are drawn by their own toolkit; the
+canvas renderer does not draw the application's controls.
 
-```text
-PLATFORM UI EVENT LOOP
-  native widget event → UiAction → UiSession → CanvasEngine
+`wgpu` provides access to Vulkan, Metal, D3D12 and browser WebGPU. The renderer
+requires a hardware GPU and has no CPU painting fallback. Imported image and
+brush source bytes may be retained in CPU memory for upload and project saving;
+this is different from maintaining a CPU copy of the rendered canvas.
 
-PLATFORM INPUT CALLBACK
-  retrieve complete coalesced/predicted history
-  normalize axes, timestamp, flags, and view revision
-  push fixed PenEvent records into bounded ingress
-                          │
-                          ▼
-ENGINE / RENDER OWNER (CPU)
-  drain input
-  transform → dynamics → distance sampling → ordered Dabs
-  update document and build one borrowed FramePacket
-                          │
-                          ▼
-WGPU RENDERER
-  one contact upload + one style upload
-  GPU contact coverage + paint/erase → persistent layer textures
-  GPU dirty composition → persistent composite texture
-  submit without waiting
-                          │
-                          ▼
-PLATFORM PRESENTER
-  sample composite into acquired surface and present
+[Rendering and composition](internals/rendering.md) explains the GPU resources
+and the explicit export, thumbnail and color-sampling readbacks.
 
-BACKGROUND HOST WORK
-  image decode · project/image encode · AI inference
-```
+## Scheduling and responsiveness
 
-There is one ordered engine/render owner because input interpretation, brush
-dynamics, document edits, and command submission are sequential. GPU passes
-provide the pixel parallelism. Native hosts may keep UI and engine on one event
-loop or place the engine on a canvas thread; the shared APIs do not require one
-topology. Wasm may run everything on the browser event loop.
+Each session has one ordered owner for engine and renderer mutations. Native
+hosts use queues and render workers to keep input collection and native UI work
+independent of GPU waits. The web host runs synchronously on the browser event
+loop, using animation callbacks to schedule updates; shared code does not require
+threads or shared memory.
 
-### Interactive renderer startup
+Frame work is incremental. New samples produce new contacts, unchanged layer
+results can be reused, and camera movement can redraw the viewport without
+rasterizing the artwork again. UI notifications separately identify affected sections of editor state, such as
+the layer list or tool settings. These are not pixel rectangles: they tell hosts
+which controls need refreshing.
 
-Interactive hosts use `WgpuRasterizer::from_wgpu_staged`, or
-`from_wgpu_staged_cached` with a dedicated app-private cache directory on native
-platforms. The four stages are:
+Shader startup is staged. The host can show controls and paper while the renderer
+prepares the current document and brush, then the remaining catalog. Painting
+waits for the required resources; showing the first frame is not the same as being
+ready for a stroke. Native compilation workers and incremental web preparation
+implement the same dependency ordering.
 
-1. Present paper using only the background/presentation pipelines.
-2. Prepare the current document's shaders and brush textures.
-3. Prepare the active brush, enabling new paint contacts when it is ready.
-4. Compile the remaining catalog without blocking input or presentation.
+Use the [testing and performance guide](development/testing.md) to measure frame
+cost and input-to-display latency on the target device.
 
-After submitting the first paper frame, call `prepare_startup(document, brush)`
-and poll `poll_startup()` without waiting. Refresh dependencies while startup is
-in progress if the document or active brush changes. Readiness includes texture
-uploads, not merely shader completion. Discard paint contacts that began before
-readiness through their release; never begin half a stroke. Navigation and UI
-controls remain usable. Notify the renderer when the initial catalog has been
-submitted so startup can complete and native pipeline data can be saved.
+## Files and other host services
 
-Native compilation runs on an owned background worker; browser hosts drive
-`compile_startup_step()` between presentation opportunities. GTK's GPU worker
-initialization is asynchronous too: the GTK event loop never waits on its
-initialization channel. Its initial document frame is retained until ready, and
-pixel-inspection requests wait behind that frame. The existing bounded frame
-queue and direct Wayland presentation remain unchanged during steady drawing.
+Shared code defines file requests, save checkpoints and close decisions. The host
+opens pickers, reads or writes bytes and reports completion. Project decoding and
+encoding belong off the input path. An incoming document is validated before it
+replaces the live one; a failed or cancelled save must not mark a document clean.
 
-The old eager `new`, `new_async`, and `from_wgpu` constructors are deprecated.
-Explicit `new_headless[_async]` is for tests and the diagnostic C ABI only; it
-uses the same pipelines, fully prepared before measurement. New platform hosts
-must not use these blocking constructors for interactive startup.
+The [document guide](internals/documents.md) explains this contract. Platform
+storage APIs differ, so a shared request does not by itself establish that every
+client implements the corresponding UI or provides the same storage guarantees.
 
-## CPU and GPU work
+## Where to read next
 
-| Operation | Owner |
-| --- | --- |
-| Retrieve platform event history and normalize axes | Native/Web adapter, CPU |
-| Pressure mapping, sensors, smoothing, spacing, and contact placement | `layer-engine`, CPU |
-| Document edits, stroke history, undo/redo, and UI business logic | Shared Rust, CPU |
-| Damage bounds, layer reconciliation, and GPU command encoding | Engine/renderer owner, CPU |
-| Analytic or R8 contact coverage | `layer-render-wgpu`, GPU |
-| Paint and erase blending | `layer-render-wgpu`, GPU |
-| Preview, layer opacity composition, viewport sampling, and presentation | `layer-render-wgpu`, GPU |
-| Pickup, smear, wet transfer, blend, and liquify | `layer-render-wgpu`, GPU |
-| Explicit export | GPU straight-alpha/sRGB conversion and readback, then host byte-stream encoding |
-| Image decode, persistence, and AI inference | Background host/runtime |
-
-CPU code never loops over canvas pixels for coverage, blending, compositing,
-color conversion, or transforms. Explicit export maps the GPU-produced sRGB
-byte stream for the host image encoder outside the drawing path. Failure to
-create a hardware GPU adapter disables painting instead of selecting another
-pixel implementation.
-
-## Shared input contract
-
-`PenEvent` is a fixed-size record containing physical-surface position,
-normalized pressure, tilt, twist, distance, tool, monotonic time, sequence,
-prediction flags, and a view revision.
-
-The adapter retrieves complete history immediately and pushes into a bounded
-`rtrb` ingress. The queue allocates once, never blocks, and reports capacity
-failure. The view revision maps delayed samples through the camera transform
-visible when they were captured.
-
-## Document contract
-
-The current document stores immutable source strokes with shared point arrays.
-Undo and redo move inverse edits without copying points. GPU textures are
-rebuildable renderer state.
-
-Dry and destination-aware brushes replay deterministically after load or device
-recreation. A future persistent water/pigment simulation would add versioned GPU
-material checkpoints; it will not add a CPU simulation.
-
-## Rendering contract
-
-`FramePacket` contains:
-
-- finite document extent, view transform, surface extent, and background;
-- the authoritative front-to-back layer slice;
-- one contiguous slice of newly resolved fixed-size `Dab` contacts;
-- compatible batches with layer, style, contact range, and damage;
-- an explicit full-rebuild flag;
-- an explicit full-composition flag.
-
-It contains no wgpu handle, texture ID, surface object, tile coordinate, fence,
-or synchronous timing result. The packet is borrowed for `submit`; a renderer
-copies only its compact GPU records.
-
-The implemented renderer stores only touched 256×256 GPU pages per paint layer
-and uses damage scissors. Empty layers contain metadata only. Paging is private
-and does not change this contract.
-
-## Frame policy
-
-- Wake from display callbacks and new work; never busy-poll.
-- Drain all available coalesced samples within a defensive bound.
-- Generate and upload only contacts that are new since the previous frame.
-- Keep no more presentation work queued than the platform needs.
-- Never wait for GPU completion in a live frame.
-- Never read back a pixel for drawing, AI preview, or presentation.
-- Measure input-to-submit in the engine and input-to-present with platform
-  timestamps.
-
-## UI boundary
-
-`layer-ui` represents concepts such as the active tool, toolbar state, color
-selection, layer list, settings editor, errors, and modal flows. Swift,
-Kotlin/Compose, GTK, WinUI, AppKit/SwiftUI, and Web frontends render those values
-with native controls and send typed actions back. Canvas surface handles and
-high-rate pen records bypass generic UI bindings and go to their dedicated
-platform adapters.
-
-See [shared-ui.md](shared-ui.md) and [platform-adapters.md](platform-adapters.md).
-
-## Current milestone
-
-Implemented:
-
-- shared document, edits, input queue, brush dynamics, and incremental packets;
-- one wgpu canvas renderer with analytic, mask, grain, dual, wet, smudge, blend,
-  liquify, prediction, sparse layer composition, and explicit export paths;
-- C ABI plus repeated 15-scenario legacy and 10-scenario painter GPU benchmarks
-  with sparse-state memory metrics;
-- 10 labeled 4096×4096 painter outputs and a contact sheet; every painter path's
-  move and pen-up p99 is under the 8.33 ms 120 Hz work budget on the benchmark
-  workstation;
-- controlled destination-interaction outputs for smudge, wet mixing, natural
-  blending, and push/twirl liquify, with corrected ordered feedback and
-  cross-page bilinear sampling;
-- shared `UiSession` actions, docking allocation, settings and camera/input,
-  with GTK4/libadwaita and actual Wasm/WebGPU frontends; both present the same
-  GPU viewport shader and have interaction checks and light/dark screenshots.
-
-Next:
-
-1. Human-test native tablet/touch delivery and capture input-to-present traces.
-2. Add imported and AI image assets.
-3. Evaluate persistent pigment/water simulation only after the implemented wet
-   interaction is tested with artists.
+- [Workspace and UI](ui/README.md) follows a command from a widget to shared state.
+- [Brushes](internals/brushes.md) follows pen samples through stroke generation.
+- [Platform integration](platforms/README.md) describes the native boundaries.
+- The [package table](../README.md#package-layout) links to each crate's entry point.

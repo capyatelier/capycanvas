@@ -113,7 +113,7 @@ function tool(name, override) {
   for (const candidate of candidates) {
     try { run(candidate, ["--version"], { stdio: "ignore" }); return candidate; } catch {}
   }
-  throw new Error(`Missing ${name}; see docs/web-packaging.md for build prerequisites`);
+  throw new Error(`Missing ${name}; see docs/development/web-packaging.md for build prerequisites`);
 }
 
 export function packageWeb() {
