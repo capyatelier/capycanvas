@@ -37,7 +37,9 @@ private struct MacEditorScene: View {
                 alert.messageText = "Some settings or workspace changes could not be saved."
                 alert.informativeText = "You can return to the app or quit with the last saved settings."
                 alert.addButton(withTitle: "Return to App"); alert.addButton(withTitle: "Quit Anyway")
-                sender.reply(toApplicationShouldTerminate: alert.runModal() == .alertSecondButtonReturn)
+                let quit = alert.runModal() == .alertSecondButtonReturn
+                if !quit { EditorStore.resetCloseApprovals() }
+                sender.reply(toApplicationShouldTerminate: quit)
             }
             }
         } }

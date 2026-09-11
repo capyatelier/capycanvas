@@ -88,8 +88,9 @@ struct EditorView<Canvas: View>: View {
             HStack(spacing: 6) {
                 Color.clear.frame(width: 36, height: 36)
                 if showsApplicationMenus {
-                    ForEach(store.catalog["menus"].array.indices, id: \.self) { index in
-                        let menu = store.catalog["menus"][index]
+                    let menus = [store.catalog["file_menu"]] + store.catalog["menus"].array
+                    ForEach(menus.indices, id: \.self) { index in
+                        let menu = menus[index]
                         Menu { CatalogMenuItems(store: store, label: menu["label"].string) } label: {
                             Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
                                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))

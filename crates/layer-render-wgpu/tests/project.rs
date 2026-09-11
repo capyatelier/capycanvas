@@ -15,17 +15,8 @@ const SIZE: [u32; 2] = [384, 256]; // Crosses raster tile boundaries.
 fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
     let mut gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
     for (id, a) in &project.assets {
-        gpu.prepare_asset(
-            id,
-            HostImage {
-                width: a.extent[0],
-                height: a.extent[1],
-                stride: a.extent[0] * a.format.channels(),
-                format: a.format,
-                bytes: &a.bytes,
-            },
-        )
-        .unwrap();
+        gpu.prepare_owned_asset(id, a).unwrap();
+        assert!(Arc::ptr_eq(&a.bytes, &gpu.source_asset(id).unwrap().bytes));
     }
     let (producer, consumer) = input_queue(64);
     let view = ViewState {
@@ -44,6 +35,60 @@ fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
     .unwrap();
     engine.render_frame_at(0).unwrap();
     (engine, producer)
+}
+
+#[test]
+fn source_uploads_share_owned_pixels_and_pack_borrowed_rows() {
+    let mut gpu = WgpuRasterizer::new_headless().expect("physical GPU required");
+    for format in [ProjectAssetFormat::R8Unorm, ProjectAssetFormat::Rgba8Srgb] {
+        let id = AssetId::from("test:owned-source");
+        let source = ProjectAsset {
+            extent: [3, 2],
+            format,
+            bytes: vec![127; 6 * format.channels() as usize].into(),
+        };
+        gpu.prepare_owned_asset(&id, &source).unwrap();
+        assert!(Arc::ptr_eq(
+            &source.bytes,
+            &gpu.source_asset(&id).unwrap().bytes
+        ));
+        for extent in [[0, 2], [u32::MAX, 2], [3, 1], [3, u32::MAX]] {
+            assert!(
+                gpu.prepare_owned_asset(
+                    &id,
+                    &ProjectAsset {
+                        extent,
+                        ..source.clone()
+                    }
+                )
+                .is_err()
+            );
+            assert!(Arc::ptr_eq(
+                &source.bytes,
+                &gpu.source_asset(&id).unwrap().bytes
+            ));
+        }
+        gpu.release_asset(&id);
+        assert!(gpu.source_asset(&id).is_none());
+        let row = 3 * format.channels() as usize;
+        let mut padded = vec![0; (row + 4) * 2];
+        for (i, line) in padded.chunks_exact_mut(row + 4).enumerate() {
+            line[..row].copy_from_slice(&source.bytes[i * row..(i + 1) * row]);
+        }
+        gpu.prepare_asset(
+            &id,
+            HostImage {
+                width: 3,
+                height: 2,
+                stride: row as u32 + 4,
+                format,
+                bytes: &padded,
+            },
+        )
+        .unwrap();
+        assert_eq!(gpu.source_asset(&id), Some(source));
+        gpu.release_asset(&id);
+    }
 }
 fn image(engine: &mut Engine, time: u64) -> Vec<u8> {
     engine.render_frame_at(time).unwrap();

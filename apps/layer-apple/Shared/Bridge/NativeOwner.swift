@@ -167,10 +167,12 @@ final class NativeOwner: @unchecked Sendable {
             reportStorage()
         }
     }
-    func checkProjectReady(_ completion: @escaping @Sendable (String?) -> Void) {
+    func documentRequest(id: UInt64 = 0, succeeded: Bool? = nil, closeDecision: UInt32? = nil,
+        completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             do {
-                try check(capy_apple_project_ready(handle))
+                if let decision = closeDecision { try check(capy_apple_document_close(handle, UInt32(id), decision)) }
+                else { try check(capy_apple_document_complete(handle, UInt32(id), succeeded == true ? 1 : 0)) }
                 try publish(); completion(nil)
             } catch { completion(error.localizedDescription) }
         }
@@ -188,13 +190,15 @@ final class NativeOwner: @unchecked Sendable {
             } else { completion(task, nil) }
         }
     }
-    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String,
+    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?,
         completion: @escaping @Sendable (String?) -> Void) {
         queue.async { [self] in
             do {
                 try title.withCString { name in
-                    try check(opening ? capy_apple_project_adopt(handle, task.handle, name)
-                        : capy_apple_project_saved(handle, task.handle, name))
+                    try (url?.absoluteString ?? "").withCString { uri in
+                        try check(opening ? capy_apple_project_adopt(handle, task.handle, name, uri)
+                            : capy_apple_project_saved(handle, task.handle, name, uri))
+                    }
                 }
                 try publish(); completion(nil)
             } catch { completion(error.localizedDescription) }

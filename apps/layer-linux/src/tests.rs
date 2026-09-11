@@ -22,6 +22,270 @@ fn state(w: &Workspace) -> UiState {
 }
 
 #[test]
+#[ignore = "native file workflow: private Wayland display and GPU"]
+#[allow(deprecated)] // Inspect GtkFileDialog's fallback widget, not a production API.
+fn native_document_files() {
+    // Application::run normally sets argv[0]; this registered test app has none.
+    glib::set_prgname(Some("capy-canvas-test"));
+    glib::set_application_name(APP_NAME);
+    let app = native_test_app("art.capycanvas.DocumentFiles");
+    let output = std::path::Path::new("../../artifacts/familiar-workspace/files");
+    std::fs::create_dir_all(output).unwrap();
+    let output = output.canonicalize().unwrap();
+    let path = output.join("drawing.capy");
+    let location = DocumentLocation {
+        uri: gtk::gio::File::for_path(&path).uri().into(),
+        name: "drawing.capy".into(),
+    };
+    let w = Workspace::with_project(
+        &app,
+        Some((new_drawing(384, 256).unwrap(), Some(location.clone()))),
+    );
+    let created = Rc::new(RefCell::new(None));
+    let result = created.clone();
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
+        *result.borrow_mut() = Some((project, location))
+    }));
+    w.window.present();
+    let ready = |w: &Rc<Workspace>| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            pump(20);
+            if w.gpu.borrow().as_ref().is_some_and(|g| {
+                g.session.engine().backend().startup.complete
+                    && !g.session.state().filter_load.pending
+                    && !g.session.engine().has_pending_document_edits()
+            }) {
+                return;
+            }
+        }
+        panic!("document did not become ready");
+    };
+    ready(&w);
+    let image = layer_core::ProjectAsset {
+        extent: [96, 64],
+        format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+        bytes: (0..96 * 64)
+            .flat_map(|i| {
+                if (i / 96 / 8 + i % 96 / 8) % 2 == 0 {
+                    [235, 60, 90, 180]
+                } else {
+                    [25, 160, 220, 95]
+                }
+            })
+            .collect(),
+    };
+    w.gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .import_layer_asset("Imported color", image)
+        .unwrap();
+    w.refresh(regions::DOCUMENT | regions::COMMANDS);
+    w.wake();
+    ready(&w);
+    assert!(state(&w).document_file.modified);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::SaveDocument,
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state(&w).document_file.busy && Instant::now() < deadline {
+        pump(20);
+    }
+    assert!(!state(&w).document_file.busy);
+    assert!(
+        !state(&w).document_file.modified,
+        "{:?}",
+        state(&w).host_error
+    );
+    let project =
+        layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
+    assert_eq!(project.assets.len(), 1);
+    let before = glib::MainContext::default()
+        .block_on(crate::files::export_pixels(&w, 900))
+        .unwrap();
+    assert_eq!([before.width, before.height], [384, 256]);
+    // GDK_DEBUG=no-portals selects GTK's chooser fallback in this isolated
+    // display; production keeps GtkFileDialog's normal portal selection.
+    let chooser = || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            pump(30);
+            if let Some(dialog) = gtk::Window::list_toplevels()
+                .into_iter()
+                .find_map(|w| w.downcast::<gtk::FileChooserDialog>().ok())
+                .filter(|d| d.is_visible())
+            {
+                // Allow the native folder/path-bar model to finish opening
+                // before sending synthetic chooser responses.
+                pump(500);
+                return dialog;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "native file chooser was not shown"
+            );
+        }
+    };
+    let finish = || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while state(&w).document_file.busy && Instant::now() < deadline {
+            pump(30);
+        }
+        assert!(
+            !state(&w).document_file.busy,
+            "file operation did not finish"
+        );
+    };
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::OpenDocument,
+    });
+    chooser().response(gtk::ResponseType::Cancel);
+    finish();
+    assert!(created.borrow().is_none());
+    assert!(state(&w).host_error.is_none());
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::OpenDocument,
+    });
+    let open = chooser();
+    open.set_file(&gtk::gio::File::for_path(&path)).unwrap();
+    pump(250);
+    open.response(gtk::ResponseType::Accept);
+    finish();
+    let (opened, origin) = created.borrow_mut().take().unwrap();
+    assert_eq!(opened, project);
+    assert_eq!(origin, Some(location.clone()));
+    let invalid = output.join("invalid.capy");
+    std::fs::write(&invalid, b"not a project").unwrap();
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::OpenDocument,
+    });
+    let open = chooser();
+    open.set_file(&gtk::gio::File::for_path(invalid)).unwrap();
+    pump(250);
+    open.response(gtk::ResponseType::Accept);
+    finish();
+    assert!(created.borrow().is_none());
+    assert!(state(&w).host_error.is_some());
+    w.wake();
+    pump(80);
+    assert!(w.status.is_visible());
+    let save_path = output.join(format!("copy-{}.capy", std::process::id()));
+    let png_path = output.join(format!("export-{}.png", std::process::id()));
+    for (command, path) in [
+        (CommandId::SaveDocumentAs, &save_path),
+        (CommandId::ExportDocument, &png_path),
+    ] {
+        w.dispatch(UiAction::Invoke { command });
+        let save = chooser();
+        assert_eq!(
+            save.current_folder().unwrap().uri(),
+            gtk::gio::File::for_path(&output).uri()
+        );
+        save.set_current_name(path.file_name().unwrap().to_str().unwrap());
+        pump(300);
+        save.response(gtk::ResponseType::Accept);
+        finish();
+        assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
+        assert!(path.is_file());
+    }
+    let mut png = png::Decoder::new(std::fs::File::open(png_path).unwrap())
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; png.output_buffer_size()];
+    let frame = png.next_frame(&mut pixels).unwrap();
+    assert_eq!(&pixels[..frame.buffer_size()], &before.bytes);
+    assert_eq!(
+        state(&w).document_file.location.as_ref().unwrap().uri,
+        gtk::gio::File::for_path(&save_path).uri()
+    );
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::NewDocument,
+        });
+        pump(220);
+        assert!(state(&w).document_file.busy);
+        let width = find_named(w.window.upcast_ref(), "new-document-width")
+            .unwrap()
+            .downcast::<adw::SpinRow>()
+            .unwrap();
+        width.set_value(512.);
+        capture_reference(
+            &w,
+            output.join(format!("new-{theme:?}.png")).to_str().unwrap(),
+            1.,
+        );
+        click(&find_button(w.window.upcast_ref(), "Create").unwrap());
+        pump(220);
+        let (project, location) = created.borrow_mut().take().unwrap();
+        assert_eq!(project.document.width, 512);
+        assert!(location.is_none());
+        assert!(!state(&w).document_file.busy);
+        assert_eq!(state(&w).tabs[0].width, 384);
+    }
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::NewDocument,
+    });
+    pump(200);
+    click(&find_button(w.window.upcast_ref(), CANCEL_DOCUMENT_LABEL).unwrap());
+    pump(160);
+    assert!(!state(&w).document_file.busy);
+    assert!(created.borrow().is_none());
+    let reopened = Workspace::with_project(&app, Some((project, Some(location))));
+    reopened.window.present();
+    // Match the application factory's settings inheritance for a new window.
+    reopened.dispatch(UiAction::RestoreSettings {
+        settings: state(&w).settings,
+    });
+    ready(&reopened);
+    let after = glib::MainContext::default()
+        .block_on(crate::files::export_pixels(&reopened, 901))
+        .unwrap();
+    assert_eq!(before.bytes, after.bytes);
+    assert!(!state(&reopened).document_file.modified);
+    capture_reference(&reopened, output.join("reopened.png").to_str().unwrap(), 1.);
+    reopened.window.close();
+    pump(200);
+    assert!(!reopened.window.is_visible());
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::AddLayer,
+    });
+    assert!(state(&w).document_file.modified);
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.window.close();
+        pump(220);
+        assert!(w.window.is_visible());
+        capture_reference(
+            &w,
+            output
+                .join(format!("unsaved-{theme:?}.png"))
+                .to_str()
+                .unwrap(),
+            1.,
+        );
+        click(&find_button(w.window.upcast_ref(), CANCEL_DOCUMENT_LABEL).unwrap());
+        pump(180);
+        assert!(w.window.is_visible());
+        assert!(state(&w).document_file.modified);
+    }
+    w.window.close();
+    pump(220);
+    click(&find_button(w.window.upcast_ref(), "Save").unwrap());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while w.window.is_visible() && Instant::now() < deadline {
+        pump(20);
+    }
+    assert!(!w.window.is_visible());
+    let saved =
+        layer_core::Project::read(std::fs::File::open(save_path).unwrap(), Default::default())
+            .unwrap();
+    assert_eq!(saved.document.layers.len(), 4);
+}
+
+#[test]
 #[ignore = "private Wayland desktop: startup timing and event-loop responsiveness"]
 fn native_startup_latency() {
     let app = native_test_app("art.capycanvas.StartupTest");
@@ -2921,6 +3185,7 @@ fn native_runtime_filter_packages() {
             &mut w.gpu.borrow_mut().as_mut().unwrap().session,
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
             mode,
+            true,
         )
         .unwrap();
         w.wake();
@@ -6770,8 +7035,8 @@ fn native_menu_sections() {
         );
         theme_action.activate(None);
         assert_eq!(state(&w).theme, theme);
-        for (label, sections) in MENUS
-            .iter()
+        for (label, sections) in std::iter::once(&FILE_MENU)
+            .chain(MENUS)
             .map(|m| (m.label, m.sections))
             .chain([("Main Menu", PRIMARY_MENU)])
         {

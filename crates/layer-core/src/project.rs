@@ -68,36 +68,6 @@ pub struct Project {
     pub assets: BTreeMap<AssetId, ProjectAsset>,
 }
 
-/// Immutable input for background validation/compression. Capturing visits
-/// document metadata and shares source/sample storage; it does not scan samples
-/// or selection pixels, serialize JSON, compress, or access files/the GPU.
-pub struct ProjectSnapshot(Project);
-impl ProjectSnapshot {
-    pub fn capture(
-        document: &Document,
-        mut source: impl FnMut(&AssetId) -> Option<ProjectAsset>,
-    ) -> Result<Self, String> {
-        let mut document = document.clone();
-        let (reachable, _) = history_references(&document, ProjectLimits::default())?;
-        document.strokes.retain(|id, _| reachable.contains_key(id));
-        let needed = asset_references(&document)?;
-        Ok(Self(Project {
-            document,
-            assets: needed
-                .keys()
-                .filter_map(|id| source(id).map(|a| (id.clone(), a)))
-                .collect(),
-        }))
-    }
-    pub fn revision(&self) -> u64 {
-        self.0.document.revision
-    }
-    pub fn finish(self) -> Result<Project, String> {
-        self.0.validate(ProjectLimits::default())?;
-        Ok(self.0)
-    }
-}
-
 /// Bounds apply to decoded data, not just compressed file size. Hosts may use
 /// stricter limits for their memory budget. GPU device limits are checked later.
 #[derive(Clone, Copy, Debug)]
@@ -167,9 +137,30 @@ impl Project {
     /// canvas pixels. Supplied built-in textures are embedded exactly too.
     pub fn snapshot_with(
         document: &Document,
-        source: impl FnMut(&AssetId) -> Option<ProjectAsset>,
+        mut source: impl FnMut(&AssetId) -> Option<ProjectAsset>,
     ) -> Result<Self, String> {
-        ProjectSnapshot::capture(document, source)?.finish()
+        let mut document = document.clone();
+        prune_history(&mut document)?;
+        let needed = asset_references(&document)?;
+        let project = Self {
+            document,
+            assets: needed
+                .keys()
+                .filter_map(|id| source(id).map(|asset| (id.clone(), asset)))
+                .collect(),
+        };
+        project.validate(ProjectLimits::default())?;
+        Ok(project)
+    }
+
+    /// Run on the file worker after capturing an immutable session snapshot.
+    /// Takes ownership so pruning does not clone the document again.
+    pub fn pruned(mut self) -> Result<Self, String> {
+        prune_history(&mut self.document)?;
+        let needed = asset_references(&self.document)?;
+        self.assets.retain(|id, _| needed.contains_key(id));
+        self.validate(ProjectLimits::default())?;
+        Ok(self)
     }
 
     pub fn validate(&self, limits: ProjectLimits) -> Result<(), String> {
@@ -286,6 +277,12 @@ impl Project {
 
 fn io_error(e: std::io::Error) -> String {
     format!("Project I/O failed: {e}")
+}
+
+fn prune_history(document: &mut Document) -> Result<(), String> {
+    let (reachable, _) = history_references(document, ProjectLimits::default())?;
+    document.strokes.retain(|id, _| reachable.contains_key(id));
+    Ok(())
 }
 fn metadata(value: &impl Serialize, limit: u64) -> Result<Vec<u8>, String> {
     struct Bounded {

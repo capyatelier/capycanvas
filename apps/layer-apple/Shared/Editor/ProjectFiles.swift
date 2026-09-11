@@ -18,8 +18,9 @@ import UIKit
     private weak var store: EditorStore?
     private var requestID: UInt64?
     private var destination: URL?
+    var closeWindow: (() -> Void)?
+    private var handledClose = false
     private var activeTask: NativeProjectTask?
-    private var confirmed: (() -> Void)?
     private var pickerCompletion: ((URL?) -> Void)?
     private var cancelled = false
     private var finishing = false
@@ -38,26 +39,37 @@ import UIKit
         let export: URL?
     }
     init(store: EditorStore, dialogs: Dialogs? = nil) { self.store = store; self.dialogs = dialogs }
-    var title: String { store?.state["project_file"]["title"].string ?? "Untitled" }
+    var title: String {
+        let name = store?.state["document_file"]["location"]["name"].string ?? ""
+        return name.isEmpty ? "Untitled" : name
+    }
     func receive(_ state: JSON) {
-        guard !busy, requestID == nil,
-            let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "project_file" }) else { return }
+        let file = state["document_file"]
+        if !busy { blocksEditor = file["close_ready"].bool }
+        if !file["close_ready"].bool { handledClose = false }
+        if file["close_ready"].bool && !handledClose {
+            handledClose = true
+            if closeCompletion != nil { finishClose(true) } else { closeWindow?() }
+        }
+        guard requestID == nil, !finishing,
+            let request = state["requests"].array.first(where: { $0["kind"]["type"].string == "document" }) else { return }
         requestID = request["id"].uint; busy = true; cancelling = false; cancelled = false
-        let action = request["kind"]["action"].string
-        blocksEditor = action == "open" || action == "new"
+        let document = request["kind"]["request"]
+        let action = document["type"].string
+        blocksEditor = action == "open" || action == "new" || action == "confirm_close" || closeCompletion != nil
         switch action {
-        case "save", "save_as": save(as: action == "save_as") { [weak self] _ in self?.finish() }
-        case "open", "new":
-            preserveChanges { [weak self] in
+        case "save":
+            destination = URL(string: document["location"]["uri"].string)
+            save(as: document["location"].isNull) { [weak self] saved in self?.finish(saved) }
+        case "new": open(nil)
+        case "open":
+            if let url = externalURL { externalURL = nil; open(url) }
+            else { chooseOpen { [weak self] url in
                 guard let self else { return }
-                if action == "new" { open(nil) }
-                else if let url = self.externalURL { self.externalURL = nil; open(url) }
-                else { chooseOpen { [weak self] url in
-                    guard let self else { return }
-                    if let url { open(url) } else { finish() }
-                } }
-            }
-        default: fail("Unknown document action")
+                if let url { open(url) } else { finish() }
+            } }
+        case "confirm_close": confirming = true
+        default: fail("This document service is not available yet")
         }
     }
     func openURL(_ url: URL) {
@@ -68,46 +80,37 @@ import UIKit
         externalURL = url; store?.invoke("open_document")
     }
     func confirmClose(_ completion: @escaping (Bool) -> Void) {
-        guard !busy else { completion(false); return }
-        busy = true; blocksEditor = true; cancelled = false; cancelling = false
-        closeCompletion = completion
-        guard let native = store?.native else { finishClose(false); return }
-        // Read the owner after already queued edits. The main-thread snapshot
-        // can still show a clean document immediately after the latest input.
-        native.checkProjectReady { [weak self] error in
+        guard !busy, let native = store?.native else { completion(false); return }
+        busy = true; blocksEditor = true; closeCompletion = completion
+        native.documentRequest(closeDecision: 0) { [weak self] error in
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let error { self.fail(error) }
-                else { self.preserveChanges { [weak self] in self?.finishClose(true) } }
+                if let error { self.report(error); self.finishClose(false) }
+                else if self.store?.state["document_file"]["close_ready"].bool == true { self.finishClose(true) }
             }
         }
     }
     private func finishClose(_ allowed: Bool) {
         let completion = closeCompletion; closeCompletion = nil
-        busy = false; blocksEditor = false; activeTask = nil; cancelling = false
+        if requestID == nil { busy = false; blocksEditor = allowed; activeTask = nil; cancelling = false }
         completion?(allowed)
     }
-    private func preserveChanges(_ continuation: @escaping () -> Void) {
-        guard store?.state["project_file"]["modified"].bool == true else { continuation(); return }
-        confirmed = continuation; confirming = true
-    }
     func choose(_ choice: String) {
-        confirming = false
-        let continuation = confirmed; confirmed = nil
-        if choice == "discard" { continuation?() }
-        else if choice == "save" {
-            save(as: false) { [weak self] saved in
+        guard let id = requestID, confirming else { return }
+        confirming = false; finishing = true
+        store?.native?.documentRequest(id: id, closeDecision: choice == "save" ? 1 : choice == "discard" ? 2 : 3) { [weak self] error in
+            DispatchQueue.main.async {
                 guard let self else { return }
-                if saved, let continuation { preserveChanges(continuation) } else { finish() }
+                if let error { self.report(error) }
+                if choice == "cancel" { self.externalURL = nil }
+                self.released()
             }
-        } else { finish() }
+        }
     }
     func dismissAlert() {
         if error != nil { error = nil; return }
-        confirming = false
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.confirmed != nil, !self.confirming else { return }
-            self.choose("cancel")
+            if self?.confirming == true { self?.choose("cancel") }
         }
     }
     func cancel() {
@@ -115,7 +118,7 @@ import UIKit
     }
     private func task(opening: Bool, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
-        let file = store?.state["project_file"] ?? JSON()
+        let file = store?.state["document_file"] ?? JSON()
         native.projectTask(opening: opening, expected: opening ? (file["epoch"].uint, file["revision"].uint) : nil) { [weak self] task, error in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -126,16 +129,19 @@ import UIKit
         }
     }
     private func save(as copy: Bool, completion: @escaping (Bool) -> Void) {
+        if !copy, let destination { write(destination, completion: completion); return }
         #if os(macOS)
-        if copy || destination == nil {
+        let exportPicker = dialogs?.export != nil
+        #else
+        let exportPicker = true
+        #endif
+        if !exportPicker {
             chooseSave { [weak self] url in
                 guard let self else { return }
                 guard let url else { completion(false); return }
                 write(url, completion: completion)
             }
-        } else if let destination { write(destination, completion: completion) }
-        #else
-        if copy || destination == nil {
+        } else {
             task(opening: false) { [weak self] task in
                 guard let self else { return }
                 let title = self.title
@@ -161,8 +167,7 @@ import UIKit
                     }
                 }
             }
-        } else if let destination { write(destination, completion: completion) }
-        #endif
+        }
     }
     private func write(_ url: URL, completion: @escaping (Bool) -> Void) {
         task(opening: false) { [weak self] task in
@@ -179,7 +184,7 @@ import UIKit
     }
     private func saved(_ task: NativeProjectTask, at url: URL, completion: @escaping (Bool) -> Void) {
         guard let native = store?.native else { completion(false); return }
-        native.finishProject(task, opening: false, title: url.lastPathComponent) { [weak self] error in
+        native.finishProject(task, opening: false, title: url.lastPathComponent, url: url) { [weak self] error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error { self.report(error); completion(false) }
@@ -195,11 +200,11 @@ import UIKit
                     DispatchQueue.main.async {
                         guard let self else { return }
                         if self.cancelled { self.finish(); return }
-                        self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled") { [weak self] error in
+                        self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url) { [weak self] error in
                             DispatchQueue.main.async {
                                 guard let self else { return }
                                 if let error { self.report(error) } else { self.destination = url; self.store?.layerThumbnails.reset() }
-                                self.finish()
+                                self.finish(error == nil)
                             }
                         }
                     }
@@ -212,19 +217,28 @@ import UIKit
     }
     private func fail(_ message: String) { report(message); finish() }
     private func report(_ message: String) { if !cancelled { error = message } }
-    private func finish() {
-        if closeCompletion != nil { finishClose(false); return }
-        guard !finishing else { return }
-        guard let id = requestID else { return }
+    private func finish(_ succeeded: Bool = false) {
+        guard !finishing, let id = requestID else { return }
         finishing = true; externalURL = nil
-        // Keep the request latched until Rust acknowledges removal; otherwise a
-        // snapshot from a queued paint event could start this same dialog again.
-        store?.edit(["type": "complete_request", "id": id, "error": NSNull()]) { [weak self] _ in
-            guard let self else { return }
-            self.requestID = nil; self.busy = false; self.blocksEditor = false
-            self.finishing = false
-            self.activeTask = nil; self.cancelling = false
-            if let state = self.store?.state { self.receive(state) }
+        // A durable save is already acknowledged by the owner. Other requests
+        // complete only after the picker and worker have finished their effect.
+        if store?.state["requests"].array.contains(where: { $0["id"].uint == id }) != true {
+            released(); return
+        }
+        store?.native?.documentRequest(id: id, succeeded: succeeded) { [weak self] error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let error { self.report(error) }
+                self.released()
+            }
+        }
+    }
+    private func released() {
+        requestID = nil; busy = false; blocksEditor = false; finishing = false
+        activeTask = nil; cancelling = false
+        if let state = store?.state {
+            receive(state)
+            if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
         }
     }
     private func chooseOpen(_ completion: @escaping (URL?) -> Void) {
@@ -238,15 +252,17 @@ import UIKit
         pickerCompletion = completion; picker = Picker(export: nil)
         #endif
     }
-    #if os(macOS)
     private func chooseSave(_ completion: @escaping (URL?) -> Void) {
         if let dialogs { dialogs.save(title, completion); return }
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.capyProject]; panel.canCreateDirectories = true
         panel.nameFieldStringValue = title == "Untitled" ? "Untitled.capy" : title
         panel.begin { response in completion(response == .OK ? panel.url : nil) }
+        #else
+        completion(nil) // iPad uses the export picker above.
+        #endif
     }
-    #endif
     func picked(_ url: URL?) {
         let completion = pickerCompletion; pickerCompletion = nil; picker = nil
         completion?(url)

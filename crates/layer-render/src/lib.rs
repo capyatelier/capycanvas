@@ -339,6 +339,24 @@ pub trait CanvasRenderer {
 
     fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error>;
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error>;
+    /// Cold source upload. Worker-backed hosts can share the immutable allocation
+    /// with the project instead of copying it across the render-thread boundary.
+    fn prepare_owned_asset(
+        &mut self,
+        id: &AssetId,
+        asset: &layer_core::ProjectAsset,
+    ) -> Result<(), Self::Error> {
+        self.prepare_asset(
+            id,
+            HostImage {
+                width: asset.extent[0],
+                height: asset.extent[1],
+                stride: asset.extent[0] * asset.format.channels(),
+                format: asset.format,
+                bytes: &asset.bytes,
+            },
+        )
+    }
     /// Immutable imported/bundled source bytes for portable document storage.
     /// Clones shared storage; never reads generated canvas pixels back from GPU.
     fn source_asset(&self, _asset: &AssetId) -> Option<layer_core::ProjectAsset> {

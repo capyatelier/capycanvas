@@ -13,9 +13,10 @@ final class DocumentWindowDelegate: NSObject, NSWindowDelegate {
         if let previous = self.window, previous.delegate === self { previous.delegate = downstream }
         self.window = window; downstream = window?.delegate
         window?.delegate = self
+        store?.projectFiles.closeWindow = { [weak window] in window?.performClose(nil) }
     }
     @MainActor func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if approved {
+        if approved || store?.state["document_file"]["close_ready"].bool == true {
             approved = false
             return downstream?.windowShouldClose?(sender) ?? true
         }

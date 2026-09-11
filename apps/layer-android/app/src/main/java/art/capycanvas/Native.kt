@@ -25,4 +25,6 @@ internal object Native {
     @JvmStatic external fun importLayer(handle: Long, name: String, width: Int, height: Int, rgba: ByteArray)
     /** Pure shared number-field math; no native session handle or GPU work. */
     @JvmStatic external fun number(request: String): String
+    /** Pure shared color-wheel hit geometry, independent of the render thread. */
+    @JvmStatic external fun colorWheelHit(request: String): String
 }

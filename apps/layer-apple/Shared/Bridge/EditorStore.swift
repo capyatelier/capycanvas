@@ -87,9 +87,18 @@ import SwiftUI
         var stores = instances.allObjects
         func next() {
             guard let store = stores.popLast() else { completion(true); return }
-            store.projectFiles.confirmClose { allowed in if allowed { next() } else { completion(false) } }
+            store.projectFiles.confirmClose { allowed in
+                if allowed { next() }
+                else {
+                    resetCloseApprovals()
+                    completion(false)
+                }
+            }
         }
         next()
+    }
+    static func resetCloseApprovals() {
+        for live in instances.allObjects { live.native?.documentRequest(closeDecision: 4) { _ in } }
     }
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }

@@ -1454,3 +1454,56 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   The sandbox run cannot supply the hardware adapter required by its GPU cases;
   this is not macOS/iOS device validation. Workspace/Wasm checks and strict
   UI/GTK Clippy pass. Concurrent Android workspace changes are separate work.
+
+### GTK document workflows
+
+- File now exposes New, Open, Save, Save As, Export PNG and Close with shared
+  command metadata/shortcuts. New/Open create separate document windows; the
+  existing drawing is never replaced by an invalid incoming file. The main
+  window title shows the filename and an unsaved indicator. The other seven
+  menus and final command ribbon still need their complete integration.
+- Shared Rust owns source-asset retention, undo-state save checkpoints,
+  single-flight requests, cancellation and close-after-save authorization.
+  Navigation/selection does not dirty artwork; undoing to the saved checkpoint
+  clears the indicator. Edits during a write remain unsaved, including a stroke
+  that finishes after a pending save-and-close. Discard/Cancel/Save use the same
+  policy from the title-bar close button and the File menu.
+- GTK uses asynchronous FileDialog and AdwAlertDialog. Source snapshots share
+  immutable buffers with uploads; validation, compression, PNG encoding and
+  atomic file writes run off the input thread. Export follows pending document
+  frames and uses the existing explicit GPU readback, never the viewport image.
+  Local files are supported; remote GIO destinations are not implemented.
+- Startup filter-library refresh no longer migrates an opened project's embedded
+  programs. Explicit replacement still supports live migration, with namespace
+  validation and last-working-program behavior unchanged.
+- Validation: 40 core, 31 engine and 213 shared UI tests pass. The native GTK
+  document test exercises actual fallback file choosers, cancellation, corrupt
+  input, Save As, PNG export, New controls, fresh-window pixel-exact reopening,
+  and save/cancel during close. Atomic-write failure leaves the original intact;
+  PNG round trips preserve RGBA and its sRGB declaration. GTK critical warnings
+  remain fatal. The scripted chooser waits for its asynchronous initial folder
+  model before responding; production adds no delay. The portal provider itself
+  is not automated by this test.
+- New/unsaved dialogs were inspected in both themes under ignored
+  `artifacts/familiar-workspace/files/`. Workspace/Wasm checks and strict
+  UI/GTK Clippy pass; existing non-Metal Apple warnings remain. No new physical
+  input, export-during-painting latency, or 120Hz benchmark claim is made here.
+  The PNG dependency reuses the already-locked MIT/Apache-2.0 version. No captures,
+  project files, raw logs, machine identifiers or local settings are committed.
+- Remaining: final eight-menu/command-ribbon assembly, requested default layout,
+  region refinements, historical filter-reference reconciliation, and the full
+  integrated GTK validation/user-approval gate. The goal remains active.
+
+- Project-source integration: owned RGBA images and R8 brush masks now share
+  their immutable pixel allocation across the session, GTK worker queue and
+  renderer source cache. Borrowed imports use one common row-packing helper.
+  GPU tests assert allocation identity, reject malformed replacements without
+  losing the previous source, check padded rows, and still reproduce reopened
+  artwork exactly. No canvas readback or drawing-time work was added.
+- Post-merge validation passes 41 core, 31 engine, 213 shared UI and 10 host
+  tests, both GPU project tests, the native GTK document workflow, workspace
+  and WebAssembly compilation, and strict core/engine/render/UI/GTK Clippy.
+  Existing non-Metal Apple warnings remain. Panel-availability tests now check
+  the shared host policy rather than repeating a list that drifts as ports
+  implement their native controls. Concurrent Android presentation work remains
+  separately owned; no new device or frame-rate claim is made here.

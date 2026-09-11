@@ -1,11 +1,11 @@
 //! Transfer jobs bridge the serial editor owner and a background file worker.
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
-use layer_core::{Project, ProjectLimits, ProjectSnapshot};
+use layer_core::{Project, ProjectLimits};
 use layer_host::Renderer;
-use layer_render::{CanvasRenderer, EffectValidationRequest, HostImage};
+use layer_render::{CanvasRenderer, EffectValidationRequest};
 use layer_render_wgpu::WgpuRasterizer;
-use layer_ui::UiSession;
+use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
 use std::{
     fs::File,
     io::{Read, Write},
@@ -26,7 +26,7 @@ struct Environment {
 }
 enum Payload {
     Save {
-        snapshot: Option<ProjectSnapshot>,
+        snapshot: Option<Project>,
         project: Option<Project>,
     },
     Open {
@@ -46,9 +46,10 @@ pub struct CapyProjectTask {
     phase: AtomicU8,
     epoch: u64,
     revision: u64,
+    save_request: Option<u32>,
 }
 impl CapyProjectTask {
-    fn new(payload: Payload, epoch: u64, revision: u64) -> *mut Self {
+    fn new(payload: Payload, epoch: u64, revision: u64, save_request: Option<u32>) -> *mut Self {
         Box::into_raw(Box::new(Self {
             state: Mutex::new(State {
                 payload,
@@ -57,6 +58,7 @@ impl CapyProjectTask {
             phase: AtomicU8::new(0),
             epoch,
             revision,
+            save_request,
         }))
     }
     fn check_cancelled(&self) -> Result<(), String> {
@@ -115,12 +117,31 @@ pub unsafe extern "C" fn capy_apple_project_task(
         return std::ptr::null_mut();
     };
     app.perform(|app| {
-        let session = &app.host.session;
-        session.project_ready()?;
-        let file = &session.state().project_file;
+        let session = &mut app.host.session;
+        session.require_document_idle()?;
+        let epoch = session.state().document_file.epoch;
+        let mut save_request = None;
         let payload = if opening == 0 {
+            let id = session
+                .state()
+                .requests
+                .iter()
+                .find_map(|r| match r.kind {
+                    HostRequestKind::Document {
+                        request: DocumentRequest::Save { .. },
+                    } => Some(r.id),
+                    _ => None,
+                })
+                .ok_or("No save request is pending")?;
+            save_request = Some(id);
             Payload::Save {
-                snapshot: Some(session.project_snapshot()?),
+                snapshot: Some(session.capture_project_save(
+                    id,
+                    DocumentLocation {
+                        uri: "apple:pending".into(),
+                        name: session.state().document_file.title().into(),
+                    },
+                )?),
                 project: None,
             }
         } else {
@@ -142,8 +163,9 @@ pub unsafe extern "C" fn capy_apple_project_task(
         };
         Ok(CapyProjectTask::new(
             payload,
-            file.epoch,
+            epoch,
             session.engine().document().revision,
+            save_request,
         ))
     })
     .unwrap_or(std::ptr::null_mut())
@@ -161,7 +183,7 @@ pub unsafe extern "C" fn capy_apple_project_ready(app: *mut CapyApple) -> i32 {
     let Some(app) = (unsafe { app.as_mut() }) else {
         return -1;
     };
-    app.perform(|app| app.host.session.project_ready())
+    app.perform(|app| app.host.session.require_document_idle())
         .map_or(-1, |_| 0)
 }
 /// # Safety
@@ -212,7 +234,7 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
             return Err("Not a save task".into());
         };
         if let Some(snapshot) = snapshot.take() {
-            *project = Some(snapshot.finish()?);
+            *project = Some(snapshot.pruned()?);
         }
         let project = project.as_ref().ok_or("Missing project snapshot")?;
         project.write(Stream {
@@ -270,20 +292,6 @@ pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32
         let mut gpu =
             WgpuRasterizer::from_wgpu(environment.adapter, environment.device, environment.queue)
                 .map_err(|e| e.to_string())?;
-        for (id, asset) in &project.assets {
-            task.check_cancelled()?;
-            gpu.prepare_asset(
-                id,
-                HostImage {
-                    width: asset.extent[0],
-                    height: asset.extent[1],
-                    stride: asset.extent[0] * asset.format.channels(),
-                    format: asset.format,
-                    bytes: &asset.bytes,
-                },
-            )
-            .map_err(|e| e.to_string())?;
-        }
         let mut programs = Vec::new();
         for effect in project
             .document
@@ -319,7 +327,7 @@ pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32
             }
         }
         let mut prepared =
-            UiSession::new(Renderer(Some(gpu)), project.document, environment.viewport)?;
+            UiSession::from_project(Renderer(Some(gpu)), project, None, environment.viewport)?;
         prepared.frame(0, 0)?;
         task.check_cancelled()?;
         *candidate = Some(prepared);
@@ -336,6 +344,7 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
     app: *mut CapyApple,
     task: *const CapyProjectTask,
     title: *const c_char,
+    uri: *const c_char,
 ) -> i32 {
     let (Some(app), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else {
         return -1;
@@ -343,6 +352,11 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
     app.perform(|app| {
         task.check_cancelled()?;
         let title = unsafe { read_title(title) }?;
+        let uri = unsafe { read_title(uri) }?;
+        let location = (!uri.is_empty()).then(|| DocumentLocation {
+            uri: uri.into(),
+            name: title.into(),
+        });
         let mut state = task.state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(error) = &state.error {
             return Err(error.clone());
@@ -360,7 +374,7 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
         match app
             .host
             .session
-            .adopt_project(prepared, task.epoch, task.revision, title)
+            .adopt_project(prepared, task.epoch, task.revision, location)
         {
             Ok(retired) => state.payload = Payload::Retired { _session: retired },
             Err((error, prepared)) => {
@@ -381,6 +395,7 @@ pub unsafe extern "C" fn capy_apple_project_saved(
     app: *mut CapyApple,
     task: *const CapyProjectTask,
     title: *const c_char,
+    uri: *const c_char,
 ) -> i32 {
     let (Some(app), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else {
         return -1;
@@ -400,9 +415,20 @@ pub unsafe extern "C" fn capy_apple_project_saved(
         ) {
             return Err("Save did not complete".into());
         }
-        app.host
-            .session
-            .project_saved(task.epoch, task.revision, unsafe { read_title(title) }?)
+        let session = &mut app.host.session;
+        if session.state().document_file.epoch != task.epoch {
+            return Err("The save belongs to a different document".into());
+        }
+        let id = task.save_request.ok_or("Not a save task")?;
+        session.retarget_project_save(
+            id,
+            DocumentLocation {
+                uri: unsafe { read_title(uri) }?.into(),
+                name: unsafe { read_title(title) }?.into(),
+            },
+        )?;
+        session.complete_document_request(id, Ok(true))?;
+        Ok(())
     })
     .map_or(-1, |_| 0)
 }
@@ -461,4 +487,59 @@ pub unsafe extern "C" fn capy_project_free(task: *mut CapyProjectTask) {
     if !task.is_null() {
         drop(unsafe { Box::from_raw(task) });
     }
+}
+
+/// # Safety
+/// Session owner only. Complete a native picker/worker request after its effect.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_complete(
+    app: *mut CapyApple,
+    id: u32,
+    succeeded: u32,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|app| {
+        app.host
+            .session
+            .complete_document_request(id, Ok(succeeded != 0))
+            .map(|_| ())
+    })
+    .map_or(-1, |_| 0)
+}
+/// # Safety
+/// Session owner only. 0 requests close, 1 saves, 2 discards, 3 cancels,
+/// 4 clears a close authorization when an application termination is cancelled.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_close(
+    app: *mut CapyApple,
+    id: u32,
+    decision: u32,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|app| {
+        let session = &mut app.host.session;
+        match decision {
+            0 => {
+                session.request_document_close()?;
+            }
+            1..=3 => {
+                session.respond_document_close(
+                    id,
+                    match decision {
+                        1 => CloseDecision::Save,
+                        2 => CloseDecision::Discard,
+                        _ => CloseDecision::Cancel,
+                    },
+                )?;
+            }
+            4 => session.reset_document_close(),
+            _ => return Err("Unknown close decision".into()),
+        }
+        Ok(())
+    })
+    .map_or(-1, |_| 0)
 }

@@ -2,9 +2,47 @@
 
 Settings and workspace persistence use the existing versioned Rust models and
 restore actions. Both native apps share storage and owner coordination.
-The shared editable `Project` codec and fresh Metal replay checks now exist.
-File menus and artwork recovery are still required; the running apps do **not**
-yet save artwork. See [the shared format](../../docs/project-format.md).
+Both apps now expose New, Open, Save and Save As using the shared editable
+[`Project` format](../../docs/project-format.md). macOS also protects window
+close and app termination with the shared unsaved-change decision. Automatic
+artwork recovery remains required.
+
+## Artwork files
+
+The shared Rust document request flow owns busy state, save checkpoints and
+Save/Discard/Cancel decisions. Apple opts into replacing the current document;
+GTK can create another window. Undo returning to the saved checkpoint marks the
+document clean again, while later edits remain unsaved after an older snapshot
+finishes writing. New/Open and close decisions require an idle canvas. A late
+open result or input from the previous document cannot change a replacement.
+
+macOS uses NSOpenPanel/NSSavePanel. iPad uses UIDocumentPickerViewController:
+Save As prepares an archive in a private temporary directory before presenting
+the export picker. Save acknowledgments follow the completed destination write
+or successful picker export, never location selection alone. Cancelled or failed
+writes preserve the current document and its saved checkpoint. Open validates
+and prepares a candidate GPU session before adoption; it retains the window's
+settings/workspace and starts fresh undo history. New currently uses a 2048×1536
+canvas; a canvas-size dialog and PNG export remain to be implemented on Apple.
+
+One owner captures immutable document/source metadata. Pruning, validation,
+compression, file coordination and GPU preparation run off the drawing queue.
+The worker borrows file descriptors, holds no live editor pointer, and uses a
+reserved stack for recursive shader translation. Retired document/GPU resources
+are also released off the owner queue. Input revision and animation clocks reset
+when a prepared document enters the existing window.
+
+Security-scoped access and NSFileCoordinator surround file operations. Regular
+writes stream into a private sibling temporary file, sync, rename and sync the
+directory. Cancellation wins before the atomic publication boundary. File-provider
+export is completed by the native picker. Source/sample allocations are shared
+with the snapshot, but large-document capture cost, GPU preparation, memory peaks
+and storage latency still require measurement.
+
+These manual operations do not implement artwork autosave or recovery. Restoring
+an artwork URL across launches, provider conflicts/file presenters, interruption
+during provider access, iPad multi-window lifecycle, and physical background-task
+expiration remain open. Enabling multiple iPad scenes is not lifecycle acceptance.
 
 ## Ownership and files
 
@@ -51,10 +89,19 @@ On an Apple Silicon development Mac, run from the repository root:
 
 ```sh
 bash apps/layer-apple/scripts/test-persistence.sh
+bash apps/layer-apple/scripts/test-project-files.sh
+cargo test -p layer-apple project_ --lib
 cargo test -p layer-host workspace_persistence --lib
 ```
 
-The standalone tests use temporary directories. They verify complete old/new file
+The project-file checks use the actual Swift owner, coordinator and Metal C ABI
+with injected location choices. They cover both Mac destination-first saves and
+iPad staged exports, Save/Open/New, private permissions, cancellation, failed
+writes/reads, changes queued before capture/close, and unsaved Save/Discard/Cancel.
+This exercises editor effects without system-menu automation; it does not validate
+native picker interaction or physical file-provider delivery.
+
+The standalone settings tests use temporary directories. They verify complete old/new file
 generations under concurrent reads, private permissions, size limits, failed-write
 preservation, malformed-file handling, per-scene isolation, settings notifications
 and flush ordering. The real-owner checks use the actual Swift owner and Rust C
@@ -71,5 +118,5 @@ persistence test environment variables.
 
 Remaining acceptance includes interrupted/background/termination delivery on
 physical devices, workspace retention across the complete window/surface matrix,
-bounded/coalesced storage work under sustained edits, document save/open/recovery,
+bounded/coalesced storage work under sustained edits, document recovery and provider delivery,
 and storage overhead in the hardware performance workloads.

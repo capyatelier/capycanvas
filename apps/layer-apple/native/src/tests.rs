@@ -12,6 +12,21 @@ impl Drop for ProjectJob {
 }
 impl ProjectJob {
     fn new(app: &App, opening: bool) -> Self {
+        if !opening {
+            let pending: Vec<_> = unsafe { &*app.0 }
+                .host
+                .session
+                .state()
+                .requests
+                .iter()
+                .filter(|r| matches!(r.kind, layer_ui::HostRequestKind::Document { .. }))
+                .map(|r| r.id)
+                .collect();
+            for id in pending {
+                assert_eq!(unsafe { capy_apple_document_complete(app.0, id, 0) }, 0);
+            }
+            app.invoke("save_document");
+        }
         let task = unsafe { capy_apple_project_task(app.0, u32::from(opening)) };
         assert!(!task.is_null());
         Self(task)
@@ -76,11 +91,18 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         assert_eq!(unsafe { capy_project_begin_commit(save.0) }, 0);
         let title = CString::new("Saved.capy").unwrap();
         assert_eq!(
-            unsafe { capy_apple_project_saved(app.0, save.0, title.as_ptr()) },
+            unsafe {
+                capy_apple_project_saved(
+                    app.0,
+                    save.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
             0
         );
         assert_eq!(
-            app.state()["project_file"]["modified"],
+            app.state()["document_file"]["modified"],
             true,
             "A late save must not mark newer edits clean"
         );
@@ -106,7 +128,14 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         app.draw_frame();
         let changed = app.pixels();
         assert_eq!(
-            unsafe { capy_apple_project_adopt(app.0, stale.0, title.as_ptr()) },
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    stale.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
             -1
         );
         app.draw_frame();
@@ -130,7 +159,14 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         let workspace = app.state()["workspace"].clone();
         let old_view = unsafe { capy_apple_camera_revision(app.0) };
         assert_eq!(
-            unsafe { capy_apple_project_adopt(app.0, open.0, title.as_ptr()) },
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    open.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
             0
         );
         assert!(unsafe { capy_apple_camera_revision(app.0) } > old_view);
@@ -138,10 +174,20 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         app.draw_frame();
         assert!(app.pixels() == original_pixels);
         assert_eq!(app.state()["workspace"], workspace);
-        assert_eq!(app.state()["project_file"]["modified"], false);
-        assert_eq!(app.state()["project_file"]["title"], "Saved.capy");
+        assert_eq!(app.state()["document_file"]["modified"], false);
         assert_eq!(
-            unsafe { capy_apple_project_saved(app.0, save.0, title.as_ptr()) },
+            app.state()["document_file"]["location"]["name"],
+            "Saved.capy"
+        );
+        assert_eq!(
+            unsafe {
+                capy_apple_project_saved(
+                    app.0,
+                    save.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
             -1,
             "Old save cannot name a replacement document"
         );
@@ -149,12 +195,12 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         assert_eq!(unsafe { capy_project_read(new.0, -1) }, 0);
         let blank = CString::new("Untitled").unwrap();
         assert_eq!(
-            unsafe { capy_apple_project_adopt(app.0, new.0, blank.as_ptr()) },
+            unsafe { capy_apple_project_adopt(app.0, new.0, blank.as_ptr(), c"".as_ptr()) },
             0
         );
         app.draw_frame();
         assert!(app.pixels() != original_pixels);
-        assert_eq!(app.state()["project_file"]["modified"], false);
+        assert_eq!(app.state()["document_file"]["modified"], false);
         drop(file);
         std::fs::remove_file(path).unwrap();
     }
@@ -196,14 +242,28 @@ fn project_cancellation_and_invalid_input_preserve_live_artwork() {
         assert_eq!(unsafe { capy_project_read(open.0, file.as_raw_fd()) }, -1);
         let title = CString::new("Broken.capy").unwrap();
         assert_eq!(
-            unsafe { capy_apple_project_adopt(app.0, open.0, title.as_ptr()) },
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    open.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
             -1
         );
         let cancelled = ProjectJob::new(&app, true);
         assert_eq!(unsafe { capy_project_read(cancelled.0, -1) }, 0);
         unsafe { capy_project_cancel(cancelled.0) };
         assert_eq!(
-            unsafe { capy_apple_project_adopt(app.0, cancelled.0, title.as_ptr()) },
+            unsafe {
+                capy_apple_project_adopt(
+                    app.0,
+                    cancelled.0,
+                    title.as_ptr(),
+                    c"file:///fixture.capy".as_ptr(),
+                )
+            },
             -1
         );
         app.draw_frame();

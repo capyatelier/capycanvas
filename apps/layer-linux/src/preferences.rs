@@ -90,7 +90,6 @@ pub struct Preferences {
     confirm: gtk::Button,
     shown: Cell<[bool; 3]>,
     updating: Cell<bool>,
-    servicing: Cell<bool>,
     context: gtk::PopoverMenu,
     context_reset: RefCell<Option<(PreferenceId, gtk::Button)>>,
 }
@@ -483,7 +482,6 @@ impl Preferences {
             confirm: gtk::Button::with_label("Set Shortcut"),
             shown: Cell::new([false; 3]),
             updating: Cell::new(false),
-            servicing: Cell::new(false),
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
@@ -1241,88 +1239,36 @@ impl Preferences {
     pub fn recording(&self) -> bool {
         self.capture.root().is_some()
     }
-    /// Ordered host services. Disk I/O runs on GIO's pool, never on the drawing
-    /// event loop. A request stays in the core until the host acknowledges it.
-    pub fn service(&self, w: &Rc<Workspace>) {
-        if self.servicing.replace(true) {
-            return;
-        }
-        // Finish an accepted settings edit even if the last window closes while
-        // its atomic write is in flight.
-        let hold = w.window.application().map(|app| app.hold());
-        glib::MainContext::default().spawn_local(glib::clone!(
-            #[weak]
-            w,
-            async move {
-                let _hold = hold;
-                loop {
-                    let request = w
-                        .gpu
-                        .borrow()
-                        .as_ref()
-                        .and_then(|g| g.session.state().requests.first().cloned());
-                    let Some(request) = request else {
-                        break;
-                    };
-                    let result: Result<(), String> = match request.kind {
-                        HostRequestKind::ProjectFile { .. } => {
-                            Err("Project file services are not connected in this host".into())
-                        }
-                        HostRequestKind::NewWindow => w
-                            .window
-                            .application()
-                            .ok_or("Application unavailable".into())
-                            .and_then(|app| {
-                                let action = app
-                                    .lookup_action("new-window")
-                                    .ok_or("New Window is unavailable")?;
-                                action.activate(None);
-                                Ok(())
-                            }),
-                        HostRequestKind::SaveSettings { settings } => {
-                            let current = w
-                                .gpu
-                                .borrow()
-                                .as_ref()
-                                .is_some_and(|g| g.session.state().settings == *settings);
-                            if !current {
-                                Ok(())
-                            } else {
-                                if let Some(action) = w
-                                    .window
-                                    .application()
-                                    .and_then(|app| app.lookup_action("settings-changed"))
-                                {
-                                    action.activate(Some(
-                                        &serde_json::to_string(&settings).unwrap().to_variant(),
-                                    ));
-                                }
-                                let revision = SAVE_REVISION
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                                    + 1;
-                                gtk::gio::spawn_blocking(move || {
-                                    let _lock = SAVE_LOCK.lock().map_err(|e| e.to_string())?;
-                                    if SAVE_REVISION.load(std::sync::atomic::Ordering::Relaxed)
-                                        != revision
-                                    {
-                                        return Ok(());
-                                    }
-                                    save(&settings)
-                                })
-                                .await
-                                .unwrap_or_else(|_| Err("Settings writer failed".into()))
-                            }
-                        }
-                    };
-                    w.dispatch(UiAction::CompleteRequest {
-                        id: request.id,
-                        error: result.err(),
-                    });
-                }
-                w.preferences.servicing.set(false);
-            }
+}
+
+pub(crate) async fn persist(w: &Workspace, settings: Box<Settings>) -> Result<(), String> {
+    if !w
+        .gpu
+        .borrow()
+        .as_ref()
+        .is_some_and(|g| g.session.state().settings == *settings)
+    {
+        return Ok(());
+    }
+    if let Some(action) = w
+        .window
+        .application()
+        .and_then(|app| app.lookup_action("settings-changed"))
+    {
+        action.activate(Some(
+            &serde_json::to_string(&settings).unwrap().to_variant(),
         ));
     }
+    let revision = SAVE_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    gtk::gio::spawn_blocking(move || {
+        let _lock = SAVE_LOCK.lock().map_err(|e| e.to_string())?;
+        if SAVE_REVISION.load(std::sync::atomic::Ordering::Relaxed) != revision {
+            return Ok(());
+        }
+        save(&settings)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Settings writer failed".into()))
 }
 
 fn path() -> Option<std::path::PathBuf> {

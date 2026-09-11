@@ -168,6 +168,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.document()
     }
 
+    pub fn checkpoint(&self) -> u64 {
+        self.editor.checkpoint()
+    }
+
     pub fn view(&self) -> ViewState {
         self.view
     }

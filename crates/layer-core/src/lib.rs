@@ -18,7 +18,7 @@ pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler}
 mod affine;
 pub use affine::{Affine, ImageTransform, Interpolation};
 mod project;
-pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits, ProjectSnapshot};
+pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
     BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,
@@ -1559,6 +1559,15 @@ pub enum Edit {
 }
 
 impl Edit {
+    /// Navigation and selection are retained by a project snapshot, but do not
+    /// themselves make artwork unsaved. Rulers and references are document edits.
+    fn changes_project(&self) -> bool {
+        match self {
+            Self::SetActiveLayer { .. } | Self::SetMaskTarget(_) | Self::SetSelection(_) => false,
+            Self::Batch(edits) => edits.iter().any(Self::changes_project),
+            _ => true,
+        }
+    }
     /// Guide-only edits affect presentation, never the canvas image or replay.
     pub fn changes_image(&self) -> bool {
         match self {
@@ -1572,8 +1581,16 @@ impl Edit {
 #[derive(Debug)]
 pub struct Editor {
     document: Document,
-    undo: Vec<Edit>,
-    redo: Vec<Edit>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    checkpoint: u64,
+    next_checkpoint: u64,
+}
+
+#[derive(Debug)]
+struct HistoryEntry {
+    edit: Edit,
+    checkpoint: u64,
 }
 
 impl Editor {
@@ -1582,11 +1599,19 @@ impl Editor {
             document,
             undo: Vec::new(),
             redo: Vec::new(),
+            checkpoint: 0,
+            next_checkpoint: 1,
         }
     }
 
     pub fn document(&self) -> &Document {
         &self.document
+    }
+
+    /// Identity of the current persistent undo state, not a monotonic revision.
+    /// A host can save this token with a snapshot while later edits continue.
+    pub fn checkpoint(&self) -> u64 {
+        self.checkpoint
     }
 
     pub fn allocate_layer_id(&mut self) -> LayerId {
@@ -1602,10 +1627,14 @@ impl Editor {
     }
 
     pub fn undo_changes_image(&self) -> bool {
-        self.undo.last().is_some_and(Edit::changes_image)
+        self.undo
+            .last()
+            .is_some_and(|entry| entry.edit.changes_image())
     }
     pub fn redo_changes_image(&self) -> bool {
-        self.redo.last().is_some_and(Edit::changes_image)
+        self.redo
+            .last()
+            .is_some_and(|entry| entry.edit.changes_image())
     }
 
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
@@ -1616,29 +1645,50 @@ impl Editor {
         // Selecting the drawing target is navigation. It must neither consume
         // an undo step nor discard redoable painting work.
         let selection_only = matches!(&edit, Edit::SetActiveLayer { .. } | Edit::SetMaskTarget(_));
+        let changes_project = edit.changes_project();
         let inverse = self.document.apply(edit)?;
         if !selection_only {
-            self.undo.push(inverse);
+            self.undo.push(HistoryEntry {
+                edit: inverse,
+                checkpoint: self.checkpoint,
+            });
             self.redo.clear();
+        }
+        if changes_project {
+            self.checkpoint = self.next_checkpoint;
+            self.next_checkpoint = self
+                .next_checkpoint
+                .checked_add(1)
+                .expect("document history exhausted");
         }
         Ok(())
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
-        let Some(edit) = self.undo.pop() else {
+        let Some(entry) = self.undo.last() else {
             return Ok(false);
         };
-        let inverse = self.document.apply(edit)?;
-        self.redo.push(inverse);
+        let inverse = self.document.apply(entry.edit.clone())?;
+        let entry = self.undo.pop().unwrap();
+        self.redo.push(HistoryEntry {
+            edit: inverse,
+            checkpoint: self.checkpoint,
+        });
+        self.checkpoint = entry.checkpoint;
         Ok(true)
     }
 
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
-        let Some(edit) = self.redo.pop() else {
+        let Some(entry) = self.redo.last() else {
             return Ok(false);
         };
-        let inverse = self.document.apply(edit)?;
-        self.undo.push(inverse);
+        let inverse = self.document.apply(entry.edit.clone())?;
+        let entry = self.redo.pop().unwrap();
+        self.undo.push(HistoryEntry {
+            edit: inverse,
+            checkpoint: self.checkpoint,
+        });
+        self.checkpoint = entry.checkpoint;
         Ok(true)
     }
 
@@ -1809,6 +1859,43 @@ mod tests {
         .normalized();
         assert_eq!(request.fidelity, 1.0);
         assert!(request.is_stale_for(&document));
+    }
+
+    #[test]
+    fn project_checkpoint_tracks_undo_branches_not_navigation() {
+        let mut editor = Editor::new(Document::new("checkpoint", 64, 64));
+        let initial = editor.checkpoint();
+        editor
+            .perform(Edit::InsertStroke(Box::new(dot(StrokeId(1), LayerId(1)))))
+            .unwrap();
+        let saved = editor.checkpoint();
+        assert_ne!(initial, saved);
+        editor
+            .perform(Edit::SetActiveLayer { id: LayerId(2) })
+            .unwrap();
+        editor.perform(Edit::SetSelection(None)).unwrap();
+        assert_eq!(editor.checkpoint(), saved);
+        editor.undo().unwrap(); // selection is undoable, but not a persistent edit
+        assert_eq!(editor.checkpoint(), saved);
+        editor.undo().unwrap();
+        assert_eq!(editor.checkpoint(), initial);
+        editor.redo().unwrap();
+        assert_eq!(editor.checkpoint(), saved);
+        editor.undo().unwrap();
+        editor
+            .perform(Edit::SetReferences(BTreeSet::from([LayerId(1)])))
+            .unwrap();
+        assert_ne!(editor.checkpoint(), saved); // a same-depth branch is not saved
+        assert_ne!(editor.checkpoint(), initial);
+        let branch = editor.checkpoint();
+        editor.clear_history();
+        assert_eq!(editor.checkpoint(), branch);
+        assert!(
+            editor
+                .perform(Edit::SetActiveLayer { id: LayerId(999) })
+                .is_err()
+        );
+        assert_eq!(editor.checkpoint(), branch);
     }
 
     #[test]

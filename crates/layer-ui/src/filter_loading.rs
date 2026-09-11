@@ -14,6 +14,7 @@ pub struct FilterLoadState {
 pub(super) struct Pending {
     catalog: EffectCatalog,
     validated: bool,
+    migrate_instances: bool,
 }
 impl<R: CanvasRenderer> UiSession<R> {
     /// The returned change wakes frame polling, including on an idle canvas.
@@ -24,6 +25,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         json: &str,
         read: impl FnMut(&str) -> Result<Arc<str>, String>,
         mode: EffectInstallMode,
+    ) -> Result<UiChange, String> {
+        self.stage_effect_package(json, read, mode, true)
+    }
+
+    /// Startup/library refresh must not silently rewrite a reopened project's
+    /// embedded programs. Explicit package replacement can still migrate them.
+    pub fn load_effect_library(
+        &mut self,
+        json: &str,
+        read: impl FnMut(&str) -> Result<Arc<str>, String>,
+        mode: EffectInstallMode,
+    ) -> Result<UiChange, String> {
+        self.stage_effect_package(json, read, mode, false)
+    }
+
+    fn stage_effect_package(
+        &mut self,
+        json: &str,
+        read: impl FnMut(&str) -> Result<Arc<str>, String>,
+        mode: EffectInstallMode,
+        migrate_instances: bool,
     ) -> Result<UiChange, String> {
         self.require_idle()?;
         if self.pending_filters.is_some() {
@@ -57,7 +79,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ));
             }
             if let Some(effect) = &layer.effect
-                && !changed.iter().any(|p| p.id == effect.program.id)
+                && (!migrate_instances || !changed.iter().any(|p| p.id == effect.program.id))
                 && !namespace.contains(&effect.program)
             {
                 namespace.push(effect.program.clone());
@@ -79,6 +101,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.pending_filters = Some(Pending {
             catalog: candidate,
             validated: false,
+            migrate_instances,
         });
         self.state.filter_load = FilterLoadState {
             request_id,
@@ -110,15 +133,25 @@ impl<R: CanvasRenderer> UiSession<R> {
             return 0;
         }
         let pending = self.pending_filters.take().unwrap();
-        let result = self.publish_filters(pending.catalog);
+        let result = self.publish_filters(pending.catalog, pending.migrate_instances);
         self.state.filter_load.pending = false;
         self.state.filter_load.error = result.err();
         regions::DOCUMENT | regions::COMMANDS
     }
 
-    fn publish_filters(&mut self, catalog: EffectCatalog) -> Result<(), String> {
+    fn publish_filters(
+        &mut self,
+        catalog: EffectCatalog,
+        migrate_instances: bool,
+    ) -> Result<(), String> {
         let mut edits = Vec::new();
-        for layer in &self.engine.document().layers {
+        for layer in self
+            .engine
+            .document()
+            .layers
+            .iter()
+            .filter(|_| migrate_instances)
+        {
             let Some(effect) = &layer.effect else {
                 continue;
             };

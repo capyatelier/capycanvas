@@ -44,7 +44,14 @@ import QuartzCore
             var beforeOpen: (() -> Void)?
             store.projectFiles = ProjectFiles(store: store, dialogs: .init(
                 open: { choices += 1; beforeOpen?(); $0(openLocation) },
-                save: { _, callback in choices += 1; callback(saveLocation) }))
+                save: { _, callback in choices += 1; callback(saveLocation) },
+                export: platform == 0 ? { staging, callback in
+                    choices += 1
+                    if let url = saveLocation {
+                        do { try FileManager.default.copyItem(at: staging, to: url); callback(url) }
+                        catch { preconditionFailure("Provider copy failed: \(error)") }
+                    } else { callback(nil) }
+                } : nil))
             let layer = CAMetalLayer(); layer.bounds = CGRect(x: 0, y: 0, width: 128, height: 128)
             store.native!.attach(layer, width: 128, height: 128, scale: 1)
             let attached = await withCheckedContinuation { continuation in
@@ -66,7 +73,7 @@ import QuartzCore
             try await invoke("save_document_as")
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             precondition(FileManager.default.fileExists(atPath: target.path))
-            precondition(store.state["project_file"]["title"].string == target.lastPathComponent)
+            precondition(store.state["document_file"]["location"]["name"].string == target.lastPathComponent)
             let mode = try FileManager.default.attributesOfItem(atPath: target.path)[.posixPermissions] as! NSNumber
             precondition(mode.intValue & 0o777 == 0o600)
             store.invoke("add_layer")
@@ -75,25 +82,25 @@ import QuartzCore
             store.layer(["op":"rename", "id":id, "name":"Saved layer"])
             try await wait("Rename not applied") { store.state["layers"].array.contains { $0["label"].string == "Saved layer" } }
             try await invoke("save_document")
-            precondition(!store.state["project_file"]["modified"].bool)
+            precondition(!store.state["document_file"]["modified"].bool)
             let savedData = try Data(contentsOf: target)
             saveLocation = nil
             try await invoke("save_document_as")
             precondition((try? Data(contentsOf: target)) == savedData)
             store.invoke("add_layer")
             try await wait("Unsaved edit not applied") { store.state["layers"].array.count == 4 }
-            let epoch = store.state["project_file"]["epoch"].uint
+            let epoch = store.state["document_file"]["epoch"].uint
             store.invoke("new_document")
             try await wait("Unsaved prompt missing") { store.projectFiles.confirming }
             store.projectFiles.choose("cancel")
             try await wait("Cancel not acknowledged") { !store.projectFiles.busy }
-            precondition(store.state["project_file"]["epoch"].uint == epoch && store.state["layers"].array.count == 4)
+            precondition(store.state["document_file"]["epoch"].uint == epoch && store.state["layers"].array.count == 4)
             store.invoke("new_document")
             try await wait("Discard prompt missing") { store.projectFiles.confirming }
             store.projectFiles.choose("discard")
             try await wait("New drawing failed") { !store.projectFiles.busy }
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
-            precondition(store.state["layers"].array.count == 2 && store.state["project_file"]["epoch"].uint == epoch + 1)
+            precondition(store.state["layers"].array.count == 2 && store.state["document_file"]["epoch"].uint == epoch + 1)
             openLocation = invalid
             try await invoke("open_document")
             precondition(store.projectFiles.error != nil)
@@ -110,19 +117,20 @@ import QuartzCore
             try await wait("Confirmed open did not settle") { !store.projectFiles.busy }
             precondition(store.projectFiles.error == nil, store.projectFiles.error ?? "")
             precondition(store.state["layers"].array.contains { $0["label"].string == "Saved layer" })
-            precondition(!store.state["project_file"]["modified"].bool)
+            precondition(!store.state["document_file"]["modified"].bool)
             store.invoke("add_layer")
             var closed: Bool?
             store.projectFiles.confirmClose { closed = $0 }
             try await wait("Close prompt missing") { store.projectFiles.confirming }
             store.projectFiles.choose("cancel")
+            try await wait("Close cancellation did not settle") { closed != nil }
             precondition(closed == false)
             closed = nil
             store.projectFiles.confirmClose { closed = $0 }
             try await wait("Save on close prompt missing") { store.projectFiles.confirming }
             store.projectFiles.choose("save")
             try await wait("Save on close did not finish") { closed != nil }
-            precondition(closed == true && !store.state["project_file"]["modified"].bool)
+            precondition(closed == true && !store.state["document_file"]["modified"].bool)
             precondition(choices == 5, "Each user request must present at most one location choice")
             withExtendedLifetime(layer) {}
             print("Project files pass for Apple platform \(platform)")

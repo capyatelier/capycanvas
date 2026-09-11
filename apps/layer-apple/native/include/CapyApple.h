@@ -21,8 +21,10 @@ int32_t capy_apple_project_ready(CapyApple *app);
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
-int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title);
-int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title);
+int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
+int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
+int32_t capy_apple_document_complete(CapyApple *app, uint32_t id, uint32_t succeeded);
+int32_t capy_apple_document_close(CapyApple *app, uint32_t id, uint32_t decision);
 void capy_project_cancel(const CapyProjectTask *task);
 int32_t capy_project_begin_commit(const CapyProjectTask *task);
 char *capy_project_error(const CapyProjectTask *task); /* owned, NULL on success */

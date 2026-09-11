@@ -41,7 +41,7 @@ pub extern "C" fn capy_apple_create(platform: u32) -> *mut CapyApple {
             _ => return None,
         };
         let mut host = NativeHost::new(platform).ok()?;
-        host.session.set_project_files_available(true);
+        host.session.set_document_replacement(true);
         Some(Box::into_raw(Box::new(CapyApple {
             host,
             metal: metal::MetalHost::default(),

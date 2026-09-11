@@ -302,7 +302,9 @@ impl NativeHost {
         {
             return Err("Invalid native pointer batch".into());
         }
-        if view_revision < self.document_view_revision {
+        if view_revision < self.document_view_revision
+            || self.session.state().document_file.close_ready
+        {
             return Ok(());
         }
         for sample in records.chunks_exact(9) {
@@ -449,13 +451,52 @@ impl NativeHost {
     }
     fn snapshot(&self) -> Value {
         let layout = self.session.layout(self.logical);
-        let panels: Vec<_> = layout
+        let state = self.session.state();
+        let zen = if state.partial_zen() {
+            state.workspace.layout.zen_toolbars(self.logical)
+        } else {
+            Default::default()
+        };
+        // Drawers and partial Zen can project panels absent from the ordinary
+        // dock groups. Publish their shared views as well, without moving docks.
+        let mut panel_ids: Vec<_> = layout
             .groups
             .iter()
             .flat_map(|g| &g.panels)
-            .filter_map(|&p| self.session.panel_view(p).ok())
+            .copied()
+            .collect();
+        for panel in zen
+            .sections
+            .iter()
+            .map(|s| s.panel)
+            .chain(
+                layout
+                    .collapsed
+                    .iter()
+                    .flat_map(|c| &c.groups)
+                    .flat_map(|g| &g.icons)
+                    .map(|i| i.panel),
+            )
+            .chain(
+                state
+                    .customization
+                    .drawer
+                    .iter()
+                    .chain(&state.customization.column_drawers)
+                    .flat_map(|d| d.columns.iter().flatten())
+                    .copied(),
+            )
+        {
+            if !panel_ids.contains(&panel) {
+                panel_ids.push(panel);
+            }
+        }
+        let panels: Vec<_> = panel_ids
+            .into_iter()
+            .filter_map(|p| self.session.panel_view(p).ok())
             .collect();
         json!({"state": self.session.state(), "layout": layout, "panels": panels,
+            "partial_zen": state.partial_zen(), "zen_toolbars": zen,
             "color_panel": self.session.state().colors.view(),
             "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
             "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
@@ -645,6 +686,47 @@ impl NativeHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2880, 1800, 1.75).unwrap();
+        let mut settings = app.session.state().settings.clone();
+        settings.total_zen = false;
+        app.dispatch(UiAction::RestoreSettings { settings })
+            .unwrap();
+        let layout = app.session.state().workspace.layout.clone();
+        app.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ZenMode,
+        })
+        .unwrap();
+        let snapshot = app.take_snapshot().unwrap();
+        assert_eq!(snapshot["partial_zen"], true);
+        let sections = snapshot["zen_toolbars"]["sections"].as_array().unwrap();
+        assert!(!sections.is_empty());
+        for section in sections {
+            let panel = snapshot["panels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == section["panel"])
+                .unwrap();
+            for tile in section["tiles"].as_array().unwrap() {
+                assert!(
+                    panel["tiles"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|t| t["id"] == tile[0])
+                );
+            }
+        }
+        assert_eq!(app.session.state().workspace.layout, layout);
+        app.dispatch(UiAction::Invoke {
+            command: layer_ui::CommandId::ZenMode,
+        })
+        .unwrap();
+        assert_eq!(app.take_snapshot().unwrap()["partial_zen"], false);
+    }
     #[test]
     fn workspace_persistence_only_emits_committed_topology_changes() {
         for platform in [layer_ui::Platform::Mac, layer_ui::Platform::Ios] {

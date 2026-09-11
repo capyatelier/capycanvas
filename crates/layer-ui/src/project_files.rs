@@ -1,68 +1,6 @@
-//! Shared document service policy. Hosts own URLs, dialogs and background I/O;
-//! these tokens prevent a late save/open from replacing newer document state.
+//! Publish prepared projects while retaining the window and shared document policy.
 use super::*;
-
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct ProjectFileState {
-    pub title: String,
-    pub epoch: u64,
-    pub revision: u64,
-    pub saved_revision: u64,
-    pub modified: bool,
-    pub supported: bool,
-}
-impl Default for ProjectFileState {
-    fn default() -> Self {
-        Self {
-            title: "Untitled".into(),
-            epoch: 1,
-            revision: 0,
-            saved_revision: 0,
-            modified: false,
-            supported: false,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProjectFileAction {
-    New,
-    Open,
-    Save,
-    SaveAs,
-}
-
 impl<R: CanvasRenderer> UiSession<R> {
-    pub fn set_project_files_available(&mut self, available: bool) {
-        self.state.project_file.supported = available;
-        self.refresh_commands();
-    }
-    pub fn project_ready(&self) -> Result<(), String> {
-        self.require_idle()?;
-        if self.operation.active() || self.region_tools.busy() || self.pending_filters.is_some() {
-            return Err("Finish or cancel the current operation first".into());
-        }
-        Ok(())
-    }
-    /// Metadata-only capture; finish/validate/serialize it on a worker.
-    pub fn project_snapshot(&self) -> Result<layer_core::ProjectSnapshot, String> {
-        self.project_ready()?;
-        layer_core::ProjectSnapshot::capture(self.engine.document(), |id| {
-            self.engine.backend().source_asset(id)
-        })
-    }
-    pub fn project_saved(&mut self, epoch: u64, revision: u64, title: &str) -> Result<(), String> {
-        if epoch != self.state.project_file.epoch || revision > self.engine.document().revision {
-            return Err("The save belongs to a different document".into());
-        }
-        let title = project_title(title)?;
-        self.state.project_file.title = title;
-        self.state.project_file.saved_revision = revision;
-        self.refresh_document();
-        self.changed(regions::DOCUMENT, false);
-        Ok(())
-    }
     /// Adopt a fully prepared candidate. Retain settings/workspace/brushes in
     /// this window, reset document gestures/caches and start fresh undo history.
     /// Return the retired session so a host can release it off the input queue.
@@ -71,17 +9,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         mut candidate: Self,
         epoch: u64,
         revision: u64,
-        title: &str,
+        location: Option<DocumentLocation>,
     ) -> Result<Self, (String, Self)> {
         let checked = (|| {
-            self.project_ready()?;
-            if epoch != self.state.project_file.epoch || revision != self.engine.document().revision
+            self.require_document_idle()?;
+            if epoch != self.state.document_file.epoch
+                || revision != self.engine.document().revision
             {
                 return Err(
                     "The document changed while opening; review those changes first".into(),
                 );
             }
-            let title = project_title(title)?;
+            if let Some(location) = &location {
+                location.validate()?;
+            }
             let next = epoch
                 .checked_add(1)
                 .ok_or("Document generation exhausted")?;
@@ -90,9 +31,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .set_brush(self.engine.configured_brush().clone())
                 .map_err(error)?;
             candidate.apply_settings(self.state.settings.clone())?;
-            Ok((title, next))
+            Ok(next)
         })();
-        let (title, next) = match checked {
+        let next = match checked {
             Ok(v) => v,
             Err(e) => return Err((e, candidate)),
         };
@@ -115,15 +56,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.sync_work_area();
         let d = self.engine.document();
         self.state.camera.fit([d.width, d.height]);
-        let revision = d.revision;
-        self.state.project_file = ProjectFileState {
-            title,
-            epoch: next,
-            revision,
-            saved_revision: revision,
-            modified: false,
-            supported: self.state.project_file.supported,
-        };
+        std::mem::swap(&mut self.files.assets, &mut candidate.files.assets);
+        self.files.saved_checkpoint = self.engine.checkpoint();
+        self.state.document_file.location = location;
+        self.state.document_file.epoch = next;
+        self.state.document_file.close_ready = false;
         self.engine.start_document_view(
             self.state.camera.view(),
             self.state.camera.input_transform(),
@@ -140,12 +77,5 @@ impl<R: CanvasRenderer> UiSession<R> {
             true,
         );
         Ok(candidate)
-    }
-}
-fn project_title(title: &str) -> Result<String, String> {
-    if title.is_empty() || title.len() > 4096 || title.contains(['\0', '\n', '\r']) {
-        Err("Invalid document title".into())
-    } else {
-        Ok(title.into())
     }
 }
