@@ -29,6 +29,38 @@ pub struct ProjectAsset {
     pub format: ProjectAssetFormat,
     pub bytes: Arc<[u8]>,
 }
+impl ProjectAsset {
+    /// Retain only tightly packed source rows, excluding host-buffer padding.
+    /// This is an import operation, never a canvas raster or GPU readback.
+    pub fn copy_rows(
+        extent: [u32; 2],
+        format: ProjectAssetFormat,
+        stride: usize,
+        bytes: &[u8],
+    ) -> Result<Self, String> {
+        let row = (extent[0] as usize)
+            .checked_mul(format.channels() as usize)
+            .ok_or("Project image size overflow")?;
+        let size = stride
+            .checked_mul(extent[1] as usize)
+            .ok_or("Project image size overflow")?;
+        if extent.contains(&0) || stride < row || bytes.len() < size {
+            return Err("Incomplete project image".into());
+        }
+        let mut packed = Vec::new();
+        packed
+            .try_reserve_exact(row * extent[1] as usize)
+            .map_err(|_| "Project image allocation failed")?;
+        for source in bytes[..size].chunks_exact(stride) {
+            packed.extend_from_slice(&source[..row]);
+        }
+        Ok(Self {
+            extent,
+            format,
+            bytes: packed.into(),
+        })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Project {
@@ -97,16 +129,25 @@ impl Project {
         document: &Document,
         assets: &BTreeMap<AssetId, ProjectAsset>,
     ) -> Result<Self, String> {
+        Self::snapshot_with(document, |id| assets.get(id).cloned())
+    }
+
+    /// Resolve only referenced immutable resources. Renderers can share their
+    /// retained source bytes without copying every loaded texture or reading GPU
+    /// canvas pixels. Supplied built-in textures are embedded exactly too.
+    pub fn snapshot_with(
+        document: &Document,
+        mut source: impl FnMut(&AssetId) -> Option<ProjectAsset>,
+    ) -> Result<Self, String> {
         let mut document = document.clone();
         let (reachable, _) = history_references(&document, ProjectLimits::default())?;
         document.strokes.retain(|id, _| reachable.contains_key(id));
         let needed = asset_references(&document)?;
         let project = Self {
             document,
-            assets: assets
-                .iter()
-                .filter(|(id, _)| needed.contains_key(*id))
-                .map(|(id, a)| (id.clone(), a.clone()))
+            assets: needed
+                .keys()
+                .filter_map(|id| source(id).map(|asset| (id.clone(), asset)))
                 .collect(),
         };
         project.validate(ProjectLimits::default())?;
@@ -589,6 +630,66 @@ fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_rows_and_snapshot_resolution_preserve_only_referenced_bytes() {
+        let image = ProjectAsset::copy_rows(
+            [1, 2],
+            ProjectAssetFormat::Rgba8Srgb,
+            8,
+            &[1, 2, 3, 4, 99, 99, 99, 99, 5, 6, 7, 8, 99, 99, 99, 99],
+        )
+        .unwrap();
+        assert_eq!(&*image.bytes, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mask = ProjectAsset::copy_rows(
+            [2, 2],
+            ProjectAssetFormat::R8Unorm,
+            3,
+            &[0, 255, 99, 17, 42, 99],
+        )
+        .unwrap();
+        assert_eq!(&*mask.bytes, &[0, 255, 17, 42]);
+        for (extent, stride, bytes) in [
+            ([0, 2], 8, &[0; 16][..]),
+            ([1, 2], 3, &[0; 8][..]),
+            ([1, 2], 8, &[0; 15][..]),
+            ([1, 2], usize::MAX, &[][..]),
+        ] {
+            assert!(
+                ProjectAsset::copy_rows(extent, ProjectAssetFormat::Rgba8Srgb, stride, bytes)
+                    .is_err()
+            );
+        }
+        let mut document = Document::new("snapshot", 128, 128);
+        let id = AssetId::from("document:image/1");
+        document.layers[0].asset = Some(id.clone());
+        let target = document.active_layer;
+        stroke(&mut document, target, DefaultBrushPreset::Pencil);
+        let mut requested = Vec::new();
+        let project = Project::snapshot_with(&document, |key| {
+            requested.push(key.clone());
+            if key == &id {
+                Some(image.clone())
+            } else if key.0.as_ref() == PENCIL_TEXTURE_ASSET {
+                Some(mask.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap();
+        assert_eq!(requested.len(), 2);
+        assert_eq!(
+            project.assets.len(),
+            2,
+            "Supplied built-in sources must be embedded exactly"
+        );
+        assert!(Arc::ptr_eq(&project.assets[&id].bytes, &image.bytes));
+        assert_eq!(roundtrip(&project), project);
+        assert!(
+            Project::snapshot_with(&document, |_| None).is_err(),
+            "Imported source cannot be omitted"
+        );
+    }
 
     fn stroke(doc: &mut Document, layer: LayerId, preset: DefaultBrushPreset) {
         let id = doc.allocate_stroke_id();

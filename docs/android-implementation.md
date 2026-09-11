@@ -36,8 +36,11 @@ numeric batches, never JSON. UI work cannot block surface acquisition or paintin
 The surface is independently composited behind the transparent native controls.
 The activity hides Android's status and navigation bars at launch and when it
 regains focus, using `WindowInsetsControllerCompat` immersive mode with transient
-bars revealed by edge swipes. The workspace reclaims the hidden bars' space while
-retaining display-cutout padding. This window policy adds no canvas shader work.
+bars revealed by edge swipes. The workspace reserves only display cutouts,
+waterfall edges and desktop window captions. Status/navigation bars overlay it:
+their visibility and inset animations never change the workspace or Vulkan buffer
+size, including before the first canvas frame. Using `safeDrawing` here would
+resize both on every bar-animation frame. This policy adds no canvas shader work.
 The keyboard changes the settings insets, not the GPU surface size. Predictions
 from Android's API 34 `MotionPredictor`, when supplied, use the engine's existing
 predicted-sample flag and never become document truth. Older devices retain the
@@ -65,11 +68,26 @@ detached. A failed GPU initialization leaves native controls and an error visibl
 
 Fullscreen was checked on the Wacom MovinkPad 14 (Android 15): landscape canvas
 bounds expanded from `[0,42][2880,1744]` to `[0,0][2880,1800]`, recovering 98
-vertical pixels. `AndroidFullscreenTest` verifies hidden bars, canvas bounds,
-system-bar reappearance and fullscreen restoration after background/resume.
+vertical pixels. The initial test checked only settled fullscreen bounds and
+missed resizing while the bars animated. The expanded `AndroidFullscreenTest`
+records canvas bounds and allocated buffer sizes from the first pre-draw through
+explicit bar show/hide animations and background/resume. On the old APK it caught
+repeated intermediate sizes between 2880×1702 and 2880×1800, including at startup;
+with the fixed inset policy both remain 2880×1800 throughout. A zero-size buffer
+before SurfaceView allocates its first buffer is expected and is not a resize.
 The pen/touch surface-recovery test also exercises orientation changes and the
-native preferences overlay. Local screenshots and test logs are under
-`artifacts/android/immersive-*`.
+native preferences overlay; the first-UI test holds GPU initialization to verify
+the gray workspace and controls remain usable. Local screenshots, recordings and
+test logs are under `artifacts/android/stable-immersive-*` (the original fullscreen
+checks remain under `artifacts/android/immersive-*`). The tablet rejected injected
+system-edge gestures, so those attempts are not counted as physical swipe
+validation; the bar transitions above were driven through the insets controller.
+The fullscreen, first-UI and touch/rotation recovery tests passed. The additional
+preferences dropdown test stopped at its native outside-tap injection for the
+same reason, so that test is not counted as passing in this run.
+A launch-theme `windowFullscreen` experiment did not hide the controls earlier
+on this firmware and was not retained. They can briefly overlay the initial UI,
+but their disappearance no longer moves or resizes it.
 
 Build tools: Android SDK 37.0 (the repository package is `platforms/android-37.0`),
 NDK r29, Gradle 9.5, Java 25 host runtime, arm64 devices and x86_64 emulator.

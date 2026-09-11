@@ -440,7 +440,32 @@ The final signed iPad build installs and launches on the attached device, and
 the final Mac build launches normally. These launches do not establish physical
 background-task expiration or termination/interruption persistence acceptance.
 
-This does not save artwork. A shared editable document archive, file actions,
-autosave/recovery, complete lifecycle acceptance and measured storage overhead
-remain required, together with the other feature, input, visual and hardware
-performance gates. No complete persistence or overall parity claim is made.
+This does not save artwork through the application. File actions, autosave/recovery,
+complete lifecycle acceptance and measured storage overhead remain required,
+together with the other feature, input, visual and hardware performance gates.
+No complete persistence or overall parity claim is made.
+
+## Shared project integration
+
+The incoming shared `Project` codec and watercolor material-update replay fix
+are integrated. Both Apple targets use that format; there is no Apple-specific
+document schema. Source images now remain available after import through the
+shared renderer contract, and snapshots share immutable bytes for used images
+and brush masks. The codec validates current editable content, prunes unreachable
+history/assets and preserves exact effect definitions. Reopening starts a fresh
+undo history. See [project format](project-format.md).
+
+All 300 model/engine/UI/host/Apple tests pass (40 core, 31 engine, 208 UI, 9 host,
+12 Apple). The new Apple case covers both platform configurations and compares
+every document byte after fresh Metal replay of an imported image, textured
+painting, applied mask and transform. New edits and undo also preserve the
+reopened pixels. The separate live/reopened GPU workload, including subsequent
+wet painting and multipass filters, passes on Metal. WebAssembly compilation
+and signed macOS/iPadOS builds pass.
+
+These are shared-code and headless GPU checks. Native Save/Open integration,
+atomic artwork writes, recovery, live-gesture snapshot policy, background
+validation/compression scheduling and physical lifecycle/performance evidence
+remain open. In particular, retaining imported source bytes increases resident
+memory by four bytes per image pixel; archive snapshots share those bytes, but
+large-image memory peaks and storage latency still need measured acceptance.

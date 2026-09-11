@@ -339,6 +339,11 @@ pub trait CanvasRenderer {
 
     fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), Self::Error>;
     fn prepare_asset(&mut self, asset: &AssetId, image: HostImage<'_>) -> Result<(), Self::Error>;
+    /// Immutable imported/bundled source bytes for portable document storage.
+    /// Clones shared storage; never reads generated canvas pixels back from GPU.
+    fn source_asset(&self, _asset: &AssetId) -> Option<layer_core::ProjectAsset> {
+        None
+    }
     fn release_asset(&mut self, asset: &AssetId);
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error>;
     /// Small asynchronous UI previews, never full-resolution paint readback.

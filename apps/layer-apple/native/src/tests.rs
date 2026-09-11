@@ -131,6 +131,134 @@ impl Drop for App {
 }
 
 #[test]
+fn apple_document_archive_replays_exact_pixels_in_a_fresh_gpu_session() {
+    use layer_core::{Project, ProjectAssetFormat, ProjectLimits};
+    use layer_render::{HostImage, PixelFormat};
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        let paper = app.pixels();
+        let name = CString::new("Embedded source").unwrap();
+        let pixels: Vec<u8> = (0..64 * 64)
+            .flat_map(|i| {
+                [
+                    (i * 37) as u8,
+                    (i * 13) as u8,
+                    (i * 7) as u8,
+                    (i % 256) as u8,
+                ]
+            })
+            .collect();
+        assert_eq!(
+            unsafe {
+                capy_apple_import_layer(app.0, name.as_ptr(), 64, 64, pixels.as_ptr(), pixels.len())
+            },
+            0
+        );
+        let id = app.state()["layer_tools"]["editing_layer"]["id"]
+            .as_u64()
+            .unwrap();
+        app.action(
+            json!({"type":"select_brush","id":layer_core::DefaultBrushPreset::Pencil as u32}),
+        );
+        app.action(json!({"type":"set_color","rgba":[0.7,0.2,0.9,1]}));
+        app.stroke();
+        app.draw_frame();
+        app.layer_action(json!({"op":"add_mask","id":id,"replace":false}));
+        app.action(json!({"type":"set_color","rgba":[0,0,0,1]}));
+        app.stroke();
+        app.draw_frame();
+        app.layer_action(json!({"op":"apply_mask","id":id}));
+        app.draw_frame();
+        app.invoke("scale_rotate");
+        app.action(json!({"type":"set_tool_setting","id":"transform_x","value":48}));
+        app.invoke("apply_transform");
+        app.draw_frame();
+        let expected = app.pixels();
+        assert!(expected != paper, "Fixture must contain visible artwork");
+        let source = unsafe { &*app.0 };
+        let engine = source.host.session.engine();
+        let original =
+            Project::snapshot_with(engine.document(), |id| engine.backend().source_asset(id))
+                .unwrap();
+        assert!(
+            original
+                .assets
+                .values()
+                .any(|a| a.format == ProjectAssetFormat::Rgba8Srgb)
+        );
+        assert!(
+            original
+                .assets
+                .values()
+                .any(|a| a.format == ProjectAssetFormat::R8Unorm)
+        );
+        let mut bytes = Vec::new();
+        original.write(&mut bytes).unwrap();
+        let Project { document, assets } =
+            Project::read(bytes.as_slice(), ProjectLimits::default()).unwrap();
+        assert_eq!(&original.document, &document);
+        let mut gpu =
+            layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required");
+        for (id, asset) in &assets {
+            gpu.prepare_asset(
+                id,
+                HostImage {
+                    width: asset.extent[0],
+                    height: asset.extent[1],
+                    stride: asset.extent[0] * asset.format.channels(),
+                    bytes: &asset.bytes,
+                    format: match asset.format {
+                        ProjectAssetFormat::R8Unorm => PixelFormat::R8Unorm,
+                        ProjectAssetFormat::Rgba8Srgb => PixelFormat::Rgba8Srgb,
+                    },
+                },
+            )
+            .unwrap();
+            let retained = gpu.source_asset(id).unwrap();
+            assert_eq!(retained, *asset);
+            let second = gpu.source_asset(id).unwrap();
+            assert!(
+                std::sync::Arc::ptr_eq(&retained.bytes, &second.bytes),
+                "Source access must share storage"
+            );
+        }
+        let restored = App::new(platform);
+        let host = &mut unsafe { &mut *restored.0 }.host;
+        host.session =
+            layer_ui::UiSession::new(layer_host::Renderer(Some(gpu)), document, [1200, 900])
+                .unwrap();
+        host.session
+            .set_platform(source.host.session.state().platform);
+        host.resize(1200, 900, 1.).unwrap();
+        restored.draw_frame();
+        assert!(
+            restored.pixels() == expected,
+            "Fresh GPU replay must match every document byte, platform {platform}"
+        );
+        restored.action(json!({"type":"set_color","rgba":[1,0,0,1]}));
+        restored.stroke();
+        restored.draw_frame();
+        assert!(
+            restored.pixels() != expected,
+            "Reopened artwork remains editable"
+        );
+        restored.invoke("undo");
+        restored.draw_frame();
+        assert!(
+            restored.pixels() == expected,
+            "New edits undo to the reopened artwork"
+        );
+        assert!(
+            app.pixels() == expected,
+            "Save/reopen must not change the original session"
+        );
+    }
+}
+
+#[test]
 fn ui_actions_change_only_the_addressed_apple_session() {
     for platform in [0, 1] {
         let first = App::new(platform);
