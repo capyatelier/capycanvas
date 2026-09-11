@@ -1098,3 +1098,61 @@ targets and WebAssembly build, and the integrated physical iPad app installs and
 launches. The earlier full regression and UI restart results precede this
 renderer integration; no additional OS UI automation was needed for the changed
 GPU paths.
+
+## Independent editor windows on both Apple hosts
+
+The shared capability policy now exposes New Window on iPad, whose native
+WindowGroup and application manifest already support multiple scenes. The command
+appears in File, shortcut configuration and toolbar customization. Both Apple
+hosts use the shared window request and native scene-opening action. An environment
+that cannot open multiple windows reports an error instead of silently accepting
+the request. Each scene exposes its independent restoration identity to native
+accessibility, allowing checks to address a specific editor without system-menu
+coordinates.
+
+The direct Apple owner check passes for both policies: New Window is available
+in the live menu, toolbar insertion accepts it, the host request belongs to the
+originating session, and layer edits/Undo do not mutate another owner. All 220 UI
+and 15 host regression checks pass, with one host hardware check ignored. Both
+signed Apple targets and WebAssembly build pass.
+
+After integrating the concurrent Windows document milestone, all 235 shared
+checks and the focused two-owner Apple check pass again. The WebAssembly and
+signed device builds pass. Tool Set command buttons now use the live shared
+enabled state and tooltip, including disabling Scale / rotate on an empty or
+locked target. The shared test application helper registers teardown so failed
+workflows do not leave unnecessary editor instances open.
+
+The final iPad Simulator workflow passes. It installs ordinary New Window/Close
+toolbar actions, creates four layers in the first scene, opens a distinct scene
+with two layers, adds and undoes a layer there, closes only that scene, then
+reactivates the app and verifies the first scene's document and independent Undo
+history. It leaves the disposable document clean before termination. Earlier
+executed failures include an invalid toolbar test fixture and a failed return-to-
+window Undo expectation. A temporary owner trace then passed; the final passing
+run removes that trace and explicitly brings the surviving app forward before
+its next edit. No repeated tap or weaker document assertion was substituted.
+
+The final Mac workflow also passes, including independent Undo after the second
+window closes. Earlier Mac runners failed before execution while enabling UI
+automation, even after individual prompt approvals. After the user configured
+Apple's persistent automation authorization, the test runs successfully and
+leaves no test application open. No system menu coordinates were used.
+
+The physical iPad runner still times out while enabling device automation, before
+executing the workflow; the device is confirmed unlocked. This is neither a
+physical-device pass nor an executed editor failure. Physical window verification,
+full scene restoration, simultaneous physical input, cross-display/split-window
+layout and memory/performance acceptance remain open. The Mac and Simulator
+checks do not close those gates or visual parity.
+
+The milestone also integrates the later web workspace/document and Windows PNG
+export changes. With those changes, the 235 shared regression checks, independent
+Apple owner check and real-Metal PNG export pixel check pass; both signed Apple
+targets and WebAssembly build. The native window UI results precede this last
+integration, whose Apple changes are shared export plumbing and added model
+metadata. The integrated physical iPad app installs and launches successfully.
+Web now uses the full editor preset and grouped paint tools. Matching
+those defaults on Apple and refreshing the Chrome comparison fixtures remain
+part of the next UI parity work; the older comparison results are not a pass
+against this new web baseline.

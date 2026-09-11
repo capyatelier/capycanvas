@@ -8,10 +8,10 @@ struct App(*mut CapyApple);
 mod input;
 #[path = "navigator_tests.rs"]
 mod navigator;
-#[path = "workspace_tests.rs"]
-mod workspace;
 #[path = "recovery_tests.rs"]
 mod recovery;
+#[path = "workspace_tests.rs"]
+mod workspace;
 
 #[test]
 fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {
@@ -942,6 +942,12 @@ fn ui_actions_change_only_the_addressed_apple_session() {
         let first = App::new(platform);
         let second = App::new(platform);
         let second_before = second.state();
+        first.action(json!({"type":"customize","action":{"type":"insert_tools","panel":"toolbar","before":null}}));
+        for command in ["new_window", "close_document"] {
+            first.action(json!({"type":"customize","action":{"type":"picker_select",
+                "control":{"kind":"command","command":command},"selected":true}}));
+        }
+        first.action(json!({"type":"customize","action":{"type":"confirm_tools"}}));
         first.action(json!({"type": "set_brush_size", "value": 42}));
         first.action(json!({"type": "set_brush_opacity", "value": 0.4}));
         assert_eq!(first.state()["brush"]["diameter"], 42.);
@@ -953,6 +959,31 @@ fn ui_actions_change_only_the_addressed_apple_session() {
         assert!(!first.request(3, Value::Null).unwrap()["preferences"].is_null());
         first.action(json!({"type": "close_settings"}));
         assert!(first.request(3, Value::Null).unwrap()["preferences"].is_null());
+        let menu = first
+            .request(2, json!({"type":"application_menu","menu":"file"}))
+            .unwrap();
+        let new_window = menu["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s.as_array().unwrap())
+            .find(|item| item["action"]["command"] == "new_window")
+            .unwrap();
+        assert_eq!(new_window["enabled"], true);
+        first.action(new_window["action"].clone());
+        let state = first.state();
+        let request = state["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"]["type"] == "new_window")
+            .unwrap();
+        first.action(json!({"type":"complete_request","id":request["id"],"error":null}));
+        first.invoke("add_layer");
+        first.invoke("add_layer");
+        assert_eq!(first.state()["layers"].as_array().unwrap().len(), 4);
+        first.invoke("undo");
+        assert_eq!(first.state()["layers"].as_array().unwrap().len(), 3);
         assert_eq!(
             second.state(),
             second_before,

@@ -7,8 +7,7 @@ struct ToolSetControls: View {
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         if store.state["tool_set"]["groups"].array.contains(where: { $0["action"]["type"].string == "select_tool_group" }) {
-            // Keep every brush reachable until Apple toolbar customization can
-            // expose all paint families. This is also the current web list.
+            // Keep every brush reachable in the current Apple paint list.
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(store.catalog["brush_categories"].array.indices, id: \.self) { index in
                     let category = store.catalog["brush_categories"][index]
@@ -33,6 +32,8 @@ struct ToolSetControls: View {
     private func items(_ items: JSON, group: Bool) -> some View {
         ForEach(items.array.indices, id: \.self) { index in
             let item = items[index]
+            let command = item["action"]["type"].string == "invoke"
+                ? store.command(item["action"]["command"].string) : JSON()
             Button { store.dispatch(item["action"]) } label: {
                 Group {
                     if !item["preview"].isNull {
@@ -49,7 +50,10 @@ struct ToolSetControls: View {
                 }.frame(maxWidth: .infinity)
                     .background(item["selected"].bool ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel(item["label"].string)
+            }.buttonStyle(.plain).disabled(!command.isNull && !command["enabled"].bool)
+                .opacity(!command.isNull && !command["enabled"].bool ? 0.4 : 1)
+                .help(command.isNull ? item["label"].string : command["tooltip"].string)
+                .accessibilityLabel(item["label"].string)
                 .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
                 .accessibilityIdentifier(item["preview"].isNull ? "tool-\(group ? "group" : "subtool")-\(index)" : "brush-\(item["preview"].uint)")
         }

@@ -5,5 +5,9 @@ import SwiftUI
 struct EditorSessionScene<Content: View>: View {
     @SceneStorage("capy.editor.session") private var identifier = UUID().uuidString
     @ViewBuilder let content: (String) -> Content
-    var body: some View { content(identifier).id(identifier) }
+    var body: some View {
+        content(identifier).id(identifier)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("editor-scene-" + identifier)
+    }
 }

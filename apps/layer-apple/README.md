@@ -22,7 +22,7 @@ or removing Swift files. Edit the generators rather than generated project entri
 ## Shared editor controls
 
 Tool Set consumes shared figure, region, ruler and Operation choices. Painting
-keeps the complete catalog brush list, also used by the web host, so every brush
+keeps the complete catalog brush list, so every brush
 remains reachable alongside custom toolbar tools.
 Enable **Workspace → Tool Settings panel** for the
 active tool's numeric fields and actions. Numeric expressions, units, ranges,

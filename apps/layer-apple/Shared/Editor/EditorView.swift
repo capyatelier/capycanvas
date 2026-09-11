@@ -6,6 +6,7 @@ struct EditorView<Canvas: View>: View {
     @ViewBuilder let canvas: () -> Canvas
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.supportsMultipleWindows) private var supportsMultipleWindows
     @State private var lastWindowRequest: UInt64 = 0
     @State private var lastLinkRequest: UInt64 = 0
     @Environment(\.openURL) private var openURL
@@ -90,8 +91,15 @@ struct EditorView<Canvas: View>: View {
         .onOpenURL { store.projectFiles.openURL($0) }
         .onChange(of: windowRequest, initial: true) { _, id in
             guard id > lastWindowRequest else { return }
-            lastWindowRequest = id; openWindow(id: "editor")
-            store.dispatch(["type": "complete_request", "id": id, "error": NSNull()])
+            lastWindowRequest = id
+            if supportsMultipleWindows {
+                openWindow(id: "editor")
+                store.dispatch(["type": "complete_request", "id": id, "error": NSNull()])
+            } else {
+                let error = "Multiple drawing windows are unavailable in this environment"
+                store.dispatch(["type": "complete_request", "id": id, "error": error])
+                store.projectFiles.error = error
+            }
         }
         .onChange(of: linkRequest, initial: true) { _, id in
             guard id > lastLinkRequest,
