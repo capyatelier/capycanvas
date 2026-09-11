@@ -1,3 +1,5 @@
+let thumbnailRequest=0n;
+const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
 export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField }) {
   const send = action => dispatch({ type: "layer", action });
@@ -31,6 +33,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   header.append(flags);
   const rows = element("div", "layer-rows"); rows.id = "layer-rows"; rows.dataset.control = "layers";
   const records = new Map();
+  let documentEpoch;
   const menu = (node, getLayer, mask = false) => {
     node.dataset.context = "{}";
     node.layerMenu = () => { const id = getLayer().id, targetMask = typeof mask === "function" ? mask() : mask;
@@ -132,6 +135,10 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     return record;
   }
   function refresh() {
+    const epoch=String(state().document_file.epoch);
+    if(epoch!==documentEpoch){documentEpoch=epoch;revisions.clear();for(const id of owned)pending.delete(id);owned.clear();
+      for(const r of records.values())for(const c of [r.content.image,r.mask.image])if(c)c.width=c.width;
+    }
     const view = state().layer_tools, current = view.editing_layer, controls = view.controls;
     if (current) { opacity.update(current.opacity); blend.value = current.blend; }
     opacity.setDisabled(!controls.opacity); blend.disabled = !controls.blend; maskButton.disabled = !controls.mask;
@@ -176,28 +183,29 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     });
   }
-  let request = 0n; const pending = new Map(), revisions = new Map();
-  setInterval(() => {
+  const pending = thumbnailPending, revisions = new Map();
+  const owned = new Set();
+  const thumbnailTimer = setInterval(() => {
     if (!panel.isConnected || !panel.clientHeight) return;
     try {
       for (let image; (image = app.take_layer_thumbnail());) {
-        const [id, width, height, bytes] = image, target = pending.get(id); pending.delete(id);
-        if (target && target.revision === revisions.get(target.key)) target.canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(bytes),width,height),0,0);
+        const [id, width, height, bytes] = image, target = pending.get(id); pending.delete(id);target?.owned.delete(id);
+        if (target && target.revision === target.revisions.get(target.key)) target.canvas.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(bytes),width,height),0,0);
       }
       const viewport = rows.getBoundingClientRect();
       for (const [id, r] of records) {
         const rect = r.row.getBoundingClientRect(); if (rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0) continue;
         for (const mask of [false,true]) {
           if (mask ? !r.layer.has_mask : r.layer.group || r.layer.content_icon) continue;
-          const key = `${id}:${mask}`, revision = String(mask ? r.layer.mask_revision : r.layer.paint_revision);
+          const key = `${id}:${mask}`, revision = documentEpoch + ":" + String(mask ? r.layer.mask_revision : r.layer.paint_revision);
           if (revisions.get(key) === revision || pending.size >= 8) continue;
-          const token = ++request;
+          const token = ++thumbnailRequest;
           if (app.request_layer_thumbnail(token, mask ? r.layer.mask_id : r.layer.id)) {
-            revisions.set(key,revision); pending.set(token,{key,revision,canvas: (mask ? r.mask : r.content).image});
+            owned.add(token);revisions.set(key,revision); pending.set(token,{key,revision,revisions,owned,canvas: (mask ? r.mask : r.content).image});
           }
         }
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh };
+  return { refresh, dispose(){clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
 }

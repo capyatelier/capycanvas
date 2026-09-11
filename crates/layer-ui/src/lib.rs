@@ -448,18 +448,28 @@ impl CommandId {
                         | Platform::Ios
                         | Platform::Android
                         | Platform::Windows
+                        | Platform::Web
                 )
             }
             Self::ExportDocument => {
                 matches!(
                     platform,
-                    Platform::Gtk | Platform::Mac | Platform::Ios | Platform::Android | Platform::Windows
+                    Platform::Gtk
+                        | Platform::Mac
+                        | Platform::Ios
+                        | Platform::Android
+                        | Platform::Windows
+                        | Platform::Web
                 )
             }
             Self::Website | Self::SourceCode => {
                 matches!(
                     platform,
-                    Platform::Gtk | Platform::Ios | Platform::Mac | Platform::Android
+                    Platform::Gtk
+                        | Platform::Ios
+                        | Platform::Mac
+                        | Platform::Android
+                        | Platform::Web
                 )
             }
             // Windows currently replaces documents in its single native window.

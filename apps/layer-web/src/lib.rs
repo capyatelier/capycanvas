@@ -1,5 +1,8 @@
 #![cfg(target_arch = "wasm32")]
 
+mod documents;
+mod editor;
+
 use layer_core::{AssetId, Point};
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::{CanvasRenderer, FramePacket, HostImage, ReadbackImage, TipOutline};
@@ -15,6 +18,7 @@ pub struct WebApp {
     sequence: u64,
     startup: StartupProgress,
     deferred_contacts: std::collections::BTreeSet<u64>,
+    overviews: Vec<editor::OverviewSlot>,
 }
 
 #[derive(Deserialize)]
@@ -44,7 +48,7 @@ struct DropQuery {
 pub struct WebGpu {
     renderer: WgpuRasterizer,
     instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
     config: wgpu::SurfaceConfiguration,
     presenter: ViewportPresenter,
     blank_presented: bool,
@@ -65,6 +69,15 @@ impl WebRenderer {
 }
 
 impl CanvasRenderer for WebRenderer {
+    fn request_color_sample(
+        &mut self,
+        request: layer_render::ColorSampleRequest,
+    ) -> Result<bool, Self::Error> {
+        self.renderer()?.request_color_sample(request)
+    }
+    fn take_color_sample(&mut self) -> Option<Result<layer_render::ColorSample, Self::Error>> {
+        self.0.as_mut()?.renderer.take_color_sample()
+    }
     fn set_transform_preview(
         &mut self,
         preview: Option<&layer_render::TransformPreview>,
@@ -348,12 +361,19 @@ impl WebApp {
         )
         .map_err(js)?;
         session.set_platform(layer_ui::Platform::Web);
+        session.set_document_replacement(true);
+        session
+            .dispatch(UiAction::RestoreWorkspace {
+                workspace: layer_ui::WorkspaceState::for_platform(layer_ui::Platform::Web),
+            })
+            .map_err(js)?;
         Ok(Self {
             session,
             canvas,
             sequence: 0,
             startup: StartupProgress::default(),
             deferred_contacts: Default::default(),
+            overviews: Vec::new(),
         })
     }
     pub fn gpu_ready(&self) -> bool {
@@ -446,7 +466,10 @@ impl WebApp {
         gpu.renderer
             .resize_surface(gpu.config.width, gpu.config.height)
             .map_err(js)?;
-        gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+        gpu.surface
+            .as_ref()
+            .unwrap()
+            .configure(gpu.renderer.device(), &gpu.config);
         self.session.renderer_mut().0 = Some(gpu);
         Ok(())
     }
@@ -505,7 +528,7 @@ impl WebGpu {
         Ok(Self {
             renderer,
             instance,
-            surface,
+            surface: Some(surface),
             config,
             presenter,
             blank_presented: false,
@@ -627,11 +650,11 @@ impl WebApp {
             .layout
             .panel(panel)
             .map_err(js)?;
-        serialize(&layer_ui::tile_layout(
+        serialize(&layer_ui::toolbar_tile_layout(
             width,
             height,
             axis,
-            config.tiles().len(),
+            config.tiles(),
             standalone,
             config.tile_style,
         ))
@@ -716,7 +739,10 @@ impl WebApp {
         {
             gpu.config.width = width;
             gpu.config.height = height;
-            gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+            gpu.surface
+                .as_ref()
+                .unwrap()
+                .configure(gpu.renderer.device(), &gpu.config);
         }
         serialize(&change)
     }
@@ -849,25 +875,33 @@ impl WebApp {
         let mut overlay = Vec::new();
         self.session.append_layer_overlay(&mut overlay);
         let scale = self.canvas.width() as f32 / self.canvas.client_width().max(1) as f32;
+        let overviews = self.overview_placements();
         let gpu = self.session.renderer_mut().0.as_mut().unwrap();
         gpu.presenter
             .set_cursor(gpu.renderer.device(), &overlay, scale);
-        let target = match gpu.surface.get_current_texture() {
+        let target = match gpu.surface.as_ref().unwrap().get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(target)
             | wgpu::CurrentSurfaceTexture::Suboptimal(target) => target,
             wgpu::CurrentSurfaceTexture::Lost => {
-                gpu.surface = gpu
-                    .instance
-                    .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
-                    .map_err(js)?;
-                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+                gpu.surface = Some(
+                    gpu.instance
+                        .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
+                        .map_err(js)?,
+                );
+                gpu.surface
+                    .as_ref()
+                    .unwrap()
+                    .configure(gpu.renderer.device(), &gpu.config);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
                 });
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                gpu.surface.configure(gpu.renderer.device(), &gpu.config);
+                gpu.surface
+                    .as_ref()
+                    .unwrap()
+                    .configure(gpu.renderer.device(), &gpu.config);
                 return serialize(&layer_ui::UiChange {
                     canvas_wake: true,
                     ..change
@@ -884,6 +918,7 @@ impl WebApp {
                 return Err(js("WebGPU surface validation failed"));
             }
         };
+        gpu.presenter.set_overviews(&gpu.renderer, &overviews);
         gpu.presenter.present(
             &gpu.renderer,
             &target.texture.create_view(&Default::default()),

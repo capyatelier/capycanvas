@@ -467,3 +467,61 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .renderer-stats { display:flex; flex-direction:column; gap:6px; }
 .renderer-stats .numeric { font-variant-numeric:tabular-nums; white-space:nowrap; }
 .renderer-chart { display:block; width:100%; height:46px; }
+
+/* Editor panels share the native host's logical sizing and models. */
+#header { background: var(--bg); }
+#header-start { min-width:0; }
+.header-menu .popover { max-height:calc(100dvh - 60px); overflow:auto; }
+.tool-groups { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.tool-choice-button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; }
+.tool-groups .tool-choice-button { width:auto; flex:1; min-width:70px; flex-direction:column; font-size:.85em; }
+.tool-subtools { display:flex; flex-direction:column; gap:4px; }
+.tool-subtools .brush-preview { width:82px; height:32px; object-fit:contain; }
+.tool-settings-control { display:flex; flex-direction:column; gap:8px; }
+.tool-settings-control h3 { margin:4px 0; font-size:inherit; }
+.color-wheel { display:block; width:100%; aspect-ratio:1; touch-action:none; }
+.color-components { display:flex; flex-direction:column; gap:6px; }
+.color-swatches { display:flex; gap:6px; margin:6px 0; }
+.color-swatch { min-width:30px; flex:1; padding:4px; background:repeating-conic-gradient(#888 0 25%,#bbb 0 50%) 0 / 10px 10px; }
+.color-swatch > span { display:block; height:22px; border-radius:3px; }
+.color-space { width:100%; margin-bottom:8px; }
+.navigator-overview { position:relative; width:100%; height:160px; touch-action:none; }
+.overview-hole { position:absolute; outline:1px solid var(--border); pointer-events:none; }
+.navigator-buttons { display:flex; flex-wrap:wrap; gap:4px; }
+.navigator-buttons button { flex:1; min-width:28px; }
+.gpu-overview-surface, .gpu-overview-surface .panel-preview { background:transparent; }
+.gpu-overview-surface::before { content:""; position:absolute; inset:0; border-radius:inherit; background:var(--panel); clip-path:var(--overview-cutout); pointer-events:none; }
+.gpu-overview-surface > .panel-columns { z-index:1; }
+.gpu-overview-surface .dock-tabs { background:var(--panel); }
+.tile-divider { pointer-events:auto; }
+.tile-divider::after { content:""; position:absolute; inset:4px calc(50% - .5px); background:var(--border); }
+.toolbar-controls[data-axis="vertical"] .tile-divider::after { inset:calc(50% - .5px) 4px; }
+.collapsed-column { position:absolute; background:var(--panel); border-radius:8px; overflow:hidden; }
+.collapsed-column > *, .collapsed-content > * { position:absolute; }
+.collapsed-content { overflow:hidden; touch-action:pan-y; }
+.column-tab { padding:4px; }
+.column-expand { padding:0; }
+.zen-toolbars { display:none; }
+.partial-zen.zen-hidden > .zen-toolbars { display:contents; }
+.zen-toolbar { position:absolute; z-index:1002; background:var(--panel); border-radius:8px; overflow:hidden; }
+.zen-toolbar .toolbar-controls { width:100%; height:100%; }
+.zen-hidden > .collapsed-column { opacity:0; pointer-events:none; }
+.content-drawer { position:absolute; background:var(--panel); border-radius:8px; overflow:hidden; box-shadow:0 5px 14px #0005; }
+.drawer-column { position:absolute !important; overflow:auto; overscroll-behavior:contain; }
+.drawer-column > .panel { height:auto; overflow:visible; }
+.drawer-column > .toolbar-controls { position:relative; }
+.drawer-tabs { position:absolute; display:flex; overflow:auto; background:var(--panel); }
+.drawer-tabs .dock-tab { flex:1; white-space:nowrap; }
+.document-dialog { width:min(440px,90vw); padding:18px; }
+.document-dialog form { display:flex; flex-direction:column; gap:14px; }
+.document-dialog h2 { margin:0; font-size:1.15em; }
+.document-dialog footer { display:flex; gap:8px; justify-content:flex-end; }
+@media(max-width:850px) {
+  #header-start { gap:0 !important; }
+  .header-menu > summary { padding:0 6px; font-size:12px; }
+  #document-title { display:none; }
+}
+.drawer-bridge { position:absolute; fill:var(--panel); pointer-events:auto; }
+.zen-toolbar .tool-tile > button, .drawer-column .tool-tile > button { display:grid; place-items:center; padding:0; width:100%; height:100%; min-height:0; }
+.zen-toolbar .toolbar-controls[data-tile-style="large"] svg, .drawer-column .toolbar-controls[data-tile-style="large"] svg { width:32px; height:32px; }
+#document-title { position:static; transform:none; left:auto; flex:1; min-width:0; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

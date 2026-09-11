@@ -1409,6 +1409,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     Platform::Gtk
                         | Platform::Generic
                         | Platform::Android
+                        | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
                 ) && layout.column_for_group(group).is_some()
@@ -1473,6 +1474,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     Platform::Gtk
                         | Platform::Generic
                         | Platform::Android
+                        | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
                 ) && control.drawer_columns().is_some()
@@ -1779,6 +1781,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 Platform::Gtk
                                     | Platform::Generic
                                     | Platform::Android
+                                    | Platform::Web
                                     | Platform::Ios
                                     | Platform::Mac
                             )
@@ -7230,12 +7233,17 @@ mod tests {
                         Platform::Gtk
                             | Platform::Windows
                             | Platform::Android
+                            | Platform::Web
                             | Platform::Ios
                             | Platform::Mac
                     ),
                     Panel::Navigator => matches!(
                         platform,
-                        Platform::Gtk | Platform::Android | Platform::Ios | Platform::Mac
+                        Platform::Gtk
+                            | Platform::Android
+                            | Platform::Web
+                            | Platform::Ios
+                            | Platform::Mac
                     ),
                     _ => unreachable!(),
                 };
@@ -7702,7 +7710,7 @@ mod tests {
     #[test]
     fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Web, Platform::Windows] {
+        for platform in [Platform::Windows] {
             let mut app = session();
             app.set_platform(platform);
             let panel = Panel::Sizes;
@@ -7811,7 +7819,7 @@ mod tests {
 
     #[test]
     fn configure_from_collapsed_column_reveals_the_ordinary_panel() {
-        for platform in [Platform::Gtk, Platform::Android] {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
             let mut s = session();
             s.set_platform(platform);
             let viewport = [1200., 900.];
@@ -9902,7 +9910,7 @@ mod tests {
 
     #[test]
     fn popup_tiles_toggle_while_explicit_open_remains_idempotent() {
-        for platform in [Platform::Windows, Platform::Web] {
+        for platform in [Platform::Windows] {
             let mut app = session();
             app.set_platform(platform);
             let tile = |app: &UiSession<Recorder>, control| {

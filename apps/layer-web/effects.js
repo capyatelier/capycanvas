@@ -1,3 +1,5 @@
+let previewRequest=0n;
+const previewJobs=new Map();
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
 // Host I/O only: Rust validates the filenames, definitions, shaders and atomic
 // publication. This also accepts external packages without rebuilding Wasm.
@@ -17,7 +19,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   search.type="search";search.maxLength=120;search.oninput=()=>pickerAction({op:"search",query:search.value});
   search.onkeydown=e=>{e.stopPropagation();if(e.key==="Escape"){e.preventDefault();pickerAction({op:"toggle_search"});}};
   pickerHeader.append(category,search,searchButton);adjustments.append(pickerHeader,list);
-  const rows=new Map();let visibleIds=null,catalogRevision=null,request=0n,pending=null,polling=false;
+  const rows=new Map();let visibleIds=null,catalogRevision=null,pending=null,polling=false;
   function refreshPicker(){
     const s=state(),picker=s.filter_picker;
     if(catalogRevision!==s.filter_catalog_revision){
@@ -47,32 +49,36 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   }
   const previewKey=()=>{
     const width=Math.min(512,Math.max(80,Math.round(Math.max(1,list.clientWidth-12)*devicePixelRatio))),height=Math.min(128,Math.round(40*devicePixelRatio));
-    return {width,height,key:`${app.filter_preview_revision().map(String).join(":")}:${width}:${height}`};
+    return {width,height,key:`${state().document_file.epoch}:${app.filter_preview_revision().map(String).join(":")}:${width}:${height}`};
   };
   function pollPreviews(){
     polling=false;if(!pending)return;
     try {
       const result=app.take_filter_previews();
       if(result){
-        const job=pending;pending=null;
-        const [id,width,height,filters]=result;
-        if(id===job.id&&job.key===previewKey().key){
-          const bytes=result.bytes,rowHeight=height/filters.length,rowBytes=width*rowHeight*4;
-          filters.forEach((id,i)=>{const row=rows.get(id);if(!row)return;row.canvas.width=width;row.canvas.height=rowHeight;
-            const pixels=new Uint8ClampedArray(bytes.buffer,bytes.byteOffset+i*rowBytes,rowBytes);
-            row.canvas.getContext("2d").putImageData(new ImageData(pixels,width,rowHeight),0,0);row.key=job.key;});
-        }
+        const [id]=result, deliver=previewJobs.get(id);
+        previewJobs.delete(id); deliver?.(result);
       }
-    }catch(error){pending=null;console.warn("Filter previews unavailable",error);}
+    }catch(error){if(pending)previewJobs.delete(pending.id);pending=null;console.warn("Filter previews unavailable",error);}
     if(pending){polling=true;requestAnimationFrame(pollPreviews);}
   }
-  setInterval(()=>{
+  const previewTimer = setInterval(()=>{
     if(document.hidden||!adjustments.isConnected||!adjustments.clientHeight)return;
     if(pending){if(!polling){polling=true;requestAnimationFrame(pollPreviews);}return;}
     try {
       const info=previewKey(),viewport=panels.get("adjustments").getBoundingClientRect(),filters=[];
       for(const choice of state().adjustments){const row=rows.get(choice.id),rect=row?.node.getBoundingClientRect();if(rect?.height&&rect.bottom>Math.max(0,viewport.top)&&rect.top<Math.min(innerHeight,viewport.bottom)&&row.key!==info.key)filters.push(choice.id);if(filters.length===8)break;}
-      if(filters.length){const id=++request;if(app.request_filter_previews(id,filters,info.width,info.height)){pending={id,key:info.key};polling=true;requestAnimationFrame(pollPreviews);}}
+      if(filters.length){const id=++previewRequest;if(app.request_filter_previews(id,filters,info.width,info.height)){
+        pending={id,key:info.key};
+        previewJobs.set(id,result=>{
+          const job=pending;pending=null;if(!job||job.key!==previewKey().key)return;
+          const [,width,height,filters]=result,bytes=result.bytes,rowHeight=height/filters.length,rowBytes=width*rowHeight*4;
+          filters.forEach((id,i)=>{const row=rows.get(id);if(!row)return;row.canvas.width=width;row.canvas.height=rowHeight;
+            const pixels=new Uint8ClampedArray(bytes.buffer,bytes.byteOffset+i*rowBytes,rowBytes);
+            row.canvas.getContext("2d").putImageData(new ImageData(pixels,width,rowHeight),0,0);row.key=job.key;});
+        });
+        polling=true;requestAnimationFrame(pollPreviews);
+      }}
     }catch(error){console.warn("Filter previews unavailable",error);}
   },200);
   panels.get("adjustments").append(adjustments);
@@ -83,7 +89,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
   const svg=(tag,attributes={})=>{const e=document.createElementNS("http://www.w3.org/2000/svg",tag);for(const [k,v] of Object.entries(attributes))e.setAttribute(k,v);return e;};
   const chart=svg("svg",{viewBox:"0 0 200 46",class:"renderer-chart","aria-hidden":"true"});
   const line=svg("path",{fill:"none",stroke:"currentColor","stroke-width":1.5}),budget=svg("path",{stroke:"currentColor","stroke-dasharray":"3 3",opacity:.3});chart.append(budget,line);
-  setInterval(()=>{
+  const statsTimer = setInterval(()=>{
     if(!stats.isConnected||!stats.getClientRects().length||document.hidden)return;
     const view=app.renderer_stats();
     if(!metricLabels.length){for(const metric of view.rows){const row=element("div","property-row"),value=element("span","numeric");row.title=metric.description;row.append(element("span","",metric.label),value);stats.append(row);metricLabels.push(value);}stats.append(chart);contentChanged("stats");}
@@ -142,7 +148,7 @@ export function createEffectPanels({app,catalog,state,panels,element,button,icon
     body.classList.toggle("disabled",!view.enabled);
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled);}
   }
-  return {refresh};
+  return {refresh,dispose(){clearInterval(previewTimer);clearInterval(statsTimer);if(pending)previewJobs.delete(pending.id);pending=null;}};
   function gradientEditor(layer,key) {
     const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
     let stops=[],selected=0;

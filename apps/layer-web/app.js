@@ -2,6 +2,9 @@ import init, { WebApp, WebGpu } from "./pkg/layer_web.js";
 import { createPreferences } from "./preferences.js";
 import { showGpuNotice } from "./gpu.js";
 import { createCustomization } from "./customization.js";
+import { createEditorPanels } from "./editor-panels.js";
+import { createWorkspaceChrome } from "./workspace-chrome.js";
+import { createDocuments } from "./documents.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
@@ -21,9 +24,7 @@ const $ = (id) =>
 const workspace = $("workspace"),
   canvas = $("canvas"),
   center = $("center");
-const commands = new Map(),
-  brushButtons = new Map(),
-  sizeButtons = new Map();
+const commands = new Map(), sizeButtons = new Map();
 let app,
   catalog,
   panelNames,
@@ -34,7 +35,7 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels;
+let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents;
 let gpuStarting = false;
 let gpuReady = false;
 let compilerScheduled = false, compilerFailed = false;
@@ -42,7 +43,8 @@ const startupTimes = { canvas: null, document: null, brush: null, complete: null
 let startupNotice;
 let firstCanvasRendered = false;
 let servicingRequests = false;
-const settingsKey = "layer.preferences.v1";
+const settingsKey = "layer.preferences.v1", workspaceKey = "layer.workspace.v1";
+let savedWorkspace = "", workspaceSaveTimer;
 const pending = [];
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 applyTheme(systemTheme.matches ? "dark" : "light");
@@ -459,6 +461,7 @@ function arrange() {
     node.dataset.zIndex = group.floating ? String(100 + layout.groups.indexOf(group) * 2) : "0";
     if (!node.classList.contains("expanded-panel")) node.style.zIndex = node.dataset.zIndex;
     place(node, group.bounds);
+    node.style.setProperty("--panel-body-height", `${group.bounds.height - (group.tabs_visible ? layout.tab_bar_height : 0)}px`);
     if (group.tiles) {
       const strip = node.querySelector(".toolbar-controls");
       const geometry = group.tiles;
@@ -512,6 +515,8 @@ function arrange() {
       dividers.delete(key);
     }
   customization.arrange(layout);
+  workspaceChrome?.arrange(layout);
+  editor.queuePositions();
   place($("canvas-status"), layout.status);
   // The help occupies the same unobstructed area used for fitting the document.
   // Panels remain native UI siblings above the full-window drawing surface.
@@ -575,29 +580,9 @@ function buildPanels() {
     panels.set(name, panel);
     panelFrame(panel, kind !== "tiles");
   }
-  const list = element("div", "brush-list");
-  list.dataset.control = "brushes";
-  for (const { label: category, brushes } of catalog.brush_categories) {
-    list.append(element("h3", "", category));
-    for (const brush of brushes) {
-      const choice = button(
-        "",
-        () => dispatch({ type: "select_brush", id: brush.id }),
-        "brush-choice",
-      );
-      choice.dataset.brush = brush.id;
-      choice.onpointerenter = () => { choice.title = app.action_tooltip(brush.label, { type: "select_brush", id: brush.id }); };
-      choice.dataset.category = category;
-      const preview = element("img", "brush-preview");
-      preview.src = asset(`brush-previews/${brush.id}-${state.theme}.png`);
-      preview.alt = "";
-      preview.draggable = false;
-      choice.append(preview, element("span", "", brush.label));
-      brushButtons.set(brush.id, choice);
-      list.append(choice);
-    }
-  }
-  panels.get("brushes").append(list);
+  panels.get("brushes").append(editor.control("brushes"));
+  for (const [panel, control] of [["tool_settings","tool_settings"],["color","color_wheel"],["navigator","navigator"]])
+    panels.get(panel).append(editor.control(control));
   const controls = element("div", "size-controls");
   controls.dataset.control = "brush_size";
   const size = numberField(catalog.brush_size, "Brush size", value => dispatch({ type: "set_brush_size", value }));
@@ -629,11 +614,24 @@ function buildPanels() {
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
     contentChanged:id=>{panelMeasurements.delete(id);queuePanelMeasurements();}});
 }
+function contentPanel(id) {
+  const panel=element("div",`panel ${id}-panel`);
+  if(id==="layers") {
+    const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField});
+    panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
+  } else if(["adjustments","properties","stats"].includes(id)) {
+    const copies=new Map(["adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));
+    const view=createEffectPanels({app,catalog,state:()=>state,panels:copies,element,button,icon,dispatch,numberField,contentChanged:()=>{}});
+    panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
+  } else {
+    for(const control of customization.view(id).controls.filter(c=>c.visible_in_panel)) panel.append(customization.field(control.control,control.label));
+    panel.refreshPanel=()=>{};
+  }
+  panel.refreshPanel();return panel;
+}
 function update(regions) {
   if (regions & (1 | 2 | 4 | 8 | 128)) customization.refresh();
   if (regions & 2) {
-    for (const [id, button] of brushButtons)
-      button.setAttribute("aria-pressed", String(id === state.brush.preset));
     for (const [size, button] of sizeButtons)
       button.setAttribute(
         "aria-pressed",
@@ -648,7 +646,9 @@ function update(regions) {
     layerPanel.refresh();
     effectPanels.refresh();
   }
+  if (regions & (1 | 2 | 4 | 8 | 16 | 32 | 128)) { editor.refresh(); workspaceChrome?.refresh(); }
   if (regions & (1 | 4 | 128)) arrange();
+  if (regions & (1 | 128)) persistWorkspace();
   if (regions & (1 | 4 | 8 | 128)) refreshWorkspaceMenu();
   if (regions & (4 | 8))
     for (const command of state.commands)
@@ -673,9 +673,6 @@ function update(regions) {
       }
   if (regions & 16) {
     applyTheme(state.theme, state.palette);
-    for (const [id, button] of brushButtons)
-      button.querySelector("img").src =
-        asset(`brush-previews/${id}-${state.theme}.png`);
     refreshPreferences(app.preferences());
   }
   if (regions & 32)
@@ -683,6 +680,7 @@ function update(regions) {
       `${Math.round(state.camera.zoom * 100)}% · ${Math.round((state.camera.rotation * 180) / Math.PI)}°`;
   if (regions & (1 | 16)) updateZen();
   if (regions & 64) {
+    documents?.refresh();
     if (state.host_error) message(state.host_error);
     // Small applied-settings snapshots only, never per-input/frame writes.
     if (!servicingRequests) {
@@ -691,7 +689,9 @@ function update(regions) {
         for (const request of state.requests) {
           let error = null;
           try {
-            if (request.kind.type !== "save_settings") throw new Error("Unsupported host request");
+            if (request.kind.type === "open_link") { window.open(app.application_link(request.kind.link), "_blank", "noopener"); }
+            else if (request.kind.type !== "save_settings") { documents.handle(request); continue; }
+            else
             localStorage.setItem(settingsKey, JSON.stringify(request.kind.settings));
           } catch (e) { error = `Cannot save preferences: ${e}`; }
           dispatch({ type: "complete_request", id: request.id, error });
@@ -795,68 +795,57 @@ function chromeInput(event) {
     viewport: [workspace.clientWidth, workspace.clientHeight],
     facts: {
       expanded_panel: customization?.placement(),
+      ...workspaceChrome?.facts(),
       contact_tab: event.kind === "contact"
         ? document.elementFromPoint(...event.position)?.closest(".dock-tab")?.dataset.panel ?? null
         : null,
       held: chromeHeld,
       dragging: dragItem !== null,
       popup_open:
-        !!document.querySelector("details[open], :popover-open") ||
+        !!document.querySelector("details[open], :popover-open, dialog[open]") ||
         !!document.activeElement?.matches("select"),
     },
   });
 }
 function updateZen() {
   chromeInput({ kind: "refresh" });
+  workspaceChrome?.refresh();
+  editor?.queuePositions();
 }
 function buildHeader() {
-  function menu(label, sections, icon) {
-    const details = element("details", "header-menu");
-    details.name = "workspace-menu";
-    const summary = element("summary", "", icon || label);
-    summary.setAttribute("aria-label", label);
-    summary.title = label;
-    summary.addEventListener("click", () => {
-      for (const popup of document.querySelectorAll(":popover-open"))
-        popup.hidePopover();
-    });
-    const contents = element("div", "popover");
-    if (!sections.length) {
-      contents.id = "workspace-menu";
-      details.addEventListener("toggle", () => { if (details.open) refreshWorkspaceMenu(); });
-    }
-    for (const [index, ids] of sections.entries()) {
-      if (index) contents.append(element("hr"));
-      for (const id of ids) {
-        const control = commandButton(id, id);
-        control.replaceChildren(element("span", "command-label"), element("span", "shortcut-hint"));
-        control.addEventListener("click", () => {
-          details.open = false;
-          updateZen();
-        });
-        contents.append(control);
-      }
-    }
-    details.append(summary, contents);
-    details.addEventListener("toggle", updateZen);
-    return details;
-  }
-  // Keep one button outside the fading header, with a matching layout spacer.
   const zen = iconButton("zen_mode");
   zen.id = "zen-button"; zen.classList.add("chrome");
   zen.dataset.context = JSON.stringify({ kind: "zen_mode" });
   workspace.prepend(zen);
   $("header-start").append(element("span", "zen-spacer"));
-  for (const spec of catalog.menus)
-    $("header-start").append(menu(spec.label, spec.sections));
+  for (const spec of app.editor_models(workspace.clientWidth, workspace.clientHeight).application_menus) {
+    const details = element("details", "header-menu"); details.name = "workspace-menu"; details.dataset.menu = spec.id;
+    const summary = element("summary", "", spec.label); summary.setAttribute("aria-label", spec.label);
+    const contents = element("div", "popover"); contents.setAttribute("role","menu");
+    if(spec.id === "window") contents.id = "workspace-menu";
+    details.append(summary,contents);
+    details.addEventListener("toggle",()=>{if(details.open) refreshWorkspaceMenu(); updateZen();});
+    $("header-start").append(details);
+  }
   $("header-end").append(fullscreenButton(), iconButton("settings"));
 }
 function refreshWorkspaceMenu() {
-  const contents = $("workspace-menu");
-  if (contents && customization) customization.renderMenu(contents, app.workspace_menu(), () => {
-    contents.parentElement.open = false; updateZen();
-  });
+  if(!customization || !document.querySelector(".header-menu[open]")) return;
+  for(const spec of app.editor_models(workspace.clientWidth,workspace.clientHeight).application_menus) {
+    const details = document.querySelector(`[data-menu="${spec.id}"]`);
+    if(details?.open) customization.renderMenu(details.querySelector(".popover"),spec.model,()=>{details.open=false;updateZen();});
+  }
 }
+function persistWorkspace() {
+  clearTimeout(workspaceSaveTimer);
+  workspaceSaveTimer = setTimeout(saveWorkspace, 250);
+}
+function saveWorkspace() {
+  if(!app) return;
+  try { const value=JSON.stringify(app.workspace_persistence()); if(value!==savedWorkspace){localStorage.setItem(workspaceKey,value);savedWorkspace=value;} }
+  catch(error){message(`Cannot save workspace: ${error}`);}
+}
+window.addEventListener("pagehide",saveWorkspace);
 function pointerStyle(e) {
   // Touch leaves :hover stuck until the next tap; track actual pointer input
   // instead of disabling hover for a whole device that may also have a pen/mouse.
@@ -1149,6 +1138,10 @@ try {
     const saved = localStorage.getItem(settingsKey);
     if (saved) app.dispatch({ type: "restore_settings", settings: JSON.parse(saved) });
   } catch (error) { restoreError = `Cannot restore preferences: ${error}`; }
+  try {
+    const saved = localStorage.getItem(workspaceKey);
+    if(saved) { app.dispatch({type:"restore_workspace", workspace:JSON.parse(saved)}); savedWorkspace=saved; }
+  } catch(error) { restoreError = `Cannot restore workspace: ${error}`; }
   const themeAction = () => ({
     type: "system_theme_changed",
     theme: systemTheme.matches ? "dark" : "light",
@@ -1167,11 +1160,14 @@ try {
   await loadIcons();
   refreshPreferences = createPreferences({ element, button, icon, numberField, panelFrame, dispatch, view: () => app.preferences() });
   panelNames = Object.fromEntries(catalog.panels.map((p) => [p.id, p.label]));
+  editor = createEditorPanels({app,state:()=>state,workspace,canvas,element,button,icon,numberField,dispatch,asset,wake});
   buildHeader();
   buildPanels();
   customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
     element, button, icon, numberField, panelFrame,
-    dispatch, draggable, grip, place, updateZen });
+    dispatch, draggable, grip, place, updateZen, editor });
+  workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
+  documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
   update(255);
   $("status").textContent = "";
   if (restoreError) message(restoreError);

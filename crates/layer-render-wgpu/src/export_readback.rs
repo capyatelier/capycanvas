@@ -36,7 +36,7 @@ impl ExportReadback {
     pub fn finish(self) -> Result<ReadbackImage, GpuRasterError> {
         self.device
             .poll(wgpu::PollType::Wait {
-                submission_index: Some(self.submission),
+                submission_index: Some(self.submission.clone()),
                 timeout: Some(READBACK_TIMEOUT),
             })
             .map_err(|e| GpuRasterError::WaitFailed(e.to_string()))?;
@@ -44,6 +44,24 @@ impl ExportReadback {
             .recv_timeout(READBACK_TIMEOUT)
             .map_err(|e| GpuRasterError::MapFailed(e.to_string()))?
             .map_err(GpuRasterError::MapFailed)?;
+        self.image()
+    }
+    /// Nonblocking completion for event-loop hosts. Yield before polling again
+    /// so the browser can deliver WebGPU's map callback.
+    pub fn try_finish(&mut self) -> Result<Option<ReadbackImage>, GpuRasterError> {
+        self.device
+            .poll(wgpu::PollType::Poll)
+            .map_err(|e| GpuRasterError::WaitFailed(e.to_string()))?;
+        match self.receiver.try_recv() {
+            Ok(result) => {
+                result.map_err(GpuRasterError::MapFailed)?;
+                self.image().map(Some)
+            }
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(e) => Err(GpuRasterError::MapFailed(e.to_string())),
+        }
+    }
+    fn image(&self) -> Result<ReadbackImage, GpuRasterError> {
         let mapped = self
             .buffer
             .slice(..)

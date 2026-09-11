@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 // Delay real WebGPU validation promises at the browser boundary. The renderer,
 // Wasm session, UI and actual GPU rendering continue to run unchanged.
 export async function checkStagedStartup({ call, evaluate, settle, canvasPixels }) {
-  const waitFor = condition => evaluate(`new Promise((resolve,reject)=>{
+  const waitFor = async condition => { for(let attempt=0;;attempt++){try{return await evaluate(`new Promise((resolve,reject)=>{
     const start=performance.now();function check(){if(${condition})resolve();
     else if(performance.now()-start>25000)reject(Error('Staged startup timed out: '+JSON.stringify(window.startupTest)));
-    else setTimeout(check,25)}check();})`);
+    else setTimeout(check,25)}check();})`);}catch(error){if(attempt>=3 || !/navigated|context.*destroyed|Cannot find context/i.test(String(error)))throw error;}}};
   const { identifier } = await call("Page.addScriptToEvaluateOnNewDocument", { source: `
     const p=window.startupTest={pipelines:[],held:null,required:false,optional:false};
     const scopes=[];

@@ -73,7 +73,10 @@ function runtimeFixture(t, changes = {}) {
   const dir = mkdtempSync(join(tmpdir(), "capy-assets-test-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [path, data] of Object.entries({
-    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nconst assetPaths = {};',
+    "app.js": 'import init from "./pkg/layer_web.js";\nimport {createEditorPanels} from "./editor-panels.js";\nimport {createWorkspaceChrome} from "./workspace-chrome.js";\nimport {createDocuments} from "./documents.js";\nimport {createPreferences} from "./preferences.js";\nimport {showGpuNotice} from "./gpu.js";\nimport {createCustomization} from "./customization.js";\nimport {createNumberField} from "./numeric.js";\nimport {createLayerPanel} from "./layers.js";\nimport {createEffectPanels} from "./effects.js";\nconst assetPaths = {};',
+    "editor-panels.js": "export function createEditorPanels() {}",
+    "workspace-chrome.js": "export function createWorkspaceChrome() {}",
+    "documents.js": "export function createDocuments() {}",
     "numeric.js": "export function createNumberField() {}",
     "layers.js": "export function createLayerPanel() {}",
     "effects.js": "export function createEffectPanels() {}",

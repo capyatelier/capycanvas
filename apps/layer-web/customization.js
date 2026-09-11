@@ -2,7 +2,7 @@
 // widgets and animation, not catalogs, validation, selection or docking policy.
 export function createCustomization({ app, catalog, state, workspace, panels, groups,
   element, button, icon, numberField, panelFrame,
-  dispatch, draggable, grip, place, updateZen }) {
+  dispatch, draggable, grip, place, updateZen, editor }) {
   const send = (action) => dispatch({ type: "customize", action });
   const views = new Map(), fields = new Map();
   const tileResize = new ResizeObserver(entries => {
@@ -113,6 +113,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
 
   // One field factory for extra compact controls, the drawer and scalar popup.
   function field(control, label) {
+    const shared = editor.control(control); if(shared) return shared;
     const row = element("div", "panel-field"); row.dataset.control = control;
     let input, sync = () => {};
     const range = (value, action) => {
@@ -180,6 +181,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   }
   function discardFields(node) {
     for (const row of fields.keys()) if (node.contains(row)) fields.delete(row);
+    node.disposeEditor?.();
+    for(const row of node.querySelectorAll("[data-control]")) row.disposeEditor?.();
   }
   function refreshPanels() {
     views.clear();
@@ -204,6 +207,11 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
             // disabled command remains movable and removable.
             const tileRoot = element("div", "tile-button tool-tile");
             tileRoot.dataset.tile = tile.id;
+            if(tile.control.kind === "divider") {
+              tileRoot.classList.add("tile-divider"); tileRoot.setAttribute("role","separator");
+              target(tileRoot,{kind:"tile",panel:config.id,tile:tile.id});
+              strip.append(draggable(tileRoot,{kind:"tile",panel:config.id,tile:tile.id})); continue;
+            }
             const node = button("", () => {
               const r = tileRoot.getBoundingClientRect(); anchor = [r.x, r.bottom + 6];
               dispatch({ type: "activate_tile", panel: config.id, tile: tile.id });
@@ -223,6 +231,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         }
         for (const tile of view.tiles) {
           const node = panel.querySelector(`[data-tile="${tile.id}"] > button`);
+          if(!node) continue;
           node.disabled = !tile.enabled; node.title = tile.tooltip;
           node.setAttribute("aria-label", tile.label); node.setAttribute("aria-pressed", tile.selected);
         }
@@ -481,7 +490,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, field, discardFields, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }
 

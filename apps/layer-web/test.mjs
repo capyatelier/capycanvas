@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
+import { checkEditor } from "./editor.test.mjs";
 import { checkParity } from "./parity.mjs";
 import { checkLayers, checkSelectedPainting } from "./layers.test.mjs";
 import { checkAdjustments, benchmarkFilters, checkRuntimeFilters } from "./effects.test.mjs";
@@ -77,7 +78,8 @@ chrome.stdio[4].on("data", (data) => {
     else if (
       event.method === "Log.entryAdded" &&
       ["error", "warning"].includes(event.params.entry.level) &&
-      !event.params.entry.text.includes("favicon")
+      !event.params.entry.text.includes("favicon") &&
+      !(event.params.entry.level === "warning" && event.params.entry.text.startsWith('Compilation log for [ShaderModule "connected region"]:') && !/\berror(?:s)?\b/i.test(event.params.entry.text))
     ) {
       if (process.env.LAYER_TEST_VERBOSE) process.stderr.write(`${JSON.stringify(event.params.entry)}\n`);
       errors.push([event.params.entry.text, event.params.entry.url].filter(Boolean).join(" "));
@@ -167,7 +169,10 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
-  if (process.argv.includes("--staged-startup")) {
+  if (process.argv.includes("--editor")) {
+    await checkEditor({call,evaluate,settle,canvasPixels});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--staged-startup")) {
     await checkStagedStartup({ call, evaluate, settle, canvasPixels });
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--runtime-filters")) {

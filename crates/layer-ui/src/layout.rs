@@ -427,7 +427,7 @@ impl Panel {
         if matches!(
             self,
             Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
-        ) && platform == crate::Platform::Android
+        ) && matches!(platform, crate::Platform::Android | crate::Platform::Web)
         {
             return true;
         }
@@ -1013,7 +1013,10 @@ impl DockLayout {
     /// The complete editor preset is enabled as hosts finish their native UI.
     /// This selects initial/reset geometry, never migrates a saved workspace.
     pub fn for_platform(platform: crate::Platform) -> Self {
-        if matches!(platform, crate::Platform::Gtk | crate::Platform::Android) {
+        if matches!(
+            platform,
+            crate::Platform::Gtk | crate::Platform::Android | crate::Platform::Web
+        ) {
             Self::editor_default()
         } else {
             Self::default()

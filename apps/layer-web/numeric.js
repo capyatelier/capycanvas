@@ -78,7 +78,7 @@ export function createNumberField({ control, label, resolve, onChange, icon, inl
     }
   });
   slider.addEventListener("input", () => { finish(true); apply({ type: "position", position: Number(slider.value) }); });
-  root.update = next => show(resolve({ control, value: next, operation: { type: "format" } }));
+  root.update = next => { if(!display || next !== value) show(resolve({ control, value: next, operation: { type: "format" } })); };
   root.setDisabled = next => { disabled = next; entry.disabled = next; valueButton.disabled = next; slider.disabled = next; show(display); };
   root.setDescription = text => {
     labels.querySelector('.number-description')?.remove();

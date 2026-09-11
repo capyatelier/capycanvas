@@ -606,6 +606,7 @@ impl DockLayout {
                 Platform::Gtk
                     | Platform::Generic
                     | Platform::Android
+                    | Platform::Web
                     | Platform::Ios
                     | Platform::Mac
             )
@@ -962,6 +963,7 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
                 Platform::Gtk
                     | Platform::Generic
                     | Platform::Android
+                    | Platform::Web
                     | Platform::Ios
                     | Platform::Mac
             )
@@ -978,6 +980,7 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
                             Platform::Gtk
                                 | Platform::Generic
                                 | Platform::Android
+                                | Platform::Web
                                 | Platform::Ios
                                 | Platform::Mac
                         )
@@ -1090,6 +1093,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                             Platform::Gtk
                                 | Platform::Generic
                                 | Platform::Android
+                                | Platform::Web
                                 | Platform::Ios
                                 | Platform::Mac
                         );
@@ -1542,6 +1546,7 @@ impl CustomizationState {
                     Platform::Gtk
                         | Platform::Generic
                         | Platform::Android
+                        | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
                 ) {
@@ -1576,6 +1581,7 @@ impl CustomizationState {
                     Platform::Gtk
                         | Platform::Generic
                         | Platform::Android
+                        | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
                 ) {
@@ -1591,6 +1597,7 @@ impl CustomizationState {
                     Platform::Gtk
                         | Platform::Generic
                         | Platform::Android
+                        | Platform::Web
                         | Platform::Ios
                         | Platform::Mac
                 ) {
@@ -2256,11 +2263,9 @@ mod tests {
         assert_eq!(
             native.len(),
             web.len()
-                + 1 // divider
-                + CommandId::ALL.iter().filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web)).count()
-                + Panel::ALL
+                + CommandId::ALL
                     .iter()
-                    .filter(|p| p.kind() == PanelKind::Content)
+                    .filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web))
                     .count()
         );
         assert!(native.iter().all(|c| !c.label.is_empty()
