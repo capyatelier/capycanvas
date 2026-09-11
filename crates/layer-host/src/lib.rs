@@ -778,6 +778,77 @@ impl NativeHost {
 mod tests {
     use super::*;
     #[test]
+    fn application_menus_follow_actions_without_entering_camera_patches() {
+        use layer_ui::{ApplicationMenu, CommandId, Platform};
+        for platform in [Platform::Ios, Platform::Mac] {
+            let mut host = NativeHost::new(platform).unwrap();
+            host.resize(1200, 900, 1.).unwrap();
+            let menus = host.take_snapshot().unwrap()["application_menus"].clone();
+            assert_eq!(menus.as_array().unwrap().len(), ApplicationMenu::ALL.len());
+            for (id, menu) in ApplicationMenu::ALL
+                .into_iter()
+                .zip(menus.as_array().unwrap())
+            {
+                let expected =
+                    json!({"id":id,"label":id.label(),"model":host.session.application_menu(id)});
+                assert_eq!(
+                    host.query(json!({"type":"application_menu","menu":id}))
+                        .unwrap(),
+                    expected["model"]
+                );
+                assert_eq!(*menu, expected);
+            }
+            let help = menus
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"] == "help")
+                .unwrap();
+            assert_eq!(
+                help["model"]["sections"][1][0]["action"]["command"],
+                "website"
+            );
+            assert_eq!(help["model"]["sections"][1][0]["enabled"], true);
+            assert!(host.take_snapshot().is_none());
+            host.dispatch(UiAction::Invoke {
+                command: CommandId::SelectAll,
+            })
+            .unwrap();
+            let next = host.take_snapshot().unwrap();
+            let select = next["application_menus"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["id"] == "select")
+                .unwrap();
+            assert!(
+                select["model"]["sections"][0][1]["enabled"]
+                    .as_bool()
+                    .unwrap()
+            );
+            host.dispatch(UiAction::Invoke {
+                command: CommandId::ZoomIn,
+            })
+            .unwrap();
+            let camera = host.take_snapshot().unwrap();
+            assert!(camera.get("camera").is_some());
+            assert!(
+                camera.get("application_menus").is_none(),
+                "No menu rebuild at camera input rate"
+            );
+            for link in [
+                layer_ui::ApplicationLink::Website,
+                layer_ui::ApplicationLink::SourceCode,
+            ] {
+                assert_eq!(
+                    host.query(json!({"type":"application_link", "link":link}))
+                        .unwrap(),
+                    link.url()
+                );
+            }
+        }
+    }
+    #[test]
     fn partial_zen_publishes_shared_edge_sections_without_changing_docks() {
         let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
         app.resize(2880, 1800, 1.75).unwrap();

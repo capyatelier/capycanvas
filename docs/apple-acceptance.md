@@ -545,3 +545,55 @@ Artwork autosave/recovery, complete file-provider delivery and conflict handling
 physical lifecycle coverage, full editor pixels, the remaining feature inventory
 and sustained 120 Hz workloads remain open. These file-workflow results do not
 close those acceptance gates.
+
+
+## Shared application menus and shortcut editing
+
+Apple now projects File, Edit, Layer, Select, Filter, View, Window and Help from
+the same live Rust menu models used by GTK and Android. Both native ports share
+the incoming Android menu snapshot/query contract. Menu actions carry typed
+keyboard chords, including custom/contextual bindings, alongside display hints.
+The native Mac app places Settings/About in their standard application menu and
+uses the OS menu bar for top-level menus. iPad keeps its menus over the canvas;
+the title moves beside wide menus, with a complete submenu fallback when space
+is limited. A clean landscape Simulator capture shows all eight menus with no
+title overlap. Full pixel acceptance and the complete narrow-window matrix
+remain open.
+
+Keyboard Shortcuts now has a searchable action list, alternate binding editor,
+Add/Remove, conflict replacement, per-action reset and Reset All. Native capture
+uses the shared Rust validation and conflict policy. Mac captures events before
+menu equivalents; iPad uses a focused native responder. Capture emits complete
+key pairs so closing its sheet cannot leave a canvas key held. Named/function
+keys use the same platform translation in capture and ordinary canvas input.
+Settings search navigates to shared search results; About and shortcut commands
+open the corresponding native settings page. Help links use the shared URL
+resolver and acknowledge native browser handoff.
+
+Direct Metal checks pass on both Apple configurations for actions selected from
+the actual menu models: clear, full pixel selection/fill, deselection, Gaussian
+blur insertion, and exact pixel restoration through Undo. The host check verifies
+all eight transported models, link availability and current command state. Camera
+patches contain no menu trees; unchanged snapshots remain absent. This does not
+establish the cost of full menu publication in the sustained hardware workloads.
+
+The focused shortcut UI workflow passes on Mac and iPad Simulator: search for
+Zen, capture Command-Z, show the Undo conflict, explicitly replace it, close the
+editors and toggle Zen twice with the new binding. It uses no system-menu clicks.
+The affected regression suites pass 244 tests (215 UI, 12 host and 17 Apple).
+The inventory example additionally emits menu states for initial content, a pixel
+selection, a locked target, shortcut editing and a conflicting captured chord
+on each Apple platform.
+
+This closes the missing top-level menu projection and basic shortcut editor gaps.
+Complete action/customization workflows, filter/property controls, recovery,
+physical input/lifecycle coverage, full visual parity and sustained performance
+remain required. In particular, the current shared capability policy still omits
+New Window on iPad; enabling multi-scene support alone does not verify that flow.
+
+
+After adopting the incoming Android document/menu changes, both shortcut UI
+workflows and all 244 affected regression tests pass again. Both signed builds
+pass; the final app installs and launches on the attached iPad, and the Mac app
+launches normally. WebAssembly compilation also passes. Private screenshots,
+logs, device/signing details and test artifacts remain outside version control.

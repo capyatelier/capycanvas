@@ -190,7 +190,11 @@ pub const MENUS: &[MenuSpec] = &[
 pub const FILE_MENU: MenuSpec = MenuSpec {
     label: "File",
     sections: &[
-        &[CommandId::NewDocument, CommandId::OpenDocument],
+        &[
+            CommandId::NewDocument,
+            CommandId::OpenDocument,
+            CommandId::NewWindow,
+        ],
         &[
             CommandId::SaveDocument,
             CommandId::SaveDocumentAs,
@@ -442,7 +446,10 @@ impl CommandId {
                 )
             }
             Self::Website | Self::SourceCode => {
-                matches!(platform, Platform::Gtk | Platform::Android)
+                matches!(
+                    platform,
+                    Platform::Gtk | Platform::Ios | Platform::Mac | Platform::Android
+                )
             }
             Self::NewWindow => platform.native_windows(),
             _ => true,

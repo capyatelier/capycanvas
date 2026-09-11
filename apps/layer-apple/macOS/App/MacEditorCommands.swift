@@ -9,25 +9,31 @@ extension FocusedValues {
 }
 
 struct MacEditorCommands: Commands {
-    @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.editorStore) private var store
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            if let store { CatalogMenuItems(store: store, label: "File") }
-            Divider()
-            Button("New Window") { openWindow(id: "editor") }.keyboardShortcut("n", modifiers: [.command, .shift])
+            if let store { CatalogMenuItems(store: store, id: "file") }
         }
         CommandGroup(replacing: .undoRedo) {
-            if let store { CatalogMenuItems(store: store, label: "Edit") }
+            if let store { CatalogMenuItems(store: store, id: "edit", excluding: ["settings"]) }
+        }
+        CommandMenu("Layer") { if let store { CatalogMenuItems(store: store, id: "layer") } }
+        CommandMenu("Select") { if let store { CatalogMenuItems(store: store, id: "select") } }
+        CommandMenu("Filter") { if let store { CatalogMenuItems(store: store, id: "filter") } }
+        CommandGroup(replacing: .help) {
+            if let store { CatalogMenuItems(store: store, id: "help", excluding: ["about"]) }
+        }
+        CommandGroup(replacing: .appInfo) {
+            if let store { Button(store.command("about")["label"].string) { store.invoke("about") } }
         }
         CommandGroup(replacing: .appSettings) {
             if let store { SettingsMenuItem(store: store) }
         }
         CommandGroup(after: .toolbar) {
-            if let store { CatalogMenuItems(store: store, label: "View") }
+            if let store { CatalogMenuItems(store: store, id: "view") }
         }
         CommandGroup(after: .windowArrangement) {
-            if let store { CatalogMenuItems(store: store, label: "Window") }
+            if let store { CatalogMenuItems(store: store, id: "window") }
         }
     }
 }

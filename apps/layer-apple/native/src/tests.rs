@@ -411,6 +411,77 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
     }
 }
 
+#[test]
+fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
+    fn item(app: &App, command: &str) -> Value {
+        fn find(value: &Value, command: &str) -> Option<Value> {
+            if value["action"]["command"] == command {
+                return Some(value.clone());
+            }
+            match value {
+                Value::Array(items) => items.iter().find_map(|v| find(v, command)),
+                Value::Object(map) => map.values().find_map(|v| find(v, command)),
+                _ => None,
+            }
+        }
+        layer_ui::ApplicationMenu::ALL
+            .into_iter()
+            .find_map(|menu| {
+                find(
+                    &app.request(2, json!({"type":"application_menu","menu":menu}))
+                        .unwrap(),
+                    command,
+                )
+            })
+            .unwrap()
+    }
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        app.stroke();
+        app.draw_frame();
+        let ink = app.pixels();
+        let clear = item(&app, "clear_layer");
+        assert_eq!(clear["enabled"], true);
+        app.action(clear["action"].clone());
+        app.draw_frame();
+        assert_ne!(app.pixels(), ink);
+        app.action(item(&app, "undo")["action"].clone());
+        app.draw_frame();
+        assert_eq!(app.pixels(), ink);
+        app.action(item(&app, "select_all")["action"].clone());
+        app.draw_frame();
+        app.action(item(&app, "fill_selection")["action"].clone());
+        app.draw_frame();
+        assert_ne!(app.pixels(), ink);
+        app.action(item(&app, "undo")["action"].clone());
+        app.draw_frame();
+        assert_eq!(app.pixels(), ink);
+        app.action(item(&app, "deselect")["action"].clone());
+        app.draw_frame();
+        assert_eq!(item(&app, "deselect")["enabled"], false);
+        let filters = app
+            .request(2, json!({"type":"application_menu","menu":"filter"}))
+            .unwrap();
+        let action = filters["sections"][0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|category| category["sections"][0].as_array().unwrap())
+            .find(|item| item["action"]["action"]["effect"] == "gaussian_blur")
+            .unwrap()["action"]
+            .clone();
+        app.action(action);
+        app.draw_frame();
+        assert_ne!(app.pixels(), ink);
+        app.action(item(&app, "undo")["action"].clone());
+        app.draw_frame();
+        assert_eq!(app.pixels(), ink);
+    }
+}
+
 impl App {
     fn new(platform: u32) -> Self {
         let app = Self(capy_apple_create(platform));

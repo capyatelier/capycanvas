@@ -95,8 +95,8 @@ extension CanvasView {
         for press in presses {
             guard let key = press.key else { continue }
             let flags = key.modifierFlags
-            store.input(["type": "key", "key": key.charactersIgnoringModifiers, "pressed": pressed,
-                "modifiers": ["command": flags.contains(.command), "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
+            store.input(["type": "key", "key": AppleKeyName.name(key), "pressed": pressed,
+                "modifiers": ["command": !flags.intersection([.command, .control]).isEmpty, "alt": flags.contains(.alternate), "shift": flags.contains(.shift)]])
         }
     }
 }
