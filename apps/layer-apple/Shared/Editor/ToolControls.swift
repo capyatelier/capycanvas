@@ -101,8 +101,4 @@ struct ToolSettingsControls: View {
 
 private extension JSON {
     var settingID: String { self["id"].string }
-    var stableKey: String {
-        (try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed, .sortedKeys]))
-            .map { String(decoding: $0, as: UTF8.self) } ?? ""
-    }
 }

@@ -3,6 +3,14 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testFilterSearchPreviewAndProperties() throws {
+        let app = editorTestApplication()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_panel_visible","panel":"adjustments","visible":true}}]"#
+        app.launch()
+        checkFilterSearchPreviewAndProperties(in: app)
+    }
+
     @MainActor func testShortcutConflictAndEditorEffect() throws {
         let app = editorTestApplication()
         #if os(iOS)

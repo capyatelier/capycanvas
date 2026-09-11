@@ -22,6 +22,10 @@ struct JSON: @unchecked Sendable {
     func encoded() throws -> String {
         String(decoding: try JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed]), as: UTF8.self)
     }
+    var stableKey: String {
+        (try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed, .sortedKeys]))
+            .map { String(decoding: $0, as: UTF8.self) } ?? ""
+    }
     static func decode(_ text: String) throws -> JSON {
         JSON(try JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]))
     }

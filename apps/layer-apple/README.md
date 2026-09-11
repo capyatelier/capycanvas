@@ -204,6 +204,25 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
+The shared `testFilterSearchPreviewAndProperties` workflow checks filter search,
+GPU preview loading, radius expressions, curve insertion/reset and gradient
+insertion/position/reset. On iPad it also checks canvas geometry while the search
+keyboard is open. A faster Mac-only alternative avoids XCTest startup and never
+addresses the system menu bar:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun swift apps/layer-apple/tests/effect-controls-mac.swift \
+  apps/layer-apple/DerivedData/Mac/Build/Products/Debug/CapyCanvas-Mac.app
+```
+
+This utility requires existing Accessibility permission for its launching
+terminal/agent. It opens a separate editor with persistence disabled, uses
+control identifiers and graph-relative pointer events, and leaves its final
+fixture open for direct capture. Missing permission returns failure without
+launching or modifying an editor. The Chrome `filter-properties` scenario in
+[`tools/visual`](../../tools/visual/README.md) reproduces its final document.
+
 Use a fresh result-bundle path. The iPad and Mac targets share frame admission,
 including wake preservation while a frame is queued, and flush final UI state
 before going idle. Each window owns its own session. Reattaching a Metal layer

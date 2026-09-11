@@ -3,6 +3,8 @@
 mod metal;
 mod project;
 pub use project::*;
+mod previews;
+pub use previews::*;
 #[cfg(test)]
 mod tests;
 use layer_host::{NativeHost, PointerBatch};

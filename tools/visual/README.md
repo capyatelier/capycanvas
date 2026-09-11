@@ -12,6 +12,11 @@ Arguments are logical width, height, pixel scale, output directory and theme.
 An optional final `layer-added` argument captures one new empty layer selected
 above the original ink/paper layers, matching the iPad layer workflow's final
 capture. The default scenario is `initial`.
+`filter-properties` reproduces the final state of the shared Apple
+`testFilterSearchPreviewAndProperties` workflow: Gaussian Blur radius 5, identity
+Curves and default Gradient Map, with Properties open. The test attaches the full
+native window/screen and logical viewport dimensions. Use those dimensions and
+light theme for each platform's separate Chrome reference and full-image diff.
 `CAPY_CHROME` overrides the default macOS Chrome executable path. WebGPU must use
 a hardware adapter. Captures wait for staged GPU startup, fonts/images, visible
 layer thumbnail pixels and layout. GPU attachment alone can precede the actual

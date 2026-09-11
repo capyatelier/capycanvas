@@ -104,6 +104,16 @@ final class NativeOwner: @unchecked Sendable {
             receive(snapshot, nil)
         }
     }
+    func filterPreviews(_ query: JSON, completion: @escaping @Sendable (FilterPreviewReply) -> Void) {
+        queue.async { [self] in
+            do {
+                let status = try request(2, query) ?? JSON()
+                let pointer = capy_apple_take_filter_previews(handle)
+                if let error = capy_apple_error(handle) { throw HostFailure(message: String(cString: error)) }
+                completion(FilterPreviewReply(status: status, atlas: pointer.map(NativeFilterPreviews.init), error: nil))
+            } catch { completion(FilterPreviewReply(status: JSON(), atlas: nil, error: error.localizedDescription)) }
+        }
+    }
     private func restore(_ loaded: EditorPersistence.Loaded) {
         for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
             ("workspace", loaded.workspace, "restore_workspace")] {
