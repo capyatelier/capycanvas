@@ -34,14 +34,17 @@ happen locally on your device, and the code is licensed under MIT or Apache-2.0.
 ## Overall architecture
 
 When designing Capy Canvas, we did not want to compromise on UI responsiveness.
-Controls and pen input need to stay responsive while the drawing engine handles
-large brushes and complex layers, on every supported platform.
+Controls and pen input need to run at 120 fps on every supported platform, even
+while the drawing engine handles large brushes and hundreds of layers.
 
-We use each platform's own UI toolkit: GTK4/libadwaita on Linux, WinUI 3 on
-Windows, Jetpack Compose on Android, AppKit on macOS and UIKit on iPadOS. This
-gives each native client direct access to the platform's controls and input
-system. The web client uses browser controls. The drawing code must also work
-across Vulkan, Metal, Direct3D 12 and WebGPU.
+For the best user experience, we use each platform's own UI toolkit:
+GTK4/libadwaita on Linux, WinUI 3 on Windows, Jetpack Compose on Android,
+AppKit on macOS and UIKit on iPadOS.
+
+GPU access also differs across platforms. Drawing uses Vulkan on Linux and
+Android, Metal on macOS and iPadOS, Direct3D 12 on Windows and WebGPU in the
+browser. The brush and compositing engines need to run efficiently through each
+API while keeping the tools' behavior consistent.
 
 As a result, the app separates platform integration from a shared Rust editor
 and renderer. The platform client collects pen samples and sends tool commands
