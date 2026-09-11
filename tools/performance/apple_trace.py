@@ -26,9 +26,12 @@ def distribution(values, divisor=NS_PER_MS):
             "p99": percentile(.99), "max": values[-1] / divisor}
 
 
-def analyze(header, events):
+def analyze(header, events, target_hz=120):
     if header.get("schema") != 1:
         raise ValueError("Unsupported trace schema")
+    if not math.isfinite(target_hz) or not 0 < target_hz <= 1000:
+        raise ValueError("Target refresh rate must be finite and between 0 and 1000 Hz")
+    target_budget_ns = 1_000_000_000 / target_hz
     grouped = collections.defaultdict(list)
     for event in events:
         if len(event) != 11 or not all(isinstance(x, int) and x >= 0 for x in event):
@@ -63,8 +66,10 @@ def analyze(header, events):
             cursor += 1
         cycles[frame] = cycle if active else None
     shown = sorted(visible.values(), key=lambda r: r[1])
-    continuous_intervals = [right[1] - left[1] for left, right in zip(shown, shown[1:])
-                            if cycles.get(left[0]) is not None and cycles.get(left[0]) == cycles.get(right[0])]
+    def active_intervals(records):
+        return [right[1] - left[1] for left, right in zip(records, records[1:])
+                if cycles.get(left[0]) is not None and cycles.get(left[0]) == cycles.get(right[0])]
+    continuous_intervals = active_intervals(shown)
     associations = {}
     correction_associations = {}
     for event in visible.values():
@@ -80,6 +85,7 @@ def analyze(header, events):
             "cpu_stages_ms": {name: distribution(r[index] for r in records)
                               for index, name in enumerate(["prepare", "acquire", "viewport", "present_call", "poll"], start=4)},
             "owner_service_over_8_33ms": sum(r[3] - r[2] > BUDGET_NS for r in records),
+            "owner_service_over_target_budget": sum(r[3] - r[2] > target_budget_ns for r in records),
         }
     def schedule_metrics(records):
         recorded = [schedules[r[0]] for r in records if r[0] in schedules]
@@ -116,8 +122,8 @@ def analyze(header, events):
     zero_gpu = sum(r[2] == 1 and r[1] == 0 for r in gpu.values())
     if last_stats[3] or last_stats[4] or last_stats[5] or any(r[6] for r in stats) or zero_gpu:
         warnings.append("GPU observations include skipped, invalid, pending or failed polls.")
-    if not displays or all(d[3] < 120 for d in displays):
-        warnings.append("No observed display configuration advertises 120 Hz.")
+    if not displays or all(d[3] < target_hz for d in displays):
+        warnings.append(f"No observed display configuration advertises {target_hz:g} Hz.")
     if ready_at is None:
         warnings.append("No fully ready canvas/shaders/filter catalog state observed.")
     warnings.extend(["Input receipt association does not establish physical input-to-pixel latency.",
@@ -127,6 +133,8 @@ def analyze(header, events):
         "schema": 1, "platform": "iPadOS" if header["platform"] == 0 else "macOS",
         "input_source": header.get("input_source", "platform"),
         "gpu_timing_requested": gpu_timing_requested,
+        "evaluation": {"target_hz": target_hz, "frame_budget_ms": target_budget_ns / NS_PER_MS,
+                       "cadence_tolerance_percent": 5},
         "configuration": header.get("configuration"), "duration_seconds": header["duration_seconds"],
         "counts": {"events": len(events), "dropped_records": header.get("dropped_records", 0),
                    "real_input_batches": sum(r[6] == 0 for r in inputs.values()),
@@ -154,6 +162,7 @@ def analyze(header, events):
             "all_intervals_including_idle_ms": distribution(b - a for a, b in zip(times, times[1:])),
             "continuous_active_intervals_ms": distribution(continuous_intervals),
             "continuous_intervals_over_120hz_budget": sum(v > BUDGET_NS * 1.05 for v in continuous_intervals),
+            "continuous_intervals_over_target_budget": sum(v > target_budget_ns * 1.05 for v in continuous_intervals),
             "positive_target_lateness_ms": distribution(max(0, r[1] - f[1]) for r, f in visible_frames if f[1]),
             "targets_exceeded_by_over_1ms": sum(r[1] > f[1] + NS_PER_MS for r, f in visible_frames if f[1]),
             "first_associated_present_per_owner_receipt_proxy_ms": distribution(associations.values()),
@@ -180,6 +189,7 @@ def analyze(header, events):
             rows = [r for r in submitted if begin[0] <= r[0] < end[0]]
             identities = {r[0] for r in rows}
             shown_rows = sorted((r for r in visible.values() if r[0] in identities), key=lambda r: r[1])
+            measured_intervals = active_intervals(shown_rows)
             acquired = {key for key in drawables if begin[0] <= key[0] < end[0]}
             observed_times = sorted(r[1] for r in visible.values() if begin[0] <= r[1] <= end[0])
             measured_ticks = [r for r in ticks if begin[0] <= r[0] < end[0]]
@@ -209,6 +219,8 @@ def analyze(header, events):
                 # The fixed workload includes explicit pen-up gaps. Preserve
                 # all intervals as well as the display-link-cycle metric above.
                 "presentation_intervals_including_pen_up_ms": distribution(b[1] - a[1] for a, b in zip(shown_rows, shown_rows[1:])),
+                "continuous_active_intervals_ms": distribution(measured_intervals),
+                "continuous_intervals_over_target_budget": sum(v > target_budget_ns * 1.05 for v in measured_intervals),
                 "positive_target_lateness_ms": distribution(max(0, r[1] - frames[r[0]][1]) for r in shown_rows),
                 "targets_exceeded_by_over_1ms": sum(r[1] > frames[r[0]][1] + NS_PER_MS for r in shown_rows),
                 "footprint_bytes": distribution((r[1] for r in memory_rows), divisor=1),
@@ -232,11 +244,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--target-hz", type=float, default=120,
+                        help="Refresh rate to evaluate (default: 120; use 90 for the current Mac display)")
     args = parser.parse_args()
     with args.trace.open() as source:
         header = json.loads(next(source))
         events = [json.loads(line) for line in source if line.strip()]
-    result = json.dumps(analyze(header, events), indent=2) + "\n"
+    try:
+        report = analyze(header, events, target_hz=args.target_hz)
+    except ValueError as error:
+        parser.error(str(error))
+    result = json.dumps(report, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(result)

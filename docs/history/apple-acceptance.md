@@ -43,14 +43,18 @@ handling. Retain full pixel differences and geometry checks within one logical
 pixel, tighter where exact alignment is possible. Permit only narrowly
 documented platform rasterization differences and system-control accommodations.
 
-Demonstrate sustained 120 Hz drawing on capable physical hardware for both
-platforms, using representative simple and complex brushes, prediction where
-supported, pen-up and 4K multilayer documents, including ten-minute sessions.
-Measure CPU/GPU frame work against 8.33 ms and separately report actual
+For the current validation scope, demonstrate sustained **90 Hz drawing on Mac
+and 120 Hz on iPad**, using representative simple and complex brushes, prediction
+where supported, pen-up and 4K multilayer documents, including ten-minute sessions.
+The user explicitly deferred Mac 120 Hz testing on 2026-09-11 until suitable
+hardware is available. That future check does not block current Mac milestones
+and must not be marked as passed. Evaluate the current frame budgets of 11.11 ms
+on Mac and 8.33 ms on iPad; retain the original 8.33 ms diagnostics for future
+Mac 120 Hz work. Measure CPU/GPU frame work and separately report actual
 presentation cadence and input-to-present latency: p50/p95/p99, maxima, missed
 deadlines, memory growth, idle behavior and thermal effects. Record the actual
-display capability and refresh rate; a display limited to 60 Hz cannot establish
-120 Hz presentation acceptance. A hardware limitation leaves that evidence open.
+display capability and refresh rate; a report evaluated at 90 Hz cannot establish
+120 Hz presentation acceptance. The iPad 120 Hz requirement is unchanged.
 Do not substitute build success, simulator tests, timings from the other
 platform, averages or reduced brush fidelity for acceptance.
 
@@ -65,6 +69,61 @@ platforms with no required work remaining.
 
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
+
+## Apple system status and current refresh target — 2026-09-11
+
+Both Apple editors now expose and implement Appearance's **Show battery and
+clock** preference. The shared catalog previously excluded this setting for
+Apple hosts. One Swift component supplies the clock and browser/Android battery
+geometry, with UIKit battery monitoring on iPad and IOKit power notifications on
+Mac. Unknown readings omit the battery; the development desktop shows the clock
+alone. The title truncates when necessary to leave space for the trailing controls.
+
+The clock refreshes on minute boundaries and system time/locale changes.
+Visible windows share one native subscription; the last hidden/background
+header releases it. Power-service reads run away from the UI/render queues.
+Neither minute updates nor battery callbacks enter the Rust owner or drawing
+display link. AppKit observations and UIKit scene geometry report actual
+full-screen state for the preference. The iPad full-screen toggle remains
+unavailable; this observation does not implement that command.
+
+Direct Swift checks pass visibility policy, battery normalization and unknown
+readings, minute scheduling, shared window lifetime, clock changes, stopping
+hidden work and rejecting retired subscriptions' replies. The shared settings
+test now covers Apple selection, serialization, reset and invalid choices.
+Focused Mac and iPad Simulator workflows pass Always/Never preference effects,
+Zen hide/restore and title/clock placement. Each captures its complete editor;
+these tests neither exercise system menu mechanics nor establish physical
+battery/input or full-screen transition acceptance.
+
+A local component comparison uses the actual browser status module/CSS and
+SwiftUI battery view at 2× scale, with seven empty/low/normal/full/charging
+readings in both themes. Tile and battery placement agree; exact sRGB comparisons
+still fail at 3,087/57,600 light pixels (5.3594%) and 3,533/57,600 dark pixels
+(6.1337%). Text and edge rasterization differences are retained without masks or
+relaxed thresholds. These component fixtures do not supersede the older failed
+full-editor comparisons or validate physical iPad rasterization.
+
+Other ports' changes through `9f32a5f` are integrated. Both Apple Release builds,
+32 Apple bridge checks, 15 host checks and 243 shared UI checks pass; the existing
+hardware-only host check remains ignored. The command inventory still classifies
+all 62 commands on both hosts. Native status checks and all twelve trace analyzer
+checks pass. Raw result bundles, images, local component harnesses, logs and
+signing/device information stay in ignored `artifacts/apple-status-*` and
+`artifacts/ui/system-status` paths.
+The signed build is installed in the separate physical iPad test app and was
+observed running after launch. This establishes startup only; physical battery changes,
+scene transitions and Pencil behavior were not revalidated in this checkpoint.
+Test apps and extra Simulator windows are closed; the original Mac editor is preserved.
+
+Mac reports now accept `--target-hz 90` and evaluate the 11.11 ms frame period;
+iPad remains at 120 Hz/8.33 ms. Existing 120 Hz diagnostics remain explicitly
+labelled. Reanalysis of the original Mac ten-minute trace reports eight CPU
+owner-service overruns and 746 long continuous presentation intervals out of
+48,890, with presentation p99 22.222 ms. This is new analysis of existing data,
+not a fresh sustained run. Mac 120 Hz work is deferred by the user's hardware
+decision; the remaining 90 Hz gaps, full workload matrix, physical latency,
+feature/lifecycle coverage and visual parity remain open.
 
 ## Presentation measurement checkpoint — 2026-09-11
 
@@ -196,7 +255,7 @@ build is only build evidence.
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
 | 5. Document/settings/workspace persistence and lifecycle | Atomic preferences and private artwork recovery implemented; Simulator settings/workspace and artwork restart checks pass. Manual Save/Open, recovery and checkpoint policy pass direct checks; provider delivery and full physical lifecycle matrix remain. | Same persistence and recovery; native restart and owner isolation pass. Manual Save/Open, recovery and unsaved close pass direct checks; full window/display/sleep/memory-pressure matrix remains. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
-| 7. Hardware performance, sustained sessions and delivery | Shared recorder and five synthetic profiles implemented. One physical ten-minute 4K watercolor run completes; CPU p99 is 9.120 ms. Full matrix, frame-budget tails, physical latency and overhead calibration remain. | Same profiles; one native ten-minute 4K watercolor run completes. Current display configuration is 90 Hz. Full matrix, memory growth, physical latency, overhead calibration and 120 Hz evidence remain. |
+| 7. Hardware performance, sustained sessions and delivery | Shared recorder and five synthetic profiles implemented. One physical ten-minute 4K watercolor run completes; CPU p99 is 9.120 ms. Full matrix, frame-budget tails, physical latency and overhead calibration remain. | Same profiles; one native ten-minute 4K watercolor run completes. Current validation target is 90 Hz. Full matrix, memory growth, physical latency and overhead calibration remain. The user deferred 120 Hz testing until suitable hardware is available. |
 
 Start input/performance instrumentation and persistence early, and run visual
 comparisons as components land. The rows are acceptance gates, not a reason to

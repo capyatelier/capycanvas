@@ -10,9 +10,11 @@ simulator runs omit these events and cannot establish presentation acceptance.
 
 One ten-minute 4K watercolor session is recorded on each physical platform below.
 Complete workload-matrix results, physical input-to-pixel evidence and calibrated
-instrumentation overhead remain required on both platforms. The current Mac
-display configuration advertises 90 Hz; this configuration cannot establish
-120 Hz presentation. Keep failing workloads and unsupported measurements visible.
+instrumentation overhead remain required on both platforms. Following the user's
+2026-09-11 clarification, current Mac validation targets **90 Hz (11.11 ms)**;
+Mac 120 Hz presentation testing is deferred until suitable hardware is available
+and does not block current Mac milestones. The iPad target remains **120 Hz
+(8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
 ## Repeatable native drawing workloads
 
@@ -103,6 +105,15 @@ submission and missing/zero-time completions. A completed input producer cannot
 establish continuous rendering if its window becomes occluded.
 
 ## Physical ten-minute baseline: 2026-09-11
+
+The existing Mac ten-minute trace was re-analyzed for the current 90 Hz target;
+this is a new report over the original capture, not a new device run. CPU p99 is
+6.083 ms, with eight owner-service samples above 11.11 ms. Continuous presentation
+intervals have p50/p95 11.111 ms, p99 22.222 ms and maximum 77.778 ms; 746 of
+48,890 continuous intervals exceed the 90 Hz period plus the existing 5%
+cadence tolerance. These remaining gaps are visible at the current target and
+are not waived by deferring 120 Hz. The report is stored locally under
+`artifacts/performance/refresh-target-review/mac90-sustained.json`.
 
 Both Release apps completed version 1 of `wet-watercolor-4k`: 4096×4096, eight
 paint layers plus paper, Wet Watercolor at 320 px, synthetic pressure and
@@ -282,7 +293,7 @@ period. Copy its local trace directory after export:
 xcrun devicectl device copy from --device DEVICE_ID \
   --domain-type appDataContainer --domain-identifier art.capycanvas.apple.ipad \
   --source Documents/Performance --destination artifacts/performance/ipad
-python3 tools/performance/apple_trace.py TRACE.jsonl \
+python3 tools/performance/apple_trace.py TRACE.jsonl --target-hz 90 \
   --output artifacts/performance/report.json
 ```
 
@@ -321,8 +332,16 @@ commands and review staged source before pushing.
   unpresented, not zero latency. Missing callbacks are reported separately.
   Continuous cadence groups frames by display-link activity cycle, excluding
   intervals across recorded idle pauses. All intervals are also reported.
-  The 8.33 ms exceedance count uses a 5% cadence tolerance; target lateness over
+  The selected refresh-rate exceedance count uses a 5% cadence tolerance; target lateness over
   1 ms is a separate descriptive count. Neither is an acceptance waiver.
+  Use `--target-hz 90` for current Mac validation and `--target-hz 120` for iPad
+  (the default remains 120 for existing callers). Reports record the evaluation
+  target and frame budget, and count CPU and continuous-cadence exceedances
+  against that budget. Measured workloads retain their own continuous-cadence
+  subset. The original `owner_service_over_8_33ms` and
+  `continuous_intervals_over_120hz_budget` fields remain explicitly labeled
+  diagnostics; they are not the current Mac 90 Hz acceptance thresholds.
+  Refresh targets change report interpretation only, not app or input behavior.
   `frame_admission_to_present_ms` measures actual display time minus frame
   admission, independently of the scheduler's advertised target. It is software
   scheduling delay, not physical input-to-pixel latency. Comparing target

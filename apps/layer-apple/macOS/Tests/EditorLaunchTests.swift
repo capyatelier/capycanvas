@@ -3,6 +3,12 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testSystemStatusSetting() {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        checkSystemStatusSetting(in: app)
+    }
+
     @MainActor func testIndependentEditorWindows() {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]

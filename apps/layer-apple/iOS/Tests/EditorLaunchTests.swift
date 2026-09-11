@@ -3,6 +3,11 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testSystemStatusSetting() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkSystemStatusSetting(in: editorTestApplication())
+    }
+
     @MainActor func testIndependentEditorWindows() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkIndependentEditorWindows(in: editorTestApplication())

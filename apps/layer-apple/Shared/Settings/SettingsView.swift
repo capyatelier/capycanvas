@@ -74,7 +74,7 @@ struct SettingsView: View {
             case "choice":
                 Picker(row["title"].string, selection: Binding(get: { Int(kind["selected"].number) }, set: { edit(row, $0) })) {
                     ForEach(kind["options"].array.indices, id: \.self) { index in Text(kind["options"][index].string).tag(index) }
-                }
+                }.accessibilityIdentifier("preference-" + row["id"].string)
             case "text":
                 PreferenceText(label: row["title"].string, value: kind["value"].string) { edit(row, $0) }
             case "number":

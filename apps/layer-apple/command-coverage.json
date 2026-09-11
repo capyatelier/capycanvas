@@ -86,9 +86,9 @@
     {
       "name": "Preferences and shortcuts",
       "commands": ["toggle_theme", "settings", "keyboard_shortcuts"],
-      "checks": ["tests/persistence-owner.swift", "Shared/Tests/MenuSettingsChecks.swift"],
-      "ios": "partial: persistence, search and shortcut conflict workflows; every preference and hardware-keyboard combination remains",
-      "mac": "partial: persistence, search and shortcut conflict workflows; every preference and keyboard/focus combination remains"
+      "checks": ["tests/persistence-owner.swift", "tests/system-status.swift", "Shared/Tests/MenuSettingsChecks.swift", "Shared/Tests/SystemStatusChecks.swift"],
+      "ios": "partial: persistence, search, shortcut conflict and clock-policy checks; every preference, physical battery/lifecycle and hardware-keyboard combination remains",
+      "mac": "partial: persistence, search, shortcut conflict and clock-policy checks; every preference, portable-Mac battery/lifecycle and keyboard/focus combination remains"
     },
     {
       "name": "Native windows",

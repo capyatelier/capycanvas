@@ -16,6 +16,7 @@ final class CanvasView: UIView {
     private lazy var frames = CanvasFrameDriver(store: store)
     private var attached = false
     private var drawableExtent = CGSize.zero
+    private var sceneGeometry: NSKeyValueObservation?
     var contacts: [ObjectIdentifier: PencilContact] = [:]
     var nextContact: UInt64 = 0
     var ignoredContacts: Set<ObjectIdentifier> = []
@@ -49,7 +50,14 @@ final class CanvasView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        sceneGeometry = nil
         if let window {
+            sceneGeometry = window.windowScene?.observe(\.effectiveGeometry, options: [.initial, .new]) { [weak self] scene, _ in
+                DispatchQueue.main.async {
+                    guard let self, self.window?.windowScene === scene else { return }
+                    self.store.windowPresentation.observe(fullscreen: scene.isFullScreen)
+                }
+            }
             store.projectFiles.closeWindow = { [weak window, weak store] in
                 guard let store else { return }
                 DocumentScene.close(window?.windowScene, store: store)

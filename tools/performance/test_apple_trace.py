@@ -17,6 +17,37 @@ def header(**changes):
 
 
 class ReportChecks(unittest.TestCase):
+    def test_90hz_evaluation_retains_real_misses_and_120hz_diagnostics(self):
+        events = [record(6, 0, 2400, 1740, 2000, 90), record(10, 0, 1),
+                  record(11, 1, 2, 1)]
+        for time in [1_000_000, 12_111_111, 34_333_333]:
+            cpu = frame(time)
+            cpu[4] = cpu[3] + 9_000_000
+            events += [cpu, record(4, time, time + 10_000_000)]
+        events.append(record(11, 100_000_001, 3, 1))
+        source = header(workload={"name": "ink", "measurement_seconds": .1})
+        result = analyze(source, events, target_hz=90)
+        self.assertEqual(result["evaluation"]["target_hz"], 90)
+        self.assertAlmostEqual(result["evaluation"]["frame_budget_ms"], 1000 / 90)
+        self.assertEqual(result["presentation"]["continuous_intervals_over_target_budget"], 1)
+        self.assertEqual(result["presentation"]["continuous_intervals_over_120hz_budget"], 2)
+        self.assertEqual(result["all_submitted_frames"]["owner_service_over_target_budget"], 0)
+        self.assertEqual(result["all_submitted_frames"]["owner_service_over_8_33ms"], 3)
+        measured = result["workload"]
+        self.assertEqual(measured["continuous_active_intervals_ms"]["count"], 2)
+        self.assertEqual(measured["continuous_intervals_over_target_budget"], 1)
+        self.assertEqual(measured["frames"]["owner_service_over_target_budget"], 0)
+        self.assertFalse(any("advertises" in warning for warning in result["warnings"]))
+        original = analyze(source, events)
+        self.assertEqual(original["evaluation"]["target_hz"], 120)
+        self.assertEqual(original["presentation"]["continuous_intervals_over_target_budget"], 2)
+        self.assertTrue(any("advertises 120 Hz" in warning for warning in original["warnings"]))
+
+    def test_invalid_refresh_targets_are_rejected(self):
+        for target in [0, -90, float("nan"), float("inf"), 1001]:
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, "Target refresh"):
+                analyze(header(), [], target_hz=target)
+
     def test_disabled_gpu_instrumentation_does_not_claim_gpu_measurements(self):
         result = analyze(header(gpu_timing_requested=False), [frame(100)])
         self.assertFalse(result["gpu_timing_requested"])
