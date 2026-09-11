@@ -285,6 +285,25 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   visible tool and command. Measure warm drawing and new operation costs separately.
 - Obtain human approval only after the full GTK implementation and validation.
 
+### Selection and watercolor boundary policy
+
+Selections constrain stored paint and wetness, including conductance-driven
+transport. Watercolor's live edge is computed from the combined wet layer,
+preserving the earlier requirement that overlaps lose internal edges and the
+effect is never baked into pigment. Its outside band is therefore a layer effect,
+not a second deposit constrained by each old stroke's selection. Changing or
+removing a selection does not change the appearance of existing strokes.
+
+For a strict visible boundary, **Mask: reveal selection** clips the combined
+pigment and live edge. The existing layer mask is sufficient; do not add another
+persistent per-stroke clipping channel or silently create masks while painting.
+This separates temporary painting constraints from final appearance, consistent
+with [CSP's separate brush and whole-layer watercolor effects](https://support.clip-studio.com/en-us/faq/articles/20200061)
+and [selection-created masks](https://help.clip-studio.com/en-us/manual_en/180_layers/Layer_masks.htm).
+These sources support the distinction, not a claim of identical CSP selection
+behavior. This resolves the earlier implementation notes' open policy question;
+the resulting GTK appearance remains subject to human review.
+
 ## Progress
 
 - Repository inventory and primary-source tool/color/ruler research completed.
@@ -526,8 +545,8 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   outside the selection during wet-on-wet transport. Selection edits do not
   clip non-destructive layer effects: watercolor's outside edge band still may
   appear beyond the painted boundary, just as image filters can. That is not
-  deposited pigment and is not baked into strokes. A strict final-appearance
-  boundary for watercolor remains a follow-up before final tool review.
+  deposited pigment and is not baked into strokes. See the boundary policy above
+  for strict final-appearance masking and its validation.
 - Selection rasterization is GPU-only: mark four-sample scanline crossings,
   then prefix-XOR/popcount the interiors into a reusable packed buffer. Holes,
   self-crossings, off-canvas geometry, inversion, fractional coordinates and
@@ -2163,3 +2182,154 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   renderer/GTK Clippy, the WebAssembly check and native GTK Operation workflow.
   The matching mask/pigment review capture was visually inspected. No raw
   hardware logs or generated screenshots are part of this milestone.
+
+### Presentation dependency investigation (not a shipped change)
+
+- API tracing found three Vulkan submissions per ordinary frame: document,
+  viewport, then another presentation transition. A separate CPU-only call
+  counter, without Nsight or timestamp queries, confirms 300 submissions for
+  every 100 warmed presentations. It is not profiler-injected work.
+- In wgpu 30.0.1, queue submission already transitions the surface to `PRESENT`.
+  [Presentation preparation](https://docs.rs/wgpu-core/30.0.1/src/wgpu_core/device/queue.rs.html)
+  asks for that same state again, but Vulkan's ordered-usage mask excludes it;
+  the tracker therefore produces another barrier and submission. Adding an
+  explicit transition in the app did not remove the duplicate and was reverted.
+- A temporary dependency experiment adds only `PRESENT` to Vulkan's ordered
+  texture usages. It reduces the independent counter to 200 submissions per
+  100 presentations. This does **not** relax write-after-write barriers such as
+  color attachments, which [require explicit ordering on Vulkan](https://github.com/gfx-rs/wgpu/issues/8853).
+  No dependency fork, registry-source edit, unsafe presenter bypass, or app-side
+  workaround is retained in this repository; the released lockfile is restored.
+- A serial, unprofiled full-workspace pair uses the same seven six-second
+  workloads and accumulated artwork. CPU columns are median/p95/p99 in ms;
+  these are single runs, not pooled statistics or a universal speedup claim.
+
+| Workload | Released CPU | Experimental CPU | Released Hz / discarded | Experimental Hz / discarded |
+| --- | --- | --- | --- | --- |
+| G-Pen | .253/.509/.670 | .234/.493/.638 | 120.01 / 0 | 120.01 / 0 |
+| Natural Blender | .634/1.099/1.284 | .556/1.241/1.440 | 119.95 / 1 | 119.96 / 1 |
+| Wet Round | .541/1.012/1.185 | .494/1.007/1.292 | 120.00 / 1 | 120.01 / 0 |
+| Watercolor | 1.105/1.910/2.385 | 1.033/1.828/2.274 | 120.00 / 1 | 120.01 / 1 |
+| Pan | .202/.390/.503 | .187/.381/.466 | 120.01 / 0 | 120.01 / 0 |
+| Hand | .202/.412/.496 | .185/.380/.506 | 119.92 / 0 | 119.92 / 0 |
+| Transform | 1.403/2.088/2.404 | 1.388/2.161/2.539 | 115.51 / 28 | 119.00 / 7 |
+
+- Median presentation-call time falls by roughly .01–.02ms. Some CPU tails
+  increase, and a 1.963ms presentation outlier remains. The test proves the
+  redundant submission, not elimination of rare driver stalls or reliable
+  120Hz transforms. No shader-only GPU timings are inferred from these runs.
+- Khronos validation of the native Operation workflow reports SPIR-V
+  `ArrayStride` storage-class errors (`VUID-StandaloneSpirv-None-10684`) on the
+  unchanged baseline as well as the discarded app-transition candidate. Both
+  workflows finish, but that is **not** a clean Vulkan-validation result.
+  A separate temporary executable using only released wgpu, with no Capy
+  renderer, reproduces both errors: a scalar compute shader is clean, while
+  four-element function and workgroup arrays each trigger that VUID. Naga
+  decorates array types with `ArrayStride` without separating these storage
+  classes; wgpu selects SPIR-V 1.6 on this Vulkan 1.3 device. This matches the
+  open [upstream Naga issue](https://github.com/gfx-rs/wgpu/issues/7696).
+  No app shader rewrite, validator suppression or dependency fork is added.
+  Successful pipeline creation is not evidence of valid generated SPIR-V;
+  this dependency limitation remains explicit in validation results.
+
+### Watercolor selection transport validation
+
+- An independent donor-color regression found that wetness transport honored
+  source selection coverage, but the equal-wetness color-mixing term did not.
+  In its initial 128×128 case, an excluded red neighbor changed 3,267 selected
+  blue pixels, with a maximum channel difference of 100/255, without brush
+  motion. The mixing term now uses the already-sampled donor coverage. No new
+  pass, channel, texture sample, allocation or CPU pixel work is introduced.
+- Eight boundary cases cover horizontal/vertical selections, both inversions,
+  and inside-page/cross-page boundaries. Selected pigment matches the independent
+  blue-neighbor control exactly, unselected pigment/water remains unchanged,
+  and an unrestricted control still mixes. The generated three-column diagnostic
+  sheet was visually inspected; it remains ignored under
+  `artifacts/brush-validation/wet-selection/`.
+- Three serial alternating before/after pairs use the existing 2048×1536,
+  eight-dab, 384px selected-brush benchmark, with forty warmup and 120 measured
+  updates. Cells are the median of three per-run median/p95/p99 values, in ms,
+  not pooled percentiles. Completion includes the explicit benchmark GPU wait.
+
+| Watercolor | CPU before | CPU after | GPU before | GPU after | Completion before | Completion after |
+| --- | --- | --- | --- | --- | --- | --- |
+| No selection | .359/.457/.527 | .379/.720/.960 | .412/.414/.414 | .412/.414/.425 | .851/.950/1.020 | .859/1.211/1.439 |
+| Selection | .364/.565/1.016 | .480/.688/.868 | .461/.462/.463 | .468/.470/.478 | .902/1.092/1.547 | 1.020/1.235/1.392 |
+
+  Selected GPU median increases 0.007ms (about 1.5%); the kernel performs one
+  additional coverage multiplication per neighbor. CPU/completion timings also
+  vary, including increases; no zero-cost or universal speedup claim is made.
+  The slowest individual post-change completion p99 is 2.153ms, below 8.33ms.
+  These measurements do not prove presentation rate or physical input latency.
+- All 115 hardware renderer tests pass, with seventeen benchmarks separately
+  ignored. GTK selected-paint/mask and full default-workspace workflows pass;
+  mask creation consumes the selection, preserves stroke history, and restores
+  the prior checkpoint on undo. Masked dark/light and representative full/compact
+  default captures were visually inspected. The WebAssembly check passes.
+  Rare presentation stalls, residual transform frame misses, strict cross-backend
+  filter parity and final human GTK approval remain separate open gates.
+
+### Combined-submission experiment (rejected)
+
+- A temporary append-to-frame API encoded document and viewport commands into
+  one command buffer. The independent Vulkan counter fell from three to two
+  submissions per frame without modifying wgpu. Pixel checks passed for both
+  surface formats, including new wet pigment, camera-only changes, overviews
+  and rejection of invalid frames before presentation.
+- Two unprofiled full-workspace pairs were run in opposite orders, with GPU
+  timestamp queries disabled. Each uses the same seven six-second workloads;
+  transform runs retain artwork from preceding brush cases. Selected results
+  below are worker median/p95/p99 ms and actual child-surface feedback.
+
+| Pair / workload | Separate CPU | Combined CPU | Separate Hz / discarded | Combined Hz / discarded |
+| --- | --- | --- | --- | --- |
+| 1 / Pan | .222/.421/.521 | .149/.348/.477 | 119.86 / 1 | 120.01 / 0 |
+| 1 / Transform | 1.463/2.208/2.534 | 1.424/2.154/2.363 | 119.34 / 6 | 117.67 / 14 |
+| 2 / Pan | .185/.388/.497 | .238/.471/.640 | 119.90 / 1 | 119.81 / 2 |
+| 2 / Transform | 1.416/2.285/2.638 | 1.521/2.153/2.415 | 114.94 / 31 | 117.52 / 15 |
+
+  The first pair reduces CPU time for every workload, but the reverse-order
+  pair does not confirm that benefit. Combined presentation still has a 15.328ms
+  outlier. These results prove neither consistent improvement nor a consistent
+  transform regression. Vulkan's wgpu backend also attaches the acquired-image
+  semaphore wait at `TOP_OF_PIPE` to the entire surface-using submission; combining
+  commands puts offscreen document work behind that wait. This is a concrete
+  synchronization tradeoff, not proof that it caused the measured variation.
+- The experimental API, host changes and its now-unused test are removed.
+  There is no runtime switch or additional supported presentation path. Private
+  reports and the rejected patch are outside the tracked tree. Fewer submissions
+  alone do not justify retaining an API that has not improved end-to-end latency.
+
+### GTK paint-color refresh
+
+- Temporary main-thread profiling separates input, model refresh and GTK paint.
+  Transform input p99 is 0.029ms; cloning the UI state is 0.044ms. Neither explains
+  the 1.436ms GTK paint p99. Unchanged toolbar colors nevertheless reloaded CSS
+  on every transform update, and unchanged color swatches requested redraws.
+- Docked, Zen and drawer toolbar projections now share one palette per window.
+  Only foreground/background changes reload its CSS. The Color panel similarly
+  updates only when its color model changes, with explicit first initialization.
+  This removes redundant native rendering work without changing core behavior,
+  throttling visible values, or adding another GPU/presentation path.
+- A serial baseline/change/baseline sweep uses the same seven six-second native
+  workloads, no concurrent compilation and no GPU timestamp queries. Transform
+  results below are median/p95/p99 milliseconds, not pooled statistics.
+
+| Transform stage | Baseline | Cached colors | Baseline rerun |
+| --- | --- | --- | --- |
+| GTK paint | .788/1.229/1.438 | .406/.852/1.039 | .623/1.137/1.266 |
+| Main-context dispatch | .017/.988/1.226 | .011/.505/.848 | .014/.748/1.135 |
+| App frame handler | .175/.330/.394 | .111/.297/.342 | .137/.271/.314 |
+
+  This confirms less GTK work, **not** reliable 120Hz transforms: actual transform
+  presentation rates are 117.68, 111.84 and 113.17Hz respectively. Pan/Hand remain
+  about 120Hz; individual brush CPU tails fluctuate, and the changed run still
+  contains a 15.164ms watercolor worker outlier. No GPU-kernel improvement or
+  elimination of presentation stalls is claimed. Temporary refresh-stage
+  instrumentation has been removed; only the established benchmark remains.
+- Palette initialization/change suppression, native color controls, nested tool
+  drawers, selected watercolor/masks and the complete default-workspace workflow
+  pass. Dark/light captures were inspected. The final hardware renderer suite
+  passes 115 tests (17 separately ignored benchmarks); strict GTK/renderer Clippy,
+  the WebAssembly check and the normal GTK release build also pass. This validates
+  the shared WGSL change on Vulkan, not a new Metal/D3D12/device-parity claim.

@@ -1223,6 +1223,204 @@ fn selected_wet_brush_does_not_dry_or_advect_unselected_wet_paint() {
 }
 
 #[test]
+fn watercolor_transport_does_not_mix_from_unselected_wet_paint() {
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layers = [Layer::paint(LayerId(1), "selected wet transport")];
+    let mut seed = batch(1);
+    seed.style = preset_style(layer_core::DefaultBrushPreset::WatercolorWash);
+    seed.style.tip = BrushTip::AnalyticEllipse;
+    seed.style.grain = None;
+    seed.style.transport = None;
+    let mut blue = dab([0., 0., 1., 1.]);
+    blue.material = [0., 0., 1., 0.];
+    let snapshot = |r: &WgpuRasterizer| {
+        let layer = &r.paint_layers[0];
+        layer
+            .pages
+            .iter()
+            .map(|page| {
+                let wet = layer
+                    .watercolor_wetness_pages
+                    .iter()
+                    .find(|p| p.coordinate == page.coordinate)
+                    .unwrap();
+                (
+                    page.coordinate,
+                    page_bytes(r, &page.active().texture),
+                    page_bytes(r, &wet.active().texture),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let capture = std::env::var_os("LAYER_WET_SELECTION_CAPTURE");
+    let mut sheet = capture.as_ref().map(|_| vec![0; 384 * 1024 * 4]);
+    // Both boundary orientations and their inverses, inside and across pages.
+    for (case, (size, axis, inverted)) in [128_u32, 512]
+        .into_iter()
+        .flat_map(|size| {
+            [0, 1]
+                .into_iter()
+                .flat_map(move |axis| [false, true].map(|inverted| (size, axis, inverted)))
+        })
+        .enumerate()
+    {
+        let half = size / 2;
+        let mut selected = Selection::polygon(vec![
+            Point { x: 0., y: 0. },
+            Point {
+                x: if axis == 0 { half } else { size } as f32,
+                y: 0.,
+            },
+            Point {
+                x: if axis == 0 { half } else { size } as f32,
+                y: if axis == 1 { half } else { size } as f32,
+            },
+            Point {
+                x: 0.,
+                y: if axis == 1 { half } else { size } as f32,
+            },
+        ])
+        .unwrap();
+        selected.inverted = inverted;
+        let mut outside = selected.clone();
+        outside.inverted = !inverted;
+        seed.damage.max = Point {
+            x: size as f32,
+            y: size as f32,
+        };
+        blue.center = Point {
+            x: half as f32,
+            y: half as f32,
+        };
+        blue.radii = [size as f32; 2];
+        let render = |r: &mut WgpuRasterizer, d, b: DabBatch, reset| {
+            r.submit(FramePacket {
+                view: ViewState {
+                    width_px: size,
+                    height_px: size,
+                    ..view()
+                },
+                document_extent: [size; 2],
+                layers: &layers,
+                dabs: &[d],
+                dab_batches: &[b],
+                reset_layers: reset,
+                time_seconds: 0.,
+                composite_all: true,
+            })
+            .unwrap();
+        };
+        // Blue control, excluded red neighbor, then unrestricted red mixing.
+        let results: Vec<_> = (0..3)
+            .map(|trial| {
+                render(&mut r, blue, seed.clone(), true);
+                let mut neighbor = seed.clone();
+                neighbor.stroke_id = StrokeId(2);
+                neighbor.style.selection = Some(std::sync::Arc::new(outside.clone()));
+                render(
+                    &mut r,
+                    Dab {
+                        color_rgba_linear: if trial == 0 {
+                            blue.color_rgba_linear
+                        } else {
+                            [1., 0., 0., 1.]
+                        },
+                        ..blue
+                    },
+                    neighbor,
+                    false,
+                );
+                let before = snapshot(&r);
+                let mut paint = seed.clone();
+                paint.stroke_id = StrokeId(3);
+                paint.style.selection = (trial != 2).then(|| std::sync::Arc::new(selected.clone()));
+                let mut transport = preset_style(layer_core::DefaultBrushPreset::WetWatercolor)
+                    .transport
+                    .unwrap();
+                transport.contrast = 0.;
+                transport.distance = 32.;
+                transport.wet_flow = 1.;
+                transport.dry_flow = 0.;
+                paint.style.transport = Some(transport);
+                let mut contact = blue;
+                if axis == 0 {
+                    contact.center.x += if inverted { 4. } else { -4. };
+                } else {
+                    contact.center.y += if inverted { 4. } else { -4. };
+                }
+                contact.radii = [18.; 2];
+                render(&mut r, contact, paint, false);
+                let after = snapshot(&r);
+                if trial != 2 {
+                    for ((coordinate, color, wet), (_, before_color, before_wet)) in
+                        after.iter().zip(before)
+                    {
+                        for y in 0..256 {
+                            for x in 0..256 {
+                                let position = [coordinate[0] * 256 + x, coordinate[1] * 256 + y];
+                                if (position[axis] < half) != inverted {
+                                    continue;
+                                }
+                                let i = (y * 256 + x) as usize;
+                                assert_eq!(
+                                    &color[i * 4..i * 4 + 4],
+                                    &before_color[i * 4..i * 4 + 4],
+                                    "unselected pigment, case {case}"
+                                );
+                                assert_eq!(wet[i], before_wet[i], "unselected water, case {case}");
+                            }
+                        }
+                    }
+                }
+                if let Some(sheet) = &mut sheet {
+                    let image = r.readback_srgb_rgba8().unwrap();
+                    for y in 0..128 {
+                        let src =
+                            (((half as usize + y - 64) * size as usize) + half as usize - 64) * 4;
+                        let dst = ((case * 128 + y) * 384 + trial * 128) * 4;
+                        sheet[dst..dst + 512].copy_from_slice(&image[src..src + 512]);
+                    }
+                }
+                after
+            })
+            .collect();
+        let mut unrestricted_changes = 0;
+        for (page, (coordinate, reference, _)) in results[0].iter().enumerate() {
+            for y in 0..256 {
+                for x in 0..256 {
+                    let position = [coordinate[0] * 256 + x, coordinate[1] * 256 + y];
+                    if position.iter().any(|v| *v >= size) || (position[axis] < half) == inverted {
+                        continue;
+                    }
+                    let i = (y * 256 + x) as usize * 4;
+                    assert_eq!(
+                        &results[1][page].1[i..i + 4],
+                        &reference[i..i + 4],
+                        "unselected donor, case {case}, {position:?}"
+                    );
+                    unrestricted_changes +=
+                        usize::from(results[2][page].1[i..i + 4] != reference[i..i + 4]);
+                }
+            }
+        }
+        assert!(
+            unrestricted_changes > 10,
+            "unrestricted wet mixing must work, case {case}"
+        );
+    }
+    if let (Some(path), Some(sheet)) = (capture, sheet) {
+        let mut encoder = png::Encoder::new(std::fs::File::create(path).unwrap(), 384, 1024);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&sheet)
+            .unwrap();
+    }
+}
+
+#[test]
 fn watercolor_outer_edge_never_borrows_unwetted_dry_pigment() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let layers = [Layer::paint(LayerId(1), "Mixed media")];

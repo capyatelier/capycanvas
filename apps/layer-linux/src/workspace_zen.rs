@@ -53,7 +53,6 @@ pub(super) struct Zen {
     root: RefCell<Option<Sections>>,
     key: RefCell<Vec<SectionKey>>,
     buttons: RefCell<Vec<(TileAnchor, gtk::Button)>>,
-    palette: gtk::CssProvider,
     active: Cell<bool>,
 }
 type SectionKey = (Panel, Edge, TileStyle, Vec<u32>);
@@ -181,7 +180,7 @@ impl Zen {
                 );
                 for (id, _) in &section.tiles {
                     let tile = config.tiles().iter().find(|t| t.id == *id).unwrap();
-                    let button = customization::tile_button(w, config, tile, &self.palette);
+                    let button = customization::tile_button(w, config, tile);
                     button.set_widget_name(&format!("zen-tile-{id}"));
                     strip.append(&button);
                     self.buttons.borrow_mut().push((
@@ -227,7 +226,6 @@ impl Zen {
                 }
             }
         }
-        customization::refresh_color_palette(&self.palette, w);
         w.surface.raise_drawer(0);
     }
 }

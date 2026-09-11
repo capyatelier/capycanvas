@@ -148,6 +148,7 @@ fn exchange(
     offset: vec2<f32>,
 ) -> Exchange {
     let neighbor_position = world + offset;
+    let neighbor_selection = brush_selection_at(neighbor_position);
     let neighbor_wet = page_sample(neighbor_position, true).x;
     let neighbor = page_sample(neighbor_position, false);
     // The destination's wetness selects the artist-facing mode. Watercolor can
@@ -157,7 +158,7 @@ fn exchange(
         style.transport_b.y,
         style.transport_b.x,
         recipient_is_watercolor,
-    ) * brush_selection_at(neighbor_position);
+    ) * neighbor_selection;
     let path = path_conductance(world, neighbor_position, center_conductance);
 
     // Wetness is a capillary activation field rather than a conserved fluid
@@ -185,7 +186,9 @@ fn exchange(
         0.45,
         min(center_wet, neighbor_wet),
     );
-    let relaxation_weight = style.transport_b.x * shared_wetness * path * 0.16;
+    // The same selection boundary limits both front transport and wet mixing.
+    let relaxation_weight = style.transport_b.x * shared_wetness * path * 0.16
+        * neighbor_selection;
     return Exchange(
         candidate_wetness,
         candidate_pigment,
