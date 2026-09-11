@@ -25,6 +25,7 @@ __declspec(dllimport) void capy_destroy(CapyHost*);
 __declspec(dllimport) const char* capy_error(void);
 __declspec(dllimport) int32_t capy_resize(CapyHost*, uint32_t width, uint32_t height, float scale);
 __declspec(dllimport) int32_t capy_pointer(CapyHost*, const CapyPointer*, size_t count);
+/* 1=action rejected (capy_error explains); the host remains usable. -1=fatal. */
 __declspec(dllimport) int32_t capy_action(CapyHost*, const char* json);
 __declspec(dllimport) int32_t capy_input(CapyHost*, const char* json);
 __declspec(dllimport) int32_t capy_suspend(CapyHost*);
@@ -35,6 +36,8 @@ __declspec(dllimport) int32_t capy_frame(CapyHost*, uint64_t now_ns, uint64_t pr
 /* Returned UTF-8 owned by Rust; release with capy_string_free. Null=no change. */
 __declspec(dllimport) char* capy_snapshot(CapyHost*);
 __declspec(dllimport) char* capy_query(CapyHost*, const char* json);
+/* Pure numeric policy; does not touch the render owner's host. */
+__declspec(dllimport) char* capy_number(const char* json);
 __declspec(dllimport) void capy_string_free(char*);
 #ifdef __cplusplus
 }

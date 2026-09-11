@@ -1,5 +1,6 @@
 #pragma once
 #include "pch.h"
+#include "WorkspaceView.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
 #include <condition_variable>
@@ -28,6 +29,13 @@ private:
     std::atomic<float> inputScale{1};
     bool inputDone=false;
     CapyHost* host=nullptr;
+    std::unique_ptr<WorkspaceView> workspace;
+    winrt::Microsoft::UI::Xaml::Controls::StackPanel toolbar;
+    winrt::Microsoft::UI::Xaml::Controls::Grid root;
+    std::string pendingFull, pendingCamera;
+    bool snapshotPosted=false;
+    void Publish(std::string snapshot, bool full);
+    void ApplyPending();
     std::jthread renderer;
     std::mutex mutex;
     std::condition_variable wake;

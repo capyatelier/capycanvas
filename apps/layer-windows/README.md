@@ -70,3 +70,28 @@ Run the relevant bridge tests with:
 ~~~powershell
 cargo test --locked -p layer-host -p layer-windows --lib
 ~~~
+
+## Native workspace checkpoint
+
+The shell now displays shared-layout tool tiles, brush previews, size presets,
+and basic layer controls. Numeric editing uses Rust's expressions, units,
+logarithmic mapping and stepping. Color and opacity open native flyouts.
+Unchanged panel structures retain their controls across value updates; camera
+patches update only the camera readout. Full and camera snapshots use separate
+coalesced slots so camera motion cannot replace an unpublished workspace update.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-workspace.ps1 -ProcessId <app-process-id>
+~~~
+
+This test uses native UI Automation to check brush values, control retention,
+layer creation and undo. It does not verify OS pointer delivery. Build-time asset
+staging reuses the web app's SVG icons and brush previews under the ignored output
+directory. No generated assets or captures need to be committed.
+
+The current web app has also been built and captured in local hardware-backed
+Chrome using tools/visual/chrome-capture.mjs. Comparison identified and corrected
+uniform spacing/corner construction, numeric units and track styling, and UTF-8
+source decoding. Header, detailed layer layout, docking/customization, settings,
+remaining panels and full visual parity are unfinished. Native frame accounting
+and presentation/input acceptance remain open.

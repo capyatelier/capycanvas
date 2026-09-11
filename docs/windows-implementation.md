@@ -202,3 +202,25 @@ controlled captures show the stroke, undo and redo; the same document pans
 behind the titlebar. Resize and coordinated close pass with no runtime stderr.
 These checks do not establish real OS input delivery, startup latency, visual
 parity, or 120 Hz presentation. Those acceptance gates remain open.
+
+### Initial native workspace checkpoint
+
+WinUI now consumes the shared layout and panel models for the initial tool,
+brush, size and layer panels. It reuses existing icons and brush preview assets.
+The first snapshot is applied before GPU preparation, and later value updates
+retain the corresponding native widgets. Camera-only patches are coalesced
+separately from full snapshots. Native color/opacity flyouts and stateless Rust
+numeric requests provide working brush controls without UI-thread GPU access.
+
+The reproducible UI Automation smoke test passes logarithmic slider mapping,
+size presets, text-field retention, layer creation and undo. Controlled replay
+still paints through the compositor with the workspace present; resize and
+close pass. The 13 adapter/shared-host Rust tests pass.
+
+A matching web build runs in an isolated local Chrome profile on the hardware
+GPU with no page errors. Comparing its dark workspace with the native capture
+caught spacing/corner, numeric presentation and source-encoding issues. This is
+a development comparison, not a visual parity pass: header and layer structure,
+settings, docking/customization, other panels and native-frame accounting remain
+unfinished. Captures, raw reports, traces and build outputs remain ignored and
+local; only this sanitized validation summary is published.

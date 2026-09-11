@@ -36,17 +36,16 @@ void CanvasWindow::Open() {
     titlebar.ButtonInactiveBackgroundColor(transparent);
     titlebar.ButtonForegroundColor(Windows::UI::Color{255,225,225,229});
     titlebar.PreferredHeightOption(TitleBarHeightOption::Standard);
-    Grid root;
     root.RequestedTheme(ElementTheme::Default);
 
     root.Children().Append(panel);
     // Only the GPU panel fills the client area. XAML chrome overlays that surface.
-    StackPanel toolbar;
     toolbar.Orientation(Orientation::Horizontal);
     toolbar.HorizontalAlignment(HorizontalAlignment::Left);
     toolbar.VerticalAlignment(VerticalAlignment::Top);
     toolbar.Margin(Thickness{12,8,0,0});
     toolbar.Spacing(4);
+    toolbar.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->Resize();});
     TextBlock name;
     name.Text(L"Capy Canvas");
     name.VerticalAlignment(VerticalAlignment::Center);
@@ -70,11 +69,11 @@ void CanvasWindow::Open() {
         }
     }
     root.Children().Append(toolbar);
-    status.Text(L"Starting D3D12 canvas…");
+    status.Text(L"Preparing canvas…");
     status.IsHitTestVisible(false);
-    status.HorizontalAlignment(HorizontalAlignment::Left);
+    status.HorizontalAlignment(HorizontalAlignment::Center);
     status.VerticalAlignment(VerticalAlignment::Bottom);
-    status.Margin(Thickness{16,0,0,12});
+    status.Margin(Thickness{0,0,0,40});
     root.Children().Append(status);
     window.Content(root);
     panel.Loaded([weak=weak_from_this()](auto&&,auto&&) { if(auto self=weak.lock()) self->Start(); });
@@ -113,10 +112,16 @@ void CanvasWindow::Resize() {
     Size next{uint32_t(std::max(1L, std::lround(panel.ActualWidth()*scale))),
               uint32_t(std::max(1L, std::lround(panel.ActualHeight()*scale))),scale};
     // Physical-pixel drag regions leave the app controls and system caption buttons interactive.
-    window.AppWindow().TitleBar().SetDragRectangles({
-        Windows::Graphics::RectInt32{int32_t(330*scale),0,
-            std::max(0,int32_t(next.width)-int32_t(480*scale)),int32_t(40*scale)}});
-    { std::lock_guard lock(mutex); desired=next; if(host&&!closing) resize=true; }
+    auto titlebar=window.AppWindow().TitleBar();
+    auto dragStart=int32_t(std::ceil((toolbar.ActualWidth()+20)*scale));
+    titlebar.SetDragRectangles({
+        Windows::Graphics::RectInt32{dragStart,0,
+            std::max(0,int32_t(next.width)-titlebar.RightInset()-dragStart),int32_t(40*scale)}});
+    {
+        std::lock_guard lock(mutex);
+        bool changed=next.width!=desired.width||next.height!=desired.height||next.scale!=desired.scale;
+        desired=next;if(host&&!closing&&changed)resize=true;
+    }
     wake.notify_one();
 }
 void CanvasWindow::Start() {
@@ -129,6 +134,17 @@ void CanvasWindow::Start() {
     capy_action(host,dark?R"({"type":"system_theme_changed","theme":"dark"})":R"({"type":"system_theme_changed","theme":"light"})");
     window.AppWindow().TitleBar().ButtonForegroundColor(dark?
         Windows::UI::Color{255,225,225,229}:Windows::UI::Color{255,32,32,36});
+    auto catalog=capy_query(host,R"({"type":"catalog"})");
+    if(!catalog){status.Text(to_hstring(capy_error()));return;}
+    std::unique_ptr<char,decltype(&capy_string_free)> ownedCatalog(catalog,capy_string_free);
+    workspace=std::make_unique<WorkspaceView>([weak=weak_from_this()](std::string json){
+        if(auto self=weak.lock())self->Send(std::move(json));
+    },Windows::Data::Json::JsonObject::Parse(to_hstring(catalog)));
+    root.Children().InsertAt(1,workspace->Root());
+    if(auto snapshot=capy_snapshot(host)){
+        std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
+        workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
+    }
     revision.store(capy_view_revision(host));
     status.Text(L"Preparing brushes…");
     inputController=Microsoft::UI::Dispatching::DispatcherQueueController::CreateOnDedicatedThread();
@@ -261,6 +277,7 @@ void CanvasWindow::Run() {
                 else {
                     auto& command=std::get<Command>(item);
                     result=command.input?capy_input(host,command.json.c_str()):capy_action(host,command.json.c_str());
+                    if(result>0)Fail(capy_error()); // A rejected UI action leaves the canvas running.
                 }
                 if(result<0) {Fail(capy_error());failed=true;break;}
             }
@@ -274,12 +291,16 @@ void CanvasWindow::Run() {
             if(auto snapshot=capy_snapshot(host)) {
                 std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
                 auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
+                Publish(snapshot,model.HasKey(L"state"));
                 if(model.HasKey(L"brush_ready")) {
                     bool ready=model.GetNamedBoolean(L"brush_ready");
                     if(ready!=brushReady) {
                         brushReady=ready;
                         dispatcher.TryEnqueue([weak=weak_from_this(),ready]{
-                            if(auto self=weak.lock())self->status.Text(ready?L"Canvas ready":L"Preparing brushes…");
+                            if(auto self=weak.lock()){
+                                self->status.Text(ready?L"":L"Preparing brushes…");
+                                self->status.Visibility(ready?Visibility::Collapsed:Visibility::Visible);
+                            }
                         });
                     }
                 }
@@ -309,7 +330,7 @@ void CanvasWindow::ApplyResize() {
 }
 void CanvasWindow::Fail(std::string message) {
     dispatcher.TryEnqueue([weak=weak_from_this(),message=std::move(message)] {
-        if(auto self=weak.lock()) self->status.Text(to_hstring(message));
+        if(auto self=weak.lock()){self->status.Text(to_hstring(message));self->status.Visibility(Visibility::Visible);}
     });
 }
 void CanvasWindow::Stop() {
@@ -334,4 +355,27 @@ void CanvasWindow::Finish() {
     panel.as<ISwapChainPanelNative>()->SetSwapChain(nullptr);
     capy_destroy(host);host=nullptr;
     closed=true;window.Close();
+}
+
+void CanvasWindow::Publish(std::string snapshot,bool full) {
+    bool post;
+    {
+        std::lock_guard lock(mutex);if(closing)return;
+        if(full){pendingFull=std::move(snapshot);pendingCamera.clear();}
+        else pendingCamera=std::move(snapshot);
+        post=!snapshotPosted;snapshotPosted=true;
+    }
+    if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
+}
+void CanvasWindow::ApplyPending() {
+    std::string full,camera;
+    {
+        std::lock_guard lock(mutex);snapshotPosted=false;
+        if(closing)return;
+        full.swap(pendingFull);camera.swap(pendingCamera);
+    }
+    try {
+        if(!full.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(full)));
+        if(!camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(camera)));
+    } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }

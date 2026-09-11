@@ -325,8 +325,11 @@ unsafe fn read_json<'a>(json: *const c_char) -> Result<&'a str, String> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        host.native
-            .dispatch(serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?)?;
+        let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        if let Err(error) = host.native.dispatch(action) {
+            fail(error);
+            return Ok(1); // A valid action can be unavailable in the current state.
+        }
         Ok(0)
     })
 }
@@ -389,6 +392,26 @@ pub unsafe extern "C" fn capy_query(host: *mut CapyHost, json: *const c_char) ->
         Ok(0)
     });
     result
+}
+/// Stateless shared numeric policy; safe on the UI thread without a host.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_number(json: *const c_char) -> *mut c_char {
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<CString, String> {
+        let request: layer_ui::NumericRequest =
+            serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        CString::new(serde_json::to_string(&request.resolve()?).map_err(err)?).map_err(err)
+    }));
+    match result {
+        Ok(Ok(value)) => value.into_raw(),
+        Ok(Err(error)) => {
+            fail(error);
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            fail("Numeric policy panic");
+            std::ptr::null_mut()
+        }
+    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_string_free(value: *mut c_char) {

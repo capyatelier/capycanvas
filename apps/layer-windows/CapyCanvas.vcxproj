@@ -52,7 +52,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel>
-      <PrecompiledHeader>Use</PrecompiledHeader><PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile><AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+      <PrecompiledHeader>Use</PrecompiledHeader><PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile><AdditionalOptions>/bigobj /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)native\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -65,8 +65,8 @@
   <ItemGroup>
 
 
-    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" />
-    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" />
+    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" /><ClInclude Include="WorkspaceView.h" />
+    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" /><ClCompile Include="WorkspaceView.cpp" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
@@ -86,6 +86,9 @@
     <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.Runtime.1.8.260804001\build\native\Microsoft.WindowsAppSDK.Runtime.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.Runtime.1.8.260804001\build\native\Microsoft.WindowsAppSDK.Runtime.targets')" />
     <Import Project="$(CapyPackages)\Microsoft.WindowsAppSDK.1.8.260804001\build\native\Microsoft.WindowsAppSDK.targets" Condition="Exists('$(CapyPackages)\Microsoft.WindowsAppSDK.1.8.260804001\build\native\Microsoft.WindowsAppSDK.targets')" />
   </ImportGroup>
+  <Target Name="StageSharedAssets" BeforeTargets="CopyRustRuntime">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)scripts\stage-assets.ps1&quot; -Destination &quot;$(OutDir)Assets&quot;" />
+  </Target>
   <Target Name="CopyRustRuntime" AfterTargets="Build">
     <Copy SourceFiles="$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll" DestinationFolder="$(OutDir)" />
   </Target>
