@@ -120,3 +120,37 @@ the adapter cancels shared contact state on those paths. Physical mouse/pen/touc
 keyboard, wheel and mixed-DPI continuity still require end-to-end validation.
 See Microsoft's [InputPointerSource event ordering](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.input.inputpointersource?view=windows-app-sdk-1.8)
 for the OS routing contract.
+
+## Presentation probe
+
+Build Release, then start the opt-in steady-content probe at normal user privilege:
+
+~~~powershell
+./apps/layer-windows/scripts/start-presentation-probe.ps1
+~~~
+
+The probe waits for shader readiness and then keeps presenting the same canvas
+through DXGI, without a timer or per-frame disk logging. It writes local surface
+identity/configuration to presentation-probe.json. This is a baseline for the
+window/compositor path; it cannot pass sustained painting or input latency gates.
+
+Install the official standalone [PresentMon 2.5.1 release](https://github.com/GameTechDev/PresentMon/releases/tag/v2.5.1)
+under ~/.local/tools/presentmon/2.5.1, or pass its path explicitly. Capture the
+process ID returned by the launch script:
+
+~~~powershell
+./apps/layer-windows/scripts/capture-presentation.ps1 -ProcessId <probe-process-id>
+~~~
+
+Windows requires ETW tracing rights for capture. If access is denied, run only
+the capture script from Administrator PowerShell and leave the app at normal
+privilege. The script does not elevate itself or change account/group membership.
+It targets that process, disables input tracking, verifies the current display
+runs at least 120 Hz, and matches the DXGI canvas identity instead of assuming
+WinUI's other swap chains are the canvas. Keep the probe window fixed during
+capture; reconfiguration invalidates the run.
+
+Raw CSV, logs, display metadata and binary hashes stay under ignored
+artifacts/windows/presentation. Analyze actual display intervals and dropped
+frames separately from submission rate. No display-cadence result is available
+until capture succeeds, and no mouse/pen latency is measured by this probe.

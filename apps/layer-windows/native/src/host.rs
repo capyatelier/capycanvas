@@ -351,6 +351,40 @@ pub unsafe extern "C" fn capy_query(host: *mut CapyHost, json: *const c_char) ->
     });
     result
 }
+/// Diagnostic identity for app-only ETW correlation. Never treat submission
+/// metadata or this steady-content probe as physical input/display timing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_surface_info(host: *mut CapyHost) -> *mut c_char {
+    let mut result = std::ptr::null_mut();
+    guard(host, |host| {
+        use windows::core::Interface;
+        let native = unsafe { host.surface.as_hal::<wgpu::hal::api::Dx12>() }
+            .ok_or("Missing D3D12 surface")?;
+        let swapchain = native.swap_chain().ok_or("Missing DXGI swap chain")?;
+        let base = swapchain
+            .cast::<windows::Win32::Graphics::Dxgi::IDXGISwapChain>()
+            .map_err(err)?;
+        let config = host
+            .config
+            .as_ref()
+            .ok_or("Missing surface configuration")?;
+        let info = serde_json::json!({
+            "scope": "steady_canvas_presentation_probe",
+            "swap_chain_addresses": [
+                format!("{:#x}", base.as_raw() as usize),
+                format!("{:#x}", swapchain.as_raw() as usize)
+            ],
+            "viewport": [config.width, config.height],
+            "density": host.scale,
+            "present_mode": format!("{:?}", config.present_mode),
+            "format": format!("{:?}", config.format),
+            "maximum_frame_latency": config.desired_maximum_frame_latency
+        });
+        result = CString::new(info.to_string()).map_err(err)?.into_raw();
+        Ok(0)
+    });
+    result
+}
 /// Stateless shared numeric policy; safe on the UI thread without a host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_number(json: *const c_char) -> *mut c_char {

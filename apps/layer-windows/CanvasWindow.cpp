@@ -379,13 +379,15 @@ void CanvasWindow::Run() {
         bool captured=false;
         bool inputStarted=false;
         bool brushReady=false;
+        bool probe=GetEnvironmentVariableW(L"CAPY_PRESENT_PROBE",nullptr,0)!=0;
+        bool probeReady=false;
         for(;prepared;) {
             {
                 std::unique_lock lock(mutex);
                 wake.wait(lock,[&]{return closing||resize||dirty||transportFailed||!work.Empty();});
                 if(closing) break;
                 if(resize) {
-                    paused=true;resize=false;
+                    paused=true;resize=false;probeReady=false;
                     capy_suspend(host);
                     dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();});
                     wake.wait(lock,[&]{return !paused||closing;});
@@ -448,6 +450,19 @@ void CanvasWindow::Run() {
                     captured=true;
                 }
             }
+            if(probe&&!probeReady&&result==0&&brushReady) {
+                auto info=capy_surface_info(host);
+                if(!info){Fail(capy_error());break;}
+                std::unique_ptr<char,decltype(&capy_string_free)> owned(info,capy_string_free);
+                auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(info));
+                model.Insert(L"process_id",Windows::Data::Json::JsonValue::CreateNumberValue(GetCurrentProcessId()));
+                model.Insert(L"ready_qpc_ns",Windows::Data::Json::JsonValue::CreateStringValue(to_hstring(std::to_string(Now()))));
+                std::ofstream("presentation-probe.json") << to_string(model.Stringify());
+                probeReady=true;
+            }
+            // Opt-in baseline only: present unchanged content at DXGI cadence.
+            // No timer, per-frame disk I/O, synthetic input or display-time claim.
+            if(probeReady)dirty=true;
             if(overflow)break;
         }
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}

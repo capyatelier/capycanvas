@@ -255,3 +255,17 @@ close completes within five seconds with no runtime stderr. This validates
 transport shutdown, not physical input delivery or presentation performance.
 Local captures preserve the existing full canvas extent. Full workspace,
 settings, lifecycle/recovery and measured 120 Hz acceptance remain open.
+
+### Presentation capture preparation
+
+An optimized build now provides an opt-in steady-canvas DXGI probe. It records
+the native canvas swap-chain identity after startup readiness and refreshes that
+identity after reconfiguration. The capture script filters to the probe process,
+checks its active display, disables input tracking, and rejects reconfiguration
+or a missing canvas swap-chain match. Reports and hashes remain local.
+
+The Release build launches successfully with FIFO and maximum frame latency 1.
+The capture preflight identifies the 120 Hz display, but Windows denies ETW trace
+creation in the current non-elevated session. The prepared capture script requires
+an administrator run; the drawing app stays at normal privilege. No presentation
+rate, sustained painting rate or input latency result has been established.
