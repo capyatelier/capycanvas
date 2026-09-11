@@ -1793,3 +1793,91 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   getters. Post-merge shared tests, strict GTK/UI/renderer Clippy, workspace/Wasm
   checks and native Navigator/startup readiness tests pass. This is source and
   Linux-host validation, not additional physical Apple-device testing.
+
+### Fill and Auto Select edge refinement
+
+- Tool Settings now exposes Close gaps (0–32 document pixels), Expansion
+  (−32–32 pixels), and Edge smoothing (0–100%), separately from color tolerance.
+  Gap closing and expansion default to zero; smoothing defaults to 100% in the
+  shared UI. Numeric kinds, ranges, units, validation and request snapshots live
+  in Rust; GTK uses its existing spin/slider controls without a custom form.
+  The separation follows [CSP's Fill tool controls](https://help.clip-studio.com/en-us/manual_en/420_fill/Fill_Tool.htm),
+  not an attempt to copy its proprietary algorithm or claim identical pixels.
+- Gap closing opens the color-eligible bitmap (closing its complementary line
+  barriers), then the existing connected-component algorithm selects the seed's
+  region. Mirrored footprints prevent odd gap widths shifting the result.
+  Signed square-neighborhood expansion/shrink follows connectivity. Four corner
+  samples soften diagonal stair steps while preserving thin features; the
+  existing quarter-coverage representation is retained. Fractional smoothing
+  tests use [WGSL's ties-to-even rounding](https://www.w3.org/TR/WGSL/#round-builtin).
+  The final selection limit applies after expansion and smoothing as well as
+  during detection, so Fill cannot grow outside the artist's selection.
+- This bounded geometric method is not semantic gap recognition: an aggressive
+  Close gaps value can remove a narrow region, including the seed location.
+  Expansion uses square, not circular, neighborhoods. Smoothing softens corners,
+  not a Gaussian blur, and straight pixel-aligned boundaries stay sharp.
+  These limitations are independent of color tolerance; zero refinements retain
+  the original three GPU dispatches.
+- Morphology processes 32 pixels per word and reuses the component-parent
+  allocation as its other scratch plane outside labeling. Refinements add one
+  retained bit per document pixel (row padded): 0.375 MiB at 2048×1536, versus
+  12 MiB for the existing parent buffer, a 3.125% increase over that buffer.
+  Query-owned resident buffers grow from about 13.5 to 13.875 MiB before source
+  captures, about 2.78%. No scratch image is allocated until a request needs it.
+  Bounds/count now share the coverage buffer footer, preserving the portable
+  four-storage-buffer limit and removing the separate bounds buffer/copy.
+- All eleven pipeline recipes participate in the existing four-stage startup
+  queue as optional work. An early request promotes only its required stages,
+  remains single-flight, and resumes through normal asynchronous polling after
+  compilation. It neither joins the compiler nor allocates document-sized
+  buffers while waiting. Other tools remain usable. Headless callers retain
+  lazy compilation; there is no second raster path or platform-specific policy.
+- Serial release benchmark, 2048×1536 linework, 30 warmups and 120 measured
+  requests; median/p95/p99 milliseconds. CPU is request encoding/submission,
+  GPU is the measured device span, and completion explicitly waits for that
+  submission (not physical input-to-display latency):
+
+  | Refinement | CPU | GPU | Completion |
+  | --- | --- | --- | --- |
+  | None | .016/.028/.036 | .152/.155/.157 | .209/.222/.226 |
+  | Close gaps 4px | .021/.024/.027 | .181/.183/.183 | .241/.258/.275 |
+  | Expand 4px | .023/.025/.026 | .265/.271/.273 | .329/.336/.339 |
+  | Smoothing 100% | .021/.021/.024 | .271/.278/.282 | .333/.341/.349 |
+  | Gap 4px, expand 2px, smoothing | .027/.029/.032 | .305/.310/.312 | .373/.380/.383 |
+  | Gap 32px, expand 32px, smoothing | .027/.077/.211 | .356/.361/.365 | .428/.475/.614 |
+  | Shrink 32px, smoothing | .020/.020/.022 | .306/.312/.314 | .380/.386/.390 |
+
+- A separate complete-request benchmark includes source composition and the
+  asynchronous packed history snapshot. With gap 4px, expansion 2px and smoothing,
+  visible-source CPU/GPU/completion p99 were .229/.379/1.038ms; raw-layer
+  .182/.530/1.268ms; reference-scene .767/.700/1.958ms. Reference-scene median
+  completion rose from 1.231ms without refinement to 1.398ms with it. This is
+  measured additional work, not a zero-overhead claim. First-use measurements
+  are separate: unprepared compilation previously took tens of milliseconds;
+  after pipeline preparation one first complete request still took 16.311ms,
+  including initial resources/history transfer. No cold-request 120Hz guarantee.
+- Native startup passes with document/brush ready at 952ms and all optional
+  compilation done at 1047ms in one warm-cache run; not statistical startup
+  percentiles. A six-second full-workspace G-Pen run with raster selection
+  delivered 119.779Hz with one discarded presentation. Worker CPU p99 .755ms,
+  GPU p99 .315ms and main-context maximum .779ms; maximum worker 1.862ms. This
+  confirms a fast warm drawing path, not elimination of every presentation gap.
+- GPU validation covers independent pixel morphology at odd row widths, gaps,
+  large positive/negative distances, fractional smoothing, invalid inputs,
+  queued scratch reuse, final selection limits, antialiased Fill and history
+  replay, and asynchronous startup ordering. Native testing draws a genuinely
+  open outline, proves the unrefined selection leaks, closes it, fills below
+  reference line art and checks undo/redo. Dark/light selection and Fill captures
+  were inspected under ignored `artifacts/familiar-workspace/`. No external
+  textures, logs or machine-identifying reports are committed.
+- Validation also passes 217 shared UI tests, strict UI/GTK/renderer Clippy,
+  workspace/all-targets and WebAssembly checks. The broad GPU run passed 108
+  tests; a further runtime-kernel test initially failed because its fixture was
+  resolved against the process working directory. It now uses the package path
+  and passes independently from the repository root. Seventeen benchmarks were
+  ignored and the known historical filter-reference failure was explicitly
+  excluded, not waived. Existing non-Metal Apple build warnings remain.
+- Remaining overall gates are watercolor's display-only selection edge policy,
+  historical filter-reference reconciliation, rare presentation outliers,
+  final integrated validation and GTK human approval. Other hosts compile the
+  shared controls and renderer; no new physical-device validation is claimed.

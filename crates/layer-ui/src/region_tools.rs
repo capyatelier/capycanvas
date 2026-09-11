@@ -6,6 +6,7 @@ use layer_render::RegionRequest;
 
 pub(super) struct RegionTools {
     pub tolerance: f32,
+    pub refinement: layer_render::RegionRefinement,
     pub source: [RegionSource; 2],
     contact: Option<Point>,
     generation: u64,
@@ -25,6 +26,10 @@ impl Default for RegionTools {
     fn default() -> Self {
         Self {
             tolerance: 0.1,
+            refinement: layer_render::RegionRefinement {
+                smoothing: 1.,
+                ..Default::default()
+            },
             source: [RegionSource::Visible; 2],
             contact: None,
             generation: 0,
@@ -36,6 +41,68 @@ impl Default for RegionTools {
     }
 }
 impl RegionTools {
+    pub fn controls(&self) -> Vec<ToolSetting> {
+        let distance = layer_render::RegionRefinement::MAX_DISTANCE as f64;
+        [
+            (
+                "tolerance",
+                "Tolerance",
+                "",
+                NumericControl::percent(),
+                self.tolerance,
+            ),
+            (
+                "gap_closing",
+                "Close gaps",
+                "Edges",
+                NumericControl::number(0., distance, 1., 0).unit("px"),
+                self.refinement.gap_closing as f32,
+            ),
+            (
+                "expansion",
+                "Expansion",
+                "Edges",
+                NumericControl::number(-distance, distance, 1., 0).unit("px"),
+                self.refinement.expansion as f32,
+            ),
+            (
+                "smoothing",
+                "Edge smoothing",
+                "Edges",
+                NumericControl::percent(),
+                self.refinement.smoothing,
+            ),
+        ]
+        .into_iter()
+        .map(|(id, label, group, numeric, value)| ToolSetting {
+            id,
+            label,
+            group,
+            numeric,
+            value,
+        })
+        .collect()
+    }
+    pub fn edit(&mut self, id: &str, value: f32) -> Result<(), String> {
+        let control = self
+            .controls()
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or("Unknown region setting")?;
+        control.numeric.validate(value, control.label)?;
+        if matches!(id, "gap_closing" | "expansion") && value.fract() != 0. {
+            return Err(format!("{} needs a whole number of pixels", control.label));
+        }
+        match id {
+            "tolerance" => self.tolerance = value,
+            "gap_closing" => self.refinement.gap_closing = value as u32,
+            "expansion" => self.refinement.expansion = value as i32,
+            "smoothing" => self.refinement.smoothing = value,
+            _ => unreachable!(),
+        }
+        self.cancel();
+        Ok(())
+    }
     pub fn cancel(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.contact = None;
@@ -110,6 +177,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     },
                     position: [point.x as u32, point.y as u32],
                     tolerance: self.region_tools.tolerance,
+                    refinement: self.region_tools.refinement,
                     limit: if fill {
                         doc.selection.as_ref().map(|s| {
                             std::sync::Arc::new(s.translated(Point {

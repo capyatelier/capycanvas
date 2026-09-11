@@ -1,18 +1,18 @@
 // Four-connected, fixed-seed color region. Original WGSL implementation;
 // local union-find, boundary merge, then packed coverage/bounds reduction.
 struct Params { extent_seed: vec4<u32>, options: vec4<f32> }
-struct Coverage { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
-struct Bounds {
-    min_x: atomic<u32>, min_y: atomic<u32>, max_x: atomic<u32>, max_y: atomic<u32>,
-    count: atomic<u32>,
-}
+// Bounds/count occupy eight extra words after the coverage, sharing one
+// allocation/binding and keeping the portable four-storage-buffer limit.
+struct Coverage { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read_write> parents: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> coverage: Coverage;
-@group(0) @binding(4) var<storage, read_write> bounds: Bounds;
 
 const NONE = 0xffffffffu;
+fn summary_index(field: u32) -> u32 {
+    return ((params.extent_seed.x+7u)/8u)*params.extent_seed.y + field;
+}
 var<workgroup> local_parent: array<atomic<u32>, 256>;
 
 fn comparison_color(value: vec4<f32>) -> vec4<f32> {
@@ -21,6 +21,11 @@ fn comparison_color(value: vec4<f32>) -> vec4<f32> {
     let srgb = select(1.055 * pow(max(straight, vec3<f32>(0.)), vec3<f32>(1./2.4)) - .055,
         straight * 12.92, straight <= vec3<f32>(.0031308));
     return vec4<f32>(srgb * value.a, value.a);
+}
+fn color_eligible(p: vec2<u32>, seed: vec4<f32>) -> bool {
+    let color = comparison_color(textureLoad(source, vec2<i32>(p), 0));
+    return all(abs(color-seed) <= vec4<f32>(params.options.x))
+        && brush_selection_at(vec2<f32>(p)+.5) > 0.;
 }
 fn local_root(start: u32) -> u32 {
     var node = start;
@@ -57,19 +62,21 @@ fn initialize(@builtin(global_invocation_id) id: vec3<u32>,
     let inside = all(id.xy < extent);
     var eligible = false;
     if inside {
-        let seed = comparison_color(textureLoad(source, vec2<i32>(params.extent_seed.zw), 0));
-        let color = comparison_color(textureLoad(source, vec2<i32>(id.xy), 0));
-        eligible = all(abs(color-seed) <= vec4<f32>(params.options.x)) && brush_selection_at(vec2<f32>(id.xy)+.5) > 0.;
+        if params.options.y > 0. { eligible = mask_bit(vec2<i32>(id.xy)); }
+        else {
+            let seed = comparison_color(textureLoad(source, vec2<i32>(params.extent_seed.zw), 0));
+            eligible = color_eligible(id.xy, seed);
+        }
     }
     atomicStore(&local_parent[lane], select(NONE, lane, eligible));
     if all(id.xy == vec2<u32>(0)) {
         coverage.rect = vec4<u32>(0,0,extent);
         coverage.info = vec4<u32>(0,1,0,0);
-        atomicStore(&bounds.min_x, extent.x);
-        atomicStore(&bounds.min_y, extent.y);
-        atomicStore(&bounds.max_x, 0);
-        atomicStore(&bounds.max_y, 0);
-        atomicStore(&bounds.count, 0);
+        atomicStore(&coverage.values[summary_index(0u)], extent.x);
+        atomicStore(&coverage.values[summary_index(1u)], extent.y);
+        atomicStore(&coverage.values[summary_index(2u)], 0);
+        atomicStore(&coverage.values[summary_index(3u)], 0);
+        atomicStore(&coverage.values[summary_index(4u)], 0);
     }
     workgroupBarrier();
     if eligible {
@@ -146,21 +153,27 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
     let word = id.x + id.y * groups.x * 64u;
     let y = word/stride;
     let x = (word%stride)*8u;
-    let selected = root(params.extent_seed.w * extent.x + params.extent_seed.z);
+    let refined = params.options.z != 0. || params.options.w != 0.;
+    var selected = NONE;
+    if !refined { selected = root(params.extent_seed.w * extent.x + params.extent_seed.z); }
     var packed = 0u;
     var low = extent;
     var high = vec2<u32>(0);
     var count = 0u;
     if y < extent.y {
         for (var i = 0u; i < 8u && x+i < extent.x; i++) {
-            if selected != NONE && root(y*extent.x+x+i) == selected {
-                packed |= u32(round(brush_selection_at(vec2<f32>(f32(x+i)+.5, f32(y)+.5))*4.)) << (i*4u);
+            var value = 0.;
+            if refined { value = refined_coverage(vec2<i32>(i32(x+i),i32(y))); }
+            else if selected != NONE && root(y*extent.x+x+i) == selected { value = 1.; }
+            let samples = u32(round(value * brush_selection_at(vec2<f32>(f32(x+i)+.5, f32(y)+.5))*4.));
+            if samples != 0u {
+                packed |= samples << (i*4u);
                 low = min(low, vec2<u32>(x+i,y));
                 high = max(high, vec2<u32>(x+i+1u,y+1u));
                 count++;
             }
         }
-        coverage.values[word] = packed;
+        atomicStore(&coverage.values[word], packed);
     }
     lows[lane] = low;
     highs[lane] = high;
@@ -175,10 +188,10 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
         workgroupBarrier();
     }
     if lane == 0u && counts[0] != 0u {
-        atomicMin(&bounds.min_x, lows[0].x);
-        atomicMin(&bounds.min_y, lows[0].y);
-        atomicMax(&bounds.max_x, highs[0].x);
-        atomicMax(&bounds.max_y, highs[0].y);
-        atomicAdd(&bounds.count, counts[0]);
+        atomicMin(&coverage.values[summary_index(0u)], lows[0].x);
+        atomicMin(&coverage.values[summary_index(1u)], lows[0].y);
+        atomicMax(&coverage.values[summary_index(2u)], highs[0].x);
+        atomicMax(&coverage.values[summary_index(3u)], highs[0].y);
+        atomicAdd(&coverage.values[summary_index(4u)], counts[0]);
     }
 }
