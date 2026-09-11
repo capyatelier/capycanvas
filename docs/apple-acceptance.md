@@ -802,3 +802,13 @@ explicit host feature difference and a failing full-image result. The native
 sections remain present. Complete drawer/style/gesture fixtures, source-corner
 connections, full main-editor visual acceptance, recovery, physical input and
 lifecycle coverage and sustained performance remain required on both platforms.
+
+The incoming shared GPU Fill/Auto Select edge refinements are integrated. All
+258 UI/host/Apple tests pass again, along with six focused GPU checks covering
+flood masks, independent pixel morphology, antialiasing through history replay,
+invalid requests and startup compilation. Two hardware latency benchmarks remain
+explicitly ignored; these correctness results establish no performance claim.
+The integrated signed iPad and Mac builds and WebAssembly build pass. The iPad
+build installs and launches, and the Mac build launches with a disposable workspace. The
+drawer UI and blank-canvas visual fixtures above predate the renderer merge and
+do not establish visual parity for the incoming Fill/Auto Select refinements.
