@@ -22,8 +22,7 @@ photographers and comic artists. It is built for Linux first, where artists have
 long had fewer choices in professional software, but also works on Android, iPad,
 Windows, Mac, and the web.
 
-We built Capy Canvas to support the different workflows of comic artists, digital
-painters and photo editors. Its GPU-accelerated brush and compositing engines are
+Its GPU-accelerated brush and compositing engines are
 designed to improve performance and battery life, particularly on mobile devices.
 A fully customizable interface lets artists adapt layouts and shortcuts to match
 the muscle memory they have developed in other apps.
