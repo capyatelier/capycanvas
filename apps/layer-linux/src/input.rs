@@ -19,6 +19,7 @@ pub struct Input {
     sequence: Cell<u64>,
     last: Cell<Option<PenEvent>>,
     pending: RefCell<VecDeque<PenEvent>>,
+    deferred_contacts: RefCell<std::collections::BTreeSet<u64>>,
     touches: RefCell<HashMap<gdk::EventSequence, u64>>,
     next_touch: Cell<u64>,
     clock: Cell<Option<(u32, u64)>>,
@@ -475,6 +476,26 @@ impl Input {
         self.send(workspace, event);
     }
     pub(crate) fn send(&self, workspace: &Rc<Workspace>, mut event: PenEvent) {
+        // A contact begun during compilation must not start midway when its
+        // shader becomes ready. Navigation and native controls remain active.
+        let ready = workspace.gpu.borrow().as_ref().is_some_and(|g| {
+            let engine = g.session.engine();
+            engine
+                .backend()
+                .paint_ready(engine.document(), engine.brush())
+        });
+        let mut deferred = self.deferred_contacts.borrow_mut();
+        if event.phase == PenPhase::Down && !ready {
+            deferred.insert(event.device_id);
+        }
+        let blocked = deferred.contains(&event.device_id);
+        if matches!(event.phase, PenPhase::Up | PenPhase::Cancel) {
+            deferred.remove(&event.device_id);
+        }
+        drop(deferred);
+        if blocked {
+            return;
+        }
         event.sequence = self.sequence.get() + 1;
         self.sequence.set(event.sequence);
         self.last

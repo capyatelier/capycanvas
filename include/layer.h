@@ -189,6 +189,8 @@ typedef struct LayerGpuInfo {
 LayerStatus layer_canvas_config_default(LayerCanvasConfig *output);
 LayerStatus layer_canvas_instant_feedback_default(
     LayerInstantFeedbackSettings *output);
+/* Blocking headless/diagnostic constructor, not an interactive window host.
+ * Native frontends use layer-host and the staged WgpuRasterizer lifecycle. */
 LayerStatus layer_canvas_create(const LayerCanvasConfig *config, LayerCanvas **output);
 void layer_canvas_destroy(LayerCanvas *canvas);
 LayerStatus layer_canvas_submit_pen_events(LayerCanvas *canvas,

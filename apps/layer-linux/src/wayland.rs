@@ -170,7 +170,7 @@ struct Events {
 }
 
 impl Child {
-    pub fn new(parent: Parent) -> Result<Self, String> {
+    pub fn new(parent: Parent, clock: Arc<FrameClock>) -> Result<Self, String> {
         // The system backend creates its OWN queue on the borrowed display.
         // Neither this backend nor Vulkan dispatches GTK's event queue.
         let backend = unsafe { Backend::from_foreign_display(parent.display as *mut _) };
@@ -200,7 +200,10 @@ impl Child {
             subsurface,
             connection,
             events,
-            state: Events::default(),
+            state: Events {
+                clock,
+                ..Default::default()
+            },
             geometry: None,
             presentation,
             #[cfg(not(test))]
@@ -239,9 +242,6 @@ impl Child {
         self.connection.flush().map_err(error)
     }
 
-    pub fn clock(&self) -> Arc<FrameClock> {
-        self.state.clock.clone()
-    }
     pub fn feedback_pending(&self) -> bool {
         self.state.feedback_pending
     }

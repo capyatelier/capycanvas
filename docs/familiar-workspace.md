@@ -858,7 +858,8 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 
 ### Operation / transform foundation (not yet exposed)
 
-- Shared affine geometry and a GPU cut-and-place primitive are implemented.
+- Shared affine geometry, a GPU cut-and-place primitive and ordered paint-layer
+  history integration are implemented.
   The intended interaction follows [CSP's transform controls](https://help.clip-studio.com/en-us/manual_en/360_transform/Transform_using_the_Tool_Settings_palette.htm)
   and [Krita's transform handles](https://docs.krita.org/en/reference_manual/tools/transform.html):
   a persistent transform box, move/scale/rotate, numeric values, and explicit
@@ -880,7 +881,8 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
 - A single uniform upload assigns distinct dynamic offsets to all output
   regions; source bindings and parameter storage are retained. Only supplied
   scissor regions are written. Full-image and tiled output match byte-for-byte.
-  Submit an encoded batch before the next batch updates the shared uniform arena.
+  Multiple encodes in one submission use distinct uniform ranges. Begin a new
+  arena frame only after submitting the previous frame.
   There are no production waits/readbacks, per-frame textures or per-tile
   bind-group creations in this primitive.
 - At 2048×1536 an uncropped immutable RGBA8 source costs 12MiB. A separate full
@@ -917,12 +919,107 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   enlargement, reduction and extreme translation. Additional tests verify tile
   seams, untouched scissor pixels, immutable input, invalid-input rejection and
   retained allocation reuse.
-  The isolated build passes 30 core, 27 engine, 183 shared-UI and 82 GPU
+  The isolated build passes 31 core, 27 engine, 183 shared-UI and 86 GPU
   correctness tests, plus strict all-target Clippy for core/renderer and
   workspace/Wasm compilation. Hardware benchmarks are separate from these totals.
-- Still required before exposing Operation: ordered document-history integration,
-  source capture and preview lifecycle, selection/linked-mask transforms,
-  watercolor/material-channel handling, dirty old/new footprint propagation,
-  cancel/commit/undo, shared handles and numeric settings, GTK rendering/input,
+- `LayerOperationKind::Transform` now bakes through the ordinary ordered paint
+  history. Appending a transform does not replay earlier paint; undo/redo and
+  device-loss replay preserve operation order. Later strokes return to the
+  ordinary brush path, without retaining scene jobs merely because history
+  contains a transform. Multiple transforms can execute in one GPU submission.
+- The renderer captures unmodified pigment and any persistent material/watercolor
+  wetness into reusable GPU textures, then transforms them with the same WGSL
+  resampling kernel. R8 wetness uses maximum on overlap, not color source-over,
+  so placement does not introduce extra water. Stroke-local coverage is reset;
+  watercolor edge styling remains live and is not baked into pigment. Layer
+  masks continue to compose normally; transforming a linked mask itself remains
+  pending. Tests cover nonzero wetness, round trips, later wet strokes, fractional
+  coverage and interpolation, and multiple-operation replay.
+- Cut and placement bounds remain separate when allocating sparse destination
+  tiles. Moving across a large gap does not allocate the intervening tiles.
+  Linear interpolation expands support in source coordinates before mapping,
+  including scaled edges. Composition still receives a conservative union.
+  Packed selection coverage is reused directly, without duplicate R8 mask pages.
+  Tests compare incremental output against full rebuilding through a group,
+  mask, unclipped Gaussian filter and clipped Gaussian filter, including layer
+  translation and tile boundaries.
+- Committed-operation benchmark at 2048×1536, 120 measured frames after 40
+  warmups. This includes source capture, transform and composition, **not** GTK
+  input/presentation or the pending interactive preview lifecycle:
+
+  | Artwork / selection | CPU submit median/p95/p99 ms | GPU median/p95/p99 ms | Completed median/p95/p99 ms |
+  | --- | --- | --- | --- |
+  | Ordinary paint / whole layer | 0.267 / 0.301 / 1.288 | 0.308 / 0.309 / 0.310 | 0.645 / 0.696 / 1.683 |
+  | Ordinary paint / selected | 0.318 / 0.529 / 0.745 | 0.336 / 0.337 / 0.337 | 0.716 / 0.939 / 1.183 |
+  | Wet round / selected | 0.741 / 0.975 / 1.389 | 0.627 / 0.629 / 0.637 | 1.457 / 1.799 / 2.134 |
+  | Watercolor / selected | 0.888 / 1.034 / 1.337 | 0.649 / 0.653 / 0.663 | 1.645 / 1.819 / 2.117 |
+
+  Capture and uniform storage stabilize at approximately 12.02/15.03/18.03MiB
+  for ordinary/wet/watercolor paint respectively, excluding ordinary paint
+  pages, composition, selection storage and driver overhead. Only channels
+  present in the layer are captured. Source captures are cropped to allocated
+  page bounds and reject extents beyond the device's texture limit before
+  allocation. Captures are refreshed per committed operation; live previews
+  must retain an immutable transaction source instead. First-operation times
+  in this cached-driver run were 0.85–3.56ms; this does not replace the cold
+  compilation warning above. Reproduce with ignored release test
+  `layer_tests::transforms::ordered_transform_latency`, serially on an idle GPU.
+- Still required before exposing Operation: interactive source/preview lifecycle,
+  selection/linked-mask transforms, dirty old/new preview footprint propagation,
+  preview cancel/commit, shared handles and numeric settings, GTK rendering/input,
   and end-to-end latency/visual tests. Existing painting is unchanged; this is a
   tested rendering foundation, **not completion of the Operation milestone**.
+
+### GTK staged startup milestone
+
+- GTK now uses the same four-stage shader dependency scheduler as Android and
+  web. GPU worker construction no longer blocks the GTK initialization call.
+  Paper is submitted before document and active-brush compilation, followed by
+  unused shaders. Procedural brush textures use that same priority queue on all
+  platforms, and readiness waits for their upload. Pixel queries wait for the
+  real document frame; a contact begun before brush readiness stays suppressed
+  until release. Existing two-frame queuing and direct Wayland presentation are
+  preserved.
+- Native pipeline data uses a bounded, build/adapter/driver-keyed private cache.
+  The old eager constructors are deprecated; tests and diagnostic bindings use
+  explicitly named headless constructors. The in-development Apple bridge still
+  needs to adopt the staged lifecycle; its old call now emits a deprecation
+  warning on an Apple build. No Apple runtime validation is claimed here.
+- Representative startup measurements (milliseconds from workspace creation):
+
+  | Measurement | Previous eager GTK | Staged, empty app cache | Staged, warm app cache |
+  | --- | ---: | ---: | ---: |
+  | `window.present()` returns | 2752 | 863 | 779 |
+  | First canvas presentation feedback observed | 2825 | 1836 | 1017 |
+  | Document / active brush ready observed | Not separately available | 1864 / 1872 | 1017 / 1017 |
+  | Entire startup catalog ready observed | Not separately available | 5381 | 1799 |
+
+  These are individual local runs, not statistical startup percentiles or a
+  cold-driver guarantee. The readiness timestamps include event-loop polling.
+  GTK's initial widget/layout work still pauses the main loop (maximum measured
+  post-present pump slice: 928ms cold, 197ms warm); moving shader compilation
+  does not remove that separate UI startup cost. Constructor-only diagnostic
+  timers were removed after confirming session/host setup itself takes under
+  1ms. The retained ignored `native_startup_latency` test checks startup order,
+  contact gating, native control changes and painting before optional completion.
+- Six-second native pacing runs, 384px brushes, actual Wayland presentation
+  feedback, no simultaneous GPU benchmark:
+
+  | Workload | Worker render/present CPU median/p95/p99 ms | GPU median/p95/p99 ms | Presented Hz |
+  | --- | --- | --- | ---: |
+  | G pen | 0.273 / 0.517 / 0.661 | 0.135 / 0.283 / 0.488 | 119.95 |
+  | Natural blender | 0.617 / 1.213 / 1.492 | 0.621 / 1.593 / 3.292 | 120.01 |
+  | Wet round | 0.527 / 0.991 / 1.145 | 0.325 / 1.082 / 2.276 | 119.95 |
+  | Watercolor | 1.176 / 1.978 / 2.403 | 1.507 / 3.711 / 4.660 | 119.91 |
+  | Pan | 0.189 / 0.413 / 0.503 | 0.071 / 0.151 / 0.330 | 119.96 |
+  | Hand tool | 0.183 / 0.405 / 0.499 | 0.067 / 0.134 / 0.181 | 120.00 |
+
+  GTK frame-handler CPU p99 stays below 0.052ms in these runs. These are
+  steady-state results, not a claim of 120Hz throughout initial UI construction
+  or physical tablet input validation. Raw reports/cache files remain local.
+- Validation: renderer regression suite including cache reload and reference
+  pixels; GTK cold/warm startup and pacing; workspace/Wasm checks and strict
+  renderer/GTK/FFI Clippy. Real Chrome + rebuilt Wasm verifies visible paper,
+  delayed GPU-validation readiness, native web settings and drawing/panning
+  during optional compilation, and startup with a loaded domain-warp filter.
+  No new physical Android or Apple run is claimed by this GTK milestone.

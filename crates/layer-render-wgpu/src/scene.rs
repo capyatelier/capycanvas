@@ -67,7 +67,7 @@ pub(super) struct Scene {
 pub(super) struct Pipelines {
     uniforms: wgpu::BindGroupLayout,
     layout: wgpu::BindGroupLayout,
-    pipeline: [wgpu::RenderPipeline; 2],
+    pub pipeline: [Deferred<wgpu::RenderPipeline>; 2],
 }
 
 impl Scene {
@@ -159,6 +159,7 @@ impl Scene {
             layout,
             pipeline,
         } = r.scene_pipelines.clone();
+        let pipeline = pipeline.map(|p| p.compile().clone());
         let stride = device.limits().min_uniform_buffer_offset_alignment.max(96) as usize;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("scene uniform records"),
@@ -815,6 +816,9 @@ impl Scene {
             let mask = self.mask_tile(r, &op.coverage, op.coverage.offset, c);
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
             match op.kind {
+                LayerOperationKind::Transform(_) => {
+                    unreachable!("transforms execute against immutable captures")
+                }
                 LayerOperationKind::ApplyMask => {
                     let mut resolved = None;
                     if watercolor
@@ -1247,7 +1251,10 @@ impl Scene {
 }
 
 impl Pipelines {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn effects(&self, r: &WgpuRasterizer) -> effects::Effects {
+        effects::Effects::new(r, &self.uniforms, &self.layout)
+    }
+    pub fn new(device: &PipelineDevice) -> Self {
         let uniforms = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene records"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -1274,9 +1281,12 @@ impl Pipelines {
                 },
             ],
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("layer scene"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+        let shader = Deferred::new({
+            let device = device.clone();
+            move || device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("layer scene"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+            })
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene composition"),
@@ -1284,15 +1294,16 @@ impl Pipelines {
             immediate_size: 0,
         });
         let pipeline = [None, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)].map(|blend| {
-            fullscreen_pipeline(
-                device,
+            let (device, pipeline_layout, shader) = (device.clone(), pipeline_layout.clone(), shader.clone());
+            Deferred::new(move || fullscreen_pipeline(
+                &device,
                 &pipeline_layout,
                 &shader,
                 "fragment_main",
                 blend,
                 COLOR_FORMAT,
                 "tile layer composition",
-            )
+            ))
         });
         Self {
             uniforms,
@@ -1304,10 +1315,10 @@ impl Pipelines {
 #[cfg(test)]
 #[test]
 fn new_scenes_reuse_compiled_device_pipelines_without_retaining_pixels() {
-    let r = WgpuRasterizer::new().unwrap();
+    let r = WgpuRasterizer::new_headless().unwrap();
     let a = Scene::new(&r);
     let b = Scene::new(&r);
-    assert_eq!(a.pipeline, r.scene_pipelines.pipeline);
+    assert_eq!(a.pipeline, r.scene_pipelines.pipeline.clone().map(|p| p.compile().clone()));
     assert_eq!(a.pipeline, b.pipeline);
     assert_eq!(a.uniforms, b.uniforms);
     assert_eq!(a.layout, b.layout);
@@ -1406,4 +1417,67 @@ fn descriptor<'a>(
         occlusion_query_set: None,
         multiview_mask: None,
     }
+}
+
+/// Compile only programs referenced by this document, including the fused
+/// sibling chains used by compose_group. Catalog previews are a later stage.
+pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<Layer>, effects::Execution)> {
+    let mut result = Vec::new();
+    let mut parents = Vec::new();
+    for layer in layers {
+        if !parents.contains(&layer.properties.parent) {
+            parents.push(layer.properties.parent);
+        }
+        if !layer.visible {
+            continue;
+        }
+        if let Some(effect) = &layer.effect {
+            if effect.program.image_boundary() {
+                for pass in 0..effect.program.passes.len().max(1) {
+                    result.push((vec![layer.clone()], effects::Execution::Image(pass)));
+                }
+            } else {
+                result.push((vec![layer.clone()], effects::Execution::Fused));
+            }
+        }
+    }
+    for parent in parents {
+        let mut siblings = layers
+            .iter()
+            .rev()
+            .filter(|l| l.properties.parent == parent && l.kind != LayerKind::Background)
+            .peekable();
+        while let Some(layer) = siblings.next() {
+            if !layer.visible
+                || !direct_effect_mask(layers, layer)
+                || !layer.effect.as_ref().is_some_and(|e| {
+                    e.program.kind == layer_core::EffectKind::Adjustment
+                        && !e.program.image_boundary()
+                })
+            {
+                continue;
+            }
+            let mut chain = vec![layer.clone()];
+            while let Some(next) = siblings.peek() {
+                if !next.visible
+                    || next.properties.clipped != layer.properties.clipped
+                    || !direct_effect_mask(layers, next)
+                    || (chain.len() >= effects::MASK_SLOTS
+                        && next.mask.as_ref().is_some_and(|m| m.enabled))
+                    || !next.effect.as_ref().is_some_and(|e| {
+                        e.program.kind == layer_core::EffectKind::Adjustment
+                            && !e.program.image_boundary()
+                    })
+                {
+                    break;
+                }
+                chain.push((*next).clone());
+                siblings.next();
+            }
+            if chain.len() > 1 {
+                result.push((chain, effects::Execution::Fused));
+            }
+        }
+    }
+    result
 }

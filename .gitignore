@@ -1,5 +1,7 @@
 target/
 node_modules/
+__pycache__/
+*.pyc
 /dist/
 /artifacts/
 /apps/layer-web/pkg/
@@ -32,6 +34,7 @@ local.properties
 *.swo
 *~
 .DS_Store
+._*
 Thumbs.db
 *.log
 *.profraw

@@ -149,7 +149,7 @@ fn png(path: &str, extent: [u32; 2], bytes: &[u8]) {
 /// including masked/clipped transparency, not a CPU reimplementation.
 #[test]
 fn runtime_filter_pixel_reference() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let sample = [64usize, 48usize];
     let columns = 8;
@@ -217,7 +217,7 @@ fn runtime_filter_pixel_reference() {
 
 #[test]
 fn gpu_preparation_is_shared_and_dependency_driven() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let mut effect = filter(fixture("unsharp_mask"));
     let old = effect.effect.take().unwrap();
@@ -297,7 +297,7 @@ fn gpu_preparation_is_shared_and_dependency_driven() {
 
 #[test]
 fn custom_preparation_replaces_kernel_at_runtime() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let mut layers = vec![filter(fixture("gaussian_blur")), base];
     submit(&mut r, EXTENT, &layers, 0., true, true, None);
@@ -337,7 +337,7 @@ fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
         })
         .unwrap();
     let definition = catalog.get("example:tent_blur").unwrap();
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     submit(
         &mut r,
@@ -396,7 +396,7 @@ fn validate_runtime(
 
 #[test]
 fn runtime_validation_preserves_working_state_and_reuses_compilation() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     validate_runtime(&mut r, fixtures().iter().map(|f| f.program()).collect()).unwrap();
     assert!(
         r.scene.is_none(),
@@ -446,7 +446,7 @@ fn runtime_validation_preserves_working_state_and_reuses_compilation() {
 
 #[test]
 fn prepared_pointwise_filters_still_fuse() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let mut program = (*fixture("brightness_contrast").program()).clone();
     program.id = "runtime_factor".into();
@@ -496,7 +496,7 @@ fn prepared_pointwise_filters_still_fuse() {
 
 #[test]
 fn invalid_preparation_keeps_the_working_gpu_state() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let effect = filter(fixture("gaussian_blur"));
     let layers = vec![effect.clone(), base];
@@ -530,7 +530,7 @@ fn invalid_preparation_keeps_the_working_gpu_state() {
 
 #[test]
 fn gpu_gaussian_is_normalized_at_parameter_extremes() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [128, 128];
     let asset = AssetId("test:uniform-normalization".into());
     let pixels: [u8; 4] = [140, 90, 180, 255];
@@ -567,7 +567,7 @@ fn gpu_gaussian_is_normalized_at_parameter_extremes() {
 
 #[test]
 fn entire_filter_catalog_renders_masks_freezes_and_animates() {
-    let mut r = WgpuRasterizer::new().expect("physical GPU required");
+    let mut r = WgpuRasterizer::new_headless().expect("physical GPU required");
     let base = setup(&mut r, EXTENT);
     submit(
         &mut r,
@@ -695,7 +695,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
 
 #[test]
 fn cached_clipping_matches_tiled_composition() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     for case in 0..18 {
         let mut base = base.clone();
@@ -807,7 +807,7 @@ fn cached_clipping_matches_tiled_composition() {
 
 #[test]
 fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let backdrop = setup(&mut r, EXTENT);
     let mut base = backdrop.clone();
     base.id = LayerId(3);
@@ -882,7 +882,7 @@ fn painting_backdrop_updates_only_dirty_tiles_without_rerunning_frozen_filter() 
 
 #[test]
 fn every_filter_incremental_update_matches_a_forced_full_rebuild() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     for id in fixtures() {
         let layers = vec![filter(id), base.clone()];
@@ -942,7 +942,7 @@ fn clipped_animation_latency() {
             v[v.len() * 99 / 100]
         )
     };
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let mut report = String::from(
         "extent,backdrop,clipped,mode,cpu_median,cpu_p95,cpu_p99,gpu_median,gpu_p95,gpu_p99,complete_median,complete_p95,complete_p99,backdrop_pixels,filter_pixels,cache_bytes\n",
     );
@@ -1050,7 +1050,7 @@ fn filter_parameter_latency() {
             v[v.len() * 99 / 100]
         )
     };
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [2048, 1536];
     let base = setup(&mut r, extent);
     let mut report = String::from(
@@ -1147,7 +1147,7 @@ fn filter_library_latency() {
         v.sort_by(f64::total_cmp);
         [v[v.len() / 2], v[v.len() * 95 / 100], v[v.len() * 99 / 100]]
     }
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [4096, 4096];
     let base = setup(&mut r, extent);
     let mut report = String::from(
@@ -1252,7 +1252,7 @@ fn filter_library_latency() {
 
 #[test]
 fn unrelated_layers_do_not_invalidate_filter_inputs() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let mut source = base.clone();
     source.id = LayerId(3);
@@ -1306,7 +1306,7 @@ fn unrelated_layers_do_not_invalidate_filter_inputs() {
 
 #[test]
 fn filter_parameter_limits_are_valid_and_do_not_recompile_shaders() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let extent = [64, 64];
     let base = setup(&mut r, extent);
     for id in fixtures().iter().skip(10) {
@@ -1339,7 +1339,7 @@ fn filter_parameter_limits_are_valid_and_do_not_recompile_shaders() {
 
 #[test]
 fn expensive_filter_chain_incremental_matches_full_at_document_and_tile_edges() {
-    let mut r = WgpuRasterizer::new().unwrap();
+    let mut r = WgpuRasterizer::new_headless().unwrap();
     let base = setup(&mut r, EXTENT);
     let mut layers: Vec<_> = [
         fixture("denoise"),

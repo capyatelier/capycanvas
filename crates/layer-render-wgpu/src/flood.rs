@@ -18,7 +18,7 @@ impl Flood {
     pub fn storage_bytes(&self) -> u64 {
         self.capacity + self.empty.size()
     }
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &PipelineDevice) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("connected region"),
             source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn connected_region_matches_independent_flood_oracle() {
-        let r = WgpuRasterizer::new().unwrap();
+        let r = WgpuRasterizer::new_headless().unwrap();
         let mut flood = Flood::new(&r.device);
         for extent in [
             [1_u32, 1],
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn tolerance_is_seed_relative_and_includes_transparency() {
-        let r = WgpuRasterizer::new().unwrap();
+        let r = WgpuRasterizer::new_headless().unwrap();
         let mut flood = Flood::new(&r.device);
         for pixels in [
             vec![0, 0, 0, 255, 2, 0, 0, 255, 4, 0, 0, 255, 2, 0, 0, 255],
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn queued_regions_keep_independent_results_while_reusing_scratch() {
-        let r = WgpuRasterizer::new().unwrap();
+        let r = WgpuRasterizer::new_headless().unwrap();
         let mut flood = Flood::new(&r.device);
         let mut encoder = r.device.create_command_encoder(&Default::default());
         let mut regions = Vec::new();
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn invalid_region_requests_do_not_allocate_scratch() {
-        let r = WgpuRasterizer::new().unwrap();
+        let r = WgpuRasterizer::new_headless().unwrap();
         let source = source(&r, [1, 1], &[255; 4]);
         let mut flood = Flood::new(&r.device);
         for (extent, seed, tolerance) in [
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     #[ignore = "hardware GPU connected-region benchmark; release, serial"]
     fn connected_region_latency() {
-        let r = WgpuRasterizer::new().unwrap();
+        let r = WgpuRasterizer::new_headless().unwrap();
         let mut flood = Flood::new(&r.device);
         let extent = [2048, 1536];
         for pattern in ["solid", "linework", "maze", "noise"] {

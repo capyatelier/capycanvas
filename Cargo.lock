@@ -934,8 +934,10 @@ dependencies = [
 name = "layer-render-wgpu"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "layer-core",
  "layer-render",
+ "libc",
  "naga",
  "png",
  "pollster",

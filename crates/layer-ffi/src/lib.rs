@@ -1,4 +1,5 @@
-//! Stable, renderer-specific C ABI used by platform canvas hosts.
+//! Blocking headless/diagnostic C ABI. Interactive native ports use layer-host
+//! with a platform surface and the renderer's staged startup API instead.
 //!
 //! Foreign callers submit validated, fixed-size event histories in batches.
 //! The ABI never exposes Rust enums, references, strings, or collections. Each
@@ -283,7 +284,7 @@ pub unsafe extern "C" fn layer_canvas_create(
             background_rgba_linear: config.background_rgba_linear,
         };
         let engine = CanvasEngine::with_capacity(
-            WgpuRasterizer::new().map_err(|_| LayerStatus::RenderError)?,
+            WgpuRasterizer::new_headless().map_err(|_| LayerStatus::RenderError)?,
             Document::new("untitled", config.document_width, config.document_height),
             consumer,
             view,

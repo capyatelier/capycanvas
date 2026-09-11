@@ -11,7 +11,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     thread::JoinHandle,
@@ -51,6 +51,8 @@ impl Frame {
     }
 }
 enum Command {
+    Startup(u64, Box<(layer_core::Document, layer_core::BrushSnapshot)>),
+    FinishStartupCache,
     Selection(Option<layer_core::Selection>),
     Region(layer_render::RegionRequest),
     EffectValidation(layer_render::EffectValidationRequest),
@@ -67,6 +69,12 @@ enum Command {
     Stop,
 }
 enum Reply {
+    Initialized,
+    Startup(
+        u64,
+        layer_render_wgpu::StartupProgress,
+        HashMap<AssetId, TipOutline>,
+    ),
     Region(Result<layer_render::RegionResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
@@ -80,6 +88,11 @@ enum Reply {
 /// Two in-flight paint frames, including the frame being presented. GTK never
 /// waits on a worker lock, Vulkan acquire, or a GPU completion fence.
 pub struct RenderWorker {
+    initialized: bool,
+    first_frame_sent: bool,
+    pub(super) startup: layer_render_wgpu::StartupProgress,
+    startup_generation: u64,
+    startup_key: Option<(layer_core::Revision, layer_core::BrushSnapshot)>,
     selection: Option<layer_core::Selection>,
     region: Option<Result<layer_render::RegionResult, String>>,
     region_pending: bool,
@@ -119,7 +132,8 @@ impl RenderWorker {
     ) -> Result<Self, String> {
         let (commands, receiver) = mpsc::channel();
         let (reply, replies) = mpsc::channel();
-        let (started, start) = mpsc::sync_channel(1);
+        let clock = Arc::new(crate::wayland::FrameClock::default());
+        let worker_clock = clock.clone();
         let in_flight = Arc::new(AtomicUsize::new(0));
         let count = in_flight.clone();
         let telemetry = Arc::new(std::sync::Mutex::new(
@@ -133,15 +147,19 @@ impl RenderWorker {
         let thread = std::thread::Builder::new()
             .name("canvas-gpu".into())
             .spawn(move || {
-                let result = Worker::new(parent, area).and_then(|mut worker| {
-                    let outlines = worker.renderer.cursor_outlines();
-                    if started.send(Ok((outlines, worker.child.clock()))).is_err() {
+                let result = Worker::new(parent, area, worker_clock).and_then(|mut worker| {
+                    if reply.send(Reply::Initialized).is_err() {
                         return Ok(());
                     }
                     #[cfg(test)]
                     let mut timing =
                         crate::timing::Timing::new(worker.renderer.device(), worker_stats);
                     let mut telemetry_enabled = false;
+                    let mut startup_input = None;
+                    let mut startup_progress = layer_render_wgpu::StartupProgress::default();
+                    let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
+                    let mut deferred = VecDeque::new();
+                    let mut document_drawn = false;
                     loop {
                         worker
                             .renderer
@@ -149,6 +167,48 @@ impl RenderWorker {
                             .poll(wgpu::PollType::Poll)
                             .map_err(error)?;
                         worker.child.dispatch()?;
+                        if !startup_progress.complete
+                            && worker.paper_ready.load(Ordering::Acquire)
+                            && let Some((generation, document, brush)) = &startup_input
+                        {
+                            if worker.renderer.startup_needs_update(document, brush) {
+                                worker
+                                    .renderer
+                                    .prepare_startup(document, brush)
+                                    .map_err(error)?;
+                            }
+                            let progress = worker.renderer.poll_startup().map_err(error)?;
+                            if progress != startup_progress {
+                                startup_progress = progress;
+                                reply
+                                    .send(Reply::Startup(
+                                        *generation,
+                                        progress,
+                                        worker.renderer.cursor_outlines(),
+                                    ))
+                                    .map_err(error)?;
+                            }
+                            while progress.canvas_ready
+                                && pending_frames
+                                    .front()
+                                    .is_some_and(|f| f.dabs.is_empty() || progress.brush_ready)
+                            {
+                                let frame = pending_frames.pop_front().unwrap();
+                                #[cfg(test)]
+                                timing.begin(frame.queued_ns);
+                                worker.draw(
+                                    &frame,
+                                    false,
+                                    #[cfg(test)]
+                                    &mut timing,
+                                )?;
+                                document_drawn = true;
+                                count.fetch_sub(1, Ordering::Release);
+                            }
+                            if progress.complete {
+                                startup_input = None;
+                            }
+                        }
                         if telemetry_enabled && let Ok(mut snapshot) = worker_telemetry.try_lock() {
                             *snapshot = worker.renderer.telemetry();
                         }
@@ -187,7 +247,10 @@ impl RenderWorker {
                         if let Some(result) = worker.renderer.take_effect_validation() {
                             reply.send(Reply::EffectValidation(result)).map_err(error)?;
                         }
-                        let next = if cfg!(test)
+                        let next = if document_drawn && !deferred.is_empty() {
+                            Ok(deferred.pop_front().unwrap())
+                        } else if cfg!(test)
+                            || !startup_progress.complete
                             || worker.renderer.effect_validation_pending()
                             || worker.renderer.filter_previews_pending()
                             || worker.pending_present
@@ -219,7 +282,27 @@ impl RenderWorker {
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
+                        if !document_drawn
+                            && matches!(
+                                command,
+                                Command::Region(_)
+                                    | Command::Thumbnail(..)
+                                    | Command::CanvasPreview(_)
+                                    | Command::ColorSample(_)
+                                    | Command::FilterPreviews(_)
+                                    | Command::Readback(_)
+                            )
+                        {
+                            deferred.push_back(command);
+                            continue;
+                        }
                         match command {
+                            Command::Startup(generation, inputs) => {
+                                let (document, brush) = *inputs;
+                                startup_input = Some((generation, document, brush));
+                                startup_progress = Default::default();
+                            }
+                            Command::FinishStartupCache => worker.renderer.finish_startup_cache(),
                             Command::Region(request) => {
                                 let result = worker.renderer.request_region(request);
                                 if !matches!(result, Ok(true)) {
@@ -296,14 +379,29 @@ impl RenderWorker {
                                 }
                             }
                             Command::Frame(frame) => {
+                                if worker.paper_submitted
+                                    && (!startup_progress.canvas_ready
+                                        || (!frame.dabs.is_empty()
+                                            && !startup_progress.brush_ready))
+                                {
+                                    pending_frames.push_back(frame);
+                                    continue;
+                                }
                                 #[cfg(test)]
                                 timing.begin(frame.queued_ns);
+                                let paper = !worker.paper_submitted;
                                 worker.draw(
                                     &frame,
+                                    paper,
                                     #[cfg(test)]
                                     &mut timing,
                                 )?;
-                                count.fetch_sub(1, Ordering::Release);
+                                if paper {
+                                    pending_frames.push_back(frame);
+                                } else {
+                                    document_drawn = true;
+                                    count.fetch_sub(1, Ordering::Release);
+                                }
                             }
                             Command::Asset(id, [width, height, stride], format, bytes) => {
                                 worker
@@ -337,20 +435,16 @@ impl RenderWorker {
                     Ok(())
                 });
                 if let Err(error) = result {
-                    let _ = started.send(Err(error.clone()));
                     let _ = reply.send(Reply::Error(error));
                 }
             })
             .map_err(error)?;
-        // Initialization only; never wait this way during drawing.
-        let (outlines, clock) = match start.recv().map_err(error).and_then(|result| result) {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = thread.join();
-                return Err(error);
-            }
-        };
         Ok(Self {
+            initialized: false,
+            first_frame_sent: false,
+            startup: Default::default(),
+            startup_generation: 0,
+            startup_key: None,
             selection: None,
             region: None,
             region_pending: false,
@@ -361,7 +455,7 @@ impl RenderWorker {
             replies,
             in_flight,
             thread: Some(thread),
-            outlines,
+            outlines: HashMap::new(),
             readbacks: VecDeque::new(),
             thumbnails: VecDeque::new(),
             canvas_preview: None,
@@ -384,9 +478,51 @@ impl RenderWorker {
             .send(command)
             .map_err(|_| BackendError("GPU worker stopped"))
     }
+    pub(super) fn finish_startup_cache(&self) -> Result<(), String> {
+        self.send(Command::FinishStartupCache).map_err(error)
+    }
+    pub(super) fn startup_needs_update(
+        &self,
+        document: &layer_core::Document,
+        brush: &layer_core::BrushSnapshot,
+    ) -> bool {
+        !self.startup.complete
+            && self
+                .startup_key
+                .as_ref()
+                .is_none_or(|(revision, old)| *revision != document.revision || old != brush)
+    }
+    pub(super) fn prepare_startup(
+        &mut self,
+        document: layer_core::Document,
+        brush: layer_core::BrushSnapshot,
+    ) -> Result<(), String> {
+        self.startup_generation += 1;
+        self.startup_key = Some((document.revision, brush.clone()));
+        self.startup = Default::default();
+        self.send(Command::Startup(
+            self.startup_generation,
+            Box::new((document, brush)),
+        ))
+        .map_err(error)
+    }
+    pub(super) fn paint_ready(
+        &self,
+        document: &layer_core::Document,
+        brush: &layer_core::BrushSnapshot,
+    ) -> bool {
+        self.startup.brush_ready && !self.startup_needs_update(document, brush)
+    }
     pub(super) fn ready(&mut self) -> Result<bool, String> {
         while let Ok(reply) = self.replies.try_recv() {
             match reply {
+                Reply::Initialized => self.initialized = true,
+                Reply::Startup(generation, progress, outlines) => {
+                    if generation == self.startup_generation {
+                        self.startup = progress;
+                        self.outlines = outlines;
+                    }
+                }
                 Reply::Region(result) => {
                     self.region_pending = false;
                     self.region = Some(result);
@@ -415,7 +551,9 @@ impl RenderWorker {
         if self.thread.as_ref().is_some_and(|t| t.is_finished()) {
             return Err("GPU worker stopped".into());
         }
-        Ok(self.in_flight.load(Ordering::Acquire) < 2)
+        Ok(self.initialized
+            && (!self.first_frame_sent || self.startup.canvas_ready)
+            && self.in_flight.load(Ordering::Acquire) < 2)
     }
 }
 impl Drop for RenderWorker {
@@ -615,6 +753,7 @@ impl CanvasRenderer for RenderWorker {
             queued_ns: gtk::glib::monotonic_time().max(0) as u64 * 1000,
         };
         self.in_flight.fetch_add(1, Ordering::Release);
+        self.first_frame_sent = true;
         if let Err(e) = self.send(Command::Frame(Box::new(frame))) {
             self.in_flight.fetch_sub(1, Ordering::Release);
             return Err(e);
@@ -630,6 +769,8 @@ impl CanvasRenderer for RenderWorker {
 }
 
 struct Worker {
+    paper_submitted: bool,
+    paper_ready: Arc<AtomicBool>,
     // Drop Vulkan's surface before the wl_surface (field declaration order).
     surface: wgpu::Surface<'static>,
     instance: wgpu::Instance,
@@ -644,8 +785,12 @@ struct Worker {
     pending_present: bool,
 }
 impl Worker {
-    fn new(parent: Parent, area: gtk::glib::SendWeakRef<gtk::Picture>) -> Result<Self, String> {
-        let child = Child::new(parent)?;
+    fn new(
+        parent: Parent,
+        area: gtk::glib::SendWeakRef<gtk::Picture>,
+        clock: Arc<crate::wayland::FrameClock>,
+    ) -> Result<Self, String> {
+        let child = Child::new(parent, clock)?;
         // One process-lifetime loader/instance, not one per window. On the
         // tested NVIDIA driver, destroying our instance invalidates Wayland WSI
         // entry points still used by GTK's instance. Devices/surfaces/resources
@@ -690,7 +835,8 @@ impl Worker {
         }
         config.present_mode = wgpu::PresentMode::Mailbox;
         config.desired_maximum_frame_latency = 2;
-        let features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        let features =
+            adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::PIPELINE_CACHE);
         #[cfg(test)]
         let features = features
             | (adapter.features()
@@ -709,9 +855,15 @@ impl Worker {
             config.present_mode,
             config.format
         );
-        let presenter = ViewportPresenter::new(&device, config.format);
-        let renderer = WgpuRasterizer::from_wgpu(adapter, device, queue).map_err(error)?;
+        let cache = gtk::glib::user_cache_dir()
+            .join("capycanvas")
+            .join("shaders");
+        let renderer = WgpuRasterizer::from_wgpu_staged_cached(adapter, device, queue, &cache)
+            .map_err(error)?;
+        let presenter = ViewportPresenter::for_renderer(&renderer, config.format);
         Ok(Self {
+            paper_submitted: false,
+            paper_ready: Arc::new(AtomicBool::new(false)),
             surface,
             instance,
             child,
@@ -728,6 +880,7 @@ impl Worker {
     fn draw(
         &mut self,
         frame: &Frame,
+        paper: bool,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
         if self.child.geometry(frame.geometry) {
@@ -760,7 +913,27 @@ impl Worker {
         if target.is_some() {
             timing.acquired(&self.renderer);
         }
-        self.renderer.submit(frame.packet()).map_err(error)?;
+        if paper {
+            let layers: Vec<_> = frame
+                .layers
+                .iter()
+                .filter(|l| l.kind == layer_core::LayerKind::Background)
+                .cloned()
+                .collect();
+            self.renderer
+                .submit(FramePacket {
+                    layers: &layers,
+                    dabs: &[],
+                    dab_batches: &[],
+                    reset_layers: true,
+                    composite_all: true,
+                    ..frame.packet()
+                })
+                .map_err(error)?;
+            self.paper_submitted = true;
+        } else {
+            self.renderer.submit(frame.packet()).map_err(error)?;
+        }
         self.cursor.clone_from(&frame.cursor);
         self.cursor_scale = frame.geometry.scale as f32;
         self.presenter
@@ -827,6 +1000,12 @@ impl Worker {
         #[cfg(not(test))]
         self.child.feedback(0);
         self.renderer.queue().present(target);
+        if !self.paper_ready.load(Ordering::Acquire) {
+            let ready = self.paper_ready.clone();
+            self.renderer
+                .queue()
+                .on_submitted_work_done(move || ready.store(true, Ordering::Release));
+        }
         #[cfg(test)]
         if let Some(timing) = timing {
             timing.end(&self.renderer);
