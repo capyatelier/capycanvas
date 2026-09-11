@@ -280,8 +280,23 @@ check also verifies canvas pinch navigation through empty workspace regions.
 Run the faster shared Metal/action regressions with
 `cargo test -p layer-apple workspace -- --test-threads=1`.
 The Chrome `panel-configuration` fixture enables direct full-image comparison.
-Collapsed columns/drawers, remaining panel projections and complete interaction
-and visual acceptance remain open on both targets.
+Collapsed columns, tabbed content drawers, child tool drawers and partial-Zen
+edge toolbars now share native projections on both targets. Content-panel tiles
+and the Commands panel are available. The core supplies column geometry, drawer
+composition, natural toolbar height, anchors, connections and dismissal policy.
+Native scrolling reports clipped tile bounds so a child drawer follows its
+origin and disappears when the tile scrolls out of view. Drawers retain their
+body only through closing and coalesce geometry requests behind one pending
+query per projection. Canvas contact admission runs on the Rust owner: an outside
+contact that dismisses a drawer cannot leak a later move or prediction into paint.
+Mode changes refresh chrome visibility even when native measurements are equal.
+
+`testCollapsedColumnsDrawersAndZen` exercises column tabs, a child drawer,
+outside dismissal and restoring the column; `testPartialZenToolbar` checks the
+default standalone toolbar projection and exiting Zen. These shared checks use
+in-app controls. The `partial-zen` Chrome fixture retains the current browser's
+missing edge toolbar sections in its full-image report. Full interaction,
+visual, physical input and performance acceptance remain open on both targets.
 
 This is an editor-shell milestone, not a finished port. The simulator renders
 the live canvas; the iPad target builds, signs, installs and launches; the AppKit

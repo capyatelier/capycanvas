@@ -46,9 +46,13 @@ struct WorkspacePanels: View {
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor, lineWidth: 2))
                     .placed(workspace.dropHint["bounds"]).allowsHitTesting(false).accessibilityHidden(true)
             }
+            if store.snapshot["partial_zen"].bool { WorkspaceZenToolbars(store: store) }
+            if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
+            WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)
         }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .modifier(WorkspaceRootDrag(workspace: workspace))
             .onPreferenceChange(WorkspaceSources.self) { workspace.sources = $0 }
+            .onPreferenceChange(DrawerTileMeasurements.self) { store.contentDrawers.measureTiles($0) }
     }
 }
 
@@ -141,11 +145,13 @@ struct WorkspaceToolbar: View {
             ForEach(panel["tiles"].array.indices, id: \.self) { index in
                 let tile = panel["tiles"][index]
                 WorkspaceTile(store: store, panel: panel, tile: tile)
+                    .modifier(DrawerTileMeasurement(panel: panel["id"].string, tile: tile["id"].uint))
                     .modifier(WorkspaceContext(store: store, target: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
                     .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw])))
                     .placed(geometry["tiles"][index])
             }
-            SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
+            if !geometry["grip"].isNull {
+                SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .accessibilityElement().accessibilityLabel("Toolbar options")
                 .accessibilityIdentifier("toolbar-options-" + panel["id"].string)
@@ -155,6 +161,7 @@ struct WorkspaceToolbar: View {
                     doubleClick: { store.doubleClickHandle(JSON(["kind": "panel", "panel": panel["id"].raw])) }))
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": panel["id"].raw])))
                 .placed(geometry["grip"])
+            }
         }
     }
 }

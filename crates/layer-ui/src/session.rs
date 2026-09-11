@@ -1405,7 +1405,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let layout = &mut self.state.workspace.layout;
                 if matches!(
                     self.state.platform,
-                    Platform::Gtk | Platform::Generic | Platform::Android
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
                 ) && layout.column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
@@ -1465,7 +1469,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .is_some_and(|t| t.choice.selected && t.enabled);
                 if matches!(
                     self.state.platform,
-                    Platform::Gtk | Platform::Generic | Platform::Android
+                    Platform::Gtk
+                        | Platform::Generic
+                        | Platform::Android
+                        | Platform::Ios
+                        | Platform::Mac
                 ) && control.drawer_columns().is_some()
                     && (!control.selectable()
                         || selected
@@ -1757,7 +1765,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                             let point = drag.position(position);
                             let root = matches!(
                                 self.state.platform,
-                                Platform::Gtk | Platform::Generic | Platform::Android
+                                Platform::Gtk
+                                    | Platform::Generic
+                                    | Platform::Android
+                                    | Platform::Ios
+                                    | Platform::Mac
                             )
                             .then(|| {
                                 self.state
@@ -7628,7 +7640,7 @@ mod tests {
     #[test]
     fn ports_awaiting_columns_retain_docked_handle_behavior() {
         let viewport = [1200.0, 900.0];
-        for platform in [Platform::Web, Platform::Mac, Platform::Ios] {
+        for platform in [Platform::Web] {
             let mut app = session();
             app.set_platform(platform);
             let panel = Panel::Sizes;

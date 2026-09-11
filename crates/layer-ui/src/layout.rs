@@ -425,8 +425,10 @@ impl Panel {
         {
             return true;
         }
-        if matches!(self, Self::ToolSettings | Self::Color | Self::Navigator)
-            && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
+        if matches!(
+            self,
+            Self::ToolSettings | Self::Color | Self::Navigator | Self::Commands
+        ) && matches!(platform, crate::Platform::Ios | crate::Platform::Mac)
         {
             return true;
         }

@@ -19,6 +19,36 @@ extension XCTestCase {
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: length) + value)
         #endif
     }
+    @MainActor func checkCollapsedColumnsDrawersAndZen(in app: XCUIApplication) {
+        workspaceActivate(app.buttons["column-icon-toolbar"])
+        let column = app.descendants(matching: .any)["column-drawer-4"].firstMatch
+        XCTAssertTrue(column.waitForExistence(timeout: 10))
+        workspaceActivate(app.buttons["drawer-tab-brushes"])
+        XCTAssertTrue(column.buttons["brush-1"].waitForExistence(timeout: 5))
+        workspaceActivate(app.buttons["drawer-tab-toolbar"])
+        let pen = column.buttons["toolbar-tile-toolbar-1"]
+        workspaceActivate(pen)
+        let drawer = app.descendants(matching: .any)["tool-drawer"].firstMatch
+        if !drawer.waitForExistence(timeout: 2) { workspaceActivate(pen) }
+        XCTAssertTrue(drawer.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.frame.contains(drawer.frame), "The shared drawer bounds must stay within the viewport")
+        XCTAssertTrue(drawer.buttons["brush-1"].exists)
+        let outside = app.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.7))
+        #if os(macOS)
+        outside.click()
+        #else
+        outside.tap()
+        #endif
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: drawer)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(column.exists, "Column drawers use explicit dismissal")
+        workspaceActivate(app.buttons["expand-column-4"])
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: column)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["panel-tab-toolbar"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+        attachWorkspaceScreen(app, name: "columns-drawers-zen")
+    }
     @MainActor func checkToolbarCustomization(in app: XCUIApplication) {
         XCTAssertTrue(app.textFields["toolbar-name"].waitForExistence(timeout: 20))
         for query in ["Undo", "Divider", "Manage Toolbars"] {

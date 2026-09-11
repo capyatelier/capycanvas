@@ -25,6 +25,7 @@ import SwiftUI
     lazy var navigatorImages = NavigatorImages(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
+    lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
     var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
     var state: JSON { currentState }
@@ -63,6 +64,7 @@ import SwiftUI
                 navigatorImages.refresh()
                 camera.value = state["camera"]
                 projectFiles.receive(state)
+                contentDrawers.refresh()
                 workspace.refresh()
             }
             else if !next["camera"].isNull {
