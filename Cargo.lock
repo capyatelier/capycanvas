@@ -982,6 +982,7 @@ version = "0.1.0"
 dependencies = [
  "layer-core",
  "layer-engine",
+ "layer-host",
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",

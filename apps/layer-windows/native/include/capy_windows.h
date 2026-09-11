@@ -18,6 +18,9 @@ typedef struct CapyPointer {
 /* Create on XAML thread with Microsoft ISwapChainPanelNative interface pointer.
    Then transfer exclusive ownership to the canvas thread. */
 __declspec(dllimport) CapyHost* capy_create(void* panel, uint32_t width, uint32_t height, float scale);
+/* Prepare on the render worker, then park it for the first UI-thread capy_resize.
+   Every subsequent resize also requires exclusive ownership on the UI thread. */
+__declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
 __declspec(dllimport) void capy_destroy(CapyHost*);
 __declspec(dllimport) const char* capy_error(void);
 __declspec(dllimport) int32_t capy_resize(CapyHost*, uint32_t width, uint32_t height, float scale);
@@ -31,6 +34,7 @@ __declspec(dllimport) int32_t capy_acquire(CapyHost*);
 __declspec(dllimport) int32_t capy_frame(CapyHost*, uint64_t now_ns, uint64_t presentation_ns);
 /* Returned UTF-8 owned by Rust; release with capy_string_free. Null=no change. */
 __declspec(dllimport) char* capy_snapshot(CapyHost*);
+__declspec(dllimport) char* capy_query(CapyHost*, const char* json);
 __declspec(dllimport) void capy_string_free(char*);
 #ifdef __cplusplus
 }

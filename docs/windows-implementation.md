@@ -182,3 +182,23 @@ staged startup integration remains required. Rounded physical extents avoid
 truncation, but XAML content and the Win32 client capture still differ by one
 physical row on the test setup. Resolve native-frame capture accounting before
 using full-image comparisons to claim parity.
+
+### Shared-host and staged GPU checkpoint
+
+Windows now uses NativeHost for actions, snapshots, queries, gesture routing,
+paint cancellation and startup readiness. Its typed pointer path keeps OS
+timestamps and camera revisions as u64 values and preserves pressure, tilt,
+twist and flags. The shared host assigns engine sequence numbers after any
+inserted cancellation; predicted boundaries cannot end deferred real contacts.
+
+Device and staged renderer preparation run on the render worker. Initial
+swap-chain attachment uses the same UI-thread handoff as subsequent resize.
+Paper is presented before background brush compilation, and the shared startup
+state controls painting readiness. CPU-side workspace models can be queried
+before the GPU is attached; the full Windows workspace is still to be built.
+
+All 13 relevant Rust tests pass and the native desktop project builds. Local
+controlled captures show the stroke, undo and redo; the same document pans
+behind the titlebar. Resize and coordinated close pass with no runtime stderr.
+These checks do not establish real OS input delivery, startup latency, visual
+parity, or 120 Hz presentation. Those acceptance gates remain open.

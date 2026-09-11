@@ -1,6 +1,6 @@
 //! Validated wire records. Positions/revisions are captured by the OS adapter,
 //! never reconstructed from the render owner's newer camera.
-use layer_engine::{PenPhase, ToolKind};
+use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CapyPointer {
@@ -21,6 +21,27 @@ pub struct CapyPointer {
     pub flags: u32,
 }
 impl CapyPointer {
+    /// Preserve capture metadata without routing timestamps through JSON/f64.
+    pub fn event(&self) -> PenEvent {
+        PenEvent {
+            device_id: self.id,
+            sequence: self.sequence,
+            timestamp_ns: self.timestamp_ns,
+            view_revision: self.view_revision,
+            surface_position: layer_core::Point {
+                x: self.x,
+                y: self.y,
+            },
+            pressure: self.pressure,
+            tilt_radians: [self.tilt_x, self.tilt_y],
+            twist_radians: self.twist,
+            distance: self.distance,
+            phase: self.phase(),
+            tool: self.tool(),
+            flags: SampleFlags(self.flags as u16),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.phase > 4 || self.tool > 3 || self.button > 2 || self.flags & !0x0f != 0 {
             return Err("Invalid pointer enum or flags");
@@ -117,6 +138,34 @@ mod tests {
         let mut last = point(3);
         last.timestamp_ns = 0;
         assert!(validate_batch(&[point(1), last]).is_err());
+    }
+    #[test]
+    fn typed_conversion_preserves_capture_precision_and_all_axes() {
+        let mut record = point(31);
+        record.timestamp_ns = (1u64 << 54) + 1;
+        record.view_revision = (1u64 << 54) + 3;
+        record.tilt_x = -0.4;
+        record.tilt_y = 0.8;
+        record.twist = 2.5;
+        record.distance = 0.25;
+        record.flags = 0x0f;
+        record.tool = 2;
+        validate_batch(&[record]).unwrap();
+        let event = record.event();
+        assert_eq!(event.timestamp_ns, record.timestamp_ns);
+        assert_eq!(event.view_revision, record.view_revision);
+        assert_eq!(event.sequence, record.sequence);
+        assert_eq!(event.device_id, record.id);
+        assert_eq!(
+            [event.surface_position.x, event.surface_position.y],
+            [record.x, record.y]
+        );
+        assert_eq!(event.pressure, record.pressure);
+        assert_eq!(event.tilt_radians, [record.tilt_x, record.tilt_y]);
+        assert_eq!(event.twist_radians, record.twist);
+        assert_eq!(event.distance, record.distance);
+        assert_eq!(event.flags.0, 0x0f);
+        assert_eq!(event.tool, ToolKind::Eraser);
     }
     #[test]
     fn capture_revision_and_eraser_survive_validation() {

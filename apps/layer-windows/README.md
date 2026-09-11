@@ -59,3 +59,14 @@ Use inspect-window.ps1 -ClientOnly for Win32 client-area captures. Record the
 XAML viewport separately: the observed client capture includes one extra physical
 row compared with the SwapChainPanel extent. Native-frame accounting remains part
 of the parity setup; do not rescale or silently crop reference captures to hide it.
+
+The bridge uses the shared NativeHost and staged GPU preparation. Device/shader
+work runs on the render worker; swap-chain attachment and reconfiguration run on
+the UI thread while the worker is parked. The first paper frame does not consume
+the engine's pending document replay. Painting readiness follows the shared
+brush preparation state.
+
+Run the relevant bridge tests with:
+~~~powershell
+cargo test --locked -p layer-host -p layer-windows --lib
+~~~

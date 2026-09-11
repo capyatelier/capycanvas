@@ -130,7 +130,7 @@ void CanvasWindow::Start() {
     window.AppWindow().TitleBar().ButtonForegroundColor(dark?
         Windows::UI::Color{255,225,225,229}:Windows::UI::Color{255,32,32,36});
     revision.store(capy_view_revision(host));
-    status.Text(L"D3D12 canvas");
+    status.Text(L"Preparing brushes…");
     inputController=Microsoft::UI::Dispatching::DispatcherQueueController::CreateOnDedicatedThread();
     inputDispatcher=inputController.DispatcherQueue();
     renderer=std::jthread([this]{Run();});
@@ -182,9 +182,6 @@ void CanvasWindow::StartInput() {
         inputSource.PointerRoutedAway([weak=weak_from_this()](auto&&,PointerEventArgs const& e){
             if(auto self=weak.lock())self->Pointer(e,4);
         });
-        dispatcher.TryEnqueue([weak=weak_from_this()]{
-            if(auto self=weak.lock())self->status.Text(L"Canvas ready");
-        });
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
 
@@ -218,58 +215,83 @@ void CanvasWindow::Pointer(Microsoft::UI::Input::PointerEventArgs const& e, uint
     wake.notify_one();e.Handled(true);
 }
 void CanvasWindow::Run() {
-    bool dirty=true;
-    bool captured=false;
-    bool inputStarted=false;
-    for(;;) {
-        {
-            std::unique_lock lock(mutex);
-            wake.wait(lock,[&]{return closing||resize||dirty||!work.empty();});
-            if(closing) break;
-            if(resize) {
-                paused=true;resize=false;
-                capy_suspend(host);
-                dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();});
-                wake.wait(lock,[&]{return !paused||closing;});
-                dirty=true;continue;
+    try {
+        struct Apartment {
+            Apartment(){init_apartment(apartment_type::multi_threaded);}
+            ~Apartment(){uninit_apartment();}
+        } apartment;
+        // Device/shader preparation must not hold the UI thread. The existing resize
+        // handshake performs the first SetSwapChain only after preparation finishes.
+        bool prepared=capy_prepare_gpu(host)>=0;
+        if(!prepared) Fail(capy_error());
+        else {std::lock_guard lock(mutex);resize=true;}
+        bool dirty=true;
+        bool captured=false;
+        bool inputStarted=false;
+        bool brushReady=false;
+        for(;prepared;) {
+            {
+                std::unique_lock lock(mutex);
+                wake.wait(lock,[&]{return closing||resize||dirty||!work.empty();});
+                if(closing) break;
+                if(resize) {
+                    paused=true;resize=false;
+                    capy_suspend(host);
+                    dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyResize();});
+                    wake.wait(lock,[&]{return !paused||closing;});
+                    dirty=true;continue;
+                }
             }
-        }
-        // DXGI waits before draining input so a frame uses the freshest arrived samples.
-        auto acquired=capy_acquire(host);
-        if(acquired<0) {Fail(capy_error());break;}
-        if(acquired==2) {std::lock_guard lock(mutex);resize=true;continue;}
-        if(acquired==0) {
-            std::unique_lock lock(mutex);
-            wake.wait_for(lock,std::chrono::milliseconds(16),[&]{return closing||resize;});
-            continue;
-        }
-        std::deque<Work> pending;
-        {std::lock_guard lock(mutex);pending.swap(work);}
-        bool failed=false;
-        for(auto& item:pending) {
-            int result;
-            if(auto points=std::get_if<std::vector<CapyPointer>>(&item))
-                result=capy_pointer(host,points->data(),points->size());
-            else {
-                auto& command=std::get<Command>(item);
-                result=command.input?capy_input(host,command.json.c_str()):capy_action(host,command.json.c_str());
+            // DXGI waits before draining input so a frame uses the freshest arrived samples.
+            auto acquired=capy_acquire(host);
+            if(acquired<0) {Fail(capy_error());break;}
+            if(acquired==2) {std::lock_guard lock(mutex);resize=true;continue;}
+            if(acquired==0) {
+                std::unique_lock lock(mutex);
+                wake.wait_for(lock,std::chrono::milliseconds(16),[&]{return closing||resize;});
+                continue;
             }
-            if(result<0) {Fail(capy_error());failed=true;break;}
-        }
-        if(failed) break;
-        auto now=Now();
-        auto result=capy_frame(host,now,now);
-        if(result<0){Fail(capy_error());break;}
-        dirty=result!=0;
-        if(!inputStarted){inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->StartInput();});}
-        revision.store(capy_view_revision(host));
-        if(!captured && GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
+            std::deque<Work> pending;
+            {std::lock_guard lock(mutex);pending.swap(work);}
+            bool failed=false;
+            for(auto& item:pending) {
+                int result;
+                if(auto points=std::get_if<std::vector<CapyPointer>>(&item))
+                    result=capy_pointer(host,points->data(),points->size());
+                else {
+                    auto& command=std::get<Command>(item);
+                    result=command.input?capy_input(host,command.json.c_str()):capy_action(host,command.json.c_str());
+                }
+                if(result<0) {Fail(capy_error());failed=true;break;}
+            }
+            if(failed) break;
+            auto now=Now();
+            auto result=capy_frame(host,now,now);
+            if(result<0){Fail(capy_error());break;}
+            dirty=result!=0;
+            if(!inputStarted){inputStarted=true;inputDispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->StartInput();});}
+            revision.store(capy_view_revision(host));
             if(auto snapshot=capy_snapshot(host)) {
-                std::ofstream("canvas-state.json") << snapshot;
-                capy_string_free(snapshot);captured=true;
+                std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
+                auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
+                if(model.HasKey(L"brush_ready")) {
+                    bool ready=model.GetNamedBoolean(L"brush_ready");
+                    if(ready!=brushReady) {
+                        brushReady=ready;
+                        dispatcher.TryEnqueue([weak=weak_from_this(),ready]{
+                            if(auto self=weak.lock())self->status.Text(ready?L"Canvas ready":L"Preparing brushes…");
+                        });
+                    }
+                }
+                if(!captured && !dirty && GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
+                    std::ofstream("canvas-state.json") << snapshot;
+                    captured=true;
+                }
             }
         }
-    }
+    } catch(hresult_error const& error) {Fail(to_string(error.message()));}
+      catch(std::exception const& error) {Fail(error.what());}
+      catch(...) {Fail("Unexpected render worker failure");}
     capy_suspend(host);
     rendererDone.store(true);
     dispatcher.TryEnqueue([weak=weak_from_this()] {

@@ -54,3 +54,9 @@ xcuserdata/
 /apps/layer-windows/Generated Files/
 /apps/layer-windows/x64/
 /apps/layer-windows/ipch/
+
+# Private Windows diagnostics, including accidental launches from the repo root.
+*.dmp
+*.etl
+*.wer
+canvas-state.json
