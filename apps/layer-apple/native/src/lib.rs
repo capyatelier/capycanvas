@@ -1,6 +1,8 @@
 //! Apple host ABI. The same library serves UIKit and AppKit. Rust owns the
 //! shared session; Swift owns UI and serial execution. No callbacks into Swift.
 mod metal;
+#[cfg(test)]
+mod tests;
 use layer_host::{NativeHost, PointerBatch};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -135,6 +137,46 @@ pub unsafe extern "C" fn capy_apple_request(
     .flatten()
     .unwrap_or(std::ptr::null_mut())
 }
+/// # Safety
+/// Valid exclusively owned handle, called on the serial owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_scroll(
+    app: *mut CapyApple,
+    x: f32,
+    y: f32,
+    dx: f32,
+    dy: f32,
+    scale: f32,
+    zoom: u32,
+    horizontal: u32,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| {
+        a.host
+            .scroll([x, y], [dx, dy], scale, zoom != 0, horizontal != 0)
+    })
+    .map_or(-1, |_| 0)
+}
+
+/// # Safety
+/// Valid exclusively owned handle, called on the serial owner.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_gesture(
+    app: *mut CapyApple,
+    x: f32,
+    y: f32,
+    scale: f32,
+    rotation: f32,
+) -> i32 {
+    let Some(app) = (unsafe { app.as_mut() }) else {
+        return -1;
+    };
+    app.perform(|a| a.host.gesture([x, y], scale, rotation))
+        .map_or(-1, |_| 0)
+}
+
 /// # Safety
 /// Valid handle and retained CAMetalLayer; layer outlives attach through detach.
 #[unsafe(no_mangle)]

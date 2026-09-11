@@ -13,8 +13,7 @@ final class CanvasView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
     let store: EditorStore
     private var displayLink: CADisplayLink?
-    private var framePending = false
-    private var generation: UInt64 = 0
+    private lazy var frames = CanvasFrameDriver(store: store)
     private var attached = false
     private var drawableExtent = CGSize.zero
     var contacts: [ObjectIdentifier: PencilContact] = [:]
@@ -40,6 +39,8 @@ final class CanvasView: UIView {
         hover.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
         addGestureRecognizer(hover)
         store.wake = { [weak self] in self?.wake() }
+        frames.setPaused = { [weak self] paused in self?.displayLink?.isPaused = paused }
+        frames.submittedViewport = { [weak self] in self?.accessibilityValue = "Metal ready" }
     }
     required init?(coder: NSCoder) { fatalError("Use init(store:)") }
     override var canBecomeFirstResponder: Bool { true }
@@ -72,30 +73,20 @@ final class CanvasView: UIView {
         if !attached {
             store.native?.attach(metal, width: width, height: height, scale: Float(contentScaleFactor))
             attached = true
+            frames.activate()
         } else { store.native?.resize(width: width, height: height, scale: Float(contentScaleFactor)) }
         wake()
     }
     func stop() {
+        frames.deactivate()
+        store.input(["type": "blur"])
         displayLink?.invalidate(); displayLink = nil
         if attached { store.native?.detach(); attached = false }
         contacts.removeAll(); ignoredContacts.removeAll()
     }
-    func wake() { generation &+= 1; displayLink?.isPaused = false }
+    func wake() { frames.wake() }
     @objc private func tick(_ link: CADisplayLink) {
-        guard !framePending, attached, let native = store.native else { return }
-        framePending = true
-        let submittedGeneration = generation
-        let now = UInt64(CACurrentMediaTime() * 1_000_000_000)
-        let target = UInt64(link.targetTimestamp * 1_000_000_000)
-        native.frame(now: now, target: target) { [weak self] again, revision, costs in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.framePending = false
-                self.store.cameraRevision = revision
-                if costs[2] > 0 { self.accessibilityValue = "Metal ready" }
-                self.displayLink?.isPaused = !again && self.generation == submittedGeneration
-            }
-        }
+        frames.tick(target: link.targetTimestamp)
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 1) }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { route(touches, event: event, phase: 2) }
