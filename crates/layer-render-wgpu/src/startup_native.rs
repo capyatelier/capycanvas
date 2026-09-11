@@ -23,7 +23,19 @@ struct Shared {
     pending: AtomicUsize,
     error: Mutex<Option<String>>,
 }
-pub(crate) struct Compiler(Arc<Shared>);
+static RETIRED: Mutex<Vec<std::thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// Wait for canceled native shader workers after closing all renderers at process
+/// shutdown. Ordinary surface teardown stays asynchronous; final shutdown must
+/// not unload the graphics driver while an in-flight compilation is using it.
+pub fn finish_shader_compiler_shutdown() {
+    let workers = std::mem::take(&mut *RETIRED.lock().unwrap());
+    for worker in workers {
+        let _ = worker.join();
+    }
+}
+
+pub(crate) struct Compiler(Arc<Shared>, Option<std::thread::JoinHandle<()>>);
 impl Compiler {
     pub fn new() -> Result<Self, GpuRasterError> {
         let shared = Arc::new(Shared {
@@ -33,7 +45,7 @@ impl Compiler {
             error: Mutex::new(None),
         });
         let worker = shared.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("capy-shaders".into())
             .spawn(move || {
                 loop {
@@ -64,7 +76,7 @@ impl Compiler {
                 }
             })
             .map_err(|e| GpuRasterError::Effect(e.to_string()))?;
-        Ok(Self(shared))
+        Ok(Self(shared, Some(thread)))
     }
     pub fn enqueue(
         &self,
@@ -109,8 +121,12 @@ impl Drop for Compiler {
         queue.stopped = true;
         queue.jobs.clear();
         self.0.wake.notify_one();
+        drop(queue);
         // An in-flight driver compilation finishes using its own GPU handles.
         // Surface teardown never joins the compiler or waits for it.
+        let mut retired = RETIRED.lock().unwrap();
+        retired.retain(|worker| !worker.is_finished());
+        retired.push(self.1.take().unwrap());
     }
 }
 struct Span;
@@ -145,4 +161,39 @@ impl Drop for Span {
 unsafe extern "C" {
     fn ATrace_beginSection(name: *const std::ffi::c_char);
     fn ATrace_endSection();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::mpsc, time::Duration};
+
+    #[test]
+    fn surface_teardown_cancels_queue_and_final_shutdown_joins_inflight_work() {
+        let compiler = Compiler::new().unwrap();
+        let (entered, wait_entered) = mpsc::channel();
+        let (release, wait_release) = mpsc::channel();
+        let (finished, wait_finished) = mpsc::channel();
+        compiler.enqueue(DOCUMENT, move || {
+            entered.send(()).unwrap();
+            wait_release.recv_timeout(Duration::from_secs(10)).unwrap();
+            finished.send(()).unwrap();
+            Ok(())
+        });
+        let canceled = Arc::new(AtomicUsize::new(0));
+        let flag = canceled.clone();
+        compiler.enqueue(OTHER, move || {
+            flag.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        compiler.start();
+        wait_entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        // Drop must return while the worker remains blocked.
+        drop(compiler);
+        assert!(wait_finished.try_recv().is_err());
+        release.send(()).unwrap();
+        finish_shader_compiler_shutdown();
+        wait_finished.try_recv().unwrap();
+        assert_eq!(canceled.load(Ordering::Relaxed), 0);
+    }
 }

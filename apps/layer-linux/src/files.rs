@@ -106,6 +106,14 @@ impl Workspace {
                         }
                         kind => {
                             let result = match kind {
+                                HostRequestKind::SetFullscreen { fullscreen } => {
+                                    if fullscreen {
+                                        w.window.fullscreen();
+                                    } else {
+                                        w.window.unfullscreen();
+                                    }
+                                    Ok(())
+                                }
                                 HostRequestKind::NewWindow => w
                                     .window
                                     .application()

@@ -5,6 +5,7 @@ import { createCustomization } from "./customization.js";
 import { createEditorPanels } from "./editor-panels.js";
 import { createWorkspaceChrome } from "./workspace-chrome.js";
 import { createDocuments } from "./documents.js";
+import { createSystemStatus } from "./system-status.js";
 import { createNumberField } from "./numeric.js";
 import { createLayerPanel } from "./layers.js";
 import { createEffectPanels, fetchFilterPackage } from "./effects.js";
@@ -35,7 +36,8 @@ let app,
   chromeHeld = false,
   dragItem = null,
   statusTimer;
-let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents;
+let refreshPreferences, customization, layerPanel, effectPanels, editor, workspaceChrome, documents, systemStatus;
+const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
 let compilerScheduled = false, compilerFailed = false;
@@ -160,33 +162,6 @@ function iconButton(id) {
     glyph.style.width = glyph.style.height = `${catalog.zen_icon_size}px`;
   }
   node.append(glyph);
-  return node;
-}
-function fullscreenButton() {
-  // Browser-window state belongs to the host, not the shared drawing session.
-  const node = button("", async () => {
-    node.disabled = true;
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.documentElement.requestFullscreen();
-    } catch {
-      message("Could not change fullscreen mode.");
-    } finally {
-      node.disabled = !document.fullscreenEnabled;
-      sync();
-    }
-  }, "tile-button");
-  node.id = "fullscreen";
-  node.disabled = !document.fullscreenEnabled;
-  function sync() {
-    const active = !!document.fullscreenElement;
-    node.title = !document.fullscreenEnabled ? "Fullscreen unavailable"
-      : active ? "Exit fullscreen" : "Enter fullscreen";
-    node.setAttribute("aria-label", node.title);
-    node.replaceChildren(icon(active ? "fullscreen-exit" : "fullscreen-enter"));
-  }
-  document.addEventListener("fullscreenchange", sync);
-  sync();
   return node;
 }
 function draggable(node, item) {
@@ -653,7 +628,7 @@ function update(regions) {
   if (regions & (4 | 8))
     for (const command of state.commands)
       for (const node of commands.get(command.id) || []) {
-        node.disabled = !command.enabled;
+        node.disabled = !command.enabled || (command.id === "fullscreen" && !document.fullscreenEnabled);
         node.title = command.tooltip;
         node.setAttribute("aria-label", command.label);
         node.setAttribute("aria-pressed", String(command.selected));
@@ -689,7 +664,17 @@ function update(regions) {
         for (const request of state.requests) {
           let error = null;
           try {
-            if (request.kind.type === "open_link") { window.open(app.application_link(request.kind.link), "_blank", "noopener"); }
+            if (request.kind.type === "set_fullscreen") {
+              if (!fullscreenRequests.has(request.id)) {
+                fullscreenRequests.add(request.id);
+                systemStatus.setFullscreen(request.kind.fullscreen)
+                  .then(() => dispatch({type:"complete_request",id:request.id,error:null}),
+                    error => dispatch({type:"complete_request",id:request.id,error:String(error)}))
+                  .finally(() => fullscreenRequests.delete(request.id));
+              }
+              continue;
+            }
+            else if (request.kind.type === "open_link") { window.open(app.application_link(request.kind.link), "_blank", "noopener"); }
             else if (request.kind.type !== "save_settings") { documents.handle(request); continue; }
             else
             localStorage.setItem(settingsKey, JSON.stringify(request.kind.settings));
@@ -827,11 +812,17 @@ function buildHeader() {
     details.addEventListener("toggle",()=>{if(details.open) refreshWorkspaceMenu(); updateZen();});
     $("header-start").append(details);
   }
-  $("header-end").append(fullscreenButton(), iconButton("settings"));
+  systemStatus = createSystemStatus({element, changed:fullscreen => {
+    if(customization && state.fullscreen !== fullscreen) dispatch({type:"window_fullscreen",fullscreen});
+  }});
+  $("header-end").append(systemStatus.root, iconButton("fullscreen"), iconButton("settings"));
+  $("header-end").querySelector('[data-command="fullscreen"]').id = "fullscreen";
 }
 function refreshWorkspaceMenu() {
   if(!customization || !document.querySelector(".header-menu[open]")) return;
   for(const spec of app.editor_models(workspace.clientWidth,workspace.clientHeight).application_menus) {
+    if (!document.fullscreenEnabled) for (const item of spec.model.sections.flat())
+      if (item.action?.type === "invoke" && item.action.command === "fullscreen") item.enabled = false;
     const details = document.querySelector(`[data-menu="${spec.id}"]`);
     if(details?.open) customization.renderMenu(details.querySelector(".popover"),spec.model,()=>{details.open=false;updateZen();});
   }
@@ -1169,6 +1160,7 @@ try {
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel});
   documents = createDocuments({app,dispatch,applyChange,wake,element,button,numberField,message,gpuOperation});
   update(255);
+  systemStatus.sync();
   $("status").textContent = "";
   if (restoreError) message(restoreError);
   new ResizeObserver(arrange).observe(workspace);

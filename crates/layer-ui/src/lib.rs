@@ -173,7 +173,11 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
         &[CommandId::ShowRulers, CommandId::SnapRulers],
-        &[CommandId::ZenMode, CommandId::ToggleTheme],
+        &[
+            CommandId::ZenMode,
+            CommandId::Fullscreen,
+            CommandId::ToggleTheme,
+        ],
         &[CommandId::ResetLayout],
     ],
 };
@@ -311,6 +315,8 @@ pub fn ui_catalog() -> UiCatalog {
             "rotate-left",
             "rotate-right",
             "flip-horizontal",
+            "fullscreen-enter",
+            "fullscreen-exit",
             "flip-vertical",
             const { ZenIcon::LookingUp.icon() },
             const { ZenIcon::FacingForward.icon() },
@@ -427,6 +433,7 @@ pub enum CommandId {
     // Old saved toolbar/custom-action entries now use the sole visibility toggle.
     #[serde(alias = "toggle_panels")]
     ZenMode,
+    Fullscreen,
     NewWindow,
     KeyboardShortcuts,
     About,
@@ -436,6 +443,7 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web),
             Self::NewDocument
             | Self::OpenDocument
             | Self::SaveDocument
@@ -482,6 +490,7 @@ impl CommandId {
         matches!(
             self,
             Self::ZenMode
+                | Self::Fullscreen
                 | Self::ToggleTheme
                 | Self::FlipHorizontal
                 | Self::FlipVertical
@@ -531,6 +540,7 @@ impl CommandId {
             Self::FlipHorizontal => "flip-horizontal",
             Self::FlipVertical => "flip-vertical",
             Self::ZenMode => ZenIcon::LookingUp.icon(),
+            Self::Fullscreen => "fullscreen-enter",
             Self::Settings => "settings",
             Self::AddLayer => "plus",
             Self::DeleteLayer => "minus",
@@ -539,7 +549,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 61] = [
+    pub const ALL: [Self; 62] = [
         Self::NewDocument,
         Self::OpenDocument,
         Self::SaveDocument,
@@ -596,6 +606,7 @@ impl CommandId {
         Self::LowerLayer,
         Self::ResetLayout,
         Self::ZenMode,
+        Self::Fullscreen,
         Self::NewWindow,
         Self::KeyboardShortcuts,
         Self::About,
@@ -686,6 +697,7 @@ impl CommandId {
             Self::LowerLayer => "Lower layer",
             Self::ResetLayout => "Reset layout",
             Self::ZenMode => "Zen mode",
+            Self::Fullscreen => "Full screen",
             Self::NewWindow => "New Window",
             Self::KeyboardShortcuts => "Keyboard Shortcuts",
             Self::About => "About Capy Canvas",
@@ -765,6 +777,8 @@ pub struct DocumentTab {
 #[derive(Clone, Debug, Serialize)]
 pub struct UiState {
     pub revision: u64,
+    /// Observed native/browser window state; never stored in workspace preferences.
+    pub fullscreen: bool,
     pub workspace: WorkspaceState,
     pub brush: BrushState,
     pub colors: ColorState,
@@ -800,6 +814,9 @@ pub struct UiState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
+    WindowFullscreen {
+        fullscreen: bool,
+    },
     Navigator {
         phase: ContactPhase,
         position: [f32; 2],

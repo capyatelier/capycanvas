@@ -16,6 +16,8 @@ mod platform;
 #[path = "startup_web.rs"]
 mod platform;
 pub(super) use platform::Compiler;
+#[cfg(not(target_arch = "wasm32"))]
+pub use platform::finish_shader_compiler_shutdown;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StartupProgress {

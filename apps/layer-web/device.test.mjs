@@ -1,11 +1,17 @@
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
 // browser flags or device settings are changed by this harness.
 import {checkEditor} from "./editor.test.mjs";
+import {checkDeviceFullscreen} from "./fullscreen.test.mjs";
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 const endpoint=process.env.LAYER_DEVICE_CDP||"http://127.0.0.1:9228";
 const url=process.env.LAYER_WEB_URL||"http://127.0.0.1:8127/";
-const tabs=await(await fetch(`${endpoint}/json/list`)).json(),tab=tabs.find(t=>t.url===url);
+let tab;
+const openingDeadline=Date.now()+10000;
+while(!tab && Date.now()<openingDeadline) {
+  const tabs=await(await fetch(`${endpoint}/json/list`)).json();tab=tabs.find(t=>t.url===url);
+  if(!tab)await new Promise(resolve=>setTimeout(resolve,100));
+}
 if(!tab)throw Error(`Open ${url} on the tablet first`);
 const socket=new WebSocket(tab.webSocketDebuggerUrl);
 await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
@@ -40,6 +46,10 @@ try {
   await reload();
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
+  if(process.argv.includes("--fullscreen")) {
+    await checkDeviceFullscreen({call,evaluate,settle});
+    assert.deepEqual(errors,[]);
+  } else {
   await checkEditor({call,evaluate,settle,canvasPixels});
   const before=await evaluate('layerApp.state().camera.zoom');
   const [cx,cy]=await evaluate('[innerWidth*.5,innerHeight*.5]');
@@ -58,4 +68,5 @@ try {
   const directory=process.env.LAYER_TEST_ARTIFACTS||"artifacts/web";
   await mkdir(directory,{recursive:true});await writeFile(`${directory}/tablet-startup.json`,JSON.stringify(timings,null,2));
   console.log("Tablet touch zoom/rotate and startup passed",timings);
+  }
 } finally {socket.close();for(const p of pending.values())clearTimeout(p.timer);}
