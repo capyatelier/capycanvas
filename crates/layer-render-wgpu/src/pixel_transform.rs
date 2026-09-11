@@ -1,7 +1,7 @@
 //! GPU affine cut-and-place primitive. A host captures the original layer once,
 //! then reuses its source binding for previews and commit. No readback, waits,
 //! per-update textures or per-tile bindings. Output regions may be canvas tiles.
-use super::{Deferred, PipelineDevice};
+use super::{Deferred, PipelineDevice, Uploads};
 use layer_core::{Affine, ImageTransform, Interpolation};
 
 pub struct TransformSource {
@@ -34,16 +34,19 @@ pub struct PixelTransform {
     next_record: u64,
 }
 impl PixelTransform {
-    /// Construct on the renderer worker before interactive previews, then retain
-    /// across transactions. Synchronous pipeline compilation is not frame work.
+    // Standalone numerical tests compile eagerly; application transforms always
+    // join the renderer's staged pipeline compiler and shared upload lifecycle.
+    #[cfg(test)]
     pub fn new(device: &wgpu::Device) -> Self {
         Self::headless(device, false)
     }
     /// The same resampling kernel for R8 wetness. Overlapping wetness uses max,
     /// not color's source-over; a move must not invent extra water in overlap.
+    #[cfg(test)]
     pub fn scalar(device: &wgpu::Device) -> Self {
         Self::headless(device, true)
     }
+    #[cfg(test)]
     fn headless(device: &wgpu::Device, scalar: bool) -> Self {
         let pass = Self::staged(&device.clone().into(), scalar);
         pass.pipeline.compile();
@@ -249,12 +252,14 @@ impl PixelTransform {
     pub fn begin_frame(&mut self) {
         self.next_record = 0;
     }
-    /// Each region and encode gets a distinct uniform offset; later queue writes
-    /// cannot change parameters of earlier operations in the same submission.
-    pub fn encode(
+    /// Each region and encode gets a distinct uniform offset. Uploads share the
+    /// frame's reusable staging belt and are finished by its submission owner.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn encode(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        uploads: &mut Uploads,
         encoder: &mut wgpu::CommandEncoder,
         source: &TransformSource,
         transform: ImageTransform,
@@ -348,7 +353,7 @@ impl PixelTransform {
             }
         }
         let (buffer, binding) = self.uniforms.as_ref().unwrap();
-        queue.write_buffer(buffer, self.next_record, &self.records);
+        uploads.write_at(encoder, queue, buffer, self.next_record, &self.records);
         for (index, target) in targets.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("affine changed region"),

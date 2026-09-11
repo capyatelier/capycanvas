@@ -2075,3 +2075,91 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   incoming Metal report now tests v4: 111 tests pass and the strict reference
   still fails, with maximum channel error 47; it is no longer an untested v4
   backend. The detailed counts remain in [runtime filter validation](runtime-filters.md).
+
+### Transform resource reuse
+
+- Live transforms now share the renderer's existing upload belt for color,
+  material wetness, watercolor wetness and mask parameters. They previously
+  bypassed it through `Queue::write_buffer`, which
+  [allocates fresh native staging memory](https://docs.rs/wgpu/30.0.0/wgpu/struct.Queue.html#method.write_buffer).
+  Uniform offsets, shader math, damage and submission ordering are unchanged.
+  There is no additional pool, image channel, wait or per-transform buffer ring;
+  the existing belt grows only as needed. Web retains its direct byte-transfer
+  implementation through the same upload abstraction.
+- The low-level transform module is internal. Its eager constructors are now
+  test-only; native and web hosts use the existing staged compiler rather than
+  being offered a second public transform startup path.
+- All 114 hardware Vulkan renderer checks pass, including the strict v4 filter
+  reference, ordered transforms, selections, masks and wetness; 17 performance
+  tests remain separately ignored. Strict renderer/GTK Clippy and the WebAssembly
+  build check pass. The current default-workspace workflow also passed before
+  the upload-only edit; fresh default dark and compact light captures were
+  visually inspected.
+- After the upload change, the native GTK Operation-tool workflow and release
+  application rebuild pass, including linked/unlinked mask transforms and
+  compact controls. No new physical-tablet or non-Vulkan device run is claimed.
+- A first serial isolated before/after comparison measures an additional
+  0.002–0.003ms GPU span because the upload copy is now inside the measured
+  encoder. Selected 48-tile CPU median/p95/p99 is .160/.198/.413ms before and
+  .155/.185/.320ms after; completion is .304/.374/.558ms and .299/.372/.483ms.
+  These are single runs, not a statistical speedup claim. Shader work is unchanged.
+- A first timestamp-free full-workspace pair measures transform presentation
+  at 116.01Hz before and 117.84Hz after (25 versus 14 discarded presentations).
+  Worker median/p95/p99 is 1.408/2.082/2.348ms versus 1.451/2.196/2.553ms;
+  the CPU tails did not improve. Pan remains 120.01Hz with no discards in both.
+  This removes a known allocation source, **not** the remaining driver-stall or
+  consistent-120Hz gate. Further paired measurements are needed. Raw captures
+  and timing reports remain outside the tracked tree.
+
+- A separate GPU identity regression confirmed that repeating an already-warmed
+  transform path recreated paint pages on its third traversal. Retired preview
+  pages now stay in transaction-local typed spare lists. The next changed region
+  reuses and clears them; apply/cancel/reset releases the spare GPU resources.
+  Original sparse pages are never recycled. Pigment, material water, watercolor
+  water and visibility masks retain their distinct existing formats/semantics.
+  Capacity follows peak live footprints, not the accumulated area visited.
+- Repeated-path tests cover all three painting modes and linked/unlinked masks,
+  including inverted/default-visible masks. Their third traversal creates no new
+  page identities, output matches independent replay, cancellation restores exact
+  sparse pigment/wetness, and apply/cancel leave zero spare-page bytes.
+- Diagnostics now includes spare pages. The latency benchmark's previous stable-
+  storage assertion covered only captures/uniforms, not temporary destination
+  pages; that assertion is retained with its precise name, and page memory is
+  measured separately. In the 2048×1536 test, spare peaks are zero for G-Pen,
+  1.25MiB for Wet Round and 2.5MiB for Watercolor, with or without a linked mask.
+  Peak paint/mask/transform storage is respectively 32.82MiB, 37.07MiB and
+  44.88MiB for Wet Round, Watercolor and linked Watercolor. These totals include
+  spares and exclude the compositor and driver allocations. No full-document
+  spare image or additional persistent channel is allocated.
+- Three alternating before/recycled benchmark pairs were attempted using the
+  same six cases, forty warmups and 120 measured updates. Two completed fully:
+  the table reports the median of those two runs' median/p95/p99 values in ms,
+  not pooled percentiles. "Before" already includes the shared upload fix.
+
+| Transform | CPU before | CPU recycled | GPU before | GPU recycled | Completion before | Completion recycled |
+| --- | --- | --- | --- | --- | --- | --- |
+| G-Pen, whole | 0.179/0.198/3.139 | 0.185/0.256/1.607 | 0.118/0.119/0.120 | 0.117/0.119/0.121 | 0.342/0.415/3.356 | 0.356/0.448/1.830 |
+| G-Pen, selected | 0.185/0.222/0.365 | 0.182/0.216/0.329 | 0.114/0.115/0.127 | 0.111/0.112/0.112 | 0.352/0.421/0.576 | 0.337/0.422/0.558 |
+| Wet Round, selected | 0.304/0.421/0.687 | 0.294/0.369/0.709 | 0.179/0.193/0.211 | 0.175/0.192/0.211 | 0.554/0.704/0.935 | 0.534/0.643/0.936 |
+| Watercolor, selected | 0.443/0.696/1.153 | 0.421/0.582/0.750 | 0.198/0.216/0.261 | 0.196/0.209/0.261 | 0.732/1.027/1.453 | 0.693/0.877/1.091 |
+| G-Pen, linked mask | 0.630/0.894/1.377 | 0.694/1.071/1.464 | 0.526/0.550/0.567 | 0.523/0.531/0.539 | 1.254/1.550/2.079 | 1.312/1.707/2.260 |
+| Watercolor, linked mask | 2.367/4.096/4.992 | 2.318/3.965/4.627 | 1.351/1.392/1.520 | 1.373/1.480/1.525 | 3.885/5.852/6.479 | 3.877/5.741/6.552 |
+
+  The third before run failed the unchanged 8.333ms assertion on its first
+  G-Pen case (10.623ms completion p99), so its other five cases did not run.
+  The third recycled run completed all six; linked Watercolor reached 8.114ms
+  completion p99. Neither run is hidden or pooled into the two complete pairs.
+  CPU/GPU tails vary and some increase; these runs prove neither a universal
+  speedup nor elimination of rare driver stalls.
+- The next timestamp-free full-workspace sweep with both changes delivers
+  119.33Hz for accumulated-artwork transforms (six discarded presentations),
+  versus 117.84Hz with upload reuse alone. Transform worker median/p95/p99 is
+  1.625/2.349/2.594ms; GTK dispatch p99 is 1.168ms. Pan and Hand remain 120.01Hz
+  with no discarded presentations. This is actual child-surface feedback with
+  synthetic input, not a physical-tablet or no-missed-frame guarantee. The
+  remaining presentation, watercolor-edge, backend-parity and human-review
+  gates stay open.
+- Final combined validation passes all 114 hardware renderer tests, strict
+  renderer/GTK Clippy, the WebAssembly check and native GTK Operation workflow.
+  The matching mask/pigment review capture was visually inspected. No raw
+  hardware logs or generated screenshots are part of this milestone.

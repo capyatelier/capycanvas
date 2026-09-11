@@ -23,6 +23,33 @@ fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
     }
 }
 
+fn check_page_reuse(r: &WgpuRasterizer, known: &mut Vec<wgpu::Texture>, warmed: bool) {
+    let textures = r
+        .paint_layers
+        .iter()
+        .flat_map(|l| {
+            l.pages
+                .iter()
+                .map(|p| &p.active().texture)
+                .chain(l.material_pages.iter().map(|p| &p.wetness.texture))
+                .chain(
+                    l.watercolor_wetness_pages
+                        .iter()
+                        .map(|p| &p.active().texture),
+                )
+        })
+        .chain(r.layer_masks.pages.values().map(|p| &p.texture));
+    for texture in textures {
+        if !known.contains(texture) {
+            assert!(
+                !warmed,
+                "repeating the warmed transform path allocated another page"
+            );
+            known.push(texture.clone());
+        }
+    }
+}
+
 #[test]
 fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
@@ -110,7 +137,7 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                         interpolation: Interpolation::Nearest,
                     },
                 };
-                for affine in [
+                let matrices = [
                     preview.transform.affine,
                     Affine::around(
                         Point { x: 100., y: 100. },
@@ -119,10 +146,18 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                         Point { x: 300., y: 50. },
                     ),
                     Affine::translation(Point { x: -500., y: 0. }),
-                ] {
+                ];
+                let mut allocated = Vec::new();
+                for (step, affine) in matrices
+                    .into_iter()
+                    .cycle()
+                    .take(matrices.len() * 3)
+                    .enumerate()
+                {
                     preview.transform.affine = affine;
                     r.set_transform_preview(Some(&preview)).unwrap();
                     frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
+                    check_page_reuse(&r, &mut allocated, step >= matrices.len() * 2);
                     let mut expected = paint.clone();
                     let companion = preview.companion(std::slice::from_ref(&paint));
                     let mut replay = brushes.to_vec();
@@ -181,6 +216,11 @@ fn live_masks_linked_and_unlinked_restore_commit_replay_and_apply() {
                 }
                 r.set_transform_preview(None).unwrap();
                 frame(&mut r, std::slice::from_ref(&paint), &[], &[], false);
+                assert_eq!(
+                    r.transforms.as_ref().unwrap().spare_page_bytes(),
+                    0,
+                    "cancel releases spare pages"
+                );
                 assert_eq!(mask_bytes(&r, (default * 255.) as u8), before_mask);
                 assert_eq!(
                     page_bytes(&r, &r.paint_layers[0].pages[0].active().texture),
@@ -451,10 +491,17 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
                 y: 110.25,
             }),
         ];
-        for affine in matrices {
+        let mut allocated = Vec::new();
+        for (step, affine) in matrices
+            .into_iter()
+            .cycle()
+            .take(matrices.len() * 3)
+            .enumerate()
+        {
             preview.transform.affine = affine;
             r.set_transform_preview(Some(&preview)).unwrap();
             frame(&mut r, layers, &[], &[], false);
+            check_page_reuse(&r, &mut allocated, step >= matrices.len() * 2);
             let live = r.readback_srgb_rgba8().unwrap();
             let mut expected = layer.clone();
             let mut op = operation(20, affine, Some(selection.clone()));
@@ -526,6 +573,11 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             original_raw,
             "{preset:?} cancel restores sparse pigment and wetness"
         );
+        assert_eq!(
+            r.transforms.as_ref().unwrap().spare_page_bytes(),
+            0,
+            "cancel releases spare pages"
+        );
 
         // A new preview may be committed as an ordinary history operation.
         preview.transaction += 1;
@@ -551,6 +603,11 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             r.transforms.as_ref().unwrap().source_captures(),
             captures,
             "apply reuses the matching preview result"
+        );
+        assert_eq!(
+            r.transforms.as_ref().unwrap().spare_page_bytes(),
+            0,
+            "apply releases spare pages"
         );
     }
 }
@@ -1040,6 +1097,8 @@ fn measure_transform_latency(live: bool) {
         let mut cpu = Vec::new();
         let mut completed = Vec::new();
         let mut scratch = 0;
+        let mut peak_spares = 0;
+        let mut peak_owned = 0;
         let mut captures = 0;
         for i in 0..160 {
             r.set_telemetry_enabled(i >= 40);
@@ -1083,6 +1142,17 @@ fn measure_transform_latency(live: bool) {
             let submitted = start.elapsed().as_secs_f32() * 1000.;
             r.wait_idle().unwrap();
             let elapsed = start.elapsed().as_secs_f32() * 1000.;
+            let transforms = r.transforms.as_ref().unwrap();
+            let spares = transforms.spare_page_bytes();
+            let captures_and_uniforms = transforms.storage_bytes() - spares;
+            peak_spares = peak_spares.max(spares);
+            peak_owned = peak_owned.max(
+                transforms.storage_bytes()
+                    + r.metrics.paint_storage_bytes
+                    + r.metrics.destination_storage_bytes
+                    + r.metrics.paint_state_storage_bytes
+                    + r.layer_masks.pages.len() as u64 * SCALAR_PAGE_BYTES,
+            );
             if i == 0 {
                 captures = r.transforms.as_ref().unwrap().source_captures();
                 eprintln!(
@@ -1101,12 +1171,11 @@ fn measure_transform_latency(live: bool) {
                 cpu.push(submitted);
                 completed.push(elapsed);
                 assert_eq!(
-                    r.transforms.as_ref().unwrap().storage_bytes(),
-                    scratch,
-                    "warm storage remains stable"
+                    captures_and_uniforms, scratch,
+                    "warm captures and uniforms remain stable"
                 );
             } else {
-                scratch = r.transforms.as_ref().unwrap().storage_bytes();
+                scratch = captures_and_uniforms;
             }
         }
         let telemetry = r.telemetry();
@@ -1117,7 +1186,7 @@ fn measure_transform_latency(live: bool) {
             percentile(completed),
         );
         eprintln!(
-            "{preset:?} live={live} linked_mask={linked_mask} selected={}: CPU median/p95/p99 {cpu:.3?}ms, GPU {gpu:.3?}ms, complete {completed:.3?}ms; capture+uniform storage {scratch}B",
+            "{preset:?} live={live} linked_mask={linked_mask} selected={}: CPU median/p95/p99 {cpu:.3?}ms, GPU {gpu:.3?}ms, complete {completed:.3?}ms; capture+uniform storage {scratch}B; peak spare {peak_spares}B; peak paint/mask/transform storage {peak_owned}B",
             selected.is_some()
         );
         assert!(completed[2] < 8.333);
