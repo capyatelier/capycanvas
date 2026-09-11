@@ -55,6 +55,23 @@ typedef struct {
 CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app);
 void capy_filter_previews_read(const CapyFilterPreviews *previews, CapyFilterPreviewInfo *output);
 void capy_filter_previews_free(CapyFilterPreviews *previews);
+typedef struct CapyPreviewImage CapyPreviewImage;
+typedef struct { uint64_t epoch, revision; } CapyNavigatorKey;
+typedef struct {
+    CapyNavigatorKey key;
+    uint32_t width, height, stride;
+    const uint8_t *pixels;
+    size_t count;
+} CapyPreviewImageInfo;
+/* Owner-only observation; camera changes do not invalidate the image key. */
+void capy_apple_navigator_key(const CapyApple *app, CapyNavigatorKey *output);
+/* One shared 15Hz producer; 1 needs another poll, 0 idle, -1 error. Returns an
+   independent owned image, straight sRGB RGBA8, maximum dimension 256 pixels. */
+int32_t capy_apple_navigator_preview(CapyApple *app, uint64_t now, uint32_t visible, CapyPreviewImage **output);
+void capy_preview_image_read(const CapyPreviewImage *image, CapyPreviewImageInfo *output);
+void capy_preview_image_free(CapyPreviewImage *image);
+/* Stateless [Camera, documentExtent, viewport] -> shared geometry JSON. */
+char *capy_apple_navigator_geometry(const char *json);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
                          const char *cache_directory);

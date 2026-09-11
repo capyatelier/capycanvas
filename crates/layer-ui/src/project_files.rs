@@ -72,6 +72,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .expect("previously validated brush state");
         self.refresh_document();
         self.refresh_commands();
+        self.sync_renderer_telemetry();
         self.changed(
             regions::DOCUMENT | regions::CAMERA | regions::COMMANDS,
             true,

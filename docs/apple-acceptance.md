@@ -650,3 +650,49 @@ heatmap and overlay stay local. The Mac capture is obstructed by the
 pending permission dialog and is rejected as a comparison fixture. Full visual
 parity, all panel projections/customization, recovery, physical input and
 sustained hardware performance remain required; this is a partial milestone.
+
+## Shared Navigator and Diagnostics
+
+Navigator is now exposed by Apple capability policy and rendered by one shared
+SwiftUI panel. Its six camera controls, drag/recenter/cancel behavior, document
+aspect fit and rotated/reflected work-area outline use Rust actions and geometry.
+A stateless geometry ABI consumes the already-published camera patch, avoiding
+asynchronous session queries or duplicated camera math on the UI thread.
+
+The preview path uses the existing shared 15Hz producer and a 256px maximum
+dimension. The serial owner keeps one poll scheduled and one image delivery in
+flight; utility-worker decoding must acknowledge delivery before another image
+is sent. Camera-only frames reuse the image. Polling sleeps once the current
+composition is consumed, including a final stroke that arrives inside the
+throttle interval. Owned straight-sRGB pixels carry a document epoch. Document
+replay and replacement cannot publish a previous drawing as the new preview.
+
+Diagnostics projects the seven shared statistics rows, descriptions, 120-sample
+chart and frame-budget reference. Its 5Hz query task runs only while visible.
+Review found that restoring an open Diagnostics panel before GPU attachment, or
+replacing its document renderer, lost the visibility-dependent sampling flag.
+Attachment and shared project adoption now reapply that policy.
+
+All 253 affected regression tests pass (217 UI, 12 host, 24 Apple). The four new
+Apple tests exercise both platform policies: exact artwork/history preservation
+through Navigator gestures and all six commands, owned preview pixels after
+editor teardown, idle/camera reuse, delivery of the throttled final stroke,
+replacement while an old preview is pending, and Diagnostics sampling across
+attachment/replacement/hiding. The first focused iPad UI run exposed a missing
+capability flag; after fixing it, the complete preview/controls/drag/Diagnostics
+tab workflow passes and its full-screen capture is retained locally. Both signed
+targets build; the updated physical iPad installs and launches.
+
+The parallel shared in-surface GPU overview foundation is integrated, and its
+three non-benchmark tests pass on Metal. Apple currently uses the bounded
+exported-preview path above. Connecting the new in-surface presenter requires
+native panel transparency/stacking integration and hardware measurement; its
+renderer-only evidence does not validate Apple's current preview transport or
+the sustained 120Hz target.
+
+Screen recording now works, but the separate XCTest authentication dialog still
+obstructs the Mac capture. Mac UI automation was not repeated in that state.
+The current web host does not expose Navigator, so this native Navigator capture
+has no matching Chrome fixture and is not a pixel-parity pass. Complete main
+editor visual acceptance, custom panel projections/drawers, recovery, physical
+input/lifecycle coverage and sustained performance remain open on both platforms.

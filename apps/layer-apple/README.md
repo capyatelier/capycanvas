@@ -243,6 +243,24 @@ tested with coordinate clicks.
 Use [the shared visual tools](../../tools/visual/README.md) for matching local
 Chrome captures and complete image differences for either native target.
 
+Navigator and Diagnostics share their SwiftUI projections across Apple targets.
+Navigator uses Rust geometry, camera actions and an event-driven preview owner:
+one GPU readback at a time, a 256px maximum image dimension, at most 15 updates
+per second, and one worker decode awaiting UI acknowledgement. Camera-only
+changes reuse the image; the last document update remains scheduled through the
+refresh throttle. Images belong to a document epoch and survive editor teardown
+without borrowing GPU resources. Diagnostics queries the shared rows and bounded
+chart at 5Hz only while visible. Timing sampling is restored on GPU attachment
+and document replacement.
+
+`EditorLaunchTests/testNavigatorAndDiagnostics` is the focused shared UI check
+for either scheme. It uses a disposable drawing, in-app navigation buttons and
+an overview drag, then switches to Diagnostics and back. The faster Metal
+regressions run with `cargo test -p layer-apple navigator -- --test-threads=1` and
+verify actual document pixels, history, preview ownership, final delivery and
+document replacement on both Apple platform policies. Full visual and physical
+performance acceptance remains in [the matrix](../../docs/apple-acceptance.md).
+
 ## Implementation status
 
 This is an editor-shell milestone, not a finished port. The simulator renders
@@ -257,9 +275,11 @@ limited to visible rows and eight pending readbacks, with no idle polling once
 previews are current. Context gestures, dragging and all menu workflows still
 need complete acceptance on both platforms.
 
-Still required: complete panel/drawer/menu/dialog behavior and customization,
-filters/properties and other specialized controls, complete settings/shortcut
-UI, document persistence and complete settings/workspace lifecycle coverage, Pencil estimated-property
+Shared Filters/Properties, menus/shortcut editing, color/tool settings,
+Navigator and Diagnostics are implemented, with focused workflow evidence in
+the acceptance document. Still required: complete panel/drawer/menu/dialog
+behavior and customization, the remaining specialized controls and complete
+workflow coverage, document recovery and settings/workspace lifecycle coverage, Pencil estimated-property
 corrections, complete hover/sensor/shortcut routing, platform lifecycle coverage,
 full pixel-difference validation, and measured iPad and Mac hardware performance.
 Mac tablet/proximity, mouse, wheel, trackpad and keyboard adapters are present;

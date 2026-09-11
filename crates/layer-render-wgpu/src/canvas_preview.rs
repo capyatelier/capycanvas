@@ -32,6 +32,10 @@ impl CanvasOverview {
     }
 }
 impl WgpuRasterizer {
+    /// Changes only when document composition changes, never for camera motion.
+    pub fn canvas_preview_revision(&self) -> u64 {
+        self.composite_revision
+    }
     pub fn canvas_preview_pending(&self) -> bool {
         self.canvas_preview.pending
     }
