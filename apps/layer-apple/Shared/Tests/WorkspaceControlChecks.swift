@@ -123,6 +123,21 @@ extension XCTestCase {
     @MainActor func checkPanelConfigurationAndLiveDrag(in app: XCUIApplication) {
         let toggle = app.buttons["configure-visible-brush_size"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 20))
+        workspaceActivate(app.buttons["configuration-size-8"])
+        let values = app.buttons.matching(identifier: "number-value-Brush size")
+        XCTAssertEqual(values.count, 2, "The preset must update both the live panel and configuration")
+        for value in values.allElementsBoundByIndex {
+            expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: value)
+        }
+        waitForExpectations(timeout: 5)
+        workspaceActivate(app.buttons["configuration-brush-color"])
+        let popup = app.descendants(matching: .any)["toolbar-control-popup"].firstMatch
+        XCTAssertTrue(popup.waitForExistence(timeout: 5))
+        workspaceActivate(app.buttons["color-background"])
+        XCTAssertTrue(app.buttons["color-background"].isSelected)
+        workspaceActivate(app.buttons["Done"])
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: popup)
+        waitForExpectations(timeout: 5)
         workspaceActivate(toggle)
         expectation(for: NSPredicate(format: "value == %@", "Off"), evaluatedWith: toggle)
         waitForExpectations(timeout: 5)

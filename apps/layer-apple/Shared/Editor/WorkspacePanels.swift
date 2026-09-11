@@ -86,7 +86,8 @@ private struct WorkspacePanelGroup: View {
             }
         }.background(palette["panel"])
             .clipShape(WorkspacePanelShape(expansion: expansion))
-            .shadow(color: .black.opacity(0.22), radius: expansion.isNull ? 6 : 16, y: 2)
+            .shadow(color: .black.opacity(expansion.isNull ? 0.16 : 0.4),
+                radius: expansion.isNull ? 4 : 12, y: expansion.isNull ? 2 : 8)
             .accessibilityIdentifier("workspace-group-\(group["id"].uint)")
     }
     private func preview(tiles: JSON) -> some View {
@@ -172,6 +173,7 @@ private struct WorkspaceTile: View {
     let tile: JSON
     private var kind: String { tile["control"]["kind"].string }
     private var style: String { panel["tile_style"].string }
+    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
         Group {
             if kind == "divider" {
@@ -180,7 +182,15 @@ private struct WorkspaceTile: View {
             } else {
                 Button { store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw]) } label: {
                     VStack(spacing: 4) {
-                        if kind == "color" { ColorSwatch(rgba: store.state["brush"]["color"]).frame(width: 22, height: 22) }
+                        if kind == "color" {
+                            // Dynamic fill within the canonical color icon's
+                            // 16-unit viewbox (5.5 radius, 1.5 outline).
+                            let scale: CGFloat = style == "large" ? 2 : 1
+                            ColorSwatch(rgba: store.state["brush"]["color"])
+                                .frame(width: 11 * scale, height: 11 * scale).clipShape(Circle())
+                                .overlay(Circle().stroke(palette["text"], lineWidth: 1.5 * scale))
+                                .frame(width: 16 * scale, height: 16 * scale)
+                        }
                         else if kind == "size" { Text(String(tile["control"]["pixels"].uint)) }
                         else { SharedIcon(name: tile["icon"].string, size: style == "large" ? 32 : 16) }
                         if style == "labeled" { Text(tile["label"].string).font(.system(size: 11)).lineLimit(2).multilineTextAlignment(.center) }
