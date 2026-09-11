@@ -13,6 +13,8 @@ mod presets;
 pub use layers::*;
 mod figures;
 pub use figures::{Figure, FigurePaint, FigureShape};
+mod rulers;
+pub use rulers::{Ruler, RulerConstraint, RulerGeometry, RulerKind, choose_ruler};
 
 pub use presets::{
     BRISTLE_GRAIN_TEXTURE_ASSET, DefaultBrushPreset, PAINTBRUSH_TEXTURE_ASSET,
@@ -44,7 +46,7 @@ impl From<&str> for AssetId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[repr(C)]
 pub struct Point {
     pub x: f32,
@@ -1161,6 +1163,8 @@ pub struct Document {
     pub active_mask: bool,
     pub selection: Option<Selection>,
     pub reference_layers: BTreeSet<LayerId>,
+    /// Global, non-raster guides; edits are durable and share document undo.
+    pub rulers: Vec<Ruler>,
     pub revision: Revision,
     strokes: BTreeMap<StrokeId, Stroke>,
     next_layer_id: u64,
@@ -1213,6 +1217,7 @@ impl Document {
             active_mask: false,
             selection: None,
             reference_layers: BTreeSet::new(),
+            rulers: Vec::new(),
             revision: 0,
             strokes: BTreeMap::new(),
             next_layer_id: 3,
@@ -1312,6 +1317,10 @@ impl Document {
             }
             Edit::SetSelection(selection) => {
                 Edit::SetSelection(std::mem::replace(&mut self.selection, selection))
+            }
+            Edit::SetRulers(rulers) => {
+                rulers::validate_rulers(&rulers)?;
+                Edit::SetRulers(std::mem::replace(&mut self.rulers, rulers))
             }
             Edit::SetReferences(references) => {
                 for &id in &references {
@@ -1495,6 +1504,7 @@ pub enum Edit {
     SetMaskTarget(bool),
     SetSelection(Option<Selection>),
     SetReferences(BTreeSet<LayerId>),
+    SetRulers(Vec<Ruler>),
     InsertLayer { index: usize, layer: Layer },
     RemoveLayer { id: LayerId },
     MoveLayer { id: LayerId, to: usize },
@@ -1503,6 +1513,17 @@ pub enum Edit {
     SetActiveLayer { id: LayerId },
     InsertStroke(Box<Stroke>),
     RemoveStroke { id: StrokeId },
+}
+
+impl Edit {
+    /// Guide-only edits affect presentation, never the canvas image or replay.
+    pub fn changes_image(&self) -> bool {
+        match self {
+            Self::SetRulers(_) => false,
+            Self::Batch(edits) => edits.iter().any(Self::changes_image),
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1535,6 +1556,13 @@ impl Editor {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    pub fn undo_changes_image(&self) -> bool {
+        self.undo.last().is_some_and(Edit::changes_image)
+    }
+    pub fn redo_changes_image(&self) -> bool {
+        self.redo.last().is_some_and(Edit::changes_image)
     }
 
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
@@ -1584,6 +1612,7 @@ impl Editor {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentError {
+    InvalidRuler(&'static str),
     InvalidLayerOperation(&'static str),
     MissingLayer(LayerId),
     MissingStroke(StrokeId),
@@ -1600,6 +1629,7 @@ pub enum DocumentError {
 impl fmt::Display for DocumentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidRuler(message) => formatter.write_str(message),
             Self::InvalidLayerOperation(message) => formatter.write_str(message),
             Self::MissingLayer(id) => write!(formatter, "layer {} does not exist", id.0),
             Self::MissingStroke(id) => write!(formatter, "stroke {} does not exist", id.0),

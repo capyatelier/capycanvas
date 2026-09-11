@@ -4,6 +4,14 @@ use crate::NumericControl;
 use layer_core::{BrushExecution, BrushSnapshot, BrushTip};
 use serde::Serialize;
 
+/// Reusable tool settings actions. Labels, enabled/checked state and shortcuts
+/// come from the same command model as menus and toolbar tiles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolSettingAction {
+    pub command: crate::CommandId,
+    pub checkable: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ToolSetting {
     pub id: &'static str,

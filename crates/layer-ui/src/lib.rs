@@ -6,7 +6,7 @@
 
 mod camera;
 mod eyedropper;
-pub use layer_core::{FigurePaint, FigureShape};
+pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
 mod color;
@@ -15,7 +15,7 @@ mod tools;
 pub use color::{
     ColorAction, ColorSlot, ColorSpace, ColorState, ColorWheelGeometry, ColorWheelPart, hue_color,
 };
-pub use tool_settings::ToolSetting;
+pub use tool_settings::{ToolSetting, ToolSettingAction};
 use tools::preset;
 pub use tools::{
     Tool, ToolFamily, ToolGroup, ToolSetItem, ToolSetView, brush_catalog, brush_categories,
@@ -160,6 +160,7 @@ pub const MENUS: &[MenuSpec] = &[
             &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas],
             &[CommandId::RotateLeft, CommandId::RotateRight],
             &[CommandId::FlipHorizontal, CommandId::FlipVertical],
+            &[CommandId::ShowRulers, CommandId::SnapRulers],
             &[CommandId::ZenMode, CommandId::ToggleTheme],
             &[CommandId::ResetLayout],
         ],
@@ -257,6 +258,10 @@ pub fn ui_catalog() -> UiCatalog {
             "eyedropper",
             "gradient",
             "figure",
+            "ruler",
+            "ruler-parallel",
+            "ruler-radial",
+            "ruler-snap",
             "line",
             "rectangle",
             "ellipse",
@@ -334,6 +339,10 @@ pub enum CommandId {
     Eyedropper,
     Gradient,
     Figure,
+    Ruler,
+    ShowRulers,
+    SnapRulers,
+    DeleteRuler,
     AutoSelect,
     Fill,
     Undo,
@@ -374,7 +383,12 @@ impl CommandId {
     pub fn is_toggle(self) -> bool {
         matches!(
             self,
-            Self::ZenMode | Self::ToggleTheme | Self::FlipHorizontal | Self::FlipVertical
+            Self::ZenMode
+                | Self::ToggleTheme
+                | Self::FlipHorizontal
+                | Self::FlipVertical
+                | Self::ShowRulers
+                | Self::SnapRulers
         )
     }
     pub fn icon(self) -> Option<&'static str> {
@@ -393,6 +407,9 @@ impl CommandId {
             Self::Eyedropper => "eyedropper",
             Self::Gradient => "gradient",
             Self::Figure => "figure",
+            Self::Ruler | Self::ShowRulers => "ruler",
+            Self::SnapRulers => "ruler-snap",
+            Self::DeleteRuler => "delete",
             Self::AutoSelect => "auto-select",
             Self::Fill => "fill",
             Self::Undo | Self::UndoWorkspace => "undo",
@@ -413,7 +430,7 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 44] = [
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -428,6 +445,10 @@ impl CommandId {
         Self::Eyedropper,
         Self::Gradient,
         Self::Figure,
+        Self::Ruler,
+        Self::ShowRulers,
+        Self::SnapRulers,
+        Self::DeleteRuler,
         Self::AutoSelect,
         Self::Fill,
         Self::Undo,
@@ -477,6 +498,10 @@ impl CommandId {
             Self::Eyedropper => "Eyedropper",
             Self::Gradient => "Gradient",
             Self::Figure => "Figure",
+            Self::Ruler => "Ruler",
+            Self::ShowRulers => "Show rulers",
+            Self::SnapRulers => "Snap to rulers",
+            Self::DeleteRuler => "Delete ruler",
             Self::AutoSelect => "Auto select",
             Self::Fill => "Fill",
             Self::Undo => "Undo",
@@ -579,6 +604,7 @@ pub struct UiState {
     pub brush: BrushState,
     pub colors: ColorState,
     pub tool_settings: Vec<ToolSetting>,
+    pub tool_actions: Vec<ToolSettingAction>,
     pub tool_set: ToolSetView,
     pub layers: Vec<LayerState>,
     pub layer_tools: LayersView,

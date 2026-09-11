@@ -230,6 +230,7 @@ impl ToolbarControl {
                             | CommandId::Eyedropper
                             | CommandId::Gradient
                             | CommandId::Figure
+                            | CommandId::Ruler
                             | CommandId::AutoSelect
                             | CommandId::Fill
                     ) =>

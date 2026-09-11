@@ -78,6 +78,7 @@ struct ActiveStroke {
     feedback: InstantFeedbackConfig,
     persistent_started: bool,
     committed_smudge_dabs: usize,
+    ruler: Option<layer_core::RulerConstraint>,
 }
 
 pub struct CanvasEngine<B: CanvasRenderer> {
@@ -90,6 +91,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     brush: BrushSnapshot,
     tool: StrokeTool,
     instant_feedback: InstantFeedbackConfig,
+    ruler_snapping: Option<f32>,
     builder: StrokeBuilder,
     dab_generator: DabGenerator,
     finalized_real_points: usize,
@@ -142,6 +144,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             brush: BrushSnapshot::default(),
             tool: StrokeTool::Brush,
             instant_feedback: InstantFeedbackConfig::default(),
+            ruler_snapping: Some(12.),
             builder: StrokeBuilder::with_capacity(capacity.stroke_points),
             dab_generator: DabGenerator::default(),
             finalized_real_points: 0,
@@ -214,7 +217,27 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.pressure,
             hover_start_ns,
         );
-        if self.active_stroke.is_some() {
+        let ruler = self.active_stroke.as_ref().map_or_else(
+            || {
+                self.ruler_snapping.and_then(|reach| {
+                    layer_core::choose_ruler(&self.document().rulers, point.position, reach)
+                })
+            },
+            |active| active.ruler,
+        );
+        if let Some(ruler) = ruler {
+            point.position = ruler.project(point.position);
+        }
+        let target = self
+            .active_stroke
+            .as_ref()
+            .map_or(self.document().active_target(), |s| s.layer_id);
+        let offset = self.document().layer_offset(target);
+        // Stroke dynamics run in layer-local coordinates; outlines are returned
+        // in document coordinates, including for translated layers.
+        point.position.x -= offset.x;
+        point.position.y -= offset.y;
+        let mut contacts = if self.active_stroke.is_some() {
             point.elapsed_micros = self
                 .builder
                 .elapsed_micros_at(event.timestamp_ns)
@@ -230,7 +253,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             point.pressure = 1.0;
             hover.cursor_seed(self.document().next_stroke_id(), self.brush());
             hover.cursor_contacts(point, self.brush())
+        };
+        for dab in &mut contacts {
+            dab.center.x += offset.x;
+            dab.center.y += offset.y;
         }
+        contacts
     }
 
     pub fn create_paint_layer(
@@ -253,8 +281,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.allocate_stroke_id()
     }
     pub fn preview_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
+        let image = edit.changes_image();
         self.editor.preview(edit)?;
-        self.composite_all = true;
+        self.composite_all |= image;
         Ok(())
     }
 
@@ -351,6 +380,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.pressure = pressure;
     }
 
+    /// UI supplies a logical hit distance converted into document units.
+    /// A stroke's selected guide remains fixed until that stroke ends.
+    pub fn set_ruler_snapping(&mut self, reach: Option<f32>) {
+        self.ruler_snapping = reach.filter(|r| r.is_finite() && *r >= 0.);
+    }
+    pub fn active_ruler_constraint(&self) -> Option<layer_core::RulerConstraint> {
+        self.active_stroke.as_ref().and_then(|s| s.ruler)
+    }
+
     pub fn set_instant_feedback(
         &mut self,
         config: InstantFeedbackConfig,
@@ -382,14 +420,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
+        let image = self.editor.undo_changes_image();
         let changed = self.editor.undo()?;
-        self.rebuild_all |= changed;
+        self.rebuild_all |= changed && image;
         Ok(changed)
     }
 
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
+        let image = self.editor.redo_changes_image();
         let changed = self.editor.redo()?;
-        self.rebuild_all |= changed;
+        self.rebuild_all |= changed && image;
         Ok(changed)
     }
 
@@ -420,7 +460,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
         }
         let rebuild = rebuild_needed(self.document(), &edit);
-        let changes_composite = !matches!(&edit, Edit::SetActiveLayer { .. });
+        let changes_composite =
+            edit.changes_image() && !matches!(&edit, Edit::SetActiveLayer { .. });
         self.editor.perform(edit)?;
         self.rebuild_all |= rebuild;
         self.composite_all |= changes_composite;
@@ -571,6 +612,22 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .expect("one transform is always retained")
             });
 
+        let point = transform.map(event.surface_position);
+        let mut ruler = if event.phase == PenPhase::Down {
+            self.ruler_snapping
+                .and_then(|reach| layer_core::choose_ruler(&self.document().rulers, point, reach))
+        } else {
+            self.active_ruler_constraint()
+        };
+        if let Some(snap) = &mut ruler {
+            if !event.flags.contains(SampleFlags::PREDICTED) {
+                snap.resolve(point);
+            }
+            transform.surface_to_document = snap.transform(transform.surface_to_document);
+        }
+        if let Some(active) = &mut self.active_stroke {
+            active.ruler = ruler;
+        }
         let target_id = self
             .active_stroke
             .as_ref()
@@ -642,6 +699,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     feedback,
                     persistent_started: false,
                     committed_smudge_dabs: 0,
+                    ruler,
                 };
                 self.active_stroke = Some(active);
                 self.pending_smudge_dabs.clear();
@@ -1664,6 +1722,253 @@ mod tests {
         assert_eq!(engine.metrics().committed_strokes, 1);
         assert!(engine.backend().persistent_dabs > 0);
         assert!(engine.backend().saw_reset);
+    }
+
+    #[test]
+    fn rulers_project_real_prediction_and_replay_without_repainting_guide_edits() {
+        use layer_core::{Ruler, RulerGeometry};
+        for kind in [
+            layer_core::RulerKind::Straight,
+            layer_core::RulerKind::Parallel,
+            layer_core::RulerKind::Radial,
+        ] {
+            let (mut producer, consumer) = input_queue(64);
+            let mut engine = CanvasEngine::new(
+                RecordingRenderer::default(),
+                Document::new("ruler", 128, 128),
+                consumer,
+                view(128, 128),
+                ViewTransform {
+                    revision: 1,
+                    ..ViewTransform::IDENTITY
+                },
+            )
+            .unwrap();
+            engine
+                .set_brush(default_brush(DefaultBrushPreset::GPen))
+                .unwrap();
+            engine.render_frame().unwrap();
+            engine.backend.saw_reset = false;
+            let guide = Ruler {
+                id: 1,
+                geometry: RulerGeometry::from_drag(
+                    kind,
+                    Point { x: 0., y: 16. },
+                    Point { x: 100., y: 16. },
+                ),
+            };
+            engine.apply_edit(Edit::SetRulers(vec![guide])).unwrap();
+            assert!(!engine.has_pending_document_edits());
+            engine.render_frame().unwrap();
+            assert!(!engine.backend.saw_reset);
+            engine.undo().unwrap();
+            engine.render_frame().unwrap();
+            assert!(!engine.backend.saw_reset);
+            engine.redo().unwrap();
+            engine.render_frame().unwrap();
+            assert!(!engine.backend.saw_reset);
+            producer.push(event(1, PenPhase::Down, 4.)).unwrap();
+            engine.render_frame().unwrap();
+            // A subsequent guide change does not redirect an active stroke.
+            engine
+                .apply_edit(Edit::SetRulers(vec![Ruler {
+                    id: 1,
+                    geometry: RulerGeometry::Parallel {
+                        start: Point { x: 0., y: 0. },
+                        end: Point { x: 0., y: 100. },
+                    },
+                }]))
+                .unwrap();
+            let mut predicted = event(3, PenPhase::Move, 50.);
+            predicted.flags = SampleFlags::PREDICTED;
+            predicted.surface_position.y = 45.;
+            producer.push(predicted).unwrap();
+            let mut real = event(2, PenPhase::Move, 28.);
+            real.surface_position.y = 30.;
+            producer.push(real).unwrap();
+            engine.render_frame().unwrap();
+            assert!(
+                engine
+                    .builder
+                    .real_points()
+                    .iter()
+                    .chain(engine.builder.predicted_points())
+                    .all(|p| (p.position.y - 16.).abs() < 0.001)
+            );
+            assert!(
+                engine
+                    .backend
+                    .preview
+                    .iter()
+                    .all(|d| (d.center.y - 16.).abs() < 0.001)
+            );
+            let mut up = event(4, PenPhase::Up, 60.);
+            up.surface_position.y = 50.;
+            producer.push(up).unwrap();
+            engine.render_frame().unwrap();
+            let stroke = engine.document().strokes().next().unwrap().clone();
+            assert!(
+                stroke
+                    .points
+                    .iter()
+                    .all(|p| (p.position.y - 16.).abs() < 0.001)
+            );
+            assert_eq!(
+                stroke.points.len(),
+                3,
+                "predicted samples are not document truth"
+            );
+            assert_eq!(stroke.points[1].pressure, 0.8);
+            let pigment = engine.backend.persistent.clone();
+            engine.rebuild_all = true;
+            engine.render_frame().unwrap();
+            assert_eq!(
+                engine.backend.persistent, pigment,
+                "replay ignores changed rulers"
+            );
+            engine.set_ruler_snapping(None);
+            producer.push(event(5, PenPhase::Down, 3.)).unwrap();
+            let mut free = event(6, PenPhase::Up, 30.);
+            free.surface_position.y = 35.;
+            producer.push(free).unwrap();
+            engine.render_frame().unwrap();
+            assert_eq!(
+                engine
+                    .document()
+                    .strokes()
+                    .last()
+                    .unwrap()
+                    .points
+                    .last()
+                    .unwrap()
+                    .position
+                    .y,
+                35.
+            );
+        }
+    }
+
+    #[test]
+    fn ruler_input_and_cursor_respect_view_layer_offsets_and_radial_origin() {
+        use layer_core::{Ruler, RulerGeometry};
+        let (mut producer, consumer) = input_queue(64);
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            Document::new("ruler-view", 128, 128),
+            consumer,
+            view(256, 256),
+            ViewTransform {
+                revision: 1,
+                surface_to_document: [0., 0.5, -0.5, 0., 64., 0.],
+            },
+        )
+        .unwrap();
+        engine
+            .set_brush(default_brush(DefaultBrushPreset::GPen))
+            .unwrap();
+        let mut layer = engine.document().layers[0].clone();
+        layer.properties.offset = Point { x: 3., y: 5. };
+        engine
+            .apply_edit(Edit::ReplaceLayer(Box::new(layer)))
+            .unwrap();
+        engine
+            .apply_edit(Edit::SetRulers(vec![Ruler {
+                id: 1,
+                geometry: RulerGeometry::Straight {
+                    start: Point { x: 0., y: 32. },
+                    end: Point { x: 100., y: 32. },
+                },
+            }]))
+            .unwrap();
+        let sample = |sequence, phase, p: [f32; 2]| {
+            let mut e = event(sequence, phase, 0.);
+            e.surface_position = Point {
+                x: 2. * p[1],
+                y: 2. * (64. - p[0]),
+            };
+            e
+        };
+        let mut hover = DabGenerator::default();
+        let down = sample(1, PenPhase::Down, [10., 34.]);
+        assert!(
+            engine
+                .cursor_contacts(down, &mut hover, 0)
+                .iter()
+                .all(|d| (d.center.y - 32.).abs() < 0.001)
+        );
+        producer.push(down).unwrap();
+        engine.render_frame().unwrap();
+        let next = sample(2, PenPhase::Move, [40., 45.]);
+        let contacts = engine.cursor_contacts(next, &mut hover, 0);
+        assert!(!contacts.is_empty());
+        assert!(
+            contacts.iter().all(|d| (d.center.y - 32.).abs() < 0.001),
+            "outline is document-local, not layer-local"
+        );
+        producer.push(next).unwrap();
+        producer.push(sample(3, PenPhase::Up, [60., 45.])).unwrap();
+        engine.render_frame().unwrap();
+        assert!(
+            engine
+                .document()
+                .strokes()
+                .next()
+                .unwrap()
+                .points
+                .iter()
+                .all(|p| (p.position.y - 27.).abs() < 0.001)
+        );
+        engine
+            .apply_edit(Edit::SetRulers(vec![Ruler {
+                id: 1,
+                geometry: RulerGeometry::Radial {
+                    center: Point { x: 16., y: 32. },
+                },
+            }]))
+            .unwrap();
+        producer
+            .push(sample(4, PenPhase::Down, [16., 32.]))
+            .unwrap();
+        engine.render_frame().unwrap();
+        assert!(
+            engine
+                .active_ruler_constraint()
+                .unwrap()
+                .direction
+                .is_none()
+        );
+        let mut prediction = sample(6, PenPhase::Move, [50., 60.]);
+        prediction.flags = SampleFlags::PREDICTED;
+        producer.push(prediction).unwrap();
+        engine.render_frame().unwrap();
+        assert!(
+            engine
+                .active_ruler_constraint()
+                .unwrap()
+                .direction
+                .is_none(),
+            "prediction cannot fix the ray"
+        );
+        producer
+            .push(sample(5, PenPhase::Move, [40., 32.]))
+            .unwrap();
+        engine.render_frame().unwrap();
+        assert_eq!(
+            engine.active_ruler_constraint().unwrap().direction,
+            Some(Point { x: 1., y: 0. })
+        );
+        producer.push(sample(7, PenPhase::Up, [60., 45.])).unwrap();
+        engine.render_frame().unwrap();
+        assert!(
+            engine
+                .document()
+                .strokes()
+                .last()
+                .unwrap()
+                .points
+                .iter()
+                .all(|p| (p.position.y - 27.).abs() < 0.001)
+        );
     }
 
     #[test]

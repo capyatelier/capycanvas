@@ -27,6 +27,9 @@ pub enum LayerCanvasTool {
         shape: FigureShape,
         paint: FigurePaint,
     },
+    Ruler {
+        kind: RulerKind,
+    },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -571,6 +574,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::Tool { tool } => {
+                if let LayerCanvasTool::Ruler { kind } = tool {
+                    self.rulers.kind = kind;
+                }
                 if let LayerCanvasTool::Figure { shape, paint } = tool {
                     if shape == FigureShape::Line && paint != FigurePaint::Outline {
                         return Err("Lines only support an outline".into());
@@ -1385,6 +1391,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if event.phase != PenPhase::Cancel && (!p.x.is_finite() || !p.y.is_finite()) {
             return Err("Invalid canvas point".into());
         }
+        if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. }) {
+            return self.ruler_pen(event, p);
+        }
         match event.phase {
             PenPhase::Down => {
                 self.layer_interaction.path.clear();
@@ -1476,6 +1485,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn cancel_layer_gesture(&mut self) -> Result<bool, String> {
+        self.cancel_ruler_gesture();
         let region = self.region_tools.cancellable();
         self.region_tools.cancel();
         if self.layer_interaction.path.is_empty() {
@@ -1586,6 +1596,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn append_layer_overlay(&self, segments: &mut Vec<layer_render::CursorSegment>) {
+        self.append_ruler_overlay(segments);
         let matrix = self.state.camera.view().document_to_surface;
         let scale = self
             .logical_viewport

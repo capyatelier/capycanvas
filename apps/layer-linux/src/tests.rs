@@ -659,6 +659,186 @@ fn native_connected_tools() {
 
 #[test]
 #[ignore = "requires a private Wayland display and GPU"]
+fn native_ruler_tools() {
+    let app = native_test_app("art.capycanvas.RulerTools");
+    let w = Workspace::new(&app);
+    w.window.present();
+    pump(700);
+    let mut workspace = state(&w).workspace;
+    workspace
+        .layout
+        .insert_tools(
+            Panel::Toolbar,
+            None,
+            &[ToolbarControl::Command {
+                command: CommandId::Ruler,
+            }],
+        )
+        .unwrap();
+    workspace
+        .layout
+        .set_panel_visible(Panel::ToolSettings, true)
+        .unwrap();
+    let group = workspace.layout.panel_group(Panel::Brushes).unwrap();
+    workspace
+        .layout
+        .move_panel(
+            [w.surface.width() as f32, w.surface.height() as f32],
+            Panel::ToolSettings,
+            DockTarget::Split {
+                group,
+                edge: Edge::Bottom,
+            },
+        )
+        .unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace });
+    pump(100);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::FitCanvas,
+    });
+    let ruler_count = || {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .session
+            .engine()
+            .document()
+            .rulers
+            .len()
+    };
+    let dir = "../../artifacts/familiar-workspace";
+    std::fs::create_dir_all(dir).unwrap();
+    for index in 0..3 {
+        w.dispatch(UiAction::Invoke {
+            command: CommandId::Ruler,
+        });
+        pump(50);
+        let button = w.tool_set.group_buttons.borrow()[index].clone();
+        click(&button);
+        pump(50);
+        let path = match index {
+            0 => [[450., 400.], [1550., 400.]],
+            1 => [[500., 720.], [700., 880.]],
+            _ => [[1470., 1120.], [1470., 1120.]],
+        };
+        native_pen_path(&w, &path);
+        assert_eq!(ruler_count(), index + 1);
+        let toggle = find_named(
+            &w.panel_widget(Panel::ToolSettings),
+            "tool-action-SnapRulers",
+        )
+        .unwrap()
+        .downcast::<gtk::CheckButton>()
+        .unwrap();
+        assert!(toggle.is_active());
+        w.dispatch(UiAction::SelectBrush {
+            id: layer_core::DefaultBrushPreset::GPen as u32,
+        });
+        w.dispatch(UiAction::SetBrushSize { value: 18. });
+        w.dispatch(UiAction::SetColor {
+            rgba: [
+                [0.15, 0.35, 0.85, 1.],
+                [0.1, 0.6, 0.3, 1.],
+                [0.85, 0.3, 0.12, 1.],
+            ][index],
+        });
+        if index < 2 {
+            let points: Vec<_> = (0..40)
+                .map(|i| {
+                    let x = 800. + i as f32 * 12.;
+                    [
+                        x,
+                        if index == 0 {
+                            410. + 20. * (i as f32 * 0.5).sin()
+                        } else {
+                            800. + i as f32 * 6. + 15. * (i as f32 * 0.7).sin()
+                        },
+                    ]
+                })
+                .collect();
+            native_pen_path(&w, &points);
+        } else {
+            for dx in [-360., -180., 0., 180., 360.] {
+                native_pen_path(
+                    &w,
+                    &[
+                        [1470., 1120.],
+                        [1470. + dx * 0.3, 1050.],
+                        [1470. + dx * 0.6 + 15., 980.],
+                        [1470. + dx, 890.],
+                    ],
+                );
+            }
+        }
+    }
+    // Verify the snapped path really reaches GPU pixels, independently of guides.
+    w.dispatch(UiAction::Layer {
+        action: LayerAction::Tool {
+            tool: LayerCanvasTool::PickLayer,
+        },
+    });
+    native_pen_path(&w, &[[1000., 400.], [1000., 400.]]);
+    pump(100);
+    let color = state(&w).colors.foreground;
+    assert!(
+        color[2] > 0.7 && color[0] < 0.25,
+        "snapped GPU ink: {color:?}"
+    );
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Ruler,
+    });
+    pump(50);
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(100);
+        capture_reference(&w, &format!("{dir}/rulers-{theme:?}.png"), 1.);
+    }
+    let show = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-action-ShowRulers",
+    )
+    .unwrap()
+    .downcast::<gtk::CheckButton>()
+    .unwrap();
+    show.set_active(false);
+    pump(100);
+    let snap = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-action-SnapRulers",
+    )
+    .unwrap()
+    .downcast::<gtk::CheckButton>()
+    .unwrap();
+    assert!(!snap.is_sensitive());
+    capture_reference(&w, &format!("{dir}/rulers-hidden.png"), 1.);
+    show.set_active(true);
+    pump(100);
+    assert!(snap.is_sensitive());
+    // Select and delete a center; undo restores its guide without changing ink.
+    native_pen_path(&w, &[[1470., 1120.], [1470., 1120.]]);
+    let delete = find_named(
+        &w.panel_widget(Panel::ToolSettings),
+        "tool-action-DeleteRuler",
+    )
+    .unwrap()
+    .downcast::<gtk::Button>()
+    .unwrap();
+    click(&delete);
+    pump(100);
+    assert_eq!(ruler_count(), 2);
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    pump(100);
+    assert_eq!(ruler_count(), 3);
+    assert!(!w.status.is_visible(), "{}", w.status.text());
+    w.window.destroy();
+    pump(100);
+}
+
+#[test]
+#[ignore = "requires a private Wayland display and GPU"]
 fn native_figure_tools() {
     let app = native_test_app("art.capycanvas.FigureTools");
     let w = Workspace::new(&app);
@@ -7527,6 +7707,22 @@ fn native_frame_pacing() {
     let w = Workspace::new(&app);
     w.window.present();
     pump(1500);
+    let rulers = std::env::var("LAYER_PACING_RULER").unwrap_or_default();
+    if rulers == "visible" || rulers == "snap" {
+        w.dispatch(UiAction::Layer {
+            action: LayerAction::Tool {
+                tool: LayerCanvasTool::Ruler {
+                    kind: layer_ui::RulerKind::Parallel,
+                },
+            },
+        });
+        native_pen_path(&w, &[[600., 600.], [1400., 600.]]);
+        if rulers == "visible" {
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::SnapRulers,
+            });
+        }
+    }
     if std::env::var("LAYER_PACING_FIGURE").as_deref() == Ok("1") {
         w.dispatch(UiAction::Layer {
             action: LayerAction::Tool {

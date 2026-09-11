@@ -10,6 +10,8 @@ mod art_layers;
 pub(crate) mod figures;
 #[path = "region_tools.rs"]
 mod region_tools;
+#[path = "rulers.rs"]
+pub(crate) mod rulers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
 #[path = "effects.rs"]
 mod effects;
@@ -55,6 +57,7 @@ pub struct UiSession<R: CanvasRenderer> {
     navigator_preview: crate::navigator::Preview,
     eyedropper: crate::eyedropper::Eyedropper,
     region_tools: region_tools::RegionTools,
+    rulers: rulers::RulerInteraction,
     system_theme: Theme,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
@@ -99,6 +102,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             navigator_preview: Default::default(),
             eyedropper: Default::default(),
             region_tools: Default::default(),
+            rulers: Default::default(),
             system_theme: Theme::Light,
             logical_viewport: None,
             initial_fit: true,
@@ -123,6 +127,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
                 colors: ColorState::default(),
                 tool_settings: Vec::new(),
+                tool_actions: Vec::new(),
                 tool_set: ToolSetView::default(),
                 layers: Vec::new(),
                 layer_tools: LayersView::default(),
@@ -305,9 +310,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         let scale = self
             .logical_viewport
             .map_or(1.0, |v| self.state.camera.viewport[0] as f32 / v[0]);
-        let dabs =
+        let dabs = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             self.engine
-                .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns);
+                .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns)
+        } else {
+            Vec::new()
+        };
         self.cursor.view(
             self.engine.backend(),
             &self.engine.brush().tip,
@@ -450,8 +458,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     self.interaction.modifiers.shift = pressed;
                 }
-                if matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. })
-                    && !self.layer_interaction.path.is_empty()
+                if (matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. })
+                    && !self.layer_interaction.path.is_empty())
+                    || self.update_ruler_preview()
                 {
                     reply.change = self.changed(regions::DOCUMENT, true);
                 }
@@ -1008,6 +1017,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::ShowRulers => idle,
+            CommandId::SnapRulers => idle && self.rulers.visible,
+            CommandId::DeleteRuler => {
+                idle && self
+                    .rulers
+                    .selected
+                    .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
+            }
             CommandId::Undo => idle && self.engine.can_undo(),
             CommandId::Redo => idle && self.engine.can_redo(),
             CommandId::UndoWorkspace => self.workspace_history.can_undo(),
@@ -1027,6 +1044,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::Eyedropper
             | CommandId::Gradient
             | CommandId::Figure
+            | CommandId::Ruler
             | CommandId::AutoSelect
             | CommandId::Fill
             | CommandId::RotateLeft
@@ -1046,6 +1064,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | (CommandId::Hand, LayerCanvasTool::Hand)
                     | (CommandId::Gradient, LayerCanvasTool::Gradient { .. })
                     | (CommandId::Figure, LayerCanvasTool::Figure { .. })
+                    | (CommandId::Ruler, LayerCanvasTool::Ruler { .. })
                     | (
                         CommandId::AutoSelect,
                         LayerCanvasTool::Region { fill: false, .. }
@@ -1057,6 +1076,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     )
             )
             || (id == CommandId::ZenMode && self.state.workspace.zen_mode)
+            || (id == CommandId::ShowRulers && self.rulers.visible)
+            || (id == CommandId::SnapRulers && self.rulers.snapping)
             || (id == CommandId::FlipHorizontal && self.state.camera.flipped[0])
             || (id == CommandId::FlipVertical && self.state.camera.flipped[1])
             || (id == CommandId::ToggleTheme
@@ -1996,6 +2017,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::Ruler => {
+                self.layer_action(LayerAction::Tool {
+                    tool: LayerCanvasTool::Ruler {
+                        kind: self.rulers.kind,
+                    },
+                })?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
+            CommandId::ShowRulers | CommandId::SnapRulers | CommandId::DeleteRuler => {
+                self.ruler_command(command)?;
+                Ok((BRUSH | DOCUMENT, true))
+            }
             CommandId::Figure => {
                 let (shape, paint) = self.layer_interaction.figure;
                 self.layer_action(LayerAction::Tool {
@@ -2276,6 +2309,28 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_tools(&mut self) {
+        self.state.tool_actions =
+            if matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
+                || !self.engine.document().rulers.is_empty()
+            {
+                [
+                    CommandId::ShowRulers,
+                    CommandId::SnapRulers,
+                    CommandId::DeleteRuler,
+                ]
+                .into_iter()
+                .filter(|c| {
+                    *c != CommandId::DeleteRuler
+                        || matches!(self.layer_interaction.tool, LayerCanvasTool::Ruler { .. })
+                })
+                .map(|command| ToolSettingAction {
+                    command,
+                    checkable: command.is_toggle(),
+                })
+                .collect()
+            } else {
+                Vec::new()
+            };
         self.state.tool_set = tools::view(&self.state.brush, self.layer_interaction.tool);
         self.state.tool_settings = if self.layer_interaction.tool == LayerCanvasTool::Paint {
             tool_settings::controls(self.engine.configured_brush())
@@ -2330,6 +2385,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn sync_camera(&mut self) {
+        self.sync_ruler_snapping();
         self.engine.set_view(
             self.state.camera.view(),
             self.state.camera.input_transform(),
@@ -2406,6 +2462,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        if self
+            .rulers
+            .selected
+            .is_some_and(|id| !self.engine.document().rulers.iter().any(|r| r.id == id))
+            && self.layer_interaction.path.is_empty()
+        {
+            self.rulers.selected = None;
+        }
         let doc = self.engine.document();
         let interaction = &mut self.layer_interaction;
         if interaction.editing != Some(doc.active_layer) {
@@ -2509,6 +2573,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             width: doc.width,
             height: doc.height,
         }];
+        self.refresh_tools();
     }
 }
 
@@ -2887,6 +2952,124 @@ mod tests {
                 panic!("fill")
             };
             assert_eq!(color[3], 0.25);
+        }
+    }
+
+    #[test]
+    fn ruler_tools_preview_edit_cancel_and_undo_without_repainting() {
+        use layer_core::RulerGeometry;
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            let mut s = session();
+            s.set_platform(platform);
+            s.set_viewport([600., 500.], [1200, 1000]).unwrap();
+            s.state.camera.rotation = 0.3;
+            s.state.camera.flipped = [true, true];
+            s.state.camera.zoom = 2.;
+            s.sync_camera();
+            s.frame(1, 1).unwrap();
+            invoke(&mut s, CommandId::Ruler);
+            assert_eq!(s.state.tool_set.groups.len(), 3);
+            assert_eq!(s.state.tool_actions.len(), 3);
+            let composites = s.renderer_mut().composites;
+            let send = |s: &mut UiSession<Recorder>, phase, p: [f32; 2]| {
+                let m = s.state.camera.document_to_surface();
+                let mut e = event(s, 1, phase, 1.);
+                e.surface_position = Point {
+                    x: m[0] * p[0] + m[2] * p[1] + m[4],
+                    y: m[1] * p[0] + m[3] * p[1] + m[5],
+                };
+                s.pen(e).unwrap();
+                s.frame(1, 1).unwrap();
+                assert!(s.state.host_error.is_none(), "{:?}", s.state.host_error);
+            };
+            for (index, y) in [(0, 100.), (1, 400.), (2, 700.)] {
+                s.dispatch(s.state.tool_set.groups[index].action.clone())
+                    .unwrap();
+                send(&mut s, PenPhase::Down, [100., y]);
+                send(&mut s, PenPhase::Move, [300., y + 50.]);
+                assert_eq!(
+                    s.engine.document().rulers.len(),
+                    index,
+                    "preview is not history"
+                );
+                let mut plain = Vec::new();
+                s.append_layer_overlay(&mut plain);
+                assert!(!plain.is_empty());
+                if index < 2 {
+                    let reply = key(&mut s, "Shift_L", true, false, false);
+                    assert!(reply.change.canvas_wake);
+                    let mut snapped = Vec::new();
+                    s.append_layer_overlay(&mut snapped);
+                    assert_ne!(format!("{plain:?}"), format!("{snapped:?}"));
+                    key(&mut s, "Shift_L", false, false, false);
+                }
+                send(&mut s, PenPhase::Up, [300., y + 50.]);
+                assert_eq!(s.engine.document().rulers.len(), index + 1);
+                let geometry = s.engine.document().rulers[index].geometry;
+                invoke(&mut s, CommandId::Undo);
+                s.frame(1, 1).unwrap();
+                assert_eq!(s.engine.document().rulers.len(), index);
+                invoke(&mut s, CommandId::Redo);
+                s.frame(1, 1).unwrap();
+                assert_eq!(s.engine.document().rulers[index].geometry, geometry);
+            }
+            let saved = s.engine.document().rulers.clone();
+            // Drag the straight guide's body, then edit its start handle.
+            send(&mut s, PenPhase::Down, [200., 125.]);
+            send(&mut s, PenPhase::Up, [200., 160.]);
+            let (a, b) = s.engine.document().rulers[0].geometry.handles();
+            assert!((a.y - 135.).abs() < 0.001);
+            send(&mut s, PenPhase::Down, [a.x, a.y]);
+            send(&mut s, PenPhase::Up, [a.x - 20., a.y + 20.]);
+            let (moved, end) = s.engine.document().rulers[0].geometry.handles();
+            assert!((moved.x - 80.).abs() < 0.001);
+            assert_eq!(end, b);
+            let before = s.engine.document().rulers.clone();
+            send(&mut s, PenPhase::Down, [moved.x, moved.y]);
+            send(&mut s, PenPhase::Move, [50., 10.]);
+            key(&mut s, "Escape", true, false, false);
+            s.frame(1, 1).unwrap();
+            assert_eq!(
+                s.engine.document().rulers,
+                before,
+                "cancel never commits a guide"
+            );
+            assert_eq!(
+                s.renderer_mut().composites,
+                composites,
+                "guide edits must not repaint"
+            );
+            assert_eq!(s.renderer_mut().dabs, 0);
+            invoke(&mut s, CommandId::DeleteRuler);
+            s.frame(1, 1).unwrap();
+            assert_eq!(s.engine.document().rulers.len(), 2);
+            invoke(&mut s, CommandId::Undo);
+            s.frame(1, 1).unwrap();
+            assert_eq!(s.engine.document().rulers, before);
+            invoke(&mut s, CommandId::ShowRulers);
+            let mut hidden = Vec::new();
+            s.append_layer_overlay(&mut hidden);
+            assert!(hidden.is_empty());
+            assert!(
+                !s.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::SnapRulers)
+                    .unwrap()
+                    .enabled
+            );
+            invoke(&mut s, CommandId::ShowRulers);
+            assert!(
+                s.state
+                    .commands
+                    .iter()
+                    .find(|c| c.id == CommandId::SnapRulers)
+                    .unwrap()
+                    .selected
+            );
+            invoke(&mut s, CommandId::SnapRulers);
+            assert!(!s.rulers.snapping);
+            assert!(matches!(saved[2].geometry, RulerGeometry::Radial { .. }));
         }
     }
 
@@ -7434,6 +7617,7 @@ mod tests {
                 ["zoom_in", "zoom_out", "fit_canvas"],
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],
+                ["show_rulers", "snap_rulers"],
                 ["zen_mode", "toggle_theme"],
                 ["reset_layout"]
             ])

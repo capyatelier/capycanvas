@@ -208,7 +208,7 @@ all drawer variants consume the same per-panel width metadata.
 
 Use drawing-oriented CSP key families: P for Pen/Pencil, B for Brush/Airbrush/
 Decoration, E for Eraser, J for Blend/Liquify, M for Selection, W for Auto select,
-G for Gradient, F for Fill, O for Operation, U for Figure/Ruler, H for Hand and I for
+G for Gradient, F for Fill, O for Operation, U for Figure, Shift+U for Ruler, H for Hand and I for
 Eyedropper. Repeated family keys cycle its tools in toolbar order; direct custom
 bindings remain possible. Keep Space temporary pan and Tab zen. New/Open/Save
 use the platform command modifier with N/O/S; standard undo/redo stay unchanged.
@@ -689,7 +689,7 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   explicit resampling policy. Watercolor's display-only outer edge still needs
   its final selection-boundary policy, as noted above.
 - Still to implement: the new default layout, missing canvas tools/commands,
-  collapsible columns, the full application menus, rulers, remaining shortcuts
+  collapsible columns, the full application menus, remaining shortcuts
   and full functional/performance validation.
 - The complete eight-tool ribbon is currently exercised by the GTK review test;
   the shipped default toolbar/layout will change when its remaining tools and
@@ -796,3 +796,62 @@ thumbnail generation is small, asynchronous, revision-driven and capped in rate.
   Clippy, workspace compilation and Wasm compilation pass. Native Figure buttons,
   settings, Shift constraints, undo/redo and pixel sampling pass on GTK in both
   themes. This does not claim native web/Android Figure input validation.
+
+### Ruler tools
+
+- Ruler (`Shift+U`, alongside Figure's `U`) offers Straight, Parallel and Radial.
+  Drag to create straight/parallel guides; tap or drag to place a radial center.
+  The same tool moves guide bodies and edits their endpoint handles. Shift snaps
+  endpoints to 45° increments immediately, including without pointer movement.
+  Escape or canceled contact discards the provisional guide. Release records one
+  document edit; guide deletion, movement and creation share document undo/redo.
+  Operation-tool integration and project serialization remain in the pending
+  Operation/file milestones; guides currently persist within the open document.
+- Show rulers and Snap to rulers appear in View and in shared Tool Settings.
+  Hiding guides disables snapping without forgetting the snap preference. Delete
+  ruler is enabled only for a selected guide. GTK projects generic command rows
+  as native checkboxes/buttons; command labels, state, availability and shortcuts
+  stay in Rust. Rulers are available in the toolbar picker and tool drawers.
+- Choose a guide once at stroke Down: nearby straight guides take precedence
+  within 12 logical pixels; otherwise the closest parallel/radial anchor wins.
+  Parallel strokes keep their own starting offset. Radial strokes use the ray
+  through their initial point; a stroke starting exactly at the center waits for
+  its first real movement to choose the ray. Predicted input cannot change this
+  durable direction. Moving a guide cannot alter already committed ink.
+- Projection composes with the existing input affine transform before pressure
+  processing, prediction and dab generation. Real and predicted samples use the
+  same constraint; replay uses stored points, never current rulers. The brush
+  outline follows the snapped contact while its optional crosshair remains at
+  the physical pointer. Layer offsets are removed during cursor dynamics and
+  restored for display, fixing moved-layer outline calculations as well.
+- Guides use the existing GPU presentation overlay, not document pixels. No new
+  texture, paint pass or readback is needed. Guide-only edits and undo/redo do
+  not trigger paint replay or recomposition. Pointer movement changes only the
+  guide preview, not panel models/history; the selected guide is a small immutable
+  stroke snapshot. The document accepts up to 1,024 validated guides.
+- Validation on the isolated staged source: 29 core, 27 engine, 183 shared UI
+  and 80 GPU correctness tests pass (12 hardware benchmarks run separately),
+  including all three host profiles for guide interactions and tests
+  of rotated/high-DPI views, moved layers, predictions, cancellation and history.
+  Strict all-target Clippy, workspace and Wasm compilation pass. GTK's actual controls,
+  snapped GPU ink sampling, hidden guides, deletion and undo pass. Dark/light
+  captures were visually inspected; GTK-specific SVG stroke classes corrected
+  missing/filled guide icons. Review images:
+  `artifacts/familiar-workspace/rulers-{Dark,Light}.png` and `rulers-hidden.png`.
+  This is GTK review coverage, not physical tablet or native web/Android testing.
+- Six-second 384px G-Pen tests on the private 120Hz Wayland compositor:
+
+  | Guides | Worker CPU median/p95/p99 ms | GPU median/p95/p99 ms | Displayed Hz | Discarded |
+  | --- | --- | --- | --- | --- |
+  | None | 0.292 / 0.559 / 0.729 | 0.122 / 0.302 / 1.082 | 119.91 | 0 |
+  | Visible, snapping off | 0.288 / 0.584 / 0.761 | 0.124 / 0.286 / 0.448 | 119.72 | 1 |
+  | Visible, snapping on | 0.294 / 0.614 / 0.757 | 0.129 / 0.336 / 0.462 | 119.91 | 0 |
+
+  Guide display adds about 0.002ms to GPU median in these runs. Snapping changes
+  the stroke's geometry and dab count, so its GPU times are not an identical-image
+  comparison. Input processing p99 is 0.040/0.045/0.046ms respectively; GTK frame
+  handlers are 0.047/0.053/0.054ms. CPU tails differ by tens of microseconds, not
+  milliseconds. This supports approximately 120Hz delivery but not zero missed
+  frames or physical pen-to-display latency. Reproduce with `native_frame_pacing`,
+  `LAYER_PACING_BRUSH=GPen` and optional `LAYER_PACING_RULER=visible` or `snap`.
+  Reports: `/tmp/capy-ruler-{none,visible,snap}.json`.
