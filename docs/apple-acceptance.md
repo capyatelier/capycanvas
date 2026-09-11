@@ -402,3 +402,11 @@ The WebAssembly compile check, standalone numeric edit-state checks and nine
 visual-tool tests pass. Full feature inventory, remaining specialized panels,
 persistence, complete visual/input coverage and sustained hardware performance
 remain open on both platforms.
+
+After integrating the incoming live collapsed-toolbar drawer work, both signed
+Apple builds and all 227 shared/Apple tests pass (208 UI + 8 host + 11 ABI).
+WebAssembly compilation passes; the merged physical iPad build installs and
+launches, and the merged Mac build launches. The focused UI and color captures
+above precede this merge; they do not validate Apple drawer projection, which
+remains unfinished. No full-image or hardware performance gate is closed by
+these integration checks.
