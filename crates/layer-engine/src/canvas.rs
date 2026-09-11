@@ -302,6 +302,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                     .layer(p.layer)
                     .is_none_or(|l| l.kind != layer_core::LayerKind::Paint)
                 || p.transform.affine.inverse().is_none()
+                || p.selection.as_ref().is_some_and(|s| {
+                    s.affine.inverse().is_none() || s.transformed(p.transform.affine).is_err()
+                })
             {
                 return Err(DocumentError::InvalidLayerOperation(
                     "Select an unlocked paint layer and finish the stroke",
@@ -317,7 +320,68 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn append_layer_operation(
         &mut self,
         id: LayerId,
+        operation: layer_core::LayerOperation,
+    ) -> Result<(), DocumentError> {
+        self.append_operation(id, operation, None)
+    }
+
+    /// Commit the displayed pixels and moved selection as one undoable edit.
+    /// The GPU can keep the matching preview result instead of resampling it.
+    pub fn commit_transform(&mut self) -> Result<bool, DocumentError> {
+        let preview = self
+            .transform_preview
+            .as_ref()
+            .ok_or(DocumentError::InvalidLayerOperation(
+                "No transform to apply",
+            ))?
+            .clone();
+        if preview.transform.affine == layer_core::Affine::IDENTITY {
+            self.transform_preview = None;
+            return Ok(false);
+        }
+        let selection = self.display_selection().map(|s| s.into_owned());
+        let mut coverage = layer_core::LayerMask::reveal_all(
+            self.allocate_layer_id(),
+            layer_core::Point::default(),
+        );
+        // The packed source selection itself carries inversion. Transform
+        // coverage defaults to zero whenever an explicit selection is present.
+        coverage.default_coverage = f32::from(preview.selection.is_none());
+        coverage.initial = preview.selection;
+        self.append_operation(
+            preview.layer,
+            layer_core::LayerOperation {
+                after_stroke: 0,
+                coverage,
+                kind: layer_core::LayerOperationKind::Transform(preview.transform),
+            },
+            Some(selection),
+        )?;
+        Ok(true)
+    }
+
+    /// Provisional selection placement is view state, never another history edit.
+    pub fn display_selection(&self) -> Option<std::borrow::Cow<'_, layer_core::Selection>> {
+        if let Some(preview) = &self.transform_preview {
+            let selection = preview.selection.as_ref()?;
+            let offset = self.document().layer_offset(preview.layer);
+            return selection
+                .transformed(preview.transform.affine)
+                .ok()
+                .map(|s| std::borrow::Cow::Owned(s.translated(offset)));
+        }
+        self.document()
+            .selection
+            .as_ref()
+            .map(std::borrow::Cow::Borrowed)
+    }
+
+    fn append_operation(
+        &mut self,
+        id: LayerId,
         mut operation: layer_core::LayerOperation,
+        // None preserves the selection; Some(None) explicitly clears it.
+        selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
         if self.has_active_stroke() {
             return Err(DocumentError::InvalidLayerOperation(
@@ -338,7 +402,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         operation.after_stroke = layer.strokes.len();
         let damage = operation.bounds([self.document().width, self.document().height]);
         layer.operations.push(operation);
-        self.editor.perform(Edit::ReplaceLayer(Box::new(layer)))?;
+        let edit = Edit::ReplaceLayer(Box::new(layer));
+        self.editor
+            .perform(if let Some(selection) = selection_after {
+                Edit::Batch(vec![edit, Edit::SetSelection(selection)])
+            } else {
+                edit
+            })?;
         self.transform_preview = None;
         self.batches.push(DabBatch {
             stroke_id: StrokeId(0),
@@ -556,9 +626,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             reset_layers: rebuilt,
             composite_all: self.composite_all,
         };
+        let selection = self.display_selection().map(|s| s.into_owned());
         let result = self
             .backend
-            .set_selection_outline(self.editor.document().selection.as_ref())
+            .set_selection_outline(selection.as_ref())
             .and_then(|_| {
                 self.backend
                     .set_transform_preview(self.transform_preview.as_ref())
@@ -1702,6 +1773,94 @@ mod tests {
         engine.set_layer_opacity(initial.active_layer, 0.5).unwrap();
         engine.render_frame().unwrap();
         assert!(engine.backend.transform.is_none());
+    }
+
+    #[test]
+    fn applying_transform_moves_selection_atomically_and_cancel_keeps_original() {
+        use layer_core::{Affine, ImageTransform, Selection};
+        let (_, consumer) = input_queue(32);
+        let mut doc = Document::new("selection transform", 128, 128);
+        let layer = doc.active_layer;
+        doc.layers[0].properties.offset = Point { x: 12., y: 7. };
+        let selection = Selection::polygon(vec![
+            Point { x: 20., y: 20. },
+            Point { x: 60., y: 20. },
+            Point { x: 20., y: 60. },
+        ])
+        .unwrap();
+        doc.selection = Some(selection.clone());
+        let mut engine = CanvasEngine::new(
+            RecordingRenderer::default(),
+            doc,
+            consumer,
+            view(128, 128),
+            ViewTransform::IDENTITY,
+        )
+        .unwrap();
+        let preview = layer_render::TransformPreview {
+            transaction: 1,
+            layer,
+            selection: Some(selection.translated(Point { x: -12., y: -7. })),
+            transform: ImageTransform {
+                affine: Affine::around(
+                    Point { x: 28., y: 33. },
+                    [1.5, 0.7],
+                    0.5,
+                    Point { x: 3., y: -2. },
+                ),
+                ..Default::default()
+            },
+        };
+        engine.set_transform_preview(Some(preview.clone())).unwrap();
+        let placed = engine.display_selection().unwrap().into_owned();
+        assert_ne!(placed, selection);
+        assert_eq!(engine.document().selection.as_ref(), Some(&selection));
+        engine.set_transform_preview(None).unwrap();
+        assert_eq!(engine.display_selection().as_deref(), Some(&selection));
+        assert!(!engine.can_undo());
+        engine.set_transform_preview(Some(preview.clone())).unwrap();
+        assert!(engine.commit_transform().unwrap());
+        assert!(engine.transform_preview.is_none());
+        assert_eq!(engine.document().selection.as_ref(), Some(&placed));
+        let operation = &engine.document().layer(layer).unwrap().operations[0];
+        assert_eq!(operation.coverage.initial, preview.selection);
+        assert_eq!(
+            operation.kind,
+            layer_core::LayerOperationKind::Transform(preview.transform)
+        );
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.document().selection.as_ref(), Some(&selection));
+        assert!(
+            engine
+                .document()
+                .layer(layer)
+                .unwrap()
+                .operations
+                .is_empty()
+        );
+        assert!(
+            !engine.can_undo(),
+            "one undo restores both pixels and selection"
+        );
+        assert!(engine.redo().unwrap());
+        assert_eq!(engine.document().selection.as_ref(), Some(&placed));
+        let mut inverted = preview.clone();
+        inverted.selection.as_mut().unwrap().inverted = true;
+        engine.set_transform_preview(Some(inverted)).unwrap();
+        assert!(engine.commit_transform().unwrap());
+        assert!(engine.document().selection.as_ref().unwrap().inverted);
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.document().selection.as_ref(), Some(&placed));
+        engine
+            .set_transform_preview(Some(layer_render::TransformPreview {
+                transform: Default::default(),
+                ..preview
+            }))
+            .unwrap();
+        assert!(
+            !engine.commit_transform().unwrap(),
+            "identity must not add history"
+        );
     }
 
     #[test]

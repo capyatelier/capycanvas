@@ -516,6 +516,97 @@ fn preset_style(preset: layer_core::DefaultBrushPreset) -> DabStyle {
 }
 
 #[test]
+#[ignore = "hardware selection preparation benchmark; release, serial"]
+fn affine_selection_preparation_latency() {
+    use layer_core::{Affine, SelectionPixels};
+    use std::{sync::Arc, time::Instant};
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let extent = [2048, 1536];
+    let base = Selection::pixels(Arc::new(
+        SelectionPixels::new(
+            extent,
+            [0, 0, extent[0], extent[1]],
+            vec![0x44443210; (extent[0] / 8 * extent[1]) as usize],
+        )
+        .unwrap(),
+    ));
+    let percentile = |mut samples: Vec<f32>| {
+        samples.sort_by(f32::total_cmp);
+        [0.5, 0.95, 0.99].map(|q| samples[(samples.len() as f32 * q).ceil() as usize - 1])
+    };
+    for mode in ["translation", "affine", "unchanged"] {
+        let mut timing = telemetry::Telemetry::new(r.device(), r.queue());
+        let mut cpu = Vec::new();
+        let mut completed = Vec::new();
+        let mut generation = 0;
+        let mut storage = 0;
+        for i in 0..160 {
+            let t = if mode == "unchanged" {
+                0.
+            } else {
+                i as f32 * 0.03
+            };
+            let affine = if mode == "translation" {
+                Affine::translation(Point {
+                    x: t.sin() * 4.,
+                    y: t.cos() * 3.,
+                })
+            } else {
+                Affine::around(
+                    Point { x: 1024., y: 768. },
+                    [0.95, 1.02],
+                    0.2 + t * 0.01,
+                    Point::default(),
+                )
+            };
+            let selection = Arc::new(base.transformed(affine).unwrap());
+            timing.enabled = i >= 40;
+            let started = Instant::now();
+            let mut encoder = r.device.create_command_encoder(&Default::default());
+            timing.begin(&r.device, &mut encoder);
+            r.selection_clip
+                .prepare(&r.device, &mut encoder, extent, &selection)
+                .unwrap();
+            timing.end(&mut encoder);
+            r.last_submission = Some(r.queue.submit([encoder.finish()]));
+            timing.submitted();
+            let submit_ms = started.elapsed().as_secs_f32() * 1000.;
+            r.wait_idle().unwrap();
+            if i >= 40 {
+                cpu.push(submit_ms);
+                completed.push(started.elapsed().as_secs_f32() * 1000.);
+                assert_eq!(
+                    r.selection_clip.storage_bytes(),
+                    storage,
+                    "warm storage stable"
+                );
+                if mode == "unchanged" {
+                    assert_eq!(r.selection_clip.generations, generation);
+                } else {
+                    assert_eq!(r.selection_clip.generations, generation + 1);
+                }
+            }
+            generation = r.selection_clip.generations;
+            storage = r.selection_clip.storage_bytes();
+        }
+        let telemetry = timing.snapshot();
+        assert_eq!(telemetry.gpu.count, 120);
+        let (cpu, gpu, completed) = (
+            percentile(cpu),
+            percentile(telemetry.gpu.ordered()),
+            percentile(completed),
+        );
+        eprintln!(
+            "selection {mode}: CPU median/p95/p99={cpu:.3?}ms GPU={gpu:.3?}ms completed={completed:.3?}ms retained={storage}B"
+        );
+        assert!(
+            completed[2] < 8.333,
+            "selection preparation exceeds 120Hz budget"
+        );
+    }
+}
+
+#[test]
 fn packed_brush_selection_matches_mask_coverage_and_reuses_geometry() {
     let mut r = WgpuRasterizer::new_headless().unwrap();
     let polygon = Selection::polygon(vec![
@@ -580,6 +671,220 @@ fn packed_brush_selection_matches_mask_coverage_and_reuses_geometry() {
     );
     assert_eq!(pixel(&mut r, 32, 64), [255, 0, 0, 255]);
     assert_eq!(pixel(&mut r, 96, 64), [255, 255, 255, 255]);
+}
+
+#[test]
+fn affine_raster_selection_matches_linear_reference_in_fill_brush_and_mask() {
+    use layer_core::{Affine, SelectionPixels};
+    use std::sync::Arc;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    // An asymmetric shape with holes and fractional coverage, not a uniform box.
+    let sample = |x: i32, y: i32| -> f32 {
+        if !(0..16).contains(&x) || !(0..8).contains(&y) {
+            return 0.;
+        }
+        if (x + y) % 5 == 0 {
+            0.
+        } else {
+            ((x + 2 * y) % 4 + 1) as f32
+        }
+    };
+    let words: Vec<u32> = (0..8)
+        .flat_map(|y| {
+            (0..2).map(move |w| (0..8).fold(0, |v, i| v | (sample(w * 8 + i, y) as u32) << (i * 4)))
+        })
+        .collect();
+    let pixels = Arc::new(SelectionPixels::new([16, 8], [0, 0, 16, 8], words).unwrap());
+    let base = Selection::pixels(pixels.clone());
+    let white = Dab {
+        radii: [200.; 2],
+        ..dab([1.; 4])
+    };
+    for affine in [
+        Affine::translation(Point { x: 30.5, y: 41.25 }),
+        Affine::around(
+            Point { x: 8., y: 4. },
+            [3., 2.],
+            0.43,
+            Point { x: 50., y: 50. },
+        ),
+        Affine::around(
+            Point { x: 8., y: 4. },
+            [-2., 4.],
+            -0.72,
+            Point { x: 20., y: 32. },
+        ),
+        Affine::around(
+            Point { x: 8., y: 4. },
+            [0.7, 1.3],
+            0.11,
+            Point { x: -2., y: -2. },
+        ),
+        Affine::around(
+            Point { x: 8., y: 4. },
+            [2., 2.],
+            0.,
+            Point { x: 500., y: 500. },
+        ),
+    ] {
+        for inverted in [false, true] {
+            let mut selection = base.transformed(affine).unwrap();
+            selection.inverted = inverted;
+            let mut layer = Layer::paint(LayerId(1), "affine coverage");
+            let mut mask = LayerMask::reveal_all(LayerId(2), Point::default());
+            mask.default_coverage = f32::from(inverted);
+            mask.initial = Some(selection.clone());
+            layer.operations = vec![LayerOperation {
+                after_stroke: 0,
+                coverage: mask.clone(),
+                kind: LayerOperationKind::Fill {
+                    color: [1.; 4],
+                    alpha_locked: false,
+                },
+            }];
+            submit(
+                &mut r,
+                &[layer.clone()],
+                &[],
+                &[DabBatch {
+                    kind: DabBatchKind::LayerOperation(0),
+                    dab_count: 0,
+                    ..batch(1)
+                }],
+                true,
+            );
+            let filled = r.readback_srgb_rgba8().unwrap();
+            let inverse = affine.inverse().unwrap();
+            for y in 0..128 {
+                for x in 0..128 {
+                    let p = inverse.map(Point {
+                        x: x as f32 + 0.5,
+                        y: y as f32 + 0.5,
+                    });
+                    let coverage = if affine.0[..4] == [1., 0., 0., 1.] {
+                        sample(p.x.floor() as i32, p.y.floor() as i32)
+                    } else {
+                        let q = Point {
+                            x: p.x - 0.5,
+                            y: p.y - 0.5,
+                        };
+                        let (a, b) = (q.x.floor() as i32, q.y.floor() as i32);
+                        let (fx, fy) = (q.x - a as f32, q.y - b as f32);
+                        let top = sample(a, b) * (1. - fx) + sample(a + 1, b) * fx;
+                        let bottom = sample(a, b + 1) * (1. - fx) + sample(a + 1, b + 1) * fx;
+                        (top * (1. - fy) + bottom * fy).round()
+                    } * 0.25;
+                    let expected =
+                        ((if inverted { 1. - coverage } else { coverage }) * 255.).round() as u8;
+                    assert!(
+                        filled[(y * 128 + x) * 4 + 3].abs_diff(expected) <= 1,
+                        "{affine:?}, inverted={inverted}, {x},{y}"
+                    );
+                }
+            }
+            let generations = r.selection_clip.generations;
+            let storage = r.selection_clip.storage_bytes();
+            layer.operations.clear();
+            let selected = DabBatch {
+                style: DabStyle {
+                    selection: Some(Arc::new(selection.clone())),
+                    ..batch(1).style
+                },
+                ..batch(1)
+            };
+            submit(&mut r, &[layer.clone()], &[white], &[selected], true);
+            assert_eq!(r.readback_srgb_rgba8().unwrap(), filled);
+            layer.mask = Some(mask);
+            submit(&mut r, &[layer], &[white], &[batch(1)], true);
+            assert_eq!(r.readback_srgb_rgba8().unwrap(), filled);
+            assert_eq!(
+                r.selection_clip.generations, generations,
+                "changing the consumer does not resample"
+            );
+            assert_eq!(r.selection_clip.storage_bytes(), storage);
+            r.set_selection_outline(Some(&selection)).unwrap();
+            assert_eq!(
+                r.display_selection.as_ref().unwrap().1,
+                r.selection_clip.pixel_buffer(&r.device, &pixels),
+                "display uses original coverage, not another copy"
+            );
+        }
+    }
+}
+
+#[test]
+fn viewport_outline_places_original_selection_without_rebuilding_coverage() {
+    use layer_core::{Affine, SelectionPixels};
+    use std::sync::Arc;
+    let mut r = WgpuRasterizer::new_headless().unwrap();
+    let layer = Layer::paint(LayerId(1), "selection display");
+    submit(&mut r, &[layer], &[], &[], true);
+    let target = r.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test selection display"),
+        size: wgpu::Extent3d {
+            width: 128,
+            height: 128,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut presenter = ViewportPresenter::for_renderer(&r, wgpu::TextureFormat::Rgba8Unorm);
+    let rectangle = Selection::pixels(Arc::new(
+        SelectionPixels::new([16, 8], [0, 0, 16, 8], vec![0x44444444; 16]).unwrap(),
+    ));
+    let words: Vec<_> = (0..128)
+        .flat_map(|y| {
+            (0..16).map(move |word| {
+                (0..8).fold(0, |v, x| {
+                    v | (if (30..62).contains(&(word * 8 + x)) && (40..64).contains(&y) {
+                        4
+                    } else {
+                        0
+                    }) << (x * 4)
+                })
+            })
+        })
+        .collect();
+    let reference = Selection::pixels(Arc::new(
+        SelectionPixels::new([128, 128], [30, 40, 62, 64], words).unwrap(),
+    ));
+    for inverted in [false, true] {
+        let mut reference = reference.clone();
+        reference.inverted = inverted;
+        r.set_selection_outline(Some(&reference)).unwrap();
+        presenter.present(
+            &r,
+            &target.create_view(&Default::default()),
+            view(),
+            [0.; 4],
+        );
+        let expected = page_bytes(&r, &target);
+        for matrix in [
+            Affine([2., 0., 0., 3., 30., 40.]),
+            Affine([-2., 0., 0., -3., 62., 64.]),
+        ] {
+            let mut transformed = rectangle.transformed(matrix).unwrap();
+            transformed.inverted = inverted;
+            let generations = r.selection_clip.generations;
+            r.set_selection_outline(Some(&transformed)).unwrap();
+            presenter.present(
+                &r,
+                &target.create_view(&Default::default()),
+                view(),
+                [0.; 4],
+            );
+            assert_eq!(page_bytes(&r, &target), expected);
+            assert_eq!(
+                r.selection_clip.generations, generations,
+                "presentation never rasterizes the selection"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1439,7 +1744,10 @@ fn baked_operations_keep_the_ordinary_brush_path() {
                         ..batch(1)
                     };
                     submit(&mut r, &[layer.clone()], &[], &[op], true);
-                    assert!(r.scene.is_some(), "image import initializes through scene jobs");
+                    assert!(
+                        r.scene.is_some(),
+                        "image import initializes through scene jobs"
+                    );
                     let before = r.readback_srgb_rgba8().unwrap();
                     if !keep_history {
                         // Reference: the same already-baked GPU pages without

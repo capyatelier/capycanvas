@@ -2841,8 +2841,8 @@ mod tests {
             assert_eq!(request.source, RegionSource::Layer(id));
             assert_eq!(request.tolerance, 0.2);
             assert_eq!(
-                request.limit.as_ref().unwrap().offset,
-                Point { x: -8., y: -12. }
+                request.limit.as_ref().unwrap().affine,
+                layer_core::Affine::translation(Point { x: -8., y: -12. })
             );
             s.renderer_mut().region_reply = Some(RegionResult {
                 request_id: request.request_id,
@@ -2914,8 +2914,8 @@ mod tests {
             });
             s.frame(13, 13).unwrap();
             assert_eq!(
-                s.engine.document().selection.as_ref().unwrap().offset,
-                Point::default()
+                s.engine.document().selection.as_ref().unwrap().affine,
+                layer_core::Affine::IDENTITY
             );
 
             // Parameter edits during async detection apply only to the next fill.
@@ -3359,10 +3359,7 @@ mod tests {
         let selection = operations[0].coverage.initial.as_ref().unwrap();
         let first = selection.contours()[0][0];
         assert_eq!(
-            Point {
-                x: first.x + selection.offset.x,
-                y: first.y + selection.offset.y
-            },
+            selection.affine.map(first),
             Point::default()
         );
         assert!(s.layer_interaction.path.is_empty());

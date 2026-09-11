@@ -4,6 +4,7 @@ struct Camera {
     viewport: vec4<f32>,
     surround: vec4<f32>,
     selection: vec4<f32>,
+    selection_inverse: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var canvas: texture_2d<f32>;
@@ -13,7 +14,8 @@ struct Selection { rect: vec4<u32>, info: vec4<u32>, values: array<u32> }
 
 fn selected(p: vec2<f32>) -> bool {
     if any(p < vec2<f32>(0.)) || any(p >= camera.offset_document.zw) { return false; }
-    let q = vec2<i32>(floor(p - camera.selection.xy)) - vec2<i32>(selection.rect.xy);
+    let local = vec2<f32>(dot(camera.selection_inverse.xz, p), dot(camera.selection_inverse.yw, p)) + camera.selection.xy;
+    let q = vec2<i32>(floor(local)) - vec2<i32>(selection.rect.xy);
     var covered = false;
     if all(q >= vec2<i32>(0)) && all(q < vec2<i32>(selection.rect.zw)) {
         let word = u32(q.y) * ((selection.rect.z+7u)/8u) + u32(q.x)/8u;

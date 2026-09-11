@@ -8114,6 +8114,7 @@ fn native_frame_pacing() {
         );
         reports.push(report);
     }
+    assert!(!reports.is_empty(), "LAYER_PACING_BRUSH did not match a benchmark workload");
     let path = std::env::var("LAYER_PACING_REPORT")
         .unwrap_or_else(|_| "/tmp/layer-wayland-pacing.json".into());
     std::fs::write(path, serde_json::to_vec_pretty(&reports).unwrap()).unwrap();

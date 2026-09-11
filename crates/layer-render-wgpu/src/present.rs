@@ -16,7 +16,7 @@ pub struct ViewportPresenter {
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
-    camera_data: Option<[f32; 20]>,
+    camera_data: Option<[f32; 24]>,
 }
 
 impl ViewportPresenter {
@@ -142,7 +142,7 @@ impl ViewportPresenter {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewport camera"),
-            size: 80,
+            size: 96,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -261,7 +261,12 @@ impl ViewportPresenter {
         if !det.is_finite() || det.abs() < 1.0e-12 {
             return;
         }
-        let data: [f32; 20] = [
+        let inverse = selection
+            .map_or(layer_core::Affine::IDENTITY, |(s, _)| {
+                s.affine.inverse().expect("selection placement validated")
+            })
+            .0;
+        let data: [f32; 24] = [
             d / det,
             -b / det,
             -c / det,
@@ -278,10 +283,14 @@ impl ViewportPresenter {
             surround_linear[1],
             surround_linear[2],
             surround_linear[3],
-            selection.map_or(0., |(s, _)| s.offset.x),
-            selection.map_or(0., |(s, _)| s.offset.y),
+            inverse[4],
+            inverse[5],
             f32::from(selection.is_some()),
             selection.map_or(0., |(s, _)| f32::from(s.inverted)),
+            inverse[0],
+            inverse[1],
+            inverse[2],
+            inverse[3],
         ];
         // A fixed f32 array has no padding or uninitialized bytes.
         let bytes = unsafe {
