@@ -17,29 +17,20 @@
   <a href="https://editor.capycanvas.art/">Web&nbsp;Demo</a>
 </p>
 
-Capy Canvas is a free, GPU-accelerated art and image editor being developed for
-digital painters, photographers and comic artists. It is Linux-first because Linux has been underserved by professional art tools,
-with native clients for Windows, macOS, iPadOS and Android, and a browser version.
-The project is still in development, and the clients do not yet have the same
-feature coverage or level of testing.
+Capy Canvas is a free art and image editor in development for digital painters,
+photographers and comic artists. It is built for Linux first, where artists have
+long had fewer choices in professional software. The same app also runs on other
+desktops, tablets and the web.
 
-The editor combines pressure-sensitive painting with layers, groups, masks,
-selections, transforms and programmable filters. These provide the shared tools
-for drawing, image adjustment and composition. Its panels and toolbars can be
-rearranged and customized, while Zen mode hides controls to leave more room for
-the drawing. A shared Rust implementation keeps drawing behavior consistent
-across platforms; each native client uses its platform's own UI toolkit.
+Painting, photo editing and comic work share many of the same building blocks:
+brushes, layers, masks and image effects. Capy Canvas implements them in a common
+GPU-accelerated core, with an interface that can be arranged to suit different
+workflows. Artists should be able to keep familiar layouts and shortcuts, drawing
+on the muscle memory they have built in other apps.
 
-The software is available under MIT or Apache-2.0. Drawing requires no login,
-subscription or central server, and the code can be forked and used in other
-projects. Coding agents are making it more practical for artists to build their
-own tools. This project aims to provide a foundation shaped by artists’ workflows:
-a responsive GPU canvas, an adaptable interface and a portable drawing engine.
-The [branding terms](#license-and-branding) are separate from the software licenses.
-
-This README introduces the code. The [technical documentation](docs/README.md)
-explains individual systems and development setup; the
-[website documentation](https://capycanvas.art/docs/) is for people using the app.
+The code is available under MIT or Apache-2.0, and the app requires no account,
+subscription or central server. Artists can modify it for their own work or reuse
+the core to build new tools, including with the help of coding agents.
 
 ## Overall architecture
 
@@ -94,14 +85,14 @@ under `crates/`; platform applications live under `apps/`.
 
 | Package | Responsibility |
 | --- | --- |
-| [`layer-core`](crates/layer-core/src/lib.rs) | Document data, layers, reversible edits, brush definitions and the editable project format. It has no dependency on a UI toolkit or graphics API. |
-| [`layer-engine`](crates/layer-engine/src/lib.rs) | Input processing, brush dynamics, stroke placement and the work sent to the renderer. |
-| [`layer-ui`](crates/layer-ui/src/lib.rs) | The editor session, tool behavior, typed commands, panel layout, preferences and file-operation state. |
-| [`layer-render`](crates/layer-render/src/lib.rs) | The contract between the engine and renderer, including brush contacts, frame packets and explicit image requests. |
-| [`layer-render-wgpu`](crates/layer-render-wgpu/src/lib.rs) | GPU brushes, layer composition, filters, previews and the canvas viewport. |
-| [`layer-host`](crates/layer-host/src/lib.rs) | Common session and renderer integration used by the Android, Apple and Windows bridges. GTK and web integrate the shared session directly. |
-| [`layer-ffi`](crates/layer-ffi/src/lib.rs) | A C interface for embedding and headless validation. The platform apps also have their own bindings where needed. |
-| [`layer-bench`](crates/layer-bench/src/main.rs) | GPU benchmarks, regression workloads and brush-preview generation. |
+| [`layer-core`](crates/layer-core/README.md) | Document data, layers, reversible edits, brush definitions and the editable project format. It has no dependency on a UI toolkit or graphics API. |
+| [`layer-engine`](crates/layer-engine/README.md) | Input processing, brush dynamics, stroke placement and the work sent to the renderer. |
+| [`layer-ui`](crates/layer-ui/README.md) | The editor session, tool behavior, typed commands, panel layout, preferences and file-operation state. |
+| [`layer-render`](crates/layer-render/README.md) | The contract between the engine and renderer, including brush contacts, frame packets and explicit image requests. |
+| [`layer-render-wgpu`](crates/layer-render-wgpu/README.md) | GPU brushes, layer composition, filters, previews and the canvas viewport. |
+| [`layer-host`](crates/layer-host/README.md) | Common session and renderer integration used by the Android, Apple and Windows bridges. GTK and web integrate the shared session directly. |
+| [`layer-ffi`](crates/layer-ffi/README.md) | A C interface for offscreen drawing, tests and benchmarks. Interactive clients use their own platform bindings. |
+| [`layer-bench`](crates/layer-bench/README.md) | GPU benchmarks, regression workloads and brush-preview generation. |
 
 [`assets/`](assets) contains brush resources and runtime filter definitions.
 The shared interface icons and bundled brush previews currently live under
@@ -109,80 +100,112 @@ The shared interface icons and bundled brush previews currently live under
 
 ## Configurable interface
 
-Painters, photographers and comic artists need different interfaces. Comic work
-calls for quick access to reference layers, selections and lasso fill. Painting
-needs detailed brush controls and room to work with the canvas. Photo editing
-makes heavier use of effect chains—ordered filters applied to an image—and
-controls that follow the selected tool, layer or filter. An interface arranged for one of these workflows can make the
-others unnecessarily awkward.
+The UI separates editor behavior from the widgets used to present it. Shared Rust
+code defines commands, controls and layout, so the same tools can be arranged into
+different workspaces without changing their behavior.
 
-Artists also bring muscle memory from the software they already use. Relearning
-where tools live, how panels behave and which shortcuts to press takes time. The
-UI should be flexible enough to accommodate familiar designs from existing apps,
-so changing editors does not require adopting one prescribed layout.
+Panels can be docked, floated, grouped in tabs or collapsed. Toolbars can contain
+chosen tools and commands, with control visibility and sizing represented in the
+workspace model. Tool Settings follows the active tool, and Properties exposes the
+selected filter's parameters.
 
-The same core already supplies layers, masks, brushes and image effects. The UI
-needs to expose the relevant tools without making every user navigate all of
-them. Configurable panels and toolbars, together with tool-specific settings,
-provide that flexibility; dedicated arrangements for each audience can build on
-this shared implementation.
+`UiSession` coordinates this shared state. A frontend sends it a typed `UiAction`,
+such as selecting a tool or moving a panel. Rust validates the action and reports
+which parts of the UI changed. The frontend updates the affected controls,
+keeping widgets in place while someone is dragging a slider or editing a value.
+Buttons, menus and shortcuts use the same command definitions and availability
+rules.
 
-`UiSession` is the shared editor session. A frontend sends it a typed `UiAction`,
-such as selecting a tool or moving a panel, and receives the resulting state
-changes. Rust decides what an action means and whether it is available; the
-frontend renders that state with GTK, DOM, Compose, UIKit, AppKit or WinUI controls.
+Workspace changes have their own undo history, separate from edits to the artwork.
+Zen mode hides controls without resizing the canvas or moving the drawing. These
+boundaries let users adjust the interface without disturbing work on the canvas.
 
-The workspace model describes docked and floating panels, tabs, toolbars and
-collapsed columns. Users can choose which tools or controls a panel contains. The shared layout
-can be serialized and restored; automatic persistence is implemented by individual
-hosts; GTK still starts from its default layout. Layout changes have their own undo history, separate
-from edits to the artwork. Zen mode changes control visibility without resizing
-the canvas or moving the drawing. Native focus, accessibility and widget behavior
-remain the client's responsibility.
-
-The [workspace guide](docs/ui/README.md) explains how layout, customization and
-changed-state notifications fit together. Individual clients implement different
-portions of this shared model as their UI work progresses.
+The [workspace guide](docs/ui/README.md) covers layout, customization and the
+shared UI contract in more detail.
 
 ## Rendering engine
 
-The renderer stores painted layer content in GPU texture pages, allocating pages
-as regions are touched. Its compositor—the code that combines layers into the
-visible image—tracks which regions have changed and retains reusable results.
-Groups, masks, clipping and blend modes are evaluated in the same composition
-system as ordinary paint layers.
+A large illustration can contain hundreds of layers, many with only a few marks
+or a small part of the image. Allocating a full canvas for each layer wastes
+graphics memory; recomputing the whole stack after every pen movement wastes
+processing time. The renderer needs to fit these sparse layers into a limited
+memory budget and update only the parts affected by an edit.
 
-A change can affect more than the rectangle that was painted. A blur, for example,
-needs neighboring pixels, while a filter on a group depends on that group's
-contents. The renderer tracks these dependencies and caches intermediate images
-where needed. Global or animated effects can require broader updates; incremental
-rendering does not mean every operation has a small cost.
+Capy Canvas stores painted layers in 256 × 256 GPU texture pages, allocated as
+regions are touched. Shaders draw into those pages and combine them into the
+visible image. The compositor tracks changed regions and the results that depend
+on them, reusing unchanged content between frames.
 
-Filters use runtime JSON definitions and WGSL, the shader language used by WebGPU
-and `wgpu`. Most can be added or replaced without rebuilding the app. Canvas
-painting and presentation stay on the GPU. Export, thumbnails and color sampling
-have explicit readback paths for the cases that need CPU-accessible results.
+Masks and effect layers introduce branching dependencies. In this example, a
+color adjustment is clipped to a paint layer beneath an ink layer. Its mask and
+opacity mix the filtered color with the original paint, preserving the paint's
+coverage. Background and ink enter separately:
 
-Start with [rendering and composition](docs/internals/rendering.md), then use the
-[runtime filter reference](docs/reference/runtime-filters.md) for the shader contract.
+```text
+Paint tile ----+----> Color filter ------+
+               |                         |
+               +---------------------+   |
+                                     v   v
+Effect mask + opacity -----------> Mix with original
+                                          |
+                                          v
+Background tile -----------------> Paint over background
+                                          |
+                                          v
+Ink tile ------------------------> Ink over result
+                                          |
+                                          v
+                                      Output tile
+```
+
+The diagram shows logical dependencies. Compatible color adjustments that
+operate on each pixel independently can be fused into one shader, including
+their masks and opacity, without writing an intermediate texture for each effect.
+Results that need separate passes remain in GPU resources. Blurs need neighboring
+pixels, and some filters require full-image intermediates, so their update and
+memory costs can be larger than a tile.
+
+Many laptops and mobile devices now share physical RAM between CPU and GPU.
+Older designs that keep separate CPU and GPU images and repeatedly copy between
+them do not automatically benefit from this unified memory. Capy Canvas keeps
+drawing and composition in GPU textures; shared RAM still has bandwidth costs
+and requires synchronization. Export and small UI image requests use explicit
+readback paths when CPU access is needed.
+
+The [rendering guide](docs/internals/rendering.md) covers caching, memory use and
+shader execution. The [runtime filter reference](docs/reference/runtime-filters.md)
+explains how filters are defined in JSON and WGSL shader code.
 
 ## Brush engine
 
-A stroke records real pen samples and the brush settings used to draw it. The
-engine evaluates pressure, tilt and other available sensors, then places brush
-contacts along the stroke. A contact is called a *dab*: one resolved brush mark
-with a position, shape, color and material parameters. Placement and randomized
-variation are deterministic so a stored stroke can be replayed.
+Simple brushes draw a stroke by stamping small marks, or dabs, along its path.
+That can run well on a CPU. The workload becomes much heavier when a brush picks up
+and mixes existing color, smears paint or deforms it with liquify. Watercolor flow and
+oil mixing add state that must change as the stroke advances. Each contact can
+then require repeated reads and updates across a large area, making computation
+and memory access a bottleneck.
 
-Simple ink and eraser brushes use GPU blending. Brushes that interact with
-existing paint, such as smudge, wet paint and watercolor, use additional GPU
-state and ordered processing. They share the same stroke model, but do not all
-have the same rendering cost. Temporary prediction helps the visible stroke
-follow the pen; predicted samples are replaced as real input arrives and are
-never saved as artwork.
+Capy Canvas keeps pressure response, stroke placement and other sequential input
+work on the CPU. It sends batches of resolved contacts to the GPU, which evaluates
+brush coverage and pixel interactions in parallel. Ordered passes preserve the
+sequence of operations when a brush needs the result of an earlier contact.
 
-The [brush guide](docs/internals/brushes.md) follows a stroke through the engine
-and points to the detailed raster and paint-state references.
+Layer pixels and paint state stay in GPU textures throughout drawing and
+composition. Wet brushes can track the paint carried by the tip; the current
+watercolor model tracks localized water and pigment transport. Sparse texture
+pages and damage bounds limit updates to affected areas. Simple ink and eraser
+brushes use a direct blending path without allocating or updating unused wet-paint
+state. This avoids both unnecessary processing and reading the canvas back to the
+CPU between brush updates.
+
+The goal is substantially better performance for these complex brushes than a
+CPU-only pixel engine, especially on modern tablets. Reducing memory traffic,
+CPU overhead and unnecessary GPU work also targets battery efficiency and sustained
+performance within a mobile device's thermal limits. Comparative speed and energy
+gains still need measurement on the target hardware.
+
+The [brush guide](docs/internals/brushes.md) explains stroke generation, GPU paint
+state and the performance considerations behind this design.
 
 ## Settings and documents
 
@@ -220,6 +243,36 @@ a claim of feature parity.
 
 ## Build and run on Linux
 
+Linux with Wayland is the primary development target and receives new editor
+features first. Coding agents port the Linux interface to the web client, where
+the shared Rust core compiles to WebAssembly. Further agents use that web
+implementation as the reference for each platform's native UI toolkit:
+
+```text
+Linux / Wayland (GTK4)
+    |  New features and UI development
+    |
+    |  Coding agents port the interface
+    v
+Web (DOM + Rust/WebAssembly)
+    |
+    |  Coding agents adapt the UI to native toolkits
+    +----> Android (Jetpack Compose)
+    +----> macOS (AppKit)
+    +----> iPadOS (UIKit)
+    +----> Windows (WinUI 3)
+
+Shared Rust editor and renderer compile for every target.
+```
+
+The web build runs on each target platform in a browser with hardware WebGPU.
+Agents can compare it with GTK on Linux, then compare native clients against
+that same reference using screenshots and interaction tests. Native clients
+compile the Rust core for
+their platform; the porting work is in the interface and OS integration. The
+[platform guide](docs/platforms/README.md) covers those boundaries and links to
+parity checks.
+
 Use a recent stable Rust toolchain, a C/C++ build toolchain, `pkg-config`, GTK4
 and libadwaita development packages. The current development environment uses
 GTK 4.22 and libadwaita 1.9. Running the native app requires a Wayland session and
@@ -238,17 +291,10 @@ for all platforms, testing and performance measurements.
 
 ## Contributing
 
-The current focus is the user interface. Help with product design, testing real
-illustration workflows and shader development would be particularly useful.
-For design or testing feedback, describe the task you were trying to complete,
-what happened and the platform and input device you used. Discuss substantial
-changes in an issue before implementing them so they can fit the current work.
-
-Much of the codebase was generated with coding agents. Once the UX is in good
-shape, we plan a substantial cleanup and a performance-focused review of the
-implementation. The brush and compositor engines have become more complex than
-we want; simplifying or rewriting them is part of that work. Their current
-internal structure should not be treated as a settled API.
+We need help with product design, testing painting, photo and comic workflows,
+and shader development. The current focus is getting the user interface right.
+Next comes a substantial cleanup of the agent-generated code, performance
+optimization, and simplifying or rewriting the brush and compositor engines.
 
 ## License and branding
 

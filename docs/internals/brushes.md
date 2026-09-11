@@ -61,6 +61,32 @@ that preview. Predictions are not saved into the document.
 Replay uses the stored real samples and brush snapshot. Any brush change should
 therefore be tested both while drawing and after undo/redo or reopening a project.
 
+## Performance and mobile devices
+
+The main reason to put pixel work on the GPU is the cost of brushes that interact
+with existing paint. Simple stamps can be efficient on a CPU. Smearing, blending,
+liquify and painterly models require more sampling and state updates per contact,
+and larger tips multiply that work. More detailed fluid and paint simulations
+would increase the cost further; the current watercolor model uses bounded,
+localized transport.
+
+The engine keeps sequential input and placement on the CPU, batches the resolved
+contacts and leaves layer pixels and paint state in GPU resources. The renderer
+runs pixel work in parallel while retaining the ordering that each brush requires.
+Sparse pages and changed-region bounds limit the affected area. Specialized paths
+avoid allocating or updating material state that a brush does not use.
+
+These choices target both performance and energy use. On mobile hardware, memory
+traffic and CPU/driver overhead contribute to power consumption alongside GPU
+computation. Reducing those costs can improve efficiency even when frame rate is
+unchanged, as explained in [Arm's GPU energy-efficiency guide](https://developer.arm.com/community/arm-community-blogs/b/mobile-graphics-and-gaming-blog/posts/energy-efficiency-in-gpu-applications-part-1).
+
+This is the rationale for the design, rather than a measured advantage over other
+painting apps. Compare equivalent brushes and image quality on the same hardware,
+and measure sustained frame time and energy per stroke. The existing
+[GPU workloads](../development/gpu-raster-benchmarks.md) measure our renderer's
+cost; they do not establish a CPU comparison or battery-life improvement.
+
 ## Changing a brush
 
 Start with the preset and shared settings when changing a brush's behavior. Change
