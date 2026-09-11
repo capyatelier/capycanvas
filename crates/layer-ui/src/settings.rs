@@ -480,6 +480,7 @@ pub struct HostRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostRequestKind {
     NewWindow,
+    Document { request: crate::DocumentRequest },
     SaveSettings { settings: Box<Settings> },
 }
 

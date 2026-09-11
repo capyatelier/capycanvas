@@ -15,10 +15,13 @@ mod region_tools;
 #[path = "rulers.rs"]
 pub(crate) mod rulers;
 pub use art_layers::{LayerAction, LayerCanvasTool, LayerControls, LayersView, RegionSource};
+#[path = "document_files.rs"]
+mod document_files;
 #[path = "effects.rs"]
 mod effects;
 #[path = "filter_loading.rs"]
 mod filter_loading;
+pub use document_files::*;
 pub use effects::{
     AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
     LayerPropertiesView, PropertyControl, PropertyKind,
@@ -75,11 +78,13 @@ pub struct UiSession<R: CanvasRenderer> {
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
     tools: tools::ToolMemory,
+    files: document_files::DocumentFiles,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub fn blank(renderer: R, viewport: [u32; 2]) -> Result<Self, String> {
-        Self::new(renderer, Document::new("untitled", 2048, 1536), viewport)
+        let [width, height] = DEFAULT_DOCUMENT_EXTENT;
+        Self::new(renderer, Document::new("untitled", width, height), viewport)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2]) -> Result<Self, String> {
@@ -119,6 +124,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             next_request: 1,
             layer_interaction: Default::default(),
             tools: tools::ToolMemory::default(),
+            files: document_files::DocumentFiles::default(),
             state: UiState {
                 revision: 0,
                 workspace: WorkspaceState::default(),
@@ -142,6 +148,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 filter_load: FilterLoadState::default(),
                 layer_properties: LayerPropertiesView::default(),
                 tabs: Vec::new(),
+                document_file: DocumentFileState::default(),
                 commands: Vec::new(),
                 settings: Settings::default(),
                 theme: Theme::Light,
@@ -1075,6 +1082,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|layer| layer.kind == LayerKind::Paint)
             .count();
         let enabled = match id {
+            CommandId::NewDocument
+            | CommandId::OpenDocument
+            | CommandId::SaveDocument
+            | CommandId::SaveDocumentAs
+            | CommandId::ExportDocument => {
+                self.require_document_idle().is_ok() && !self.state.document_file.busy
+            }
+            CommandId::CloseDocument => self.require_document_idle().is_ok(),
             CommandId::ScaleRotate => idle && self.can_transform(),
             CommandId::ApplyTransform | CommandId::CancelTransform | CommandId::TransformAspect => {
                 idle && self.operation.active()
@@ -1852,6 +1867,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .position(|r| r.id == id)
                     .ok_or("Unknown host request")?;
+                if matches!(
+                    self.state.requests[index].kind,
+                    HostRequestKind::Document { .. }
+                ) {
+                    return Err("Complete document requests through the document service".into());
+                }
                 self.state.requests.remove(index);
                 self.state.host_error = error;
                 (HOST, false)
@@ -2193,6 +2214,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .render_frame_for(now_ns, presentation_ns)
             .map_err(error)?;
         self.input_pending = false;
+        changed |= self.poll_document_close();
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
@@ -2220,6 +2242,28 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn invoke(&mut self, command: CommandId) -> Result<(u32, bool), String> {
         use regions::*;
         match command {
+            CommandId::NewDocument | CommandId::OpenDocument => {
+                self.request_document(if command == CommandId::NewDocument {
+                    DocumentRequest::New
+                } else {
+                    DocumentRequest::Open
+                })?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::SaveDocument | CommandId::SaveDocumentAs => {
+                self.request_save(command == CommandId::SaveDocumentAs)?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::ExportDocument => {
+                self.request_document(DocumentRequest::Export {
+                    name: self.document_filename("png"),
+                })?;
+                Ok((DOCUMENT | HOST, false))
+            }
+            CommandId::CloseDocument => {
+                self.request_document_close()?;
+                Ok((DOCUMENT | HOST, false))
+            }
             CommandId::ScaleRotate => {
                 self.begin_transform()?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -2707,6 +2751,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn refresh_document(&mut self) {
+        self.refresh_file_state();
         self.reconcile_transform();
         if self
             .rulers
@@ -2814,7 +2859,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.state.tabs = vec![DocumentTab {
             id: doc.id.to_string(),
-            title: "Untitled".into(),
+            title: self.state.document_file.title().into(),
             active: true,
             width: doc.width,
             height: doc.height,
@@ -2947,6 +2992,176 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn document_save_keeps_source_assets_and_tracks_the_saved_undo_state() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        let pixels = std::sync::Arc::<[u8]>::from([200, 20, 90, 128]);
+        s.import_layer_asset(
+            "Image",
+            layer_core::ProjectAsset {
+                extent: [1, 1],
+                format: layer_core::ProjectAssetFormat::Rgba8Srgb,
+                bytes: pixels.clone(),
+            },
+        )
+        .unwrap();
+        assert!(s.state.document_file.modified);
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        assert!(s.complete_document_request(id, Ok(true)).is_err());
+        let location = DocumentLocation {
+            uri: "file:///drawing.capy".into(),
+            name: "drawing.capy".into(),
+        };
+        let project = s
+            .capture_project_save(id, location.clone())
+            .unwrap()
+            .pruned()
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(
+            &project.assets.values().next().unwrap().bytes,
+            &pixels
+        ));
+        assert!(s.capture_project_save(id, location.clone()).is_err());
+        // The writer holds its snapshot while drawing/editing continues.
+        invoke(&mut s, CommandId::AddLayer);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert_eq!(s.state.document_file.location, Some(location));
+        assert_eq!(s.state.tabs[0].title, "drawing.capy");
+        assert!(s.state.document_file.modified);
+        invoke(&mut s, CommandId::Undo);
+        assert!(!s.state.document_file.modified);
+        invoke(&mut s, CommandId::Redo);
+        assert!(s.state.document_file.modified);
+        let mut stream = Vec::new();
+        project.write(&mut stream).unwrap();
+        let decoded = layer_core::Project::read(stream.as_slice(), Default::default()).unwrap();
+        let reopened = UiSession::from_project(
+            Recorder::default(),
+            decoded,
+            s.state.document_file.location.clone(),
+            [800, 600],
+        )
+        .unwrap();
+        assert!(!reopened.state.document_file.modified);
+        assert_eq!(reopened.files.assets, project.assets);
+        assert_eq!(reopened.engine.document(), &project.document);
+    }
+
+    #[test]
+    fn close_save_cancel_failure_and_concurrent_edits_never_discard_work() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        let location = DocumentLocation {
+            uri: "file:///drawing.capy".into(),
+            name: "drawing.capy".into(),
+        };
+        for outcome in [Ok(false), Err("Disk full".into())] {
+            s.request_document_close().unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.respond_document_close(id, CloseDecision::Save).unwrap();
+            let id = s.files.pending.as_ref().unwrap().0;
+            s.capture_project_save(id, location.clone()).unwrap();
+            s.complete_document_request(id, outcome).unwrap();
+            assert!(s.state.document_file.modified);
+            assert!(!s.state.document_file.close_ready);
+            assert!(!s.state.document_file.busy);
+        }
+        s.request_document_close().unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+        assert!(!s.state.document_file.close_ready);
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.capture_project_save(id, location.clone()).unwrap();
+        s.request_document_close().unwrap(); // do not interrupt the write
+        invoke(&mut s, CommandId::AddLayer);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(!s.state.document_file.close_ready);
+        let id = s.files.pending.as_ref().unwrap().0;
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::Document {
+                request: DocumentRequest::ConfirmClose { .. }
+            }
+        ));
+        s.respond_document_close(id, CloseDecision::Save).unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.capture_project_save(id, location).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.state.document_file.close_ready);
+        assert!(!s.state.document_file.modified);
+    }
+
+    #[test]
+    fn file_requests_are_single_flight_and_new_open_do_not_replace_artwork() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        let document = s.engine.document().clone();
+        for command in [
+            CommandId::NewDocument,
+            CommandId::OpenDocument,
+            CommandId::ExportDocument,
+        ] {
+            invoke(&mut s, command);
+            let id = s.files.pending.as_ref().unwrap().0;
+            assert!(s.request_save(false).is_err());
+            assert!(
+                s.dispatch(UiAction::CompleteRequest { id, error: None })
+                    .is_err()
+            );
+            s.complete_document_request(id, Ok(true)).unwrap();
+            assert_eq!(s.engine.document(), &document);
+            assert!(s.state.document_file.modified);
+            assert!(s.complete_document_request(id, Ok(true)).is_err());
+        }
+        s.request_document_close().unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Discard)
+            .unwrap();
+        assert!(s.state.document_file.close_ready);
+        assert_eq!(s.engine.document(), &document);
+        assert!(new_drawing(0, 10).is_err());
+        assert!(new_drawing(10, 8193).is_err());
+        assert_eq!(new_drawing(512, 128).unwrap().document.width, 512);
+    }
+
+    #[test]
+    fn save_completion_during_a_live_stroke_defers_close_until_pen_up() {
+        let mut s = session();
+        s.set_platform(Platform::Gtk);
+        invoke(&mut s, CommandId::AddLayer);
+        invoke(&mut s, CommandId::SaveDocument);
+        let id = s.state.requests.last().unwrap().id;
+        s.capture_project_save(
+            id,
+            DocumentLocation {
+                uri: "file:///live.capy".into(),
+                name: "live.capy".into(),
+            },
+        )
+        .unwrap();
+        s.request_document_close().unwrap();
+        s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+        s.frame(10_000_000, 18_000_000).unwrap();
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(!s.state.document_file.close_ready);
+        assert!(s.state.requests.is_empty());
+        s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
+        s.frame(20_000_000, 28_000_000).unwrap();
+        assert!(s.state.document_file.modified);
+        assert!(matches!(
+            s.state.requests.last().unwrap().kind,
+            HostRequestKind::Document {
+                request: DocumentRequest::ConfirmClose { .. }
+            }
+        ));
     }
 
     #[test]
@@ -4519,6 +4734,62 @@ mod tests {
         assert!(s.renderer_mut().validation.is_none());
         assert_eq!(s.engine.document().layer(id).unwrap().effect, original);
         assert!(s.effect_catalog.get("document:custom").is_none());
+    }
+
+    #[test]
+    fn startup_filter_library_does_not_rewrite_saved_programs() {
+        use layer_core::{EffectInstallMode, EffectPackage};
+        use std::sync::Arc;
+        let mut s = session();
+        s.dispatch(UiAction::Effect {
+            action: EffectAction::Insert {
+                effect: "unsharp_mask".into(),
+            },
+        })
+        .unwrap();
+        s.frame(0, 0).unwrap();
+        let document = s.engine.document().clone();
+        let original = document
+            .layer(document.active_layer)
+            .unwrap()
+            .effect
+            .as_ref()
+            .unwrap()
+            .program
+            .clone();
+        let checkpoint = s.engine.checkpoint();
+        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        Arc::make_mut(&mut definition.program).label = "New library version".into();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: vec![definition],
+        };
+        s.load_effect_library(
+            &serde_json::to_string(&package).unwrap(),
+            |_| panic!(),
+            EffectInstallMode::Replace,
+        )
+        .unwrap();
+        assert!(
+            s.renderer_mut()
+                .validation
+                .as_ref()
+                .unwrap()
+                .namespace
+                .contains(&original)
+        );
+        s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
+            request_id: s.state.filter_load.request_id,
+            result: Ok(()),
+        });
+        s.frame(1, 1).unwrap();
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(
+            s.effect_catalog.get("unsharp_mask").unwrap().label(),
+            "New library version"
+        );
     }
 
     #[test]

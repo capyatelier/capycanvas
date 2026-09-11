@@ -26,13 +26,20 @@ impl GpuCanvas {
         self.needs_present = true;
         true
     }
-    pub fn new(area: &gtk::Picture) -> Result<Self, String> {
+    pub fn with_project(
+        area: &gtk::Picture,
+        project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+    ) -> Result<Self, String> {
         let parent = area
             .native()
             .and_then(|native| native.surface())
             .ok_or("GTK surface unavailable")?;
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into())?;
-        let mut session = UiSession::blank(renderer, extent(area))?;
+        let mut session = if let Some((project, location)) = project {
+            UiSession::from_project(renderer, project, location, extent(area))?
+        } else {
+            UiSession::blank(renderer, extent(area))?
+        };
         session.set_platform(layer_ui::Platform::Gtk);
         // Prefer installed/development resources. The same runtime loader can
         // replace these files without recompiling the executable.
@@ -52,7 +59,7 @@ impl GpuCanvas {
             let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "merge".into());
             let result = serde_json::from_value(serde_json::Value::String(mode))
                 .map_err(|e| e.to_string())
-                .and_then(|mode| load_filter_directory(&mut session, &directory, mode));
+                .and_then(|mode| load_filter_directory(&mut session, &directory, mode, false));
             if let Err(error) = result {
                 eprintln!("{error}; using bundled filters");
             }
@@ -138,18 +145,20 @@ pub(super) fn load_filter_directory(
     session: &mut UiSession<RenderWorker>,
     directory: &std::path::Path,
     mode: layer_core::EffectInstallMode,
+    migrate: bool,
 ) -> Result<UiChange, String> {
     let manifest =
         std::fs::read_to_string(directory.join("manifest.json")).map_err(|e| e.to_string())?;
-    session.load_effect_package(
-        &manifest,
-        |name| {
-            std::fs::read_to_string(directory.join(name))
-                .map(std::sync::Arc::from)
-                .map_err(|e| e.to_string())
-        },
-        mode,
-    )
+    let read = |name: &str| {
+        std::fs::read_to_string(directory.join(name))
+            .map(std::sync::Arc::from)
+            .map_err(|e| e.to_string())
+    };
+    if migrate {
+        session.load_effect_package(&manifest, read, mode)
+    } else {
+        session.load_effect_library(&manifest, read, mode)
+    }
 }
 fn extent(area: &gtk::Picture) -> [u32; 2] {
     let scale = area.scale_factor() as u32;

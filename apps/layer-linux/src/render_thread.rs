@@ -66,7 +66,7 @@ enum Command {
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(layer_render::FilterPreviewRequest),
     Frame(Box<Frame>),
-    Asset(AssetId, [u32; 3], PixelFormat, Vec<u8>),
+    Asset(AssetId, [u32; 3], PixelFormat, Arc<[u8]>),
     Release(AssetId),
     Readback(u64),
     Capture(mpsc::Sender<Result<ReadbackImage, String>>),
@@ -729,7 +729,27 @@ impl CanvasRenderer for RenderWorker {
             asset.clone(),
             [image.width, image.height, image.stride],
             image.format,
-            image.bytes.to_vec(),
+            Arc::from(image.bytes),
+        ))
+    }
+    fn prepare_owned_asset(
+        &mut self,
+        id: &AssetId,
+        asset: &layer_core::ProjectAsset,
+    ) -> Result<(), Self::Error> {
+        let [width, height] = asset.extent;
+        let stride = width * asset.format.channels();
+        if asset.format == PixelFormat::R8Unorm {
+            self.outlines.insert(
+                id.clone(),
+                layer_render::mask_outline(width, height, stride, &asset.bytes),
+            );
+        }
+        self.send(Command::Asset(
+            id.clone(),
+            [width, height, stride],
+            asset.format,
+            asset.bytes.clone(),
         ))
     }
     fn release_asset(&mut self, asset: &AssetId) {

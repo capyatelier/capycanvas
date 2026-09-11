@@ -298,15 +298,50 @@ impl<R: CanvasRenderer> UiSession<R> {
             || image.width > 8192
             || image.height > 8192
             || image.stride < image.width * 4
-            || image.bytes.len() < image.stride as usize * image.height as usize
+            || (image.stride as usize)
+                .checked_mul(image.height as usize)
+                .is_none_or(|len| len > image.bytes.len())
+        {
+            return Err("Import an image up to 8192 × 8192 pixels".into());
+        }
+        let bytes = if image.stride == image.width * 4 {
+            std::sync::Arc::from(&image.bytes[..image.stride as usize * image.height as usize])
+        } else {
+            image
+                .bytes
+                .chunks_exact(image.stride as usize)
+                .take(image.height as usize)
+                .flat_map(|row| row[..image.width as usize * 4].iter().copied())
+                .collect()
+        };
+        self.import_layer_asset(
+            name,
+            layer_core::ProjectAsset {
+                extent: [image.width, image.height],
+                format: image.format,
+                bytes,
+            },
+        )
+    }
+
+    pub fn import_layer_asset(
+        &mut self,
+        name: &str,
+        image: layer_core::ProjectAsset,
+    ) -> Result<(), String> {
+        self.require_idle()?;
+        if image.format != layer_render::PixelFormat::Rgba8Srgb
+            || image.extent.iter().any(|n| *n == 0 || *n > 8192)
+            || image.bytes.len() != image.extent[0] as usize * image.extent[1] as usize * 4
         {
             return Err("Import an image up to 8192 × 8192 pixels".into());
         }
         let id = self.engine.allocate_layer_id();
         let asset = layer_core::AssetId::from(format!("document:image/{}", id.0).as_str());
         self.renderer_mut()
-            .prepare_asset(&asset, image)
+            .prepare_owned_asset(&asset, &image)
             .map_err(error)?;
+        self.files.assets.insert(asset.clone(), image);
         let doc = self.engine.document();
         let current = doc.layer(doc.active_layer).ok_or("Unknown layer")?;
         let index = doc.layers.iter().position(|l| l.id == current.id).unwrap();

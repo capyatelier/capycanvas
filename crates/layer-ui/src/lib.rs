@@ -13,7 +13,7 @@ mod color;
 mod tool_settings;
 mod tools;
 pub use color::{
-    ColorAction, ColorSlot, ColorSpace, ColorState, ColorPanelView, ColorComponentView,
+    ColorAction, ColorComponentView, ColorPanelView, ColorSlot, ColorSpace, ColorState,
     ColorSwatchView, ColorWheelGeometry, ColorWheelPart, hue_color,
 };
 pub use tool_settings::{ToolSetting, ToolSettingAction};
@@ -41,8 +41,11 @@ mod workspace;
 pub use session::{LayerAction, LayerCanvasTool, LayersView, RegionSource};
 mod stats;
 pub use session::{
-    AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterLoadState, FilterPickerAction,
-    FilterPickerState, LayerPropertiesView, PropertyControl, PropertyKind,
+    AdjustmentChoice, CANCEL_DOCUMENT_LABEL, CloseDecision, DEFAULT_DOCUMENT_EXTENT,
+    DISCARD_DOCUMENT_LABEL, DOCUMENT_HEIGHT_LABEL, DOCUMENT_WIDTH_LABEL, DocumentFileState,
+    DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice, FilterLoadState,
+    FilterPickerAction, FilterPickerState, LayerPropertiesView, MAX_NEW_DOCUMENT_DIMENSION,
+    PropertyControl, PropertyKind, UNSAVED_DESCRIPTION, new_drawing,
 };
 pub use stats::{StatRow, StatsView};
 
@@ -175,6 +178,19 @@ pub const MENUS: &[MenuSpec] = &[
         sections: &[],
     },
 ];
+/// GTK-first until the document transport is available on the other hosts.
+pub const FILE_MENU: MenuSpec = MenuSpec {
+    label: "File",
+    sections: &[
+        &[CommandId::NewDocument, CommandId::OpenDocument],
+        &[
+            CommandId::SaveDocument,
+            CommandId::SaveDocumentAs,
+            CommandId::ExportDocument,
+        ],
+        &[CommandId::CloseDocument],
+    ],
+};
 pub const WORKSPACE_MENU_LABEL: &str = "Workspace";
 pub const ZEN_ICON_SIZE: u32 = 28;
 
@@ -217,6 +233,10 @@ pub fn ui_catalog() -> UiCatalog {
         panel_expansion_ms: PANEL_EXPANSION_MS,
         cursors: CursorMode::CHOICES,
         icons: [
+            "new-document",
+            "open-document",
+            "save-document",
+            "export-document",
             "adjustments",
             "properties",
             "stats",
@@ -330,6 +350,12 @@ pub fn ui_catalog() -> UiCatalog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandId {
+    NewDocument,
+    OpenDocument,
+    SaveDocument,
+    SaveDocumentAs,
+    ExportDocument,
+    CloseDocument,
     Pen,
     Pencil,
     Brush,
@@ -384,6 +410,12 @@ pub enum CommandId {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::NewDocument
+            | Self::OpenDocument
+            | Self::SaveDocument
+            | Self::SaveDocumentAs
+            | Self::ExportDocument
+            | Self::CloseDocument => platform == Platform::Gtk,
             Self::NewWindow => platform.native_windows(),
             _ => true,
         }
@@ -403,6 +435,10 @@ impl CommandId {
     }
     pub fn icon(self) -> Option<&'static str> {
         Some(match self {
+            Self::NewDocument => "new-document",
+            Self::OpenDocument => "open-document",
+            Self::SaveDocument | Self::SaveDocumentAs => "save-document",
+            Self::ExportDocument => "export-document",
             Self::Pen => "pen",
             Self::Pencil => "pencil",
             Self::Brush => "brush",
@@ -443,7 +479,13 @@ impl CommandId {
             _ => return None,
         })
     }
-    pub const ALL: [Self; 48] = [
+    pub const ALL: [Self; 54] = [
+        Self::NewDocument,
+        Self::OpenDocument,
+        Self::SaveDocument,
+        Self::SaveDocumentAs,
+        Self::ExportDocument,
+        Self::CloseDocument,
         Self::Pen,
         Self::Pencil,
         Self::Brush,
@@ -501,6 +543,12 @@ impl CommandId {
     ];
     pub fn label(self) -> &'static str {
         match self {
+            Self::NewDocument => "New…",
+            Self::OpenDocument => "Open…",
+            Self::SaveDocument => "Save",
+            Self::SaveDocumentAs => "Save As…",
+            Self::ExportDocument => "Export PNG…",
+            Self::CloseDocument => "Close",
             Self::Pen => "Pen",
             Self::Pencil => "Pencil",
             Self::Brush => "Brush",
@@ -636,6 +684,7 @@ pub struct UiState {
     pub filter_load: FilterLoadState,
     pub layer_properties: LayerPropertiesView,
     pub tabs: Vec<DocumentTab>,
+    pub document_file: DocumentFileState,
     pub commands: Vec<CommandState>,
     pub settings: Settings,
     /// Resolved appearance for widgets, previews and GPU canvas surround.

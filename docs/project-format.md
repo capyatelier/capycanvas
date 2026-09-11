@@ -1,8 +1,7 @@
 # Editable projects
 
-The shared `layer-core::Project` codec is the foundation for native Save/Open.
-It is not yet connected to GTK file dialogs. Save retains editable content;
-Export produces a flattened image. This distinction follows familiar creative
+The shared `layer-core::Project` codec backs GTK's `.capy` Save/Open workflow.
+Save retains editable content; Export produces a flattened PNG image. This distinction follows familiar creative
 applications such as [Krita](https://docs.krita.org/en/reference_manual/main_menu/file_menu.html).
 
 ## Stored content
@@ -38,6 +37,43 @@ Default decoded limits: 64 MiB metadata, 512 MiB image assets, 32768-pixel image
 dimensions, 4096 layers, 500000 strokes and eight million samples. Hosts can
 choose stricter load limits. GPU device limits and shader compilation are a
 separate pre-publication gate, not a guarantee provided by parsing the file.
+
+## GTK document workflow
+
+The File menu supplies New, Open, Save, Save As, Export PNG and Close. New/Open
+create a separate document window, preserving the current drawing even if the
+incoming project is corrupt or its GPU initialization fails. New offers width
+and height in pixels; the initial 2048×1536 canvas can range from 1 to 8192 pixels
+on either axis. File dialogs start in the current drawing's folder when known.
+
+Shared Rust owns request IDs, single-flight operations, filenames, dirty state
+and close authorization. The editor exposes an undo-state checkpoint rather
+than treating its monotonically increasing revision as unsaved work. Undoing to
+the saved state clears the indicator; branching history, references and rulers
+change it. Target/selection navigation, camera, workspace and preferences do not.
+
+Save captures immutable document/source state; pruning, validation, compression
+and disk I/O run on a worker. A sibling temporary file is flushed and synced
+before atomic replacement. Errors leave the existing file intact before that
+replacement; a subsequent directory-sync failure is reported rather than claiming
+durability. Temporary files are cleaned up. Native transport currently accepts
+local filesystem destinations, not arbitrary remote GIO providers.
+
+Edits may continue while writing. Only the captured checkpoint becomes saved;
+later work remains modified. Closing offers Save, Discard Changes or Cancel, and
+waits for an accepted save. If another stroke starts during the write, the close
+decision waits for pen-up and checks again. Cancellation/failure never marks the
+document clean. Export neither renames the project nor marks it saved.
+
+GTK uses the asynchronous [FileDialog API](https://docs.gtk.org/gtk4/class.FileDialog.html)
+and follows [GNOME's confirmation-dialog guidance](https://developer.gnome.org/hig/patterns/feedback/dialogs.html).
+No native dialog loop or disk work is added to the input path. Export queues the
+renderer’s existing explicit whole-document readback after pending image edits;
+it is a cold operation, not a live drawing/presentation mechanism.
+
+Startup catalog refresh validates new definitions without migrating an opened
+document's embedded programs. Explicit runtime replacement retains its existing
+migration behavior. Namespace conflicts still reject a candidate library.
 Validation covers asset formats, references/ownership, history ordering,
 allocators, mask/group identity and depth, numeric constraints, stroke bounds,
 selection coverage and effect definitions. Metadata output is bounded while
@@ -79,7 +115,11 @@ batch group, not unrelated strokes in a full document replay.
 - Optional `CAPY_PROJECT_CAPTURES` writes generated test PNGs for inspection;
   use a directory under ignored `artifacts/`, never commit those captures.
 
-GTK file dialogs, save cancellation and unsaved-work behavior are not covered by
-these codec tests. Browser/Android/Apple project UI and GPU replay are not yet
-device-tested. The independent historical filter-reference discrepancy remains
+The native `workspace::tests::native_document_files` test exercises GTK document
+dialogs, cancellation, malformed files, Save As, PNG export, fresh-window GPU
+reopening and close-after-save. It uses the toolkit's file-chooser fallback on
+an isolated Wayland display; desktop portal-provider interaction is not automated.
+Shared tests cover failed/overlapping writes, undo checkpoints and edits during
+save. Browser/Android/Apple project UI is a separate platform-validation gate.
+The independent historical filter-reference discrepancy remains
 open as documented in [runtime-filters.md](runtime-filters.md).

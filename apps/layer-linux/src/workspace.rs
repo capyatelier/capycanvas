@@ -735,6 +735,9 @@ pub struct Workspace {
     view_info: gtk::Label,
     status: gtk::Label,
     pub(crate) preferences: crate::preferences::Preferences,
+    pub(crate) servicing: Cell<bool>,
+    pub(crate) open_document: RefCell<Option<crate::files::OpenDocument>>,
+    initial_project: RefCell<Option<(layer_core::Project, Option<DocumentLocation>)>>,
     customization: customization::Customization,
     pub(crate) drawer: Rc<drawers::Drawer>,
     columns: columns::Columns,
@@ -754,6 +757,12 @@ impl Drop for Workspace {
 
 impl Workspace {
     pub fn new(app: &adw::Application) -> Rc<Self> {
+        Self::with_project(app, None)
+    }
+    pub(crate) fn with_project(
+        app: &adw::Application,
+        project: Option<(layer_core::Project, Option<DocumentLocation>)>,
+    ) -> Rc<Self> {
         static ICONS: std::sync::Once = std::sync::Once::new();
         ICONS.call_once(|| {
             gtk::gio::resources_register_include!("layer-icons.gresource").expect("bundled icons");
@@ -887,6 +896,9 @@ impl Workspace {
             view_info,
             status,
             preferences: crate::preferences::Preferences::new(),
+            servicing: Cell::new(false),
+            open_document: RefCell::new(None),
+            initial_project: RefCell::new(project),
             customization: customization::Customization::new(),
             drawer: drawers::Drawer::new(0),
             columns: columns::Columns::default(),
@@ -913,6 +925,7 @@ impl Workspace {
         this.install_chrome();
         crate::input::install(&this);
         this.install_gpu();
+        this.install_document_close();
         this.reconcile_layout(&DockLayout::default());
         this.install_drop_target();
         this
@@ -1129,7 +1142,7 @@ impl Workspace {
         self.header.pack_start(&zen_space);
         self.surface.add(Slot::ZenButton, &zen);
         self.install_context(&zen, ContextTarget::ZenMode);
-        for menu in MENUS {
+        for menu in std::iter::once(&FILE_MENU).chain(MENUS) {
             self.header
                 .pack_start(&self.chrome_menu(menu.label, menu.sections));
         }
@@ -1507,7 +1520,15 @@ impl Workspace {
         match result {
             Ok(change) => {
                 self.refresh_cursor();
-                self.status.set_visible(false);
+                if self.status.is_visible()
+                    && self
+                        .gpu
+                        .borrow()
+                        .as_ref()
+                        .is_none_or(|g| g.session.state().host_error.is_none())
+                {
+                    self.status.set_visible(false);
+                }
                 if change.regions != 0 {
                     self.refresh(change.regions);
                 }
@@ -1515,6 +1536,7 @@ impl Workspace {
                     self.wake();
                 }
                 if change.regions & regions::HOST != 0 {
+                    self.status.set_visible(false);
                     if let Some(error) = self
                         .gpu
                         .borrow()
@@ -1525,7 +1547,7 @@ impl Workspace {
                         self.status.set_text(&error);
                         self.status.set_visible(true);
                     }
-                    self.preferences.service(self);
+                    self.service_requests();
                 }
             }
             Err(error) => {
@@ -1647,7 +1669,7 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |area| {
-                match GpuCanvas::new(area) {
+                match GpuCanvas::with_project(area, this.initial_project.borrow_mut().take()) {
                     Ok(gpu) => {
                         *this.gpu.borrow_mut() = Some(gpu);
                         this.refresh(regions::ALL);
@@ -1717,8 +1739,17 @@ impl Workspace {
             self.layer_panel.refresh(&state);
             self.effects.refresh(self, &state);
             if let Some(tab) = state.tabs.first() {
-                self.tab
-                    .set_text(&format!("{} · {} × {}", tab.title, tab.width, tab.height));
+                let modified = if state.document_file.modified {
+                    "• "
+                } else {
+                    ""
+                };
+                self.tab.set_text(&format!(
+                    "{modified}{} · {} × {}",
+                    tab.title, tab.width, tab.height
+                ));
+                self.window
+                    .set_title(Some(&format!("{modified}{} — {APP_NAME}", tab.title)));
             }
         }
         if regions & regions::COMMANDS != 0 {

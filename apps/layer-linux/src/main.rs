@@ -1,5 +1,6 @@
 mod canvas;
 mod effects;
+mod files;
 mod image_selector;
 mod input;
 mod layers;
@@ -119,21 +120,39 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
         #[strong]
         active,
         move |_, _| {
-            let settings = active.borrow().last().and_then(|w| {
-                w.gpu
-                    .borrow()
-                    .as_ref()
-                    .map(|g| g.session.state().settings.clone())
-            });
-            let workspace = workspace::Workspace::new(&app);
-            active.borrow_mut().push(workspace.clone());
-            workspace.window.present();
-            if let Some(settings) = settings {
-                workspace.dispatch(layer_ui::UiAction::RestoreSettings { settings });
-            }
+            open_workspace(&app, &active, None);
         }
     ));
     app.add_action(&new_window);
+}
+
+fn open_workspace(
+    app: &adw::Application,
+    active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
+    project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+) {
+    let settings = active.borrow().last().and_then(|w| {
+        w.gpu
+            .borrow()
+            .as_ref()
+            .map(|g| g.session.state().settings.clone())
+    });
+    let workspace = match project {
+        None => workspace::Workspace::new(app),
+        Some(project) => workspace::Workspace::with_project(app, Some(project)),
+    };
+    let windows = Rc::downgrade(active);
+    let application = app.downgrade();
+    *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
+        if let (Some(app), Some(active)) = (application.upgrade(), windows.upgrade()) {
+            open_workspace(&app, &active, Some((project, location)));
+        }
+    }));
+    active.borrow_mut().push(workspace.clone());
+    workspace.window.present();
+    if let Some(settings) = settings {
+        workspace.dispatch(layer_ui::UiAction::RestoreSettings { settings });
+    }
 }
 
 fn capture(workspace: &workspace::Workspace, path: &str) {

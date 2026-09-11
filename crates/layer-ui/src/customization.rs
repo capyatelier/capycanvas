@@ -835,6 +835,12 @@ pub fn tool_choice(control: ToolbarControl) -> ToolChoice {
                 CommandId::ResetLayout => "Restore panel docking positions",
                 CommandId::ZenMode => "Hide or show the editor controls",
                 CommandId::NewWindow => "Open another drawing window",
+                CommandId::NewDocument => "Create a drawing",
+                CommandId::OpenDocument => "Open an editable drawing",
+                CommandId::SaveDocument => "Save the current drawing",
+                CommandId::SaveDocumentAs => "Save an editable copy",
+                CommandId::ExportDocument => "Export the canvas as a PNG image",
+                CommandId::CloseDocument => "Close the current drawing",
                 CommandId::KeyboardShortcuts => "Customize application shortcuts",
                 CommandId::About => "Application information and links",
                 CommandId::ZoomIn | CommandId::ZoomOut => "Change the canvas viewing scale",
@@ -2150,7 +2156,8 @@ mod tests {
         assert_eq!(
             native.len(),
             web.len()
-                + 2
+                + 1 // divider
+                + CommandId::ALL.iter().filter(|id| id.available_on(Platform::Gtk) && !id.available_on(Platform::Web)).count()
                 + Panel::ALL
                     .iter()
                     .filter(|p| p.kind() == PanelKind::Content)

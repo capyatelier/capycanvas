@@ -240,7 +240,13 @@ pub(crate) fn defaults(id: &str) -> Vec<KeyChord> {
         }
         "command.Settings" => key(",", true, false),
         "command.KeyboardShortcuts" => key("?", true, true),
-        "command.NewWindow" => key("n", true, false),
+        "command.NewDocument" => key("n", true, false),
+        "command.NewWindow" => key("n", true, true),
+        "command.OpenDocument" => key("o", true, false),
+        "command.SaveDocument" => key("s", true, false),
+        "command.SaveDocumentAs" => key("s", true, true),
+        "command.ExportDocument" => key("e", true, true),
+        "command.CloseDocument" => key("w", true, false),
         "canvas.pan" => key(" ", false, false),
         _ => return Vec::new(),
     };

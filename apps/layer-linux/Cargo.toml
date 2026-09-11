@@ -13,6 +13,7 @@ layer-render-wgpu = { path = "../../crates/layer-render-wgpu" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_9"] }
 serde_json = "1"
+png = "0.17.16"
 wgpu = "30.0.1"
 libc = "0.2"
 pollster = "0.4"

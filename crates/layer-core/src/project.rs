@@ -97,20 +97,24 @@ impl Project {
         document: &Document,
         assets: &BTreeMap<AssetId, ProjectAsset>,
     ) -> Result<Self, String> {
-        let mut document = document.clone();
-        let (reachable, _) = history_references(&document, ProjectLimits::default())?;
-        document.strokes.retain(|id, _| reachable.contains_key(id));
-        let needed = asset_references(&document)?;
-        let project = Self {
-            document,
-            assets: assets
-                .iter()
-                .filter(|(id, _)| needed.contains_key(*id))
-                .map(|(id, a)| (id.clone(), a.clone()))
-                .collect(),
-        };
-        project.validate(ProjectLimits::default())?;
-        Ok(project)
+        Self {
+            document: document.clone(),
+            assets: assets.clone(),
+        }
+        .pruned()
+    }
+
+    /// Run on the file worker after capturing an immutable session snapshot.
+    /// Takes ownership so pruning does not clone the document again.
+    pub fn pruned(mut self) -> Result<Self, String> {
+        let (reachable, _) = history_references(&self.document, ProjectLimits::default())?;
+        self.document
+            .strokes
+            .retain(|id, _| reachable.contains_key(id));
+        let needed = asset_references(&self.document)?;
+        self.assets.retain(|id, _| needed.contains_key(id));
+        self.validate(ProjectLimits::default())?;
+        Ok(self)
     }
 
     pub fn validate(&self, limits: ProjectLimits) -> Result<(), String> {
