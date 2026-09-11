@@ -17,9 +17,11 @@ typedef struct CapyProjectTask CapyProjectTask;
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
 CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t opening);
-int32_t capy_apple_project_ready(CapyApple *app);
+int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
+int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
+int32_t capy_project_new(const CapyProjectTask *task, uint32_t width, uint32_t height);
 int32_t capy_project_read(const CapyProjectTask *task, int32_t fd); /* -1: new */
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);

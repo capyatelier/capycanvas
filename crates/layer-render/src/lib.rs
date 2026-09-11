@@ -5,6 +5,9 @@
 //! sees textures, tiles, queues, fences, or presentation objects. There is no
 //! host-memory raster contract.
 
+#[cfg(feature = "png")]
+mod png_export;
+
 use layer_core::{
     AssetId, BrushDeform, BrushExecution, BrushGrain, BrushRendering, BrushTip, BrushTransport,
     BrushWetMix, DualBrush, Layer, LayerId, Point, Rect, StrokeId,

@@ -280,6 +280,137 @@ fn project_cancellation_and_invalid_input_preserve_live_artwork() {
         std::fs::remove_file(path).unwrap();
     }
 }
+#[test]
+fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
+    use std::{
+        io::Seek,
+        os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    };
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.draw_frame();
+        let invalid = ProjectJob::new(&app, true);
+        assert_eq!(unsafe { capy_project_new(invalid.0, 0, 47) }, -1);
+        assert_eq!(
+            unsafe { &*app.0 }.host.session.engine().document().width,
+            2048
+        );
+        let new = ProjectJob::new(&app, true);
+        assert_eq!(
+            unsafe { capy_project_new(new.0, 63, 47) },
+            0,
+            "{:?}",
+            new.error()
+        );
+        assert_eq!(
+            unsafe { capy_apple_project_adopt(app.0, new.0, c"Untitled".as_ptr(), c"".as_ptr()) },
+            0
+        );
+        assert_eq!(
+            unsafe { &*app.0 }.host.session.engine().document().width,
+            63
+        );
+        assert_eq!(
+            unsafe { &*app.0 }.host.session.engine().document().height,
+            47
+        );
+        app.action(json!({"type":"set_color","rgba":[0.8,0.2,0.5,0.6]}));
+        app.stroke();
+        app.draw_frame();
+        let expected = app.pixels();
+        app.invoke("export_document");
+        let id = app.state()["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"]["request"]["type"] == "export")
+            .unwrap()["id"]
+            .as_u64()
+            .unwrap() as u32;
+        let mut pointer = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { capy_apple_export_task(app.0, id, 2_000_000_000, &mut pointer) },
+            1
+        );
+        let export = ProjectJob(pointer);
+        // Later GPU work must not alter the copied snapshot. The worker also
+        // owns everything it needs after the editor and renderer are destroyed.
+        app.action(json!({"type":"set_layer_opacity","opacity":0.25}));
+        app.draw_frame();
+        assert_ne!(app.pixels(), expected);
+        assert!(app.state()["document_file"]["modified"].as_bool().unwrap());
+        assert!(app.state()["document_file"]["location"].is_null());
+        drop(app);
+        let path =
+            std::env::temp_dir().join(format!("capy-export-{}-{platform}.png", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        assert_eq!(
+            unsafe { capy_project_write(export.0, file.as_raw_fd()) },
+            0,
+            "{:?}",
+            export.error()
+        );
+        file.rewind().unwrap();
+        let mut reader = png::Decoder::new(&file).read_info().unwrap();
+        assert_eq!(
+            reader.info().srgb,
+            Some(png::SrgbRenderingIntent::Perceptual)
+        );
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        assert_eq!([info.width, info.height], [63, 47]);
+        assert_eq!(pixels, expected);
+        drop(reader);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn bundled_library_refresh_waits_without_migrating_document_filters() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
+            Some(layer_render_wgpu::WgpuRasterizer::new_headless().expect("Hardware GPU required"));
+        app.action(json!({"type":"effect","action":{"op":"insert","effect":"unsharp_mask"}}));
+        app.draw_frame();
+        let before = unsafe { &*app.0 }.host.session.engine().document().clone();
+        let checkpoint = unsafe { &*app.0 }.host.session.engine().checkpoint();
+        let catalog = layer_core::bundled_effect_catalog();
+        let mut definition = catalog.get("unsharp_mask").unwrap().clone();
+        std::sync::Arc::make_mut(&mut definition.program).label = "Updated library".into();
+        let package = layer_core::EffectPackage {
+            format: 1,
+            categories: catalog.categories().to_vec(),
+            filters: vec![definition],
+        };
+        app.request(2, json!({"type":"load_filter_package", "manifest":serde_json::to_string(&package).unwrap(),
+            "modules":{}, "mode":"replace", "library":true})).unwrap();
+        assert_eq!(unsafe { capy_apple_project_ready(app.0) }, 1);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while app.state()["filter_load"]["pending"] == true {
+            assert!(std::time::Instant::now() < end);
+            app.draw_frame();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(unsafe { capy_apple_project_ready(app.0) }, 0);
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().document(), &before);
+        assert_eq!(
+            unsafe { &*app.0 }.host.session.engine().checkpoint(),
+            checkpoint
+        );
+    }
+}
+
 impl App {
     fn new(platform: u32) -> Self {
         let app = Self(capy_apple_create(platform));

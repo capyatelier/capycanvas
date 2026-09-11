@@ -15,6 +15,9 @@ import UIKit
     @Published var error: String?
     @Published var picker: Picker?
     @Published var cancelling = false
+    @Published var creating = false
+    private var creationCompletion: (([UInt32]?) -> Void)?
+    private var exportPreparing = false
     private weak var store: EditorStore?
     private var requestID: UInt64?
     private var destination: URL?
@@ -30,7 +33,8 @@ import UIKit
     /// platform panels. The app uses the native implementation by default.
     struct Dialogs {
         var open: (@escaping (URL?) -> Void) -> Void
-        var save: (String, @escaping (URL?) -> Void) -> Void
+        var save: (String, UTType, @escaping (URL?) -> Void) -> Void
+        var create: ((JSON, @escaping ([UInt32]?) -> Void) -> Void)? = nil
         var export: ((URL, @escaping (URL?) -> Void) -> Void)? = nil
     }
     private let dialogs: Dialogs?
@@ -56,12 +60,19 @@ import UIKit
         requestID = request["id"].uint; busy = true; cancelling = false; cancelled = false
         let document = request["kind"]["request"]
         let action = document["type"].string
-        blocksEditor = action == "open" || action == "new" || action == "confirm_close" || closeCompletion != nil
+        blocksEditor = action == "open" || action == "new" || action == "confirm_close" || action == "export" || closeCompletion != nil
         switch action {
         case "save":
             destination = URL(string: document["location"]["uri"].string)
             save(as: document["location"].isNull) { [weak self] saved in self?.finish(saved) }
-        case "new": open(nil)
+        case "new":
+            let completed: ([UInt32]?) -> Void = { [weak self] extent in
+                guard let self else { return }
+                if let extent { open(nil, extent: extent) } else { finish() }
+            }
+            if let create = dialogs?.create { create(newDocumentSpec, completed) }
+            else { creationCompletion = completed; creating = true }
+        case "export": exportPNG(name: document["name"].string)
         case "open":
             if let url = externalURL { externalURL = nil; open(url) }
             else { chooseOpen { [weak self] url in
@@ -115,6 +126,7 @@ import UIKit
     }
     func cancel() {
         cancelled = true; cancelling = true; activeTask?.cancel()
+        if exportPreparing && activeTask == nil { finish() }
     }
     private func task(opening: Bool, _ ready: @escaping (NativeProjectTask) -> Void) {
         guard let native = store?.native else { fail("The canvas session is unavailable"); return }
@@ -128,43 +140,69 @@ import UIKit
             }
         }
     }
+    var newDocumentSpec: JSON { store?.catalog["new_document"] ?? JSON() }
+    func created(_ extent: [UInt32]?) {
+        let completion = creationCompletion; creationCompletion = nil; creating = false
+        completion?(extent)
+    }
     private func save(as copy: Bool, completion: @escaping (Bool) -> Void) {
         if !copy, let destination { write(destination, completion: completion); return }
+        task(opening: false) { [weak self] task in
+            guard let self else { return }
+            deliver(task, name: title, type: .capyProject) { [weak self] url in
+                guard let self, let url else { completion(false); return }
+                saved(task, at: url, completion: completion)
+            }
+        }
+    }
+    private func exportPNG(name: String) {
+        guard let id = requestID, let native = store?.native else { fail("The canvas is unavailable"); return }
+        exportPreparing = true
+        native.exportTask(id: id) { [weak self] task, error in
+            DispatchQueue.main.async {
+                guard let self, self.requestID == id else { return }
+                self.exportPreparing = false
+                if self.cancelled { self.finish(); return }
+                guard let task else { self.fail(error ?? "Export failed"); return }
+                self.activeTask = task; self.blocksEditor = false
+                self.deliver(task, name: name, type: .png) { [weak self] url in self?.finish(url != nil) }
+            }
+        }
+    }
+    private var usesExportPicker: Bool {
         #if os(macOS)
-        let exportPicker = dialogs?.export != nil
+        return dialogs?.export != nil
         #else
-        let exportPicker = true
+        return true
         #endif
-        if !exportPicker {
-            chooseSave { [weak self] url in
-                guard let self else { return }
-                guard let url else { completion(false); return }
-                write(url, completion: completion)
+    }
+    /// Share destination and staging behavior for editable projects and PNGs.
+    private func deliver(_ task: NativeProjectTask, name: String, type: UTType, completion: @escaping (URL?) -> Void) {
+        if !usesExportPicker {
+            chooseSave(name: name, type: type) { [weak self] url in
+                guard let self, let url else { completion(nil); return }
+                NativeProjectTask.io.async {
+                    do { try task.write(to: url); DispatchQueue.main.async { completion(url) } }
+                    catch { let message = error.localizedDescription
+                        DispatchQueue.main.async { self.report(message); completion(nil) }
+                    }
+                }
             }
         } else {
-            task(opening: false) { [weak self] task in
-                guard let self else { return }
-                let title = self.title
-                NativeProjectTask.io.async { [weak self] in
-                    do {
-                        let staging = try ProjectFileIO.stagingURL(title: title)
-                        do { try task.write(to: staging) }
-                        catch { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()); throw error }
-                        DispatchQueue.main.async {
-                            guard let self else { Self.removeStaging(staging); return }
-                            if self.cancelled { Self.removeStaging(staging); completion(false); return }
-                            let completed: (URL?) -> Void = { [weak self] url in
-                                Self.removeStaging(staging)
-                                guard let self, let url else { completion(false); return }
-                                self.saved(task, at: url, completion: completion)
-                            }
-                            if let export = self.dialogs?.export { export(staging, completed) }
-                            else { self.pickerCompletion = completed; self.picker = Picker(export: staging) }
-                        }
-                    } catch {
-                        let message = error.localizedDescription
-                        DispatchQueue.main.async { self?.report(message); completion(false) }
+            NativeProjectTask.io.async { [weak self] in
+                do {
+                    let staging = try ProjectFileIO.stagingURL(title: name, extension: type == .png ? "png" : "capy")
+                    do { try task.write(to: staging) }
+                    catch { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()); throw error }
+                    DispatchQueue.main.async {
+                        guard let self else { Self.removeStaging(staging); return }
+                        if self.cancelled { Self.removeStaging(staging); completion(nil); return }
+                        let completed: (URL?) -> Void = { url in Self.removeStaging(staging); completion(url) }
+                        if let export = self.dialogs?.export { export(staging, completed) }
+                        else { self.pickerCompletion = completed; self.picker = Picker(export: staging) }
                     }
+                } catch { let message = error.localizedDescription
+                    DispatchQueue.main.async { self?.report(message); completion(nil) }
                 }
             }
         }
@@ -192,11 +230,11 @@ import UIKit
             }
         }
     }
-    private func open(_ url: URL?) {
+    private func open(_ url: URL?, extent: [UInt32]? = nil) {
         task(opening: true) { [weak self] task in
             NativeProjectTask.io.async {
                 do {
-                    try task.read(from: url)
+                    try task.read(from: url, extent: extent)
                     DispatchQueue.main.async {
                         guard let self else { return }
                         if self.cancelled { self.finish(); return }
@@ -235,7 +273,7 @@ import UIKit
     }
     private func released() {
         requestID = nil; busy = false; blocksEditor = false; finishing = false
-        activeTask = nil; cancelling = false
+        activeTask = nil; cancelling = false; exportPreparing = false
         if let state = store?.state {
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
@@ -252,12 +290,12 @@ import UIKit
         pickerCompletion = completion; picker = Picker(export: nil)
         #endif
     }
-    private func chooseSave(_ completion: @escaping (URL?) -> Void) {
-        if let dialogs { dialogs.save(title, completion); return }
+    private func chooseSave(name: String, type: UTType, _ completion: @escaping (URL?) -> Void) {
+        if let dialogs { dialogs.save(name, type, completion); return }
         #if os(macOS)
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.capyProject]; panel.canCreateDirectories = true
-        panel.nameFieldStringValue = title == "Untitled" ? "Untitled.capy" : title
+        panel.allowedContentTypes = [type]; panel.canCreateDirectories = true
+        panel.nameFieldStringValue = name.contains(".") ? name : name + (type == .png ? ".png" : ".capy")
         panel.begin { response in completion(response == .OK ? panel.url : nil) }
         #else
         completion(nil) // iPad uses the export picker above.
@@ -294,6 +332,9 @@ struct ProjectFilesModifier: ViewModifier {
                     Button("Cancel", role: .cancel) { files.choose("cancel") }
                 }
             } message: { if let error = files.error { Text(error) } }
+            .sheet(isPresented: $files.creating, onDismiss: { files.created(nil) }) {
+                NewDrawingForm(spec: files.newDocumentSpec) { files.created($0) }
+            }
             #if os(iOS)
             .sheet(item: $files.picker, onDismiss: { files.picked(nil) }) { picker in
                 ProjectPicker(picker: picker) { files.picked($0) }.ignoresSafeArea()
@@ -302,7 +343,7 @@ struct ProjectFilesModifier: ViewModifier {
     }
 }
 private extension ProjectFiles {
-    var activeOperationVisible: Bool { !confirming && picker == nil }
+    var activeOperationVisible: Bool { !confirming && picker == nil && !creating }
 }
 
 #if os(iOS)
