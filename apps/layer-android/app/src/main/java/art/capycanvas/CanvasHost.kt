@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -45,6 +46,31 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         private set
     internal var cameraReadout by mutableStateOf(CameraReadout(100, 0))
         private set
+    internal var cameraState by mutableStateOf(JSONObject())
+        private set
+    internal var navigatorImage by mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null)
+        private set
+    private var navigatorViewers = 0 // Render Looper only.
+    private val navigatorPoll = object : Runnable {
+        override fun run() {
+            if (disposed || handle == 0L) return
+            attempt(canvas = false) {
+                if (attached) Native.navigatorPreview(handle, SystemClock.elapsedRealtimeNanos(), navigatorViewers > 0)?.let { data ->
+                    val size = JSONArray(data[0] as String)
+                    val bitmap = android.graphics.Bitmap.createBitmap(size.getInt(0), size.getInt(1), android.graphics.Bitmap.Config.ARGB_8888)
+                    bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(data[1] as ByteArray))
+                    val image = bitmap.asImageBitmap()
+                    main.post { navigatorImage = image }
+                }
+            }
+            if (navigatorViewers > 0) worker.postDelayed(this, 33)
+        }
+    }
+    internal fun navigatorVisible(visible: Boolean) = post {
+        val previous = navigatorViewers
+        navigatorViewers = (navigatorViewers + if (visible) 1 else -1).coerceAtLeast(0)
+        if (previous == 0 && navigatorViewers > 0) { worker.removeCallbacks(navigatorPoll); worker.post(navigatorPoll) }
+    }
     var catalog by mutableStateOf(JSONObject())
         private set
     var failure by mutableStateOf<String?>(null)
@@ -394,6 +420,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
     }
     private fun updateCameraReadout(camera: JSONObject) {
+        cameraState = camera
         cameraReadout = CameraReadout((camera.number("zoom", 1.0) * 100).roundToInt(),
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }

@@ -1398,7 +1398,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::DoubleClickPanelHandle { group, viewport } => {
                 valid_viewport(viewport)?;
                 let layout = &mut self.state.workspace.layout;
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
                     && layout.column_for_group(group).is_some()
                 {
                     layout.set_column_collapsed(group, true, viewport)?;
@@ -1456,7 +1456,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .find(|t| t.id == tile)
                     .is_some_and(|t| t.choice.selected && t.enabled);
-                if matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                if matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
                     && control.drawer_columns().is_some()
                     && (!control.selectable()
                         || selected
@@ -1747,7 +1747,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if !drag.collapsed {
                             let point = drag.position(position);
                             let root =
-                                matches!(self.state.platform, Platform::Gtk | Platform::Generic)
+                                matches!(self.state.platform, Platform::Gtk | Platform::Generic | Platform::Android)
                                     .then(|| {
                                         self.state
                                             .workspace

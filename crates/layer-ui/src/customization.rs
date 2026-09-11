@@ -584,7 +584,7 @@ impl DockLayout {
         ]
     }
     fn column_items(&self, group: Option<u32>, platform: Platform) -> Vec<ContextMenuItem> {
-        let Some(group) = group.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic))
+        let Some(group) = group.filter(|_| matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android))
         else {
             return Vec::new();
         };
@@ -918,7 +918,7 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
         .map(|command| ToolbarControl::Command { command })
         .chain([ToolbarControl::Color, ToolbarControl::Opacity])
         .chain(
-            matches!(platform, Platform::Gtk | Platform::Generic)
+            matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android)
                 .then_some(ToolbarControl::Divider),
         )
         .chain(
@@ -927,7 +927,7 @@ fn tool_catalog(platform: Platform) -> Vec<ToolChoice> {
                 .filter(move |p| {
                     p.kind() == PanelKind::Content
                         && p.available_on(platform)
-                        && matches!(platform, Platform::Gtk | Platform::Generic)
+                        && matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android)
                 })
                 .map(|panel| ToolbarControl::Panel { panel }),
         )
@@ -1032,7 +1032,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel) -> Result<PanelView, Str
                 }
                 ToolbarControl::Panel { panel } => {
                     enabled = panel.available_on(state.platform)
-                        && matches!(state.platform, Platform::Gtk | Platform::Generic);
+                        && matches!(state.platform, Platform::Gtk | Platform::Generic | Platform::Android);
                     false
                 }
                 _ => false,
@@ -1472,7 +1472,7 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ToggleToolDrawer { anchor } => {
-                if !matches!(platform, Platform::Gtk | Platform::Generic) {
+                if !matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android) {
                     return Err("Tool drawers are not available on this platform yet".into());
                 }
                 let drawer = ContentDrawer::for_tile(layout, anchor)?;
@@ -1499,7 +1499,7 @@ impl CustomizationState {
                 self.drawer = (!close).then_some(drawer);
             }
             SetColumnCollapsed { group, collapsed } => {
-                if !matches!(platform, Platform::Gtk | Platform::Generic) {
+                if !matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
                 layout.set_column_collapsed(group, collapsed, viewport)?;
@@ -1507,7 +1507,7 @@ impl CustomizationState {
                 changed |= regions::LAYOUT;
             }
             ToggleColumnDrawer { group, panel } => {
-                if !matches!(platform, Platform::Gtk | Platform::Generic) {
+                if !matches!(platform, Platform::Gtk | Platform::Generic | Platform::Android) {
                     return Err("Collapsed columns are not available on this platform yet".into());
                 }
                 let mut next = ContentDrawer::for_column(layout, group, panel)?;

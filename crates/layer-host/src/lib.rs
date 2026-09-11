@@ -553,6 +553,22 @@ impl NativeHost {
                 #[serde(default)]
                 expansion: Option<layer_ui::PanelExpansion>,
             },
+            Drawer {
+                column: Option<u32>,
+                heights: Vec<f32>,
+                progress: f32,
+                from: Option<layer_ui::DrawerPlacement>,
+                #[serde(default)]
+                closing: bool,
+            },
+            DrawerToolbar {
+                panel: layer_ui::Panel,
+                width: f32,
+                height: f32,
+            },
+            Navigator {
+                viewport: [f32; 2],
+            },
             Expansion {
                 panel: layer_ui::Panel,
                 heights: [f32; 2],
@@ -657,6 +673,65 @@ impl NativeHost {
                 self.session
                     .drop_hint(self.logical, position, &tabs, item, expansion)
             ),
+            Query::Drawer {
+                column,
+                heights,
+                progress,
+                from,
+                closing,
+            } => {
+                let state = self.session.state();
+                let drawer = match column {
+                    None => state.customization.drawer.as_ref(),
+                    Some(id) => state.customization.column_drawers.iter().find(|d|
+                        matches!(d.anchor, layer_ui::DrawerAnchor::Column { column, .. } if column == id)),
+                };
+                let end = if closing {
+                    from.as_ref().map(|p| p.closed())
+                } else {
+                    drawer.and_then(|d| {
+                        state.customization.drawer_placement(
+                            d,
+                            &state.workspace.layout,
+                            self.logical,
+                            &heights,
+                            state.partial_zen(),
+                        )
+                    })
+                };
+                json!(end.map(|end| {
+                    let from = from.unwrap_or_else(|| end.closed());
+                    let placement = end.interpolate_from(&from, progress);
+                    json!({"connection": placement.connection(), "placement": placement})
+                }))
+            }
+            Query::DrawerToolbar {
+                panel,
+                width,
+                height,
+            } => {
+                if ![width, height].into_iter().all(|v| v.is_finite() && v > 0.) {
+                    return Err("Invalid drawer toolbar size".into());
+                }
+                let config = self.session.state().workspace.layout.panel(panel)?;
+                json!(layer_ui::toolbar_tile_layout(
+                    width,
+                    height,
+                    layer_ui::Axis::Vertical,
+                    config.tiles(),
+                    false,
+                    config.tile_style
+                ))
+            }
+            Query::Navigator { viewport } => {
+                let state = self.session.state();
+                let doc = self.session.engine().document();
+                json!(layer_ui::NavigatorGeometry::new(
+                    &state.camera,
+                    [doc.width, doc.height],
+                    viewport
+                ))
+            }
             Query::Expansion {
                 panel,
                 heights,
@@ -726,6 +801,57 @@ mod tests {
         })
         .unwrap();
         assert_eq!(app.take_snapshot().unwrap()["partial_zen"], false);
+    }
+    #[test]
+    fn android_drawer_queries_follow_collapsed_toolbar_measurements() {
+        let mut app = NativeHost::new(layer_ui::Platform::Android).unwrap();
+        app.resize(2880, 1800, 1.75).unwrap();
+        let group = app
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel_group(layer_ui::Panel::Brushes)
+            .unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"move_panel", "panel":"toolbar", "target":{"kind":"tab","group":group}, "viewport":app.logical})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"set_column_collapsed","group":group,"collapsed":true}})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_column_drawer","group":group,"panel":"toolbar"}})).unwrap()).unwrap();
+        let column = app
+            .session
+            .state()
+            .workspace
+            .layout
+            .collapsed_column_for_group(group)
+            .unwrap();
+        let tile = app
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel(layer_ui::Panel::Toolbar)
+            .unwrap()
+            .tiles()[0]
+            .id;
+        app.dispatch(serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[{"column":column,"anchor":{"panel":"toolbar","tile":tile},"bounds":{"x":80.,"y":100.,"width":36.,"height":36.}}]})).unwrap()).unwrap();
+        app.dispatch(serde_json::from_value(json!({"type":"customize", "action":{"type":"toggle_tool_drawer","anchor":{"panel":"toolbar","tile":tile}}})).unwrap()).unwrap();
+        let query = json!({"type":"drawer","heights":[900.,200.],"progress":1.});
+        let first = app.query(query.clone()).unwrap();
+        assert_eq!(first["placement"]["anchor"]["y"], 100.);
+        assert!(first["connection"].is_object());
+        app.dispatch(serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[{"column":column,"anchor":{"panel":"toolbar","tile":tile},"bounds":{"x":80.,"y":60.,"width":36.,"height":20.}}]})).unwrap()).unwrap();
+        assert_eq!(
+            app.query(query.clone()).unwrap()["placement"]["anchor"]["height"],
+            20.
+        );
+        app.dispatch(
+            serde_json::from_value(json!({"type":"measure_drawer_tiles", "measurements":[]}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            app.query(query).unwrap().is_null(),
+            "A clipped-out tile has no child drawer"
+        );
     }
     #[test]
     fn workspace_persistence_only_emits_committed_topology_changes() {
