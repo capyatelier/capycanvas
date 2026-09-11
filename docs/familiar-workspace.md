@@ -207,14 +207,19 @@ drop eligibility and drawer selection; GTK only renders and forwards input.
   column. Drag-resizing collapses it when the requested width falls below 75%
   of the column's minimum width, or reaches the collapsed strip width (36
   logical pixels), whichever happens first. Exactly 25% into the minimum does
-  not trigger the percentage rule. Collapse stays latched during the resize
-  gesture. Expansion restores the remembered ordinary width.
+  not trigger the percentage rule. While the pointer stays down, moving back
+  outward across that same threshold reverses the collapse and immediately
+  resumes normal resizing, clamped to the minimum width. It can collapse again
+  on the next inward crossing without first reaching the expanded edge.
+  Expansion using the button restores the remembered ordinary width.
 - Dragging a collapsed column's edge holds the entire layout fixed until the
-  pointer moves 36 logical pixels outward. It then restores the saved expanded
-  width and holds that width until the pointer reaches the restored edge. The
+  pointer moves 36 logical pixels outward. It then opens at the column's minimum
+  width and holds that width until the pointer reaches the expanded edge. The
   same drag can then resize normally or collapse the column again. Releasing
   while waiting keeps the column expanded; cancellation restores the original
   collapsed layout. Expansion and subsequent resizing form one undoable action.
+  GTK retains the resize cursor throughout the held gesture, including while
+  the pointer is inside the expanded panel.
 - Double-clicking the **non-tab area of any docked panel group's tab bar** also
   collapses its containing column, whether the group has one tab or several.
   This replaces the existing docked single-panel header double-click toggle

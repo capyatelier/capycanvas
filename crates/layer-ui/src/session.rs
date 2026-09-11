@@ -2250,10 +2250,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         viewport: [f32; 2],
         drag: &mut ResizeDrag,
     ) -> Result<(), String> {
-        if matches!(drag.phase, ResizeDragPhase::Collapsed) {
-            return Ok(());
-        }
         let point = drag.position(position);
+        if let ResizeDragPhase::Collapsed(collapse) = drag.phase {
+            if collapse.contains(point[0]) {
+                return Ok(());
+            }
+            // Recreate the geometry just before collapse, then apply the current
+            // pointer normally. This clamps reopening to the minimum and keeps
+            // nested dividers' threshold anchored to the same parent edge.
+            let layout = &mut self.state.workspace.layout;
+            if let Some(column) = layout
+                .collapsed
+                .iter_mut()
+                .find(|c| c.root == collapse.root)
+            {
+                column.expanded_width = collapse.expanded_width;
+            }
+            layout.set_column_collapsed(collapse.root, false, viewport)?;
+            drag.phase = ResizeDragPhase::Resizing;
+        }
         if let ResizeDragPhase::Expand { columns, edge } = drag.phase {
             let delta = point[0] - edge;
             // Opening uses a fixed 36 logical pixels of outward movement,
@@ -2268,7 +2283,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state
                 .workspace
                 .layout
-                .set_column_collapsed(root, false, viewport)?;
+                .expand_column_for_resize(root, viewport)?;
             let divider = self.divider(id, viewport)?;
             drag.phase = ResizeDragPhase::CatchUp {
                 edge: divider.bounds.x + divider.bounds.width * 0.5,
@@ -2285,7 +2300,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             drag.phase = ResizeDragPhase::Resizing;
         }
-        let root = self
+        let collapse = self
             .column_resize_enabled()
             .then(|| {
                 self.state
@@ -2294,7 +2309,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .collapse_at_divider(id, point, viewport)
             })
             .flatten();
-        if let Some(root) = root {
+        if let Some(collapse) = collapse {
+            let root = collapse.root;
             let original_width = self.workspace_history.gesture_start().and_then(|s| {
                 // A gesture that began collapsed must remember the expanded
                 // width, not overwrite it with the strip width when closing again.
@@ -2320,7 +2336,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             {
                 c.expanded_width = width;
             }
-            drag.phase = ResizeDragPhase::Collapsed;
+            drag.phase = ResizeDragPhase::Collapsed(collapse);
         } else {
             self.state
                 .workspace
@@ -8132,7 +8148,7 @@ mod tests {
         assert_eq!(s.state.workspace, moved);
     }
     #[test]
-    fn resize_collapse_latches_until_release_and_restores_pre_gesture_width() {
+    fn resize_collapse_preserves_history_and_pre_gesture_width() {
         let viewport = [1200., 900.];
         for cancel in [false, true] {
             for group in [5, 8] {
@@ -8193,8 +8209,8 @@ mod tests {
                 );
                 assert!(s.state.workspace.layout.is_collapsed(root));
                 let collapsed = s.state.workspace.clone();
-                drag(&mut s, ContactPhase::Move, start[0]);
-                assert_eq!(s.state.workspace, collapsed, "No threshold oscillation");
+                drag(&mut s, ContactPhase::Move, x_for_width(minimum * 0.75 - 1.));
+                assert_eq!(s.state.workspace, collapsed, "Hold below the threshold");
                 drag(
                     &mut s,
                     if cancel {
@@ -8202,7 +8218,7 @@ mod tests {
                     } else {
                         ContactPhase::Up
                     },
-                    start[0],
+                    x_for_width(minimum * 0.75 - 1.),
                 );
                 if cancel {
                     assert_eq!(s.state.workspace, original);
@@ -8250,6 +8266,7 @@ mod tests {
         center: f32,
         outward: f32,
         saved_width: f32,
+        minimum: f32,
     }
     impl CollapsedResizeTest {
         fn new(platform: Platform, right: bool, nested: Option<bool>) -> Self {
@@ -8266,8 +8283,10 @@ mod tests {
                 *axis = Axis::Horizontal;
                 (4, if second { 6 } else { 5 })
             } else if right {
+                session.state.workspace.layout.bands[1].extent = 400.;
                 (7, 8)
             } else {
+                session.state.workspace.layout.bands[0].extent = 400.;
                 (3, 4)
             };
             let saved_width = session
@@ -8293,6 +8312,13 @@ mod tests {
                 center: d.bounds.x + d.bounds.width * 0.5,
                 outward: if nested.unwrap_or(right) { -1. } else { 1. },
                 saved_width,
+                minimum: if nested == Some(true) {
+                    TILE_SIZE
+                } else if nested.is_none() && right {
+                    crate::LAYERS_MIN_WIDTH
+                } else {
+                    crate::TOOL_PANEL_MIN_WIDTH
+                },
             }
         }
         fn drag(&mut self, phase: ContactPhase, distance: f32) {
@@ -8356,7 +8382,8 @@ mod tests {
                 t.drag(ContactPhase::Down, 0.);
                 t.drag(ContactPhase::Move, 36.);
                 assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-                assert!((t.width() - t.saved_width).abs() < 0.01);
+                assert!(t.saved_width > t.minimum);
+                assert!((t.width() - t.minimum).abs() < 0.01);
                 let expanded = t.session.state.workspace.clone();
                 let edge = t.edge_distance();
                 assert!(edge > 36.);
@@ -8370,7 +8397,7 @@ mod tests {
                 t.drag(ContactPhase::Move, edge);
                 assert_eq!(t.session.state.workspace, expanded);
                 t.drag(ContactPhase::Move, edge + 45.);
-                assert!((t.width() - t.saved_width - 45.).abs() < 0.01);
+                assert!((t.width() - t.minimum - 45.).abs() < 0.01);
                 let minimum = if right {
                     crate::LAYERS_MIN_WIDTH
                 } else {
@@ -8382,11 +8409,90 @@ mod tests {
                 let collapsed = t.session.state.workspace.clone();
                 assert!(collapsed.layout.is_collapsed(t.root));
                 assert_eq!(collapsed.layout.collapsed[0].expanded_width, t.saved_width);
+                // Reversing this collapse resumes immediately, even before the
+                // pointer has reached the minimum-width edge.
+                t.drag(ContactPhase::Move, minimum * 0.75 - TILE_SIZE);
+                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+                assert!((t.width() - t.minimum).abs() < 0.01);
+                t.drag(ContactPhase::Move, minimum * 0.75 - TILE_SIZE - 0.5);
+                assert_eq!(t.session.state.workspace, collapsed);
                 t.drag(ContactPhase::Up, edge + 100.);
-                assert_eq!(
-                    t.session.state.workspace, collapsed,
-                    "closing retains the existing gesture latch"
-                );
+                assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
+                assert!((t.width() - t.minimum - 100.).abs() < 0.01);
+            }
+        }
+    }
+
+    #[test]
+    fn drag_collapse_reverses_at_its_original_threshold_without_an_edge_wait() {
+        for right in [false, true] {
+            for nested in [None, Some(false), Some(true)] {
+                for finish in 0..3 {
+                    let mut t = CollapsedResizeTest::new(Platform::Gtk, right, nested);
+                    t.session
+                        .state
+                        .workspace
+                        .layout
+                        .set_column_collapsed(t.root, false, t.viewport)
+                        .unwrap();
+                    let before = t.session.state.workspace.clone();
+                    let d = t.session.divider(t.id, t.viewport).unwrap();
+                    t.start = [d.bounds.x + 1., d.bounds.y + 20.];
+                    t.center = d.bounds.x + d.bounds.width * 0.5;
+                    let origin = if t.outward < 0. {
+                        d.parent.x + d.parent.width - WORKSPACE_SPACING * 0.5
+                    } else {
+                        d.parent.x + WORKSPACE_SPACING * 0.5
+                    };
+                    let base = (origin - t.center) * t.outward;
+                    let distance = |width| base + width;
+                    let threshold = (t.minimum * 0.75).max(TILE_SIZE);
+                    t.drag(ContactPhase::Down, 0.);
+                    // Jump directly from a wide column across the threshold.
+                    // Nested columns must retain the pre-collapse parent edge.
+                    for _ in 0..3 {
+                        t.drag(ContactPhase::Move, distance(threshold - 0.5));
+                        assert!(t.session.state.workspace.layout.is_collapsed(t.root));
+                        let collapsed = t.session.state.workspace.clone();
+                        t.drag(ContactPhase::Move, distance(threshold - 10.));
+                        assert_eq!(t.session.state.workspace, collapsed);
+                        t.drag(ContactPhase::Move, distance(threshold));
+                        assert_eq!(
+                            t.session.state.workspace.layout.is_collapsed(t.root),
+                            threshold == TILE_SIZE,
+                            "fixed threshold is inclusive"
+                        );
+                        t.drag(ContactPhase::Move, distance(threshold + 0.5));
+                        assert!(
+                            !t.session.state.workspace.layout.is_collapsed(t.root),
+                            "right={right}, nested={nested:?}"
+                        );
+                        if nested.is_none() || nested == Some(false) {
+                            assert!((t.width() - t.minimum).abs() < 0.01);
+                        }
+                        // The next iteration returns inside the threshold
+                        // without ever catching up to the expanded edge.
+                    }
+                    let after = t.session.state.workspace.clone();
+                    match finish {
+                        0 => {
+                            t.drag(ContactPhase::Up, distance(threshold + 0.5));
+                            invoke(&mut t.session, CommandId::UndoWorkspace);
+                            assert_eq!(t.session.state.workspace, before);
+                            assert!(!t.session.command(CommandId::UndoWorkspace).enabled);
+                            invoke(&mut t.session, CommandId::RedoWorkspace);
+                            assert_eq!(t.session.state.workspace, after);
+                        }
+                        1 => t.drag(ContactPhase::Cancel, distance(threshold + 0.5)),
+                        _ => {
+                            t.session.input(UiInput::Blur).unwrap();
+                        }
+                    }
+                    if finish != 0 {
+                        assert_eq!(t.session.state.workspace, before);
+                        assert!(!t.session.command(CommandId::UndoWorkspace).enabled);
+                    }
+                }
             }
         }
     }
@@ -8400,7 +8506,7 @@ mod tests {
                     let before = t.session.state.workspace.clone();
                     t.drag(ContactPhase::Down, 0.);
                     let distance = if skip_to_edge {
-                        t.saved_width - TILE_SIZE + 70.
+                        t.minimum - TILE_SIZE + 70.
                     } else {
                         36.
                     };
@@ -8412,8 +8518,7 @@ mod tests {
                     }
                     assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
                     assert!(
-                        (t.width() - t.saved_width - if skip_to_edge { 70. } else { 0. }).abs()
-                            < 0.01
+                        (t.width() - t.minimum - if skip_to_edge { 70. } else { 0. }).abs() < 0.01
                     );
                     let after = t.session.state.workspace.clone();
                     match finish {
@@ -8518,11 +8623,16 @@ mod tests {
             assert_eq!(t.session.state.workspace, before);
             t.drag(ContactPhase::Move, 36.);
             assert!(!t.session.state.workspace.layout.is_collapsed(t.root));
-            assert!((t.width() - t.saved_width).abs() < 0.01);
+            // A content-free subcolumn's minimum edge is already behind the
+            // pointer at opening, so normal band resizing can grow it at once.
+            assert!(t.width() >= t.minimum && t.width() < t.saved_width);
             let expanded = t.session.state.workspace.clone();
             let edge = t.edge_distance();
-            t.drag(ContactPhase::Move, edge - 0.5);
-            assert_eq!(t.session.state.workspace, expanded);
+            if edge > 36. {
+                assert!((t.width() - t.minimum).abs() < 0.01);
+                t.drag(ContactPhase::Move, edge - 0.5);
+                assert_eq!(t.session.state.workspace, expanded);
+            }
             t.drag(ContactPhase::Move, edge + 20.);
             assert!((t.edge_distance() - edge - 20.).abs() < 0.01);
             t.drag(ContactPhase::Cancel, 0.);
