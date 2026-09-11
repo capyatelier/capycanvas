@@ -19,8 +19,8 @@
 
 Capy Canvas is a free art and image editor in development for digital painters,
 photographers and comic artists. It is built for Linux first, where artists have
-long had fewer choices in professional software. The same app also runs on other
-desktops, tablets and the web.
+long had fewer choices in professional software, but also works on Android, iPad,
+Windows, Mac, and the web.
 
 Painting, photo editing and comic work share many of the same building blocks:
 brushes, layers, masks and image effects. Capy Canvas implements them in a common
