@@ -413,3 +413,40 @@ content and subsequent wet painting. The merged native build passes the full
 isolated storage fixture plus existing Preferences/header and workspace checks,
 with review windows closed and empty runtime stderr. This verifies the shared
 project foundation on Windows; Windows Save/Open UI is still unimplemented.
+
+### Native Color panel checkpoint
+
+Windows now exposes the shared Color panel and uses the same retained native
+projection in the toolbar color popup. The HSV square, HLS triangle, hue ring,
+markers, foreground/background/transparent swatches, swap action and compact
+component fields follow shared Rust presentation and action models. The native
+pointer adapter uses Rust hit testing and keeps the initial wheel region during
+capture; resize, unload, capture loss and color-context changes cancel capture.
+
+Direct2D draws the small gradient image into a WinUI SurfaceImageSource. The
+image is cached until hue, space, extent or scale changes; marker motion uses
+retained XAML shapes. This adds no continuous presentation loop and does not
+alter the canvas swap chain. Surface loss and device errors have a redraw path,
+but forced device-loss and mixed-DPI acceptance remain unverified.
+
+The first captured HSV field exposed incorrect mesh interpolation. It now uses
+the reference's white-to-hue gradient followed by transparent-to-black. The hue
+ring and HLS triangle remain GPU meshes. App-only, uncropped HSV/HLS captures,
+including remembered hue with black paint, pass the existing two-level channel
+tolerance against the independent shared picker oracle. The four captures check
+1,404 interior pixels in total; boundaries and markers are excluded by the
+existing checker. This is sampled color correctness, not full-editor parity.
+
+Native UI Automation passes numeric expressions and field retention, exact RGBA
+preservation on space changes, stale draft cancellation on slot changes,
+swatches/swap, popup/dock synchronization and repeated-tile dismissal. Shared
+tile activation now toggles an already-open color/opacity popup on hosts using
+that popup model; explicit OpenControl remains idempotent. An unchanged numeric
+field no longer emits a redundant edit when focus moves.
+
+The 233 UI/host/Windows Rust tests and five comparator tests pass. The rebuilt
+app also passes the existing Preferences, workspace and settings-storage
+fixtures, controlled drawing and normal close with empty runtime stderr.
+Physical wheel gestures/capture, full connected drawers, complete tool/panel
+functionality and whole-workspace visual parity remain open. The 120 Hz
+benchmark is still deferred. Captures, settings and raw reports stay local.

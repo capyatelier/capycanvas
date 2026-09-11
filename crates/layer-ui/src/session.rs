@@ -1443,7 +1443,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                         },
                     });
                 }
-                return self.dispatch(control.action().ok_or("This panel drawer is unavailable")?);
+                let action = control.action().ok_or("This panel drawer is unavailable")?;
+                if let UiAction::Customize {
+                    action: CustomizationAction::OpenControl { control },
+                } = &action
+                    && self.state.customization.control == Some(*control)
+                {
+                    return self.dispatch(UiAction::Customize {
+                        action: CustomizationAction::CloseControl,
+                    });
+                }
+                return self.dispatch(action);
             }
             UiAction::RestoreWorkspace { workspace } => {
                 workspace.validate()?;
@@ -6630,6 +6640,7 @@ mod tests {
     #[test]
     fn native_only_panel_controls_are_not_offered_to_other_hosts() {
         for platform in [
+            Platform::Windows,
             Platform::Gtk,
             Platform::Web,
             Platform::Android,
@@ -6640,6 +6651,7 @@ mod tests {
             app.set_platform(platform);
             for panel in [Panel::ToolSettings, Panel::Color] {
                 let available = platform == Platform::Gtk
+                    || (panel == Panel::Color && platform == Platform::Windows)
                     || (matches!(panel, Panel::ToolSettings | Panel::Color)
                         && matches!(platform, Platform::Ios | Platform::Mac));
                 assert_eq!(
@@ -9265,6 +9277,67 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn popup_tiles_toggle_while_explicit_open_remains_idempotent() {
+        for platform in [
+            Platform::Windows,
+            Platform::Web,
+            Platform::Android,
+            Platform::Ios,
+            Platform::Mac,
+        ] {
+            let mut app = session();
+            app.set_platform(platform);
+            let tile = |app: &UiSession<Recorder>, control| {
+                app.state
+                    .workspace
+                    .layout
+                    .panel(Panel::Toolbar)
+                    .unwrap()
+                    .tiles()
+                    .iter()
+                    .find(|t| t.control == control)
+                    .unwrap()
+                    .id
+            };
+            let color = tile(&app, ToolbarControl::Color);
+            let opacity = tile(&app, ToolbarControl::Opacity);
+            let activate = |app: &mut UiSession<Recorder>, tile| {
+                app.dispatch(UiAction::ActivateTile {
+                    panel: Panel::Toolbar,
+                    tile,
+                })
+                .unwrap()
+            };
+            activate(&mut app, color);
+            assert_eq!(
+                app.state.customization.control,
+                Some(PanelControl::BrushColor)
+            );
+            activate(&mut app, color);
+            assert_eq!(app.state.customization.control, None);
+            for _ in 0..2 {
+                app.dispatch(UiAction::Customize {
+                    action: CustomizationAction::OpenControl {
+                        control: PanelControl::BrushColor,
+                    },
+                })
+                .unwrap();
+                assert_eq!(
+                    app.state.customization.control,
+                    Some(PanelControl::BrushColor)
+                );
+            }
+            activate(&mut app, opacity);
+            assert_eq!(
+                app.state.customization.control,
+                Some(PanelControl::BrushOpacity)
+            );
+            activate(&mut app, opacity);
+            assert_eq!(app.state.customization.control, None);
+        }
+    }
+
     #[test]
     fn appearance_follows_system_unless_overridden() {
         let mut app = session();

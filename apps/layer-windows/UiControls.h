@@ -127,7 +127,7 @@ inline Button button(std::shared_ptr<WorkspaceData> const& data,hstring const& t
 }
 struct NumberState {double value=0;bool editing=false,dragging=false,formatting=false;};
 inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring const& title,J const& spec,
-    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr){
+    std::function<double()> get,std::function<void(double)> set,Bindings& bindings,Bindings* commits=nullptr,bool valueOnly=false){
     auto local=std::make_shared<NumberState>();local->value=get();
     StackPanel root;root.Spacing(0);
     Grid header;ColumnDefinition left;left.Width({1,GridUnitType::Star});header.ColumnDefinitions().Append(left);
@@ -167,9 +167,11 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
         try{
             auto next=numeric(spec,local->value,cancel?O({{L"type",S(L"format")}}):
                 O({{L"type",S(L"expression")},{L"text",S(entry.Text())}}));
+            bool changed=local->value!=num(next,L"value");
             local->value=num(next,L"value");local->editing=false;
             setText(str(next,entry.FocusState()==FocusState::Unfocused?L"text":L"edit"));entry.BorderThickness(Thickness{0});
-            if(!cancel)set(local->value);
+            ToolTipService::SetToolTip(entry,nullptr);
+            if(!cancel&&changed)set(local->value);
         }catch(hresult_error const& error){
             entry.BorderThickness(Thickness{1,1,1,1});entry.BorderBrush(fill({255,221,85,85}));
             ToolTipService::SetToolTip(entry,box_value(error.message()));
@@ -179,16 +181,14 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
     entry.GotFocus([data,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();entry.Background(data->brush(L"input"));
         if(!local->editing)setText(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"edit"));
-        local->editing=true;
     });
     entry.LostFocus([commit,local,spec,setText](Windows::Foundation::IInspectable const& sender,RoutedEventArgs const&){
         auto entry=sender.as<TextBox>();commit(false);entry.Background(clear());
         if(!local->editing)setText(str(numeric(spec,local->value,O({{L"type",S(L"format")}})),L"text"));
     });
     entry.KeyDown([commit,local](auto&&,KeyRoutedEventArgs const& e){
-        if(e.Key()==Windows::System::VirtualKey::Enter){local->editing=true;commit(false);e.Handled(true);}
+        if(e.Key()==Windows::System::VirtualKey::Enter){commit(false);e.Handled(true);}
         else if(e.Key()==Windows::System::VirtualKey::Escape){commit(true);e.Handled(true);}
-        else local->editing=true;
     });
     slider.AddHandler(UIElement::PointerPressedEvent(),box_value(PointerEventHandler(
         [local](auto&&,auto&&){local->dragging=true;})),true);
@@ -212,6 +212,11 @@ inline StackPanel number(std::shared_ptr<WorkspaceData> const& data,hstring cons
         entry.Background(entry.FocusState()==FocusState::Unfocused?clear():data->brush(L"input"));
         slider.Value(num(shown,L"fill"));
     });
+    if(valueOnly){
+        header.Children().RemoveAt(1);entry.ClearValue(FrameworkElement::WidthProperty());entry.MinWidth(0);
+        entry.HorizontalAlignment(HorizontalAlignment::Stretch);entry.TextAlignment(TextAlignment::Center);
+        root.Children().Append(entry);return root;
+    }
     bool ranged=str(spec,L"kind")==L"slider";
     StackPanel spin;spin.Orientation(Orientation::Horizontal);spin.Spacing(6);
     if(!ranged){header.Children().RemoveAt(1);spin.Children().Append(entry);Grid::SetColumn(spin,1);header.Children().Append(spin);}

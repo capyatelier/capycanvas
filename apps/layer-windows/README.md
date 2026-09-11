@@ -216,3 +216,26 @@ locked-file recovery and preservation of unreadable files:
 These local profiles and reports must never be committed. Native text drafts use
 the synchronous [TextChanging event](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.textbox.textchanging?view=windows-app-sdk-1.8)
 to keep formatting updates distinct from edits before close.
+
+## Color panel checks
+
+Workspace's Color panel and the toolbar's Brush color popup project the shared
+HSV/HLS model with native controls and GPU gradients. Pointer-region selection
+and all color edits go through Rust. The image uses Windows'
+[Direct2D gradient meshes](https://learn.microsoft.com/en-us/windows/win32/api/d2d1_3/ns-d2d1_3-d2d1_gradient_mesh_patch)
+through WinUI image-surface interop; the main canvas retains its independent
+D3D12 presentation path.
+
+Build the shared pixel oracle and run against a fresh, isolated review instance
+with CAPY_TRACE_UI=1. Pass a Python interpreter with Pillow installed:
+
+~~~powershell
+cargo build --locked -p layer-ui --example color_wheel_reference
+./apps/layer-windows/scripts/exercise-color.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json -Python <python-executable>
+~~~
+
+The fixture opens Color, checks native actions and popup synchronization, then
+captures the entire app window. Rust classifies sampled wheel pixels and computes
+expected colors. Four HSV/HLS cases include remembered hue with black paint.
+Reports remain under ignored artifacts/windows/color. This does not validate
+physical pointer capture, full-window visual parity or presentation performance.

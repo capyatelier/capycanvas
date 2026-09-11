@@ -26,6 +26,8 @@ __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
    storage thread and must only signal owned synchronization state. */
 __declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void (*wake)(void*));
 __declspec(dllimport) int32_t capy_poll_services(CapyHost*);
+/* Stateless shared color hit policy: 0 none, 1 hue, 2 field; space 0 HSV / 1 HLS. */
+__declspec(dllimport) uint32_t capy_color_hit(float x, float y, float size, uint32_t space);
 /* Flush/join on the render owner before destroying the callback context.
    Cleanup is required even after a renderer failure. */
 __declspec(dllimport) int32_t capy_finish_services(CapyHost*);

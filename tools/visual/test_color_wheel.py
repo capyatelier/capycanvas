@@ -11,9 +11,15 @@ SCRIPT = Path(__file__).with_name("check_color_wheel.py")
 
 class ColorWheelCheckTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.temp = tempfile.TemporaryDirectory(prefix="capy-color-")
+        self.root = Path(self.temp.name).resolve()
+        def cleanup():
+            # Verify the owned resolved temporary directory before recursive removal.
+            self.assertEqual(self.root.resolve(), self.root)
+            self.assertEqual(self.root.parent, Path(tempfile.gettempdir()).resolve())
+            self.assertTrue(self.root.name.startswith("capy-color-"))
+            self.temp.cleanup()
+        self.addCleanup(cleanup)
         # A deterministic oracle double isolates report/coordinate handling
         # from Rust's separately tested picker. Both regions need coverage.
         self.oracle = self.root / "oracle"
@@ -34,7 +40,8 @@ print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
         source = self.root / "source.png"
         self.image.save(source)
         result = subprocess.run([sys.executable, str(SCRIPT), str(source), str(self.fixture),
-            "--oracle", str(self.oracle), "--output", str(self.root / "report.json")],
+            "--oracle", str(self.oracle), "--oracle-interpreter", sys.executable,
+            "--output", str(self.root / "report.json")],
             capture_output=True, text=True)
         return result, json.loads(result.stdout) if result.stdout else None
 
@@ -57,6 +64,16 @@ print(json.dumps({"model": {"hue_marker": [-10,-10], "field_marker": [-10,-10]},
         result, report = self.check_image()
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(report["maximum_channel_error"]["hue"], 255)
+
+    def test_remembered_hue_reaches_the_oracle(self):
+        fixture = json.loads(self.fixture.read_text())
+        fixture["hue"] = 269
+        self.fixture.write_text(json.dumps(fixture))
+        self.oracle.write_text(self.oracle.read_text().replace('print(json.dumps(',
+            'assert request.get("hue") == 269\nprint(json.dumps('))
+        result, report = self.check_image()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(report["passed"])
 
     def test_mismatched_orientation_is_rejected(self):
         self.image = Image.new("RGB", (128,256))

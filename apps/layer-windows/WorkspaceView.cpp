@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "WorkspaceView.h"
+#include "ColorView.h"
 #include "UiControls.h"
 #include "native/include/capy_windows.h"
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -179,6 +180,7 @@ struct WorkspaceView::Impl {
                 if(kind==L"brushes")content.Children().Append(brushes(bindings));
                 else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16,bindings));
                 else if(kind==L"layers")content.Children().Append(layers(bindings));
+                else if(kind==L"color_wheel")content.Children().Append(ColorPanel(data,bindings));
                 else if(kind==L"brush_size"||kind==L"brush_opacity"){
                     bool size=kind==L"brush_size";
                     content.Children().Append(number(data,size?L"Brush size":L"Brush opacity",
@@ -220,20 +222,7 @@ struct WorkspaceView::Impl {
                     [data=data]{return num(object(data->state,L"brush"),L"opacity");},
                     [data=data](double value){data->dispatch(O({{L"type",S(L"set_brush_opacity")},{L"value",N(value)}}));},popupBindings));
             }else if(next==L"brush_color"){
-                ColorPicker picker;picker.IsAlphaEnabled(true);picker.IsAlphaSliderVisible(true);picker.IsHexInputVisible(true);
-                picker.ColorChanged([data=data](ColorPicker const&,ColorChangedEventArgs const& e){
-                    if(data->updating)return;
-                    auto color=e.NewColor();A rgba;
-                    for(auto channel:{color.R,color.G,color.B,color.A})rgba.Append(N(double(channel)/255));
-                    data->dispatch(O({{L"type",S(L"set_color")},{L"rgba",rgba}}));
-                });
-                popupBindings.emplace_back([data=data,picker]{
-                    auto rgba=array(object(data->state,L"brush"),L"color");if(rgba.Size()!=4)return;
-                    Windows::UI::Color nextColor{uint8_t(std::round(rgba.GetNumberAt(3)*255)),
-                        uint8_t(std::round(rgba.GetNumberAt(0)*255)),uint8_t(std::round(rgba.GetNumberAt(1)*255)),
-                        uint8_t(std::round(rgba.GetNumberAt(2)*255))};
-                    if(picker.Color()!=nextColor)picker.Color(nextColor);
-                });content.Children().Append(picker);
+                content.Children().Append(ColorPanel(data,popupBindings));
             }
             popup=Flyout();popup.Content(content);
             popup.Closed([data=data,generation=popupGeneration,current=*popupGeneration](auto&&,auto&&){

@@ -59,15 +59,15 @@
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
     <Link><SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll.lib;windowsapp.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(CapyRoot)\target\$(CapyRustProfile)\layer_windows.dll.lib;windowsapp.lib;user32.lib;d3d11.lib;d2d1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
 
 
-    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" /><ClInclude Include="CanvasWorkBuffer.h" /><ClInclude Include="WorkspaceView.h" /><ClInclude Include="UiControls.h" /><ClInclude Include="HeaderView.h" /><ClInclude Include="SettingsView.h" />
-    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" /><ClCompile Include="WorkspaceView.cpp" /><ClCompile Include="HeaderView.cpp" /><ClCompile Include="SettingsView.cpp" />
+    <ClInclude Include="pch.h" /><ClInclude Include="CanvasWindow.h" /><ClInclude Include="CanvasWorkBuffer.h" /><ClInclude Include="WorkspaceView.h" /><ClInclude Include="UiControls.h" /><ClInclude Include="ColorView.h" /><ClInclude Include="HeaderView.h" /><ClInclude Include="SettingsView.h" />
+    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile><ClCompile Include="App.cpp" /><ClCompile Include="CanvasWindow.cpp" /><ClCompile Include="WorkspaceView.cpp" /><ClCompile Include="ColorView.cpp" /><ClCompile Include="HeaderView.cpp" /><ClCompile Include="SettingsView.cpp" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
