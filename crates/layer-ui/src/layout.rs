@@ -1015,7 +1015,11 @@ impl DockLayout {
     pub fn for_platform(platform: crate::Platform) -> Self {
         if matches!(
             platform,
-            crate::Platform::Gtk | crate::Platform::Android | crate::Platform::Web
+            crate::Platform::Gtk
+                | crate::Platform::Android
+                | crate::Platform::Web
+                | crate::Platform::Ios
+                | crate::Platform::Mac
         ) {
             Self::editor_default()
         } else {

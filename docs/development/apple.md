@@ -50,6 +50,11 @@ provides desktop windows, menus and tablet/mouse input; UIKit provides iPad cont
 and Pencil events. Platform display callbacks drive presentation, with GPU work
 kept separate from native control updates.
 
+New editor sessions use the shared full editor workspace and grouped tool
+catalog, matching the web preset. Saved workspaces retain their existing layout
+and toolbar contents. The shared Swift views project those Rust models on both
+Apple targets; native adapters handle focus, input and platform services.
+
 The iPad adapter forwards coalesced and predicted touches and later updates to
 estimated Pencil samples. Those corrections use the shared stroke model rather
 than creating an Apple-specific brush implementation. macOS and iPadOS also have

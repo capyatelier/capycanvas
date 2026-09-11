@@ -1267,6 +1267,7 @@ fn stateless_numeric_input_uses_shared_policy_without_a_session() {
 fn apple_tool_panels_edit_every_visible_brush_setting_through_the_abi() {
     for platform in [0, 1] {
         let app = App::new(platform);
+        app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":false}}));
         let snapshot = app.request(3, Value::Null).unwrap();
         let menu_action = snapshot["workspace_menu"]["sections"]
             .as_array()
@@ -1470,6 +1471,7 @@ fn apple_color_wheel_slots_and_channel_edits_use_shared_policy() {
     };
     for platform in [0, 1] {
         let app = App::new(platform);
+        app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":false}}));
         let initial = app.request(3, Value::Null).unwrap();
         let open = initial["workspace_menu"]["sections"]
             .as_array()

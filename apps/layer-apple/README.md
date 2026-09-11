@@ -21,16 +21,23 @@ or removing Swift files. Edit the generators rather than generated project entri
 
 ## Shared editor controls
 
-Tool Set consumes shared figure, region, ruler and Operation choices. Painting
-keeps the complete catalog brush list, so every brush
-remains reachable alongside custom toolbar tools.
-Enable **Workspace → Tool Settings panel** for the
-active tool's numeric fields and actions. Numeric expressions, units, ranges,
-slider mappings and stepping resolve through Rust. The shared Apple control
+Fresh editors use the shared full editor preset: the Tools and Commands bars,
+Tool Set, Tool Settings, Brush size, Color, Navigator/Diagnostics,
+Properties/Filters and Layers. Restoring a saved workspace preserves its layout
+and toolbar contents, including workspaces from earlier Apple builds.
+
+Tool Set projects the shared groups and subtools for painting, figures, regions,
+rulers and Operation. Every catalog brush remains reachable through its family;
+Rust remembers the selected subtool and edited settings when changing groups.
+Tool Settings shows the active tool's numeric fields and actions. Numeric
+expressions, units, ranges, slider mappings and stepping resolve through Rust.
+The shared Apple control
 handles optimistic edits and local validation feedback; small AppKit/UIKit
 adapters handle text selection, keyboard focus, Return, Escape and arrow keys.
+Native focus changes are deferred until after SwiftUI updates to avoid entering
+the hosting responder graph recursively when accepting an expression.
 
-Enable **Workspace → Color panel** for the shared HSV square / HLS triangle,
+The Color panel provides the shared HSV square / HLS triangle,
 foreground/background/transparent paint slots, swap and component expressions.
 Rust owns color conversion, hue memory, normalized geometry, hit regions and
 drag clamping. Both native hosts share the gradient drawing and controls; their
@@ -48,8 +55,11 @@ open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_p
 ```
 
 Release builds ignore this variable. The focused `testNumericToolControls` test
-uses the same fixture on both platforms. Standalone edit-state checks need no
-GUI automation:
+uses a fresh light-theme editor on both platforms. It checks expression acceptance,
+invalid input, stepping and remembered brush settings across group changes.
+`testCompleteEditorCapture` captures only the settled default workspace and its
+logical dimensions for the Chrome `initial` comparison. Standalone edit-state
+checks need no GUI automation:
 
 ```sh
 xcrun swiftc apps/layer-apple/Shared/Editor/NumericEditState.swift \
@@ -159,7 +169,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-
 /tmp/capy-frame-driver-tests
 ```
 
-Use launch tests for native surface geometry and targeted event-delivery checks:
+Use a focused launch test for a settled default editor capture:
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -168,20 +178,17 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   -scheme CapyCanvas-iPad -destination 'platform=iOS Simulator,id=SIMULATOR_ID' \
   -derivedDataPath apps/layer-apple/DerivedData/Simulator \
   -resultBundlePath artifacts/ui/parity/ipad-launch.xcresult \
+  -only-testing:CapyCanvas-iPadTests/EditorLaunchTests/testCompleteEditorCapture \
   CODE_SIGNING_ALLOWED=NO test
 ```
 
-Choose a fresh result-bundle path for subsequent runs. The test waits for a
-successful Metal viewport submission, checks Zen-button dimensions, and retains
-a full-screen landscape screenshot with full-window canvas geometry checks.
+Choose a fresh result-bundle path for subsequent runs. The capture checks that
+the default controls exist and waits for the Metal canvas and live Navigator.
+It attaches the full landscape screen on iPad or the editor window on Mac.
 It does not measure drawable presentation or prove full visual/functional parity.
 Physical input and hardware performance acceptance are required on each platform.
-The optional Mac test exercises the app's full-window canvas, window-control
-clearance, mouse stroke termination and keyboard undo/redo. Both launch tests
-also exercise the same small layer workflow: add a layer, check a different row
-without changing the drawing target, add a mask, switch content/mask targets,
-and delete the mask through its own context menu. Mac uses an in-app right click;
-iPad uses a long press. No system-menu clicks are required.
+Replace the final test method with `testNumericToolControls` for the focused
+numeric input and grouped brush workflow.
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -189,6 +196,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   -scheme CapyCanvas-Mac -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath apps/layer-apple/DerivedData/Mac \
   -resultBundlePath artifacts/ui/parity/mac-launch.xcresult \
+  -only-testing:CapyCanvas-MacTests/EditorLaunchTests/testCompleteEditorCapture \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
@@ -289,11 +297,12 @@ Mode changes refresh chrome visibility even when native measurements are equal.
 `testCollapsedColumnsDrawersAndZen` exercises column tabs, a child drawer,
 outside dismissal and restoring the column; `testPartialZenToolbar` checks the
 default standalone toolbar projection and exiting Zen. These shared checks use
-in-app controls. The `partial-zen` Chrome fixture retains the current browser's
-missing edge toolbar sections in its full-image report. Full interaction,
-visual, physical input and performance acceptance remain open on both targets.
+in-app controls. The `partial-zen` Chrome fixture uses the same shared workspace
+policy; its older comparison predates the browser's edge toolbar implementation.
+Full interaction, visual, physical input and performance acceptance remain open
+on both targets.
 
-This is an editor-shell milestone, not a finished port. The simulator renders
+Full port acceptance remains open. The simulator renders
 the live canvas; the iPad target builds, signs, installs and launches; the AppKit
 target builds and launches, with mouse drawing and keyboard undo/redo checked.
 Both targets share frame admission and per-window session ownership. Initial

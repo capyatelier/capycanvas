@@ -145,7 +145,7 @@ extension XCTestCase {
         let size = app.buttons["number-value-Brush size"]
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: size)
         waitForExpectations(timeout: 5)
-        let grip = app.descendants(matching: .any)["group-options-6"].firstMatch
+        let grip = app.descendants(matching: .any)["group-options-9"].firstMatch
         XCTAssertTrue(grip.waitForExistence(timeout: 5))
         let original = grip.frame
         let target = workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.54, dy: 0.48))

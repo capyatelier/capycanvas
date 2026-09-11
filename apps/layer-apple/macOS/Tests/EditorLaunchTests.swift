@@ -45,7 +45,7 @@ final class EditorLaunchTests: XCTestCase {
         #else
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":5},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":5,"collapsed":true}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":6},"viewport":[1376,1032]},{"type":"customize","action":{"type":"set_column_collapsed","group":6,"collapsed":true}}]"#
         app.launch()
         checkCollapsedColumnsDrawersAndZen(in: app)
     }
@@ -81,7 +81,7 @@ final class EditorLaunchTests: XCTestCase {
         #else
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
         #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_panel_visible","panel":"navigator","visible":true}},{"type":"customize","action":{"type":"add_panel","panel":"stats","group":9}},{"type":"select_panel_tab","group":9,"panel":"navigator"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
         checkNavigatorAndDiagnostics(in: app)
     }
@@ -132,10 +132,18 @@ final class EditorLaunchTests: XCTestCase {
         }
     }
 
+    @MainActor func testCompleteEditorCapture() {
+        let app = editorTestApplication()
+        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launch()
+        captureDefaultEditor(in: app)
+    }
+
     @MainActor func testNumericToolControls() throws {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-AppleInterfaceStyle", "Light"]
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch()
         checkNumericToolControls(in: app)
         let shot = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())

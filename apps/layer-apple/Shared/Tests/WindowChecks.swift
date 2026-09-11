@@ -4,7 +4,7 @@ extension XCTestCase {
     @MainActor func checkIndependentEditorWindows(in app: XCUIApplication) {
         // Install ordinary toolbar commands so the test exercises editor
         // effects without navigating the macOS system menu bar.
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"insert_tools","panel":"toolbar","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"new_window"},"selected":true}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"close_document"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"insert_tools","panel":"commands","before":null}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"new_window"},"selected":true}},{"type":"customize","action":{"type":"picker_select","control":{"kind":"command","command":"close_document"},"selected":true}},{"type":"customize","action":{"type":"confirm_tools"}}]"#
         app.launch()
         let scenes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-"))
         XCTAssertTrue(scenes.firstMatch.waitForExistence(timeout: 20))

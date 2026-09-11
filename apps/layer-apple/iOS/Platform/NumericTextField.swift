@@ -37,7 +37,15 @@ struct NumericTextField: UIViewRepresentable {
                 guard coordinator.parent.focused, let field, !field.isFirstResponder else { return }
                 field.becomeFirstResponder()
             }
-        } else if !focused && field.isFirstResponder { field.resignFirstResponder() }
+        } else if !focused && field.isFirstResponder {
+            // UIKit consults the hosting view's responder graph while resigning.
+            // Defer that work until SwiftUI has finished its current update.
+            let coordinator = context.coordinator
+            DispatchQueue.main.async { [weak field] in
+                guard !coordinator.parent.focused, let field, field.isFirstResponder else { return }
+                field.resignFirstResponder()
+            }
+        }
     }
     final class Coordinator: NSObject, UITextFieldDelegate {
         var parent: NumericTextField

@@ -41,6 +41,75 @@ fn menu_action(menu: &Value, operation: &str) -> Value {
 }
 
 #[test]
+fn apple_default_workspace_reaches_every_grouped_brush_without_changing_artwork() {
+    use std::collections::BTreeSet;
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        assert_eq!(
+            app.state()["workspace"]["layout"],
+            serde_json::to_value(layer_ui::DockLayout::for_platform(layer_ui::Platform::Web))
+                .unwrap(),
+            "Fresh Apple editors use the same workspace as the web editor"
+        );
+        let catalog = app.request(2, json!({"type":"catalog"})).unwrap();
+        let expected: BTreeSet<_> = catalog["brush_categories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|category| category["brushes"].as_array().unwrap())
+            .map(|brush| brush["id"].as_u64().unwrap())
+            .collect();
+        let mut reachable = BTreeSet::new();
+        let color = app.state()["brush"]["color"].clone();
+        let layers = app.state()["layers"].clone();
+        for tool in layer_ui::Tool::ALL {
+            let command = serde_json::to_value(tool.command()).unwrap();
+            let panel = config(&app, "toolbar");
+            let tile = panel["content"]["tiles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|tile| tile["control"]["command"] == command)
+                .unwrap();
+            app.action(json!({"type":"activate_tile","panel":"toolbar","tile":tile["id"]}));
+            let groups = app.state()["tool_set"]["groups"]
+                .as_array()
+                .unwrap()
+                .clone();
+            for group in groups {
+                app.action(group["action"].clone());
+                let subtools = app.state()["tool_set"]["subtools"]
+                    .as_array()
+                    .unwrap()
+                    .clone();
+                assert!(!subtools.is_empty());
+                for subtool in subtools {
+                    app.action(subtool["action"].clone());
+                    let id = subtool["preview"].as_u64().unwrap();
+                    assert_eq!(app.state()["brush"]["preset"], id);
+                    assert_eq!(app.state()["brush"]["color"], color);
+                    assert_eq!(app.state()["layers"], layers);
+                    reachable.insert(id);
+                }
+            }
+        }
+        assert_eq!(
+            reachable, expected,
+            "Grouped controls must retain every catalog brush"
+        );
+        let mut saved = layer_ui::WorkspaceState::default();
+        saved.layout.bands[0].extent = 275.;
+        let saved = serde_json::to_value(saved).unwrap();
+        app.action(json!({"type":"restore_workspace","workspace":saved}));
+        assert_eq!(
+            app.state()["workspace"],
+            saved,
+            "Restoring an older customized workspace must not replace it with the new preset"
+        );
+    }
+}
+
+#[test]
 fn toolbar_picker_naming_duplication_manager_and_history_preserve_artwork() {
     for platform in [0, 1] {
         let app = App::new(platform);
