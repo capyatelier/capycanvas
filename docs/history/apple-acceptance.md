@@ -66,6 +66,56 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Shared replay milestone — 2026-09-11
+
+A direct renderer regression reproduced the intermittent Metal startup failure
+without AppKit, UIKit or frame recording. Replaying seven filled 4096×4096 paint
+layers together exhausted wgpu's limit of 4096 outstanding native command
+buffers; rendering the same fills incrementally succeeded. The shared renderer
+now splits recording after 512 render/compute passes and finishes/submits each
+chunk in queue order. Staging uploads close before submission and their reuse
+callbacks remain on the final chunk. Production adds no CPU wait for the GPU.
+
+The full 4K replay now matches every exported incremental pixel with renderer
+telemetry off and on. The renderer suite passed 117 checks, with 18 explicit
+hardware benchmarks/stress checks ignored and the known strict filter-reference
+failure retained. Its actual PNG and difference report are byte-identical to
+unchanged `fa71061`: 3,274 pixels above one byte across 70 cases, maximum error
+47. The new replay stress check was run explicitly and passed.
+
+Changes from the other ports through `fa71061` are integrated. Apple tests now
+look up diagnostic metrics by label and select the Brush size tab explicitly,
+following the shared layout changes. All 32 Apple, 15 host and 233 UI checks
+passed; the existing host hardware benchmark remains ignored. The shared renderer
+also passed its WebAssembly compile check. Both Apple Release targets rebuilt;
+the signed iPad build was installed into the separate benchmark app.
+
+Both physical hosts completed twenty measured seconds of `wet-watercolor-4k`,
+plus warm-up and postlude, using the published display scheduler. Each delivered
+4,513 nonpredicted samples. The measured Mac interval recorded 1,645 actual
+presentations and iPad recorded 2,201, with zero rejected input, missing callbacks
+or zero-time presentations. The Mac's completed canvas was captured and visibly
+contains the synthetic paint. Both benchmark apps were stopped afterwards, with
+the original Mac editor preserved. Build/device logs, traces and images stay in
+ignored local artifacts.
+The full traces retain one Mac and four iPad zero-time presentations outside the
+measured intervals, plus 14 and 19 omitted GPU samples respectively. Neither
+trace contains a renderer error or recorder overflow.
+
+The final integration also includes Windows milestone `ed27d2b`, which extracts
+the existing shared thumbnail query into a reusable native helper. The Apple
+image-import/thumbnail pixel check passes on both platform profiles after that
+integration, and both Apple Release builds pass. The short device pilots above
+precede this helper extraction.
+The subsequent shared resize milestone `f6fe901` is also integrated: all 234 UI
+checks, the Apple workspace drag/cancel/history pixel check on both profiles,
+and both Apple Release rebuilds pass after the rebase.
+
+This milestone establishes replay correctness and submission capacity on the
+shared renderer. The separate Apple display-link experiment remains unpublished.
+Full visual/feature parity, sustained performance, instrumentation calibration,
+physical input latency and the remaining lifecycle matrix are still open.
+
 ## Shared code and directory rules
 
 | Location | Responsibility |

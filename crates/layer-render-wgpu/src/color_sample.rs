@@ -75,11 +75,12 @@ impl WgpuRasterizer {
                     mapped_at_creation: false,
                 })
             });
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            let mut encoder = crate::submission::CommandEncoder::new(
+                &self.device,
+                &wgpu::CommandEncoderDescriptor {
                     label: Some("color sample"),
-                });
+                },
+            );
             encoder.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
                     origin: wgpu::Origin3d {
@@ -99,7 +100,7 @@ impl WgpuRasterizer {
                     depth_or_array_layers: 1,
                 },
             );
-            self.queue.submit([encoder.finish()]);
+            encoder.submit(&self.queue);
             let ready = buffer.clone();
             let tx = self.color_sampler.tx.clone();
             buffer

@@ -106,7 +106,7 @@ impl ImageComposition {
         r: &WgpuRasterizer,
         base: &Layer,
         region: PixelRect,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) {
         let properties = [
             if base.visible { base.opacity } else { 0. },
@@ -321,7 +321,7 @@ impl Scene {
         index: usize,
         cached: &mut CachedStage,
         changes: &[PixelRect],
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PixelRect, GpuRasterError> {
         let output_dirty = changes[index];
         let Some(plan) = &self.images.clips[index] else {
@@ -512,7 +512,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         packet: FramePacket<'_>,
         dirty: PixelRect,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PixelRect, GpuRasterError> {
         let extent = packet.document_extent;
         if self.images.stages.is_empty()

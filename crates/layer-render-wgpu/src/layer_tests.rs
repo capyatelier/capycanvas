@@ -9,6 +9,8 @@ use layer_render::{DabStyle, ViewState};
 mod figures;
 #[path = "overview_tests.rs"]
 mod overviews;
+#[path = "submission_tests.rs"]
+mod submissions;
 #[path = "paint_transform_tests.rs"]
 mod transforms;
 
@@ -624,7 +626,7 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let mut encoder = r.device.create_command_encoder(&Default::default());
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -637,7 +639,7 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
         },
         texture.size(),
     );
-    let submission = r.queue.submit([encoder.finish()]);
+    let submission = encoder.submit(&r.queue);
     let (send, receive) = mpsc::channel();
     buffer
         .slice(..)
@@ -738,13 +740,14 @@ fn affine_selection_preparation_latency() {
             let selection = Arc::new(base.transformed(affine).unwrap());
             timing.enabled = i >= 40;
             let started = Instant::now();
-            let mut encoder = r.device.create_command_encoder(&Default::default());
+            let mut encoder =
+                crate::submission::CommandEncoder::new(&r.device, &Default::default());
             timing.begin(&r.device, &mut encoder);
             r.selection_clip
                 .prepare(&r.device, &mut encoder, extent, &selection)
                 .unwrap();
             timing.end(&mut encoder);
-            r.last_submission = Some(r.queue.submit([encoder.finish()]));
+            r.last_submission = Some(encoder.submit(&r.queue));
             timing.submitted();
             let submit_ms = started.elapsed().as_secs_f32() * 1000.;
             r.wait_idle().unwrap();
@@ -2658,9 +2661,10 @@ fn selection_raster_latency() {
             let mut style = batch(1).style;
             style.selection = Some(std::sync::Arc::new(Selection::polygon(points).unwrap()));
             let start = std::time::Instant::now();
-            let mut encoder = r.device.create_command_encoder(&Default::default());
+            let mut encoder =
+                crate::submission::CommandEncoder::new(&r.device, &Default::default());
             r.prepare_selection(&mut encoder, &style).unwrap();
-            let submission = r.queue.submit([encoder.finish()]);
+            let submission = encoder.submit(&r.queue);
             r.device
                 .poll(wgpu::PollType::Wait {
                     submission_index: Some(submission),

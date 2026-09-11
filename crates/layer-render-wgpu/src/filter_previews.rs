@@ -162,11 +162,12 @@ impl FilterPreviews {
             self.key = Some(key);
             self.point = None;
             let request = self.request.as_ref().unwrap();
-            let mut encoder = r
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            let mut encoder = crate::submission::CommandEncoder::new(
+                &r.device,
+                &wgpu::CommandEncoderDescriptor {
                     label: Some("filter preview source"),
-                });
+                },
+            );
             if self
                 .source
                 .as_ref()
@@ -252,7 +253,7 @@ impl FilterPreviews {
             });
             encoder.copy_buffer_to_buffer(&winner, 0, &read, 0, 8);
             r.uploads.finish(&encoder);
-            r.queue.submit([encoder.finish()]);
+            encoder.submit(&r.queue);
             let buffer = read.clone();
             let tx = self.tx.clone();
             read.slice(..)
@@ -300,11 +301,12 @@ impl FilterPreviews {
         if self.rendering.is_empty() {
             return Ok(());
         }
-        let mut encoder = r
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = crate::submission::CommandEncoder::new(
+            &r.device,
+            &wgpu::CommandEncoderDescriptor {
                 label: Some("filter picker previews"),
-            });
+            },
+        );
         self.scene.begin_frame();
         self.scene.jobs.clear();
         let [width, height] = request.size;
@@ -556,7 +558,7 @@ impl Scene {
         r: &mut WgpuRasterizer,
         request: &FilterPreviewRequest,
         destination: &wgpu::Texture,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
         let index = request
             .layers

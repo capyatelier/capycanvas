@@ -210,6 +210,15 @@ fn panel_drag_and_resize_use_cancelable_shared_history_without_changing_pixels()
         app.draw_frame();
         app.stroke();
         app.draw_frame();
+        let sizes_group = unsafe { &*app.0 }
+            .host
+            .session
+            .state()
+            .workspace
+            .layout
+            .panel_group(layer_ui::Panel::Sizes)
+            .unwrap();
+        app.action(json!({"type":"select_panel_tab","group":sizes_group,"panel":"sizes"}));
         let pixels = app.pixels();
         let baseline = app.state()["workspace"].clone();
         let group = snapshot(&app)["layout"]["groups"]

@@ -164,6 +164,22 @@ canvas-readiness accessibility updates once per attached surface instead of
 every submitted frame. The synthetic producer also leaves lift gaps asleep.
 The pilot changed multiple factors, so it does not isolate this change's benefit.
 
+## Large document replay safety
+
+A direct Metal regression reproduced the startup device loss seen while
+investigating frame scheduling: replaying seven filled 4096×4096 paint layers
+in one frame attempted to create 4097 outstanding native command buffers.
+The reproduction uses no native window or frame recorder. Incremental layer
+fills succeeded, which explains why setup timing could hide the problem.
+
+The shared renderer now records at most 512 render/compute passes per chunk,
+then finishes and submits chunks in order after closing staging uploads.
+Upload completion stays attached to the last chunk. The complete replay matches
+every pixel of the incremental 4K image, with renderer telemetry off and on.
+See the [renderer regression command](../../crates/layer-render-wgpu/README.md).
+This fixes submission capacity; it does not close the sustained frame-time or
+presentation requirements above. The published Apple scheduler is unchanged.
+
 ## Capture locally
 
 Build with `CAPY_CONFIGURATION=Release` for performance investigations. See

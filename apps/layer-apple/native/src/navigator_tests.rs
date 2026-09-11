@@ -15,6 +15,14 @@ fn show_stats(app: &App) {
 
 #[test]
 fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() {
+    fn metric<'a>(stats: &'a Value, label: &str) -> &'a Value {
+        stats["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["label"] == label)
+            .expect("Named diagnostics metric")
+    }
     for platform in [0, 1] {
         let app = App::new(platform);
         show_stats(&app);
@@ -29,9 +37,9 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
         assert_eq!(stats["rows"].as_array().unwrap().len(), 7);
         assert!(!stats["samples"].as_array().unwrap().is_empty());
         assert!(stats["samples"].as_array().unwrap().len() <= 120);
-        assert_ne!(stats["rows"][0]["value"], "—");
+        assert_ne!(metric(&stats, "CPU · ms")["value"], "—");
         assert!(
-            stats["rows"][2]["value"]
+            metric(&stats, "Frames")["value"]
                 .as_str()
                 .unwrap()
                 .parse::<u64>()
@@ -39,7 +47,7 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
                 > 0
         );
         assert!(
-            stats["rows"][3]["value"]
+            metric(&stats, "Dabs")["value"]
                 .as_str()
                 .unwrap()
                 .parse::<u64>()
@@ -47,7 +55,7 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
                 > 0
         );
         assert!(
-            stats["rows"][1]["description"]
+            metric(&stats, "GPU · ms")["description"]
                 .as_str()
                 .unwrap()
                 .contains("Excludes presentation")
@@ -55,7 +63,10 @@ fn diagnostics_restored_before_gpu_attachment_collects_actual_drawing_samples() 
         app.invoke("zoom_in");
         app.draw_frame();
         let navigated = app.request(2, json!({"type":"renderer_stats"})).unwrap();
-        assert_eq!(navigated["rows"][3]["value"], stats["rows"][3]["value"]);
+        assert_eq!(
+            metric(&navigated, "Dabs")["value"],
+            metric(&stats, "Dabs")["value"]
+        );
         let samples = navigated["samples"].clone();
         app.action(json!({"type":"customize","action":{"type":"set_panel_visible","panel":"stats","visible":false}}));
         app.stroke();

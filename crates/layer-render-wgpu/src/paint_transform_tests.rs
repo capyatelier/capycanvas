@@ -554,7 +554,8 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
             // Other tools/mask passes reuse selection_clip. They must not
             // mutate the selection held by the transform's immutable source.
             let unrelated = selection.translated(Point { x: 200., y: 0. });
-            let mut encoder = r.device.create_command_encoder(&Default::default());
+            let mut encoder =
+                crate::submission::CommandEncoder::new(&r.device, &Default::default());
             r.selection_clip
                 .prepare(
                     &r.device,
@@ -563,7 +564,7 @@ fn live_transform_uses_immutable_pixels_cancels_exactly_and_commits_without_jump
                     &std::sync::Arc::new(unrelated),
                 )
                 .unwrap();
-            r.queue.submit([encoder.finish()]);
+            encoder.submit(&r.queue);
         }
         r.set_transform_preview(None).unwrap();
         frame(&mut r, layers, &[], &[], false);

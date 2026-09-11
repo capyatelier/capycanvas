@@ -31,7 +31,7 @@ fn read(r: &WgpuRasterizer, t: &wgpu::Texture) -> Vec<u8> {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut e = r.device().create_command_encoder(&Default::default());
+    let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     e.copy_texture_to_buffer(
         t.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -44,7 +44,7 @@ fn read(r: &WgpuRasterizer, t: &wgpu::Texture) -> Vec<u8> {
         },
         t.size(),
     );
-    r.queue().submit([e.finish()]);
+    e.submit(&r.queue);
     b.map_async(wgpu::MapMode::Read, .., |result| result.unwrap());
     wait(r);
     let pixels = b
@@ -106,7 +106,7 @@ fn draw(
 ) {
     let v = t.create_view(&Default::default());
     let mut uploads = Uploads::new(r.device(), 64 * 1024);
-    let mut e = r.device().create_command_encoder(&Default::default());
+    let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     p.begin_frame();
     p.encode(
         r.device(),
@@ -124,7 +124,7 @@ fn draw(
     )
     .unwrap();
     uploads.finish(&e);
-    r.queue().submit([e.finish()]);
+    e.submit(&r.queue);
 }
 
 #[test]
@@ -450,7 +450,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         .collect();
     let texture = upload(&r, size, &pixels);
     let source = p.source(r.device(), &texture, [0, 0], None).unwrap();
-    let mut empty = r.device().create_command_encoder(&Default::default());
+    let mut empty = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     p.encode(
         r.device(),
         r.queue(),
@@ -502,7 +502,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
             region: [0, 0, t.width(), t.height()],
         })
         .collect();
-    let mut e = r.device().create_command_encoder(&Default::default());
+    let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     p.begin_frame();
     p.encode(
         r.device(),
@@ -515,7 +515,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     )
     .unwrap();
     uploads.finish(&e);
-    r.queue().submit([e.finish()]);
+    e.submit(&r.queue);
     for (origin, t, _) in &tiles {
         let actual = read(&r, t);
         for y in 0..t.height() {
@@ -537,7 +537,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
     let view = partial.create_view(&Default::default());
     for i in 0..5 {
         p.begin_frame();
-        let mut e = r.device().create_command_encoder(&Default::default());
+        let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         p.encode(
             r.device(),
             r.queue(),
@@ -557,7 +557,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
         )
         .unwrap();
         uploads.finish(&e);
-        r.queue().submit([e.finish()]);
+        e.submit(&r.queue);
         assert_eq!(p.storage_bytes(), capacity);
         assert_eq!(p.records.as_ptr(), records);
     }
@@ -570,7 +570,7 @@ fn transform_regions_are_seamless_reuse_storage_and_preserve_untouched_pixels() 
             }
         }
     }
-    let mut e = r.device().create_command_encoder(&Default::default());
+    let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     assert!(
         p.encode(
             r.device(),
@@ -719,7 +719,7 @@ fn transform_latency() {
                 interpolation: Interpolation::Linear,
             };
             let start = Instant::now();
-            let mut e = r.device().create_command_encoder(&Default::default());
+            let mut e = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             if i >= 40 {
                 telemetry.begin(r.device(), &mut e);
             }
@@ -737,7 +737,7 @@ fn transform_latency() {
                 telemetry.end(&mut e);
             }
             uploads.finish(&e);
-            r.queue().submit([e.finish()]);
+            e.submit(&r.queue);
             let elapsed = start.elapsed().as_secs_f64() * 1000.;
             if i >= 40 {
                 telemetry.submitted();
@@ -806,7 +806,7 @@ fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
     let binding = pass
         .source(r.device(), &source, [0, 0], Some(&coverage))
         .unwrap();
-    let mut encoder = r.device().create_command_encoder(&Default::default());
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
     pass.encode(
         r.device(),
         r.queue(),
@@ -844,7 +844,7 @@ fn scalar_wetness_interpolates_without_color_alpha_or_extra_overlap_water() {
         output.size(),
     );
     uploads.finish(&encoder);
-    r.queue().submit([encoder.finish()]);
+    encoder.submit(&r.queue);
     read.map_async(wgpu::MapMode::Read, .., |r| r.unwrap());
     wait(&r);
     // Selected water [64,96,0,0] shifted by .5 -> [32,80,48,0].

@@ -260,7 +260,7 @@ impl PixelTransform {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         uploads: &mut Uploads,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         source: &TransformSource,
         transform: ImageTransform,
         targets: &[TransformTarget<'_>],

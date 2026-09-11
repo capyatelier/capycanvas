@@ -46,7 +46,7 @@ impl PaintTransforms {
     pub fn apply(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
         operation: &layer_core::LayerOperation,
         extent: [u32; 2],
@@ -69,7 +69,7 @@ impl PaintTransforms {
     pub fn cancel_preview(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
         let mut damage = Vec::with_capacity(2);
         for t in &mut self.0 {
@@ -80,7 +80,7 @@ impl PaintTransforms {
     pub fn update_preview(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview,
         extent: [u32; 2],
         layers: &[Layer],
@@ -210,7 +210,7 @@ impl ImageTransformState {
     pub fn apply(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
         operation: &layer_core::LayerOperation,
         extent: [u32; 2],
@@ -236,7 +236,7 @@ impl ImageTransformState {
     fn capture_source(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
         selection: Option<&layer_core::Selection>,
         extent: [u32; 2],
@@ -396,7 +396,7 @@ impl ImageTransformState {
     fn render_source(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         layer: LayerId,
         transform: layer_core::ImageTransform,
         regions: &[PixelRect],
@@ -639,7 +639,7 @@ impl ImageTransformState {
     pub fn cancel_preview(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<(LayerId, PixelRect)>, GpuRasterError> {
         let Some(previous) = self.preview.take() else {
             return Ok(None);
@@ -660,7 +660,7 @@ impl ImageTransformState {
     pub fn update_preview(
         &mut self,
         r: &mut WgpuRasterizer,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         next: &layer_render::TransformPreview,
         extent: [u32; 2],
     ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {

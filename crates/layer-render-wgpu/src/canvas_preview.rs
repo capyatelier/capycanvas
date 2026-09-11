@@ -100,13 +100,14 @@ impl WgpuRasterizer {
                 )
             });
             let target = self.canvas_preview.target.as_ref().unwrap();
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            let mut encoder = crate::submission::CommandEncoder::new(
+                &self.device,
+                &wgpu::CommandEncoderDescriptor {
                     label: Some("Navigator preview"),
-                });
+                },
+            );
             target.encode(&mut encoder, pipeline, source);
-            self.queue.submit([encoder.finish()]);
+            encoder.submit(&self.queue);
             let tx = self.canvas_preview.tx.clone();
             target.map(revision, move |image| {
                 let _ = tx.send(image.map(|image| CanvasPreview {

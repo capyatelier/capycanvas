@@ -141,7 +141,7 @@ impl Flood {
     pub fn encode(
         &mut self,
         device: &PipelineDevice,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::submission::CommandEncoder,
         source: &wgpu::TextureView,
         extent: [u32; 2],
         seed: [u32; 2],
@@ -311,9 +311,9 @@ mod tests {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut encoder = r.device.create_command_encoder(&Default::default());
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         encoder.copy_buffer_to_buffer(&region.coverage, 0, &buffer, 0, size + 32);
-        let submitted = r.queue.submit([encoder.finish()]);
+        let submitted = encoder.submit(&r.queue);
         let (tx, rx) = mpsc::channel();
         buffer
             .slice(..)
@@ -393,7 +393,8 @@ mod tests {
                             }
                         }
                     }
-                    let mut encoder = r.device.create_command_encoder(&Default::default());
+                    let mut encoder =
+                        crate::submission::CommandEncoder::new(&r.device, &Default::default());
                     let region = flood
                         .encode(
                             &r.device,
@@ -406,7 +407,7 @@ mod tests {
                             Default::default(),
                         )
                         .unwrap();
-                    r.queue.submit([encoder.finish()]);
+                    encoder.submit(&r.queue);
                     let (words, bounds) = read_region(&r, &region);
                     assert_eq!(&words[..8], &[0, 0, w, h, 0, 1, 0, 0]);
                     let mut expected_bounds = [w, h, 0, 0, 0];
@@ -563,7 +564,8 @@ mod tests {
                         );
                     }
                 }
-                let mut encoder = r.device.create_command_encoder(&Default::default());
+                let mut encoder =
+                    crate::submission::CommandEncoder::new(&r.device, &Default::default());
                 let region = flood
                     .encode(
                         &r.device,
@@ -576,7 +578,7 @@ mod tests {
                         refine,
                     )
                     .unwrap();
-                r.queue.submit([encoder.finish()]);
+                encoder.submit(&r.queue);
                 let (words, bounds) = read_region(&r, &region);
                 let mut expected_bounds = [w, h, 0, 0, 0];
                 for y in 0..h {
@@ -642,7 +644,8 @@ mod tests {
         ] {
             let source = source(&r, [4, 1], &pixels);
             for (tolerance, expected, count) in [(0.1, 0x44, 2), (0.2, 0x4444, 4)] {
-                let mut encoder = r.device.create_command_encoder(&Default::default());
+                let mut encoder =
+                    crate::submission::CommandEncoder::new(&r.device, &Default::default());
                 let region = flood
                     .encode(
                         &r.device,
@@ -655,7 +658,7 @@ mod tests {
                         Default::default(),
                     )
                     .unwrap();
-                r.queue.submit([encoder.finish()]);
+                encoder.submit(&r.queue);
                 let (coverage, bounds) = read_region(&r, &region);
                 assert_eq!(coverage[8], expected);
                 assert_eq!(bounds, [0, 0, count, 1, count]);
@@ -667,7 +670,7 @@ mod tests {
     fn queued_regions_keep_independent_results_while_reusing_scratch() {
         let r = WgpuRasterizer::new_headless().unwrap();
         let mut flood = Flood::new(&r.device);
-        let mut encoder = r.device.create_command_encoder(&Default::default());
+        let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         let mut regions = Vec::new();
         for (extent, refinement) in [
             ([65, 49], RegionRefinement::default()),
@@ -706,7 +709,7 @@ mod tests {
             assert_eq!(flood.capacity, 65 * 49 * 4);
             regions.push((region, extent));
         }
-        r.queue.submit([encoder.finish()]);
+        encoder.submit(&r.queue);
         for (region, [w, h]) in regions {
             let (coverage, bounds) = read_region(&r, &region);
             assert_eq!(bounds, [0, 0, w, h, w * h]);
@@ -737,7 +740,8 @@ mod tests {
             ([u32::MAX, 1], [0, 0], 0.),
             ([u32::MAX, u32::MAX], [0, 0], 0.),
         ] {
-            let mut encoder = r.device.create_command_encoder(&Default::default());
+            let mut encoder =
+                crate::submission::CommandEncoder::new(&r.device, &Default::default());
             assert!(
                 flood
                     .encode(
@@ -781,7 +785,8 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let mut encoder = r.device.create_command_encoder(&Default::default());
+            let mut encoder =
+                crate::submission::CommandEncoder::new(&r.device, &Default::default());
             assert!(
                 flood
                     .encode(
@@ -846,7 +851,8 @@ mod tests {
             let mut completed = layer_render::TimingSamples::default();
             for i in 0..150 {
                 let start = std::time::Instant::now();
-                let mut encoder = r.device.create_command_encoder(&Default::default());
+                let mut encoder =
+                    crate::submission::CommandEncoder::new(&r.device, &Default::default());
                 timing.begin(&r.device, &mut encoder);
                 let region = flood
                     .encode(
@@ -861,7 +867,7 @@ mod tests {
                     )
                     .unwrap();
                 timing.end(&mut encoder);
-                let submitted = r.queue.submit([encoder.finish()]);
+                let submitted = encoder.submit(&r.queue);
                 timing.submitted();
                 timing.cpu.push(start.elapsed().as_secs_f32() * 1000.);
                 r.device

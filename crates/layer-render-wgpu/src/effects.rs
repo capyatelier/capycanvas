@@ -110,7 +110,7 @@ impl Effects {
         }
         self.preparation.merge(other.preparation);
     }
-    pub fn encode_preparation(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn encode_preparation(&mut self, encoder: &mut crate::submission::CommandEncoder) {
         self.preparation.encode(encoder);
     }
     #[cfg(test)]
