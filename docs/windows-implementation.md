@@ -575,3 +575,31 @@ tolerances were changed by Windows integration; filter parity remains open.
 The 120 Hz display has been reconnected. Presentation/input-latency benchmarking
 still awaits the remaining application work, as requested. All review processes
 from this checkpoint are closed; captures, test profiles and logs stay local.
+
+### Main branch integration checkpoint
+
+The Windows milestone now integrates upstream through 75c72f8, including the
+explicit filter-output storage conversion and watercolor dry-pigment isolation.
+The shared unit suites pass all 331 checks, the native WinUI build succeeds,
+and the bounded C++ input queue and synthetic presentation-analysis fixtures
+pass. Hardware D3D12 tests also pass for background document save/open/new,
+stale adoption rejection, delayed pen estimate correction, renderer-retained
+source assets and save/reopen followed by wet painting.
+
+The complete serial renderer suite reports 113 passed, one failed and 17 ignored
+performance tests. Curves/Exposure scalar checks now pass across six alpha
+levels, including the previously failing opaque Curves case. The strict v4
+filter sheet still differs, with maximum byte error 30; its one-byte tolerance
+and all channels remain intact. See [runtime filter validation](runtime-filters.md).
+This is an outstanding acceptance gate, not a fully passing renderer claim.
+
+Milestones are pushed to both `ports/windows` and `main` so the other ports can
+consume shared changes. Incoming changes are merged and checked before each
+integration; no force push is used. The public diff contains source, synthetic
+tests and documentation. Raw captures, settings, profiles and machine logs stay
+local.
+
+Native document dialogs and File menu wiring are the next implementation
+milestone. Full workspace parity, physical input, shutdown cost, device recovery,
+release packaging and the deferred 120 Hz benchmark remain open. This integration
+does not add a new native UI or physical-device acceptance claim.

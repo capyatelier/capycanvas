@@ -448,3 +448,17 @@ or exclusions; 17 hardware benchmarks remain separately ignored. This includes
 incremental/full equivalence, clipping, masks, preview crops, preparation
 invalidation/reuse, fusion, animation and the independent color checks. The v4
 sheet was visually inspected. The software alpha-oracle repeat also passes.
+
+### Windows D3D12 storage-conversion check
+
+The Windows integration through upstream 75c72f8 runs the complete renderer
+suite serially on hardware D3D12: 113 pass, one fails and 17 performance tests
+remain separately ignored. Curves and Exposure now pass the independent scalar
+oracle across all six alpha levels. The imported ramp across every alpha value,
+Halftone endpoints and both new watercolor regressions also pass.
+
+The strict v4 sheet still fails, with maximum channel error 30. The one-byte
+tolerance and all channels remain unchanged. This run does not establish the
+cause or full cross-backend parity; the remaining discrepancy needs independent
+isolation. Windows did not regenerate the reference or adjust expectations.
+Raw output and diagnostic images stay in ignored local artifacts.

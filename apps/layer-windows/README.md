@@ -7,6 +7,20 @@ pointer replay verifies drawing, undo/redo, and a painted document continuing
 behind titlebar controls. Real OS input, workspace parity, recovery, bounded input
 transport, and presentation acceptance remain open; this is not a release package.
 
+## Milestone integration
+
+Windows implementation work lives on `ports/windows`. At each milestone, merge
+the latest `origin/main` into that branch, resolve conflicts with the shared
+behavior intact, run the affected checks and record any remaining acceptance
+gaps. Commit and push the reviewed milestone to `ports/windows`, then integrate
+and push it to `main` so other port agents can use it. If another port advances
+`main` during validation, merge that update and check the affected code before
+retrying the push. Never force-push over another port's work.
+
+Stage source, tests and public documentation explicitly. Keep local settings,
+profiles, captures, traces, machine logs, binaries and private paths out of
+commits.
+
 ## Build
 
 Install Rust stable for x86_64-pc-windows-msvc, Visual Studio C++ Build Tools
