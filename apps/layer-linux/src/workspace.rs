@@ -665,6 +665,7 @@ struct NativeWorkspaceDrag {
     parent: Option<gtk::Widget>,
     wait_for_hold: bool,
     sequence: Option<gdk::EventSequence>,
+    device: Option<gdk::Device>,
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
     tab_grab: Option<NativeTabSlide>,
@@ -2426,10 +2427,10 @@ impl Workspace {
         }
     }
     fn install_panel_drag(self: &Rc<Self>, widget: &impl IsA<gtk::Widget>, item: DockItem) {
-        self.register_drag(widget, DragTarget::Dock(item));
         if matches!(item, DockItem::Tile { .. }) {
             widget.add_css_class("drag-hold");
         }
+        self.register_drag(widget, DragTarget::Dock(item));
     }
     fn clear_drop(&self) {
         self.drop_hint.borrow_mut().take();
@@ -2567,7 +2568,11 @@ impl Workspace {
 
     fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
         if matches!(target, DragTarget::Dock(_)) {
-            widget.set_cursor_from_name(Some("grab"));
+            widget.set_cursor_from_name(Some(if widget.has_css_class("drag-hold") {
+                "default"
+            } else {
+                "grab"
+            }));
         }
         let mut targets = self.drag_targets.borrow_mut();
         targets.retain(|(widget, _)| widget.upgrade().is_some());
@@ -2625,22 +2630,42 @@ impl Workspace {
         }
     }
 
-    fn set_drag_cursor(&self, drag: &NativeWorkspaceDrag, name: &str) {
-        if let Some((widget, _)) = &drag.cursor {
+    fn set_drag_cursor(&self, drag: &mut NativeWorkspaceDrag, name: &str) {
+        let Some(device) = &drag.device else {
+            return;
+        };
+        // Remember the original cursor once, across armed and dragging states.
+        if drag.cursor.is_none() {
+            let widget = self
+                .surface
+                .pick(
+                    drag.origin[0] as f64,
+                    drag.origin[1] as f64,
+                    gtk::PickFlags::DEFAULT,
+                )
+                .unwrap_or_else(|| drag.source.clone());
+            drag.cursor = Some((widget.clone(), widget.cursor()));
+        }
+        if let Some((widget, _)) = &drag.cursor
+            && widget.cursor().and_then(|cursor| cursor.name()).as_deref() != Some(name)
+        {
             widget.set_cursor_from_name(Some(name));
         }
         if let Some(surface) = self.window.surface()
-            && let Some(pointer) = surface.display().default_seat().and_then(|s| s.pointer())
+            && surface
+                .device_cursor(device)
+                .and_then(|cursor| cursor.name())
+                .as_deref() != Some(name)
             && let Some(cursor) = gdk::Cursor::from_name(name, None)
         {
             // The pressed widget may be unparented by a tab tear-off. Keep
-            // feedback on the native pointer throughout that same gesture.
-            surface.set_device_cursor(&pointer, &cursor);
+            // feedback on the originating mouse/pen throughout that gesture.
+            surface.set_device_cursor(device, &cursor);
         }
     }
 
     fn restore_drag_cursor(&self, drag: &NativeWorkspaceDrag) {
-        if !drag.started || !matches!(drag.target, DragTarget::Dock(_)) {
+        if drag.cursor.is_none() {
             return;
         }
         if let Some((widget, cursor)) = &drag.cursor {
@@ -2660,10 +2685,10 @@ impl Workspace {
             picked = widget.parent();
         }
         if let Some(surface) = self.window.surface()
-            && let Some(pointer) = surface.display().default_seat().and_then(|s| s.pointer())
+            && let Some(device) = &drag.device
             && let Some(cursor) = cursor.or_else(|| gdk::Cursor::from_name("default", None))
         {
-            surface.set_device_cursor(&pointer, &cursor);
+            surface.set_device_cursor(device, &cursor);
         }
     }
 
@@ -2713,6 +2738,7 @@ impl Workspace {
                     parent: source.parent(),
                     source,
                     sequence,
+                    device: self.surface.display().default_seat().and_then(|seat| seat.pointer()),
                     cursor: None,
                     tab: None,
                     tab_grab: None,
@@ -2766,6 +2792,8 @@ impl Workspace {
         if !drag.started {
             if !drag.source.is_ancestor(&self.surface) || drag.source.parent() != drag.parent {
                 self.workspace_drag.borrow_mut().take();
+                drag.point = point;
+                self.restore_drag_cursor(&drag);
                 self.dismiss_context();
                 return false;
             }
@@ -2795,18 +2823,7 @@ impl Workspace {
             }
             self.start_tab_slide(&mut drag);
             if matches!(drag.target, DragTarget::Dock(_)) {
-                drag.cursor = self
-                    .surface
-                    .pick(
-                        drag.origin[0] as f64,
-                        drag.origin[1] as f64,
-                        gtk::PickFlags::DEFAULT,
-                    )
-                    .map(|widget| {
-                        let cursor = widget.cursor();
-                        (widget, cursor)
-                    });
-                self.set_drag_cursor(&drag, "grabbing");
+                self.set_drag_cursor(&mut drag, "grabbing");
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
             if !matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
@@ -2828,7 +2845,7 @@ impl Workspace {
                 *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);
                 self.surface.queue_draw();
             }
-            self.set_drag_cursor(&drag, "grabbing");
+            self.set_drag_cursor(&mut drag, "grabbing");
         }
         true
     }
@@ -2970,7 +2987,15 @@ impl Workspace {
                 let point = w
                     .event_point(controller)
                     .or_else(|| w.workspace_drag.borrow().as_ref().map(|d| d.point));
-                if point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence)) {
+                let starting = phase == ContactPhase::Down && w.workspace_drag.borrow().is_none();
+                let handled = point.is_some_and(|point| w.workspace_drag_input(phase, point, sequence));
+                if starting
+                    && let Some(drag) = w.workspace_drag.borrow_mut().as_mut()
+                {
+                    // A tablet has its own GDK device; touch has no cursor.
+                    drag.device = if touch { None } else { event.device() };
+                }
+                if handled {
                     column_click.set(None);
                     glib::Propagation::Stop
                 } else {

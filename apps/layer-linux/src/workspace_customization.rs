@@ -1399,6 +1399,7 @@ impl Workspace {
                     {
                         // Mouse holds arm tile pickup without opening a menu.
                         drag.held = true;
+                        w.set_drag_cursor(drag, "grab");
                         gesture.set_state(gtk::EventSequenceState::Claimed);
                     }
                 }
@@ -1422,6 +1423,9 @@ impl Workspace {
                 }
                 drag.context = true;
                 drag.held = true;
+                if drag.wait_for_hold {
+                    self.set_drag_cursor(drag, "grab");
+                }
                 true
             } else {
                 false

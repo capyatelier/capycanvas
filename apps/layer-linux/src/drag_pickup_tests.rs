@@ -12,6 +12,9 @@ fn native_drag_pickup_input() {
     pump(1600);
     let original = state(&w).workspace;
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
+    let native = w.window.surface().unwrap();
+    let pointer = native.display().default_seat().unwrap().pointer().unwrap();
+    let cursor = || native.device_cursor(&pointer).and_then(|cursor| cursor.name());
     let menu = w
         .popovers
         .borrow()
@@ -122,6 +125,11 @@ fn native_drag_pickup_input() {
                     } else {
                         [750., 470.]
                     };
+                    let tile = source.ends_with("tile") || source == "column";
+                    if !touch {
+                        perform(serde_json::json!([{"point":start}]));
+                        assert_eq!(cursor().as_deref(), Some(if tile { "default" } else { "grab" }), "{source}: hover cursor");
+                    }
                     if !touch && !held && !cancel && source != "column-grip" {
                         perform(serde_json::json!([
                             {"point":start},{"down":true,"button":273},{"down":false,"button":273}
@@ -136,12 +144,20 @@ fn native_drag_pickup_input() {
                         serde_json::json!([{"point":start},{"down":true}])
                     };
                     perform(press.clone());
+                    if !touch && tile {
+                        assert_eq!(cursor().as_deref(), Some("default"), "press alone keeps the pointer");
+                    }
                     if held {
                         pump(800);
                         assert_eq!(menu.is_visible(), touch, "{touch} {source}: only touch holds open menus");
                         assert_eq!(saved(), before, "hold must not activate");
                         if source.ends_with("tile") || source == "column" {
                             assert!(w.workspace_drag.borrow().as_ref().is_some_and(|d| d.held), "{touch} {source}: hold arms pickup");
+                            if !touch {
+                                assert_eq!(cursor().as_deref(), Some("grab"), "{source}: held cursor");
+                                perform(serde_json::json!([{"point":[start[0]+1.,start[1]]}]));
+                                assert_eq!(cursor().as_deref(), Some("grab"), "small held movement keeps the open hand");
+                            }
                         }
                         if !cancel && (source.ends_with("tile") || source == "column") {
                             perform(if touch {
@@ -151,6 +167,9 @@ fn native_drag_pickup_input() {
                             });
                             assert_eq!(menu.is_visible(), touch, "hold release menu lifetime");
                             assert_eq!(saved(), before, "held release must not activate");
+                            if !touch {
+                                assert_eq!(cursor().as_deref(), Some("default"), "held release restores pointer");
+                            }
                             w.dismiss_context();
                             pump(150);
                             perform(press);
@@ -171,6 +190,9 @@ fn native_drag_pickup_input() {
                         expected,
                         "touch={touch} {source} held={held}: pickup"
                     );
+                    if !touch && expected {
+                        assert_eq!(cursor().as_deref(), Some("grabbing"), "{source}: dragging cursor");
+                    }
                     assert!(!menu.is_visible(), "drag/scroll dismisses hold");
                     if cancel {
                         perform(
@@ -185,6 +207,12 @@ fn native_drag_pickup_input() {
                     pump(200);
                     assert!(w.workspace_drag.borrow().is_none());
                     assert!(w.drop_hint.borrow().is_none());
+                    if !touch {
+                        assert_ne!(cursor().as_deref(), Some("grabbing"), "release/cancel restores cursor");
+                        if tile {
+                            assert_eq!(widget.cursor().and_then(|cursor| cursor.name()).as_deref(), Some("default"), "source restores its idle cursor");
+                        }
+                    }
                     if expected && !cancel {
                         let after = saved();
                         assert_ne!(after, before, "touch={touch} {source}: drop");
@@ -204,6 +232,35 @@ fn native_drag_pickup_input() {
                 }
             }
         }
+    }
+    // An armed cursor also retires without ever becoming a drag.
+    for reason in ["escape", "blur", "removed"] {
+        w.dispatch(UiAction::RestoreWorkspace { workspace: original.clone() });
+        pump(250);
+        let widget = w.toolbar.first_child().unwrap();
+        let bounds = widget.compute_bounds(&w.surface).unwrap();
+        let start = [bounds.x() + bounds.width() / 2., bounds.y() + bounds.height() / 2.];
+        perform(serde_json::json!([{"point":start},{"down":true}]));
+        pump(800);
+        assert_eq!(cursor().as_deref(), Some("grab"));
+        match reason {
+            "escape" => perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}])),
+            "blur" => { w.interact(UiInput::Blur); }
+            _ => {
+                let tile = original.layout.panel(Panel::Toolbar).unwrap().tiles()[0].id;
+                w.dispatch(UiAction::Customize {
+                    action: CustomizationAction::RemoveTool { panel: Panel::Toolbar, tile },
+                });
+                pump(150);
+                perform(serde_json::json!([{"point":[start[0]+20.,start[1]]}]));
+            }
+        }
+        assert!(w.workspace_drag.borrow().is_none(), "{reason}: retires hold");
+        // GTK may clear the device override after the old widget disappears;
+        // an unset window cursor is also the regular pointer.
+        assert!(matches!(cursor().as_deref(), None | Some("default")), "{reason}: restores pointer");
+        perform(serde_json::json!([{"down":false}]));
+        assert!(w.workspace_drag.borrow().is_none());
     }
     std::fs::write(dir.join("finished"), "finished").unwrap();
     w.window.destroy();
