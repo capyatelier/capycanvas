@@ -1,6 +1,6 @@
 {
-  "schema": 1,
-  "scope": "Command catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
+  "schema": 2,
+  "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": {"fullscreen": "The installed UIKit SDK offers scene orientation requests, but no native iPad window full-screen toggle. This capability remains open; Mac Catalyst's geometry API does not apply to this UIKit target."},
     "mac": {}
@@ -104,5 +104,49 @@
       "ios": "open: shared About/link routes implemented; complete displayed information and URL handoff checks remain",
       "mac": "open: shared About/link routes implemented; complete displayed information and URL handoff checks remain"
     }
-  ]
+  ],
+  "workspace_commands": {
+    "commands": [
+      "manage",
+      "new",
+      "reset_brushes",
+      "reset_layout",
+      "layout_history",
+      "switch",
+      "manage_toolbars",
+      "save_toolbar",
+      "new_toolbar"
+    ],
+    "handler": "Shared/Editor/WorkspaceManager.swift",
+    "checks": [
+      "tests/workspace-manager.swift",
+      "tests/workspace-menu-actions.swift"
+    ],
+    "ios": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete native UI validation remains",
+    "mac": "partial: real menu payloads through Apple host requests, coordinator workflows and cancellation; complete native UI validation remains"
+  },
+  "panel_controls": {
+    "brush_size": "Shared/Editor/PanelControls.swift",
+    "size_presets": "Shared/Editor/PanelControls.swift",
+    "brush_opacity": "Shared/Editor/PanelControls.swift",
+    "brush_color": "Shared/Editor/PanelControls.swift",
+    "brushes": "Shared/Editor/ToolControls.swift",
+    "tool_settings": "Shared/Editor/ToolControls.swift",
+    "color_wheel": "Shared/Editor/ColorPanel.swift",
+    "layers": "Shared/Editor/LayerPanel.swift",
+    "layer_actions": "Shared/Editor/LayerPanel.swift",
+    "layer_opacity": "Shared/Editor/LayerPanel.swift",
+    "adjustments": "Shared/Editor/AdjustmentPanel.swift",
+    "properties": "Shared/Editor/PropertyControls.swift",
+    "navigator": "Shared/Editor/NavigatorPanel.swift",
+    "stats": "Shared/Bridge/RendererStats.swift"
+  },
+  "preference_kinds": {
+    "switch": "Shared/Settings/SettingsView.swift",
+    "choice": "Shared/Settings/SettingsView.swift",
+    "text": "Shared/Settings/SettingsView.swift",
+    "number": "Shared/Settings/SettingsView.swift",
+    "info": "Shared/Settings/SettingsView.swift",
+    "link": "Shared/Settings/SettingsView.swift"
+  }
 }

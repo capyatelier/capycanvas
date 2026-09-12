@@ -76,6 +76,42 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Expanded feature inventory and workspace menu actions — 2026-09-12
+
+The schema 3 inventory starts from the settled default drawing and task workspace
+with synthetic managed identities. This exposes production workspace service
+routes that bare host creation omitted. It records all 62 commands and their
+initial dispatch results, all three task workspaces and 133 panel/group/tile/
+ribbon/Zen context menus per Apple preset. Following the rendered tool-choice
+graph with a hardware renderer and disposable filled drawing resolves 80 tool
+choices and 28 setting IDs per preset, including transform controls.
+
+The Apple review now covers nine workspace service commands, 14 panel control
+types and six preference kinds, with implementation/check references. The audit
+passes for both presets. Negative probes reject missing brushes, unresolved
+tools, unknown panel controls, missing/duplicate workspace reviews and rejected
+initially enabled commands. Save/Load Layout stays excluded; the inventory
+continues to expose the existing unavailable iPad Full Screen capability.
+
+Direct Swift checks dispatch actual shared menu payloads through the Apple
+editor and workspace coordinator. All nine routes pass on both presets,
+including form cancellation, manager/history dismissal, request acknowledgement,
+switch/return, history timestamp persistence and document preservation. Existing
+confirmed-form and coordinator workflows also pass on both presets. These checks
+use isolated temporary storage, without OS menu automation or visible windows;
+they exercise shared Apple code on macOS, not native UIKit widgets.
+Both signed Release targets build successfully.
+The integrated Windows milestone `ba9849a` adds a shared filter-readiness query
+unused by Apple; all 273 shared UI tests and the inventory audit pass afterward.
+
+Reproduction is documented in the [Apple README](../../apps/layer-apple/README.md).
+The new inventory is a review aid, not complete UI acceptance: remaining dynamic
+document/filter states, native workflows and widgets, full visual parity,
+physical input/lifecycle coverage and sustained hardware performance remain
+open on both platforms. This milestone changes validation tooling and records;
+it adds no new drawing-runtime or hardware-performance evidence. Raw generated
+inventories and logs stay in ignored local artifacts.
+
 ## Shared Apple and web header alignment — 2026-09-12
 
 Both Apple targets use shared six-point menu/title/clock padding, fractional
