@@ -51,7 +51,7 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
       const r=await rect(`${source} .layer-name`);
       await input("down",{x:r.x+r.width/2,y:r.y+r.height/2});await wait(600);
-      assert.equal(await menu(),true,`${mode}: hold opens menu`);
+      assert.equal(await menu(),device!=="mouse",`${mode}: only touch/pen holds open menus`);
       if(mode!=="cancel-hold"){
         const target=await rect(`#layer-rows .layer-row[data-layer="${before[1]}"]`);
         await input("move",{x:target.x+target.width/2,y:target.y+target.height-3});

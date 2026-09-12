@@ -89,8 +89,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     if (!node) return;
     e.preventDefault(); showContext(node, [e.clientX, e.clientY]);
   });
-  // A hold opens the existing menu and arms reordering for every device. A
-  // scroll, drag or cancelled contact cancels it; never claim input editing.
+  // Every device holds to arm tile reordering; only touch/pen holds open menus.
+  // Scrolling, dragging or cancelling retires the hold; editing keeps ownership.
   let hold, heldPointer = null;
   const cancelHold = () => { if (hold) clearTimeout(hold.timer); hold = null; };
   function dismissContext() {
@@ -100,13 +100,15 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   workspace.addEventListener("pointerdown", (e) => {
     cancelHold(); heldPointer = null;
     const node = contextTarget(e.target);
-    if (!node || e.button !== 0 || (e.pointerType === "mouse" && !node.closest(".layer-row,[data-drag-pickup=hold]"))) return;
+    const menuHold = e.pointerType === "touch" || e.pointerType === "pen";
+    if (!node || e.button !== 0 || (!menuHold && !node.closest("[data-drag-pickup=hold]"))) return;
     const parent = node.parentNode;
     hold = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: setTimeout(() => {
       cancelHold();
       if (!node.isConnected || node.parentNode !== parent) return;
       heldPointer = e.pointerId;
-      showContext(node, [e.clientX, e.clientY]);
+      if (menuHold) showContext(node, [e.clientX, e.clientY]);
+      else node.dispatchEvent(new Event("workspace-drag-held", { bubbles: true }));
     }, 500) };
   });
   workspace.addEventListener("pointermove", (e) => {

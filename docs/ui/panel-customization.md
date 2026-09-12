@@ -74,7 +74,8 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   allow dragging without a hold. This also applies inside drawers and to
   draggable collapsed-column icons. See the [inventory](drag-inventory.md) for
   implementations that still need to change.
-- Secondary click and supported press-and-hold context gestures open the same menu.
+- Secondary click and touch/pen holds open the same menu. Mouse holds only arm
+  tile dragging; they never open context menus.
   Native gesture recognition owns timing/slop; the deepest applicable target
   wins. Recognized hold/drag suppresses the ordinary click, and scrolling cancels
   a pending hold. Moving with the same held contact closes the menu and starts
@@ -273,8 +274,8 @@ stay in their parents; closing restores its allocation without changing saved ge
 checks exercise group/panel/tile/empty-ribbon targets, all five tab-group styles,
 creation/insertion, control visibility and editing, a GTK drop signal, restore
 and reset. Dark/light GTK widget captures are inspected in
-`artifacts/ui/customization/` (ignored). Gesture signals test native bindings,
-not physical tablet/touch delivery or compositor timing.
+`artifacts/ui/customization/` (ignored). These presentation checks call the menu
+presenter; the pickup/hold suites exercise device arbitration through real input.
 
 Tabbed ribbons reserve one padded lane below the header; further overflow clips.
 GTK tool ribbons are explicitly clipped and never gain a scroller.

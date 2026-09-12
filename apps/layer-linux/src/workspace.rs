@@ -659,6 +659,7 @@ struct NativeWorkspaceDrag {
     origin: [f32; 2],
     point: [f32; 2],
     started: bool,
+    held: bool,
     context: bool,
     source: gtk::Widget,
     parent: Option<gtk::Widget>,
@@ -2706,6 +2707,7 @@ impl Workspace {
                     origin: point,
                     point,
                     started: false,
+                    held: false,
                     context: false,
                     wait_for_hold: source.has_css_class("drag-hold"),
                     parent: source.parent(),
@@ -2730,7 +2732,7 @@ impl Workspace {
         };
         if matches!(phase, ContactPhase::Up | ContactPhase::Cancel) {
             self.workspace_drag.borrow_mut().take();
-            if phase == ContactPhase::Cancel {
+            if phase == ContactPhase::Cancel || drag.held {
                 self.reset_drag_recognizers(&drag);
             }
             self.clear_tab_slide(&mut drag);
@@ -2759,7 +2761,7 @@ impl Workspace {
             self.restore_drag_cursor(&drag);
             self.clear_drop();
             self.update_zen();
-            return drag.started || drag.context;
+            return drag.started || drag.held || drag.context;
         }
         if !drag.started {
             if !drag.source.is_ancestor(&self.surface) || drag.source.parent() != drag.parent {
@@ -2780,7 +2782,7 @@ impl Workspace {
             if !recognized {
                 return false;
             }
-            if drag.wait_for_hold && !drag.context {
+            if drag.wait_for_hold && !drag.held {
                 // Moving before the native hold wins belongs to scrolling.
                 self.workspace_drag.borrow_mut().take();
                 return false;

@@ -2,7 +2,8 @@
 
 Tiles: hold then drag for every device. Row bodies: mouse immediate; touch/pen
 hold first and scroll before holding. Grips and title/tab bars: immediate for all.
-Keep same-contact menu-to-drag, cancellation, and undo/redo.
+Hold menus: touch/pen only; mouse uses secondary click. Keep same-contact
+menu-to-drag, cancellation, and undo/redo. Mouse tile holds only arm pickup.
 
 - **Android:** gate tile pickup on hold; stop treating pen row drags as mouse.
 - **Apple:** add tile hold gating and whole-row pickup; currently only row grips drag.

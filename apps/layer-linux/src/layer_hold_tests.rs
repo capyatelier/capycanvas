@@ -245,14 +245,15 @@ fn native_layer_hold_input() {
     perform(serde_json::json!([{"point":start},{"down":true}]));
     pump(800);
     assert!(
-        w.popovers
+        !w.popovers
             .borrow()
             .iter()
             .filter_map(|p| p.upgrade())
             .any(|p| p.is_visible()),
-        "mouse hold opens menu"
+        "mouse hold must not open a menu"
     );
-    perform(serde_json::json!([{"point":point},{"point":[point[0]+1.,point[1]]},{"down":false}]));
+    let slop = gtk::Settings::default().unwrap().gtk_dnd_drag_threshold() as f32;
+    perform(serde_json::json!([{"point":[start[0]-2.,start[1]]},{"point":[start[0]-slop*3.,start[1]]},{"point":point},{"point":[point[0]+1.,point[1]]},{"down":false}]));
     assert_ne!(order(), before, "mouse continues held drag");
     w.dispatch(UiAction::Invoke {
         command: CommandId::Undo,

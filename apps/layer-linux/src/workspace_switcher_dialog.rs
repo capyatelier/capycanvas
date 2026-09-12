@@ -355,7 +355,7 @@ impl ManagerUi {
             #[strong]
             valid,
             move |g, x, y| {
-                if !picked(&row, x, y).0 {
+                if crate::input::touch_or_pen(g) && !picked(&row, x, y).0 {
                     held.set(true);
                     valid.set(false);
                     g.set_state(gtk::EventSequenceState::Claimed);

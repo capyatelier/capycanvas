@@ -119,7 +119,9 @@ review PNGs stay ignored under `artifacts/ui/layers-gtk/`.
 The [2026-09-12 convention](../ui/drag-and-reorder.md) additionally requires pen
 row-body dragging to wait for a hold, alongside touch. Mouse row-body dragging
 and all explicit row grips remain immediate. The acceptance evidence below
-predates that requirement; it does not establish pen hold gating. See the
+predates that requirement; it does not establish pen hold gating. The convention
+also supersedes mouse hold menus: only touch/pen holds open menus; mouse uses
+secondary click. GTK/Web regression suites now enforce this distinction. See the
 [implementation inventory](../ui/drag-inventory.md) for the remaining changes.
 
 Web and GTK now allow holding row text, padding, thumbnails, mask/link controls,
@@ -127,7 +129,7 @@ selection/visibility controls, or the grip, then reordering with the same contac
 The menu closes when dragging starts and remains available when the hold is
 released without dragging. Mask holds retain their mask-specific context.
 Active name editing keeps its normal input behavior. Movement before a touch
-hold completes still scrolls the list; mouse holds also work.
+hold completes still scrolls the list.
 
 GTK groups the row's long-press gesture with its native drag source and claims
 the contact only after the hold. Web retains a pending pointer and prevents

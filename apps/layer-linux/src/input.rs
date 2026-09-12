@@ -14,6 +14,20 @@ use std::{
     rc::Rc,
 };
 
+/// Only direct touch/stylus contacts open menus on a primary-button hold.
+pub(crate) fn touch_or_pen(gesture: &impl IsA<gtk::Gesture>) -> bool {
+    // Long-press fires from a timer, outside current_event's dispatch lifetime.
+    gesture.last_event(gesture.last_updated_sequence().as_ref()).is_some_and(|event| {
+        event.device_tool().is_some()
+            || event.device().is_some_and(|device| {
+                matches!(
+                    device.source(),
+                    gdk::InputSource::Touchscreen | gdk::InputSource::Pen
+                )
+            })
+    })
+}
+
 #[derive(Default)]
 pub struct Input {
     sequence: Cell<u64>,

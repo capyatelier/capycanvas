@@ -67,7 +67,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
             assert.equal(await menu(),false,`${label}: removed source cannot arm`);
           } else {
             await wait(650);
-            assert.equal(await menu(),true,`${label}: real hold opens menu`);
+            assert.equal(await menu(),device!=="mouse",`${label}: only touch/pen holds open menus`);
             assert.deepEqual(await snapshot(),before,`${label}: hold does not activate`);
             if(mode!=="release") {
               await input("move",target);await settle();
@@ -86,7 +86,7 @@ export async function checkDragPickup({call,evaluate,settle}) {
             await send({type:"invoke",command:"redo_workspace"});assert.deepEqual(await snapshot(),after,`${label}: one redo`);
           } else {
             assert.deepEqual(await snapshot(),before,`${label}: no move/activation`);
-            assert.equal(await menu(),mode==="release",`${label}: menu lifetime`);
+            assert.equal(await menu(),mode==="release"&&device!=="mouse",`${label}: menu lifetime`);
           }
           await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
         }
@@ -101,6 +101,17 @@ export async function checkDragPickup({call,evaluate,settle}) {
         await input("up");await wait(350);assert.notDeepEqual(await snapshot(),before);
         await send({type:"invoke",command:"undo_workspace"});assert.deepEqual(await snapshot(),before);await clean();
       }
+    }
+    device="mouse";
+    for(const selector of ['.toolbar-controls [data-drag-pickup=hold]','.dock-tab[data-panel=properties]','.toolbar-controls > .panel-grip','#layer-rows .layer-name']) {
+      await send({type:"restore_workspace",workspace:fixture});
+      const p=center(await rect(selector));
+      await input("down",p);await wait(650);
+      assert.equal(await menu(),false,`${selector}: mouse hold never opens menu`);
+      await input("up");
+      for(const type of ["mousePressed","mouseReleased"])await call("Input.dispatchMouseEvent",{type,...p,button:"right",buttons:type==="mousePressed"?2:0,clickCount:1});
+      assert.equal(await menu(),true,`${selector}: right-click still opens menu`);
+      await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
     }
     console.log("PASS: mouse/touch/pen tile and collapsed-icon hold gates, menu release, Escape/blur/removal, immediate tabs/grips/rows, undo/redo");
   } finally {

@@ -13,9 +13,11 @@ behavior on GTK, Web, Android, macOS, iPadOS, and Windows:
 - An explicit list-row grab handle starts dragging immediately for every device,
   including touch and pen. The handle rule takes precedence over the row rule.
 - Before a touch/pen row hold completes, preserve normal scrolling. A completed
-  hold can open the existing context menu; dragging with that same contact closes
-  it, while release without dragging retains it. Preserve cancellation, ordinary
-  clicks, editing, and one-step undo/redo.
+  touch/pen hold can open the existing context menu; dragging with that contact
+  closes it, while release without dragging retains it. Preserve cancellation,
+  ordinary clicks, editing, and one-step undo/redo.
+- Mouse holds never open context menus. Mouse tile holds only arm reordering;
+  use secondary click or the existing keyboard action to open a mouse menu.
 
 Classify the visible hit target and actual pointer device. Pen is not mouse for
 list arbitration; an icon tile does not become a tab bar because its payload is

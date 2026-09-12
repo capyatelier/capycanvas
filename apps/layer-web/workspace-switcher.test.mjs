@@ -41,7 +41,7 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
   const drag = async (id, target, after, sourceDevice, handle=false, hold=false) => {
     device=sourceDevice;
     const start=await point(`${row(id)} ${handle?'.workspace-grip':'.workspace-choice'}`), end=await point(row(target), after?.85:.15);
-    await pointer("down",start); if(hold) {await pause(600);assert.equal(await menuOpen(),true,`${device} hold opens menu before drag`);}
+    await pointer("down",start); if(hold) {await pause(600);assert.equal(await menuOpen(),device!=="mouse",`${device}: only touch/pen holds open menus before drag`);}
     for(const t of [.3,.7,1]) await pointer("move",{x:start.x+(end.x-start.x)*t,y:start.y+(end.y-start.y)*t});
     if(hold)assert.equal(await menuOpen(),false,`${device} same-contact drag closes menu`);
     await pointer("up"); await idle();
@@ -61,17 +61,25 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     for(const kind of ["mouse","touch","pen"]) {
       device=kind;
       await pointer("down",await point(`${row(p)} .workspace-choice`)); await pause(600);
-      assert.equal(await menuOpen(),true,`${kind} hold opens menu`); await pointer("up"); await idle();
-      assert.equal(await menuOpen(),true,`${kind} release retains menu`);
-      assert.deepEqual(await layout(),preview); await key("Escape");
+      assert.equal(await menuOpen(),kind!=="mouse",`${kind}: only touch/pen holds open menus`); await pointer("up"); await idle();
+      assert.equal(await menuOpen(),kind!=="mouse",`${kind}: menu lifetime after release`);
+      if(kind==="mouse") {
+        assert.equal((await view()).selected,p,"mouse hold release keeps ordinary row selection");
+        await click(`${row(f)} .workspace-choice`);
+      } else await key("Escape");
+      assert.deepEqual(await layout(),preview);
       await drag(p,f,true,kind,true);
       assert.deepEqual(await pins(),[i,f,p],`${kind} handle starts without hold`);
       await drag(p,i,false,kind,true); assert.deepEqual(await pins(),[p,i,f]);
       if(kind!=="mouse") {
         await drag(p,f,true,kind); assert.deepEqual(await pins(),[p,i,f],`${kind} row cannot reorder before hold`);
       }
-      await drag(p,f,true,kind,false,kind!=="mouse"); assert.deepEqual(await pins(),[i,f,p],`${kind} row reorder`);
+      await drag(p,f,true,kind,false,true); assert.deepEqual(await pins(),[i,f,p],`${kind} held row reorder`);
       await drag(p,i,false,kind,true);
+      if(kind==="mouse") {
+        await drag(p,f,true,kind); assert.deepEqual(await pins(),[i,f,p],"mouse row drags immediately");
+        await drag(p,i,false,kind,true);
+      }
       assert.deepEqual(await durable(),original,"preferences never enter workspace history");
       assert.deepEqual(await layout(),preview); assert.equal((await view()).selected,f);
     }

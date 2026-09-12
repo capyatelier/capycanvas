@@ -41,8 +41,11 @@ when the native API provides the original device type.
 - A plain drag on a tile must not reorder it before the hold. Preserve scrolling
   when its container scrolls; this convention does not add scrolling to toolbars
   whose existing layout deliberately clips overflow.
-- Preserve existing hold-to-context-menu behavior. Where a reorderable surface
-  has a context menu, a hold can show it and arm dragging with the same contact.
+- Only touch and pen holds open context menus. Mouse holds never open menus,
+  including on tiles, list rows, tabs, and handles; mouse tile holds only arm
+  reordering. Preserve secondary-click and existing keyboard menu actions.
+  Where a reorderable surface has a context menu, a touch/pen hold can show it
+  and arm dragging with the same contact.
   Close the menu when dragging starts; retain it when released without dragging.
   Cancelled holds/drags must not leave a stuck menu, pressed tile, or grab.
 - Suppress the ordinary click after a recognized hold or drag, so release cannot
@@ -50,8 +53,7 @@ when the native API provides the original device type.
   click/tap continues to perform its existing action. Name editing and native
   text selection keep their existing ownership.
 - Handles and title/tab bars can still have context menus, but opening a menu
-  must not become a prerequisite for their drag. Mouse list rows may still open
-  context menus on hold or secondary click; a hold is not required to move them.
+  must not become a prerequisite for their drag. Mouse list rows drag immediately.
 - Once dragging starts, retain the original contact and grab offset across
   reparenting, scrolling, and view updates. Preserve validated drop indicators,
   cancellation rollback, and one undo/redo transaction per completed reorder.
@@ -81,6 +83,7 @@ Verify short click, motion before the hold, hold then drag with the same contact
 hold then release, ordinary list scrolling, secondary context menus, source
 removal/reparenting, cancellation/capture loss/blur, and one-step undo/redo. The
 negative tests matter: a tile must not reorder early, a pen row must not steal
-scrolling early, and a handle/tab must not wait for the hold timeout. Measure
+scrolling early, mouse holds must not open menus, and a handle/tab must not wait
+for the hold timeout. Measure
 steady motion separately from the intentional pickup delay and preserve retained
 controls and display-paced rendering.

@@ -625,6 +625,7 @@ impl LayerPanel {
                     widget.add_controller(click);
                 }
                 let hold = gtk::GestureLongPress::new();
+                hold.set_touch_only(false); // Pen events are not touch sequences.
                 hold.set_propagation_phase(gtk::PropagationPhase::Capture);
                 hold.connect_begin(glib::clone!(
                     #[strong]
@@ -647,6 +648,9 @@ impl LayerPanel {
                     #[strong]
                     owner,
                     move |g, x, y| {
+                        if !crate::input::touch_or_pen(g) {
+                            return;
+                        }
                         if name_stack.visible_child_name().as_deref() == Some("edit") {
                             return;
                         }

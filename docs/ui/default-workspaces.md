@@ -86,7 +86,8 @@ Drag any row to change its order, including unchecked rows. Moving a row never
 changes its visibility. Mouse can drag any non-button part of the row. Touch and
 pen can drag the handle immediately; the rest of the row requires a hold,
 following the [app-wide drag convention](drag-and-reorder.md). Ordinary touch
-swipes scroll the list. Right-click or hold opens the row menu. Moving with the
+swipes scroll the list. Right-click or touch/pen hold opens the row menu; mouse
+holds never open menus. Moving with the
 same held contact closes the menu and starts dragging; release without movement
 leaves the menu open. An insertion line shows the destination. Escape cancels the
 drag. **Move Up / Move Down** is available for every row and supports keyboard

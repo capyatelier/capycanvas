@@ -7604,7 +7604,7 @@ fn native_panel_customization() {
     let dir = "../../artifacts/ui/customization";
     std::fs::create_dir_all(dir).unwrap();
     let send = |action| w.dispatch(UiAction::Customize { action });
-    // Signal-driven holds have no Wayland input serial for a popup grab. Keep
+    // Presentation checks have no Wayland input serial for a popup grab. Keep
     // this control/snapshot test independent of external desktop focus changes;
     // production retains native autohide and actions still dismiss the menu.
     for popover in w.popovers.borrow().iter().filter_map(|p| p.upgrade()) {
@@ -7613,7 +7613,7 @@ fn native_panel_customization() {
         }
     }
     let hold_count = Cell::new(0);
-    let hold = |widget: &gtk::Widget, x: f64, y: f64| {
+    let hold = |widget: &gtk::Widget, target: ContextTarget, x: f64, y: f64| {
         hold_count.set(hold_count.get() + 1);
         assert!(
             widget.width() > 0 && widget.height() > 0,
@@ -7632,12 +7632,8 @@ fn native_panel_customization() {
             widget.is_visible(),
             widget.is_sensitive()
         );
-        let controllers = widget.observe_controllers();
-        let gesture = (0..controllers.n_items())
-            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
-            .find(|g| g.name().as_deref() == Some("workspace-context-hold"))
-            .unwrap();
-        gesture.emit_by_name::<()>("pressed", &[&x, &y]);
+        // Native device arbitration is covered by the compositor input suites.
+        w.show_context(widget, target, x, y);
         pump(150);
     };
     let context = || {
@@ -7679,7 +7675,7 @@ fn native_panel_customization() {
             .unwrap()
             .1
             .clone();
-        hold(tab.upcast_ref(), 12.0, 12.0);
+        hold(tab.upcast_ref(), ContextTarget::Panel { panel: Panel::Sizes }, 12.0, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("panel-menu-{theme:?}"));
         assert!(menu_action(&menu.menu_model().unwrap(), "Icons only").is_none());
@@ -7698,7 +7694,7 @@ fn native_panel_customization() {
             .root
             .clone();
         let header = find_css(root.upcast_ref(), "dock-tabs").unwrap();
-        hold(&header, header.width() as f64 - 10.0, 12.0);
+        hold(&header, ContextTarget::Group { group }, header.width() as f64 - 10.0, 12.0);
         let menu = context();
         menu.activate_action(
             &menu_action(&menu.menu_model().unwrap(), "Icons only").unwrap(),
@@ -7801,7 +7797,7 @@ fn native_panel_customization() {
             .unwrap()
             .first_child()
             .unwrap();
-        hold(&header, (header.width() - 12) as f64, 12.0);
+        hold(&header, ContextTarget::Group { group: 8 }, (header.width() - 12) as f64, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("group-menu-{theme:?}"));
         menu.activate_action(
@@ -7881,7 +7877,7 @@ fn native_panel_customization() {
             }
         );
         let root = button.parent().unwrap();
-        hold(&root, 10.0, 10.0);
+        hold(&root, ContextTarget::Tile { panel, tile }, 10.0, 10.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("tile-menu-{theme:?}"));
         menu.activate_action(
@@ -8003,7 +7999,7 @@ fn native_panel_customization() {
         w.dispatch(UiAction::SelectPanelTab { group, panel });
         pump(150);
         capture_reference(&w, &format!("{dir}/empty-toolbar-{theme:?}.png"), 1.0);
-        hold(&w.panel_widget(panel), 12.0, 12.0);
+        hold(&w.panel_widget(panel), ContextTarget::Ribbon { panel }, 12.0, 12.0);
         let menu = context();
         snapshot_popover(menu.upcast_ref(), &format!("ribbon-menu-{theme:?}"));
         menu.activate_action(
@@ -8928,14 +8924,9 @@ fn native_hidden_tabs() {
                 .is_empty()
         );
         capture_reference(&w, &format!("{dir}/tab-hidden-docked-{theme:?}.png"), 1.0);
-        // The footer's actual touch context binding still exposes name/icon
-        // selection and the independent Show tab bar toggle.
-        let controllers = handle.observe_controllers();
-        let hold = (0..controllers.n_items())
-            .filter_map(|i| controllers.item(i).and_downcast::<gtk::GestureLongPress>())
-            .find(|c| c.name().as_deref() == Some("workspace-context-hold"))
-            .unwrap();
-        hold.emit_by_name::<()>("pressed", &[&(b.width() as f64 * 0.5), &10.0f64]);
+        // The footer menu exposes name/icon selection and Show tab bar.
+        // Compositor tests cover the touch/pen-only hold binding.
+        w.show_context(&handle, ContextTarget::Group { group }, b.width() as f64 * 0.5, 10.0);
         pump(150);
         let menu = w
             .popovers

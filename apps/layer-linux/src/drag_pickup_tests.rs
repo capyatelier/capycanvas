@@ -122,17 +122,40 @@ fn native_drag_pickup_input() {
                     } else {
                         [750., 470.]
                     };
+                    if !touch && !held && !cancel && source != "column-grip" {
+                        perform(serde_json::json!([
+                            {"point":start},{"down":true,"button":273},{"down":false,"button":273}
+                        ]));
+                        assert!(menu.is_visible(), "{source}: right-click opens menu");
+                        perform(serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]));
+                    }
                     let before = saved();
                     let press = if touch {
                         serde_json::json!([{"touch":"down","point":start}])
                     } else {
                         serde_json::json!([{"point":start},{"down":true}])
                     };
-                    perform(press);
+                    perform(press.clone());
                     if held {
                         pump(800);
-                        assert!(menu.is_visible(), "{touch} {source}: hold menu");
+                        assert_eq!(menu.is_visible(), touch, "{touch} {source}: only touch holds open menus");
                         assert_eq!(saved(), before, "hold must not activate");
+                        if source.ends_with("tile") || source == "column" {
+                            assert!(w.workspace_drag.borrow().as_ref().is_some_and(|d| d.held), "{touch} {source}: hold arms pickup");
+                        }
+                        if !cancel && (source.ends_with("tile") || source == "column") {
+                            perform(if touch {
+                                serde_json::json!([{"touch":"up"}])
+                            } else {
+                                serde_json::json!([{"down":false}])
+                            });
+                            assert_eq!(menu.is_visible(), touch, "hold release menu lifetime");
+                            assert_eq!(saved(), before, "held release must not activate");
+                            w.dismiss_context();
+                            pump(150);
+                            perform(press);
+                            pump(800);
+                        }
                     }
                     perform(if touch {
                         serde_json::json!([{"touch":"move","point":point}])

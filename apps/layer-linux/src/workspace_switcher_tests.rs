@@ -170,7 +170,7 @@ fn native_workspace_switcher_input() {
         serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
     );
     assert!(!popup.is_visible());
-    // A hold opens the menu without changing the preview; release retains it.
+    // Only touch holds open menus; mouse release remains with the native row.
     for touch in [false, true] {
         let point = at(&w, &row(&w, &p), 0.35, 0.5);
         let mut events = if touch {
@@ -183,10 +183,12 @@ fn native_workspace_switcher_input() {
         };
         events.extend((0..10).map(|_| serde_json::json!({})));
         send(&dir, &mut step, serde_json::Value::Array(events));
-        assert!(
-            popup.is_visible() && !popup.is_autohide(),
-            "hold leaves contact available to dragging"
+        assert_eq!(
+            popup.is_visible(), touch,
+            "only touch holds open the row menu"
         );
+        assert_eq!(durable_layout(&state(&w).workspace.layout), preview);
+        if touch { assert!(!popup.is_autohide(), "hold retains the contact"); }
         send(
             &dir,
             &mut step,
@@ -196,15 +198,23 @@ fn native_workspace_switcher_input() {
                 serde_json::json!({"down":false})
             }]),
         );
-        assert!(
-            popup.is_visible() && popup.is_autohide(),
-            "hold release retains a dismissible menu"
+        assert_eq!(
+            popup.is_visible(), touch,
+            "only touch release retains a menu"
         );
-        send(
-            &dir,
-            &mut step,
-            serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
-        );
+        if !touch {
+            // Restore the preview after the native mouse release before testing
+            // that touch hold/release preserves it.
+            click(&w, &dir, &mut step, &row(&w, &f));
+        }
+        if touch {
+            assert!(popup.is_autohide(), "released menu is dismissible");
+            send(
+                &dir,
+                &mut step,
+                serde_json::json!([{"key":65307,"down":true},{"key":65307,"down":false}]),
+            );
+        }
         assert!(!popup.is_visible());
         assert!(
             durable_layout(&state(&w).workspace.layout) == preview,

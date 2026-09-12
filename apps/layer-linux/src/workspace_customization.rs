@@ -1388,15 +1388,32 @@ impl Workspace {
                     return;
                 };
                 if owns_context(&widget, x, y) {
-                    gesture.set_state(gtk::EventSequenceState::Claimed);
-                    w.show_context(&widget, target, x, y);
+                    if crate::input::touch_or_pen(gesture) {
+                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                        w.show_context(&widget, target, x, y);
+                    } else if let Some(drag) = w.workspace_drag.borrow_mut().as_mut()
+                        && drag.wait_for_hold
+                        && !drag.started
+                        && drag.source == widget
+                        && drag.source.parent() == drag.parent
+                    {
+                        // Mouse holds arm tile pickup without opening a menu.
+                        drag.held = true;
+                        gesture.set_state(gtk::EventSequenceState::Claimed);
+                    }
                 }
             }
         ));
         widget.add_controller(hold);
     }
 
-    fn show_context(self: &Rc<Self>, widget: &gtk::Widget, target: ContextTarget, x: f64, y: f64) {
+    pub(super) fn show_context(
+        self: &Rc<Self>,
+        widget: &gtk::Widget,
+        target: ContextTarget,
+        x: f64,
+        y: f64,
+    ) {
         let held_drag = {
             let mut pending = self.workspace_drag.borrow_mut();
             if let Some(drag) = pending.as_mut() {
@@ -1404,6 +1421,7 @@ impl Workspace {
                     return;
                 }
                 drag.context = true;
+                drag.held = true;
                 true
             } else {
                 false

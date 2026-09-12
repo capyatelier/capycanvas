@@ -109,6 +109,8 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     const handle = !!e.target.closest(".workspace-grip");
     contact = {id:e.pointerId, row, point:{x:e.clientX,y:e.clientY}, x:e.clientX, y:e.clientY,
       wait:e.pointerType !== "mouse" && !handle, held:false};
+    // Mouse rows already drag immediately; holding never opens their menu.
+    if (e.pointerType !== "touch" && e.pointerType !== "pen") return;
     const current = contact;
     current.timer = setTimeout(() => {
       if (contact !== current || !row.isConnected) return;

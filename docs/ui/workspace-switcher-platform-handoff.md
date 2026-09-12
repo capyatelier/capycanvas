@@ -3,8 +3,9 @@
 Implement the configurable workspace switcher on your platform, matching GTK/Web.
 In Manage Workspaces, add Show in top bar, a pin indicator, narrow left grips on
 all rows, and Move Up / Move Down. All rows reorder; the top bar follows that
-order and skips hidden entries. Right-click/hold opens the row menu; dragging
-with the same held contact closes it. Handles drag immediately on every device.
+order and skips hidden entries. Right-click or touch/pen hold opens the row menu;
+mouse holds never open menus. Dragging with the same held contact closes the menu.
+Handles drag immediately on every device.
 Preserve scrolling, preview/Cancel behavior, workspace contents, and persistence.
 Test mouse, touch/pen where supported, keyboard, cancellation, and restart.
 
