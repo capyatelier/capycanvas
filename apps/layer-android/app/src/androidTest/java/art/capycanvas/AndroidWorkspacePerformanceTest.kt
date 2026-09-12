@@ -31,7 +31,11 @@ import kotlin.math.sin
 /** Opt-in measurement on the real Android frame clock, without Compose test
  * clock advancement or wait-for-idle between pointer samples. */
 class AndroidWorkspacePerformanceTest {
-    @Test fun continuousDragFrameTiming() {
+    @Test fun continuousDragFrameTiming() = frameTiming(false)
+
+    @Test fun continuousResizeFrameTiming() = frameTiming(true)
+
+    private fun frameTiming(resize: Boolean) {
         assumeTrue(InstrumentationRegistry.getArguments().getString("workspaceBenchmark") == "true")
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var host: CanvasHost
@@ -106,17 +110,22 @@ class AndroidWorkspacePerformanceTest {
             scenario.onActivity { owner.view.viewTreeObserver.addOnDrawListener(drawListener) }
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
             try {
-                for (mouse in listOf(true, false)) for (mode in listOf("attached", "floating", "destination")) {
+                for (mouse in listOf(true, false)) for (mode in if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")) {
+                    if (resize) fixture.getJSONObject("layout").getJSONArray("bands").apply {
+                        getJSONObject(0).put("root", tabs(41, mode))
+                        getJSONObject(1).put("root", tabs(43, "layers"))
+                    }
                     action(obj("type" to "restore_workspace", "workspace" to fixture))
+                    waitFor { !resize || host.snapshot!!.getJSONObject("layout").array("groups").objects().any { it.getInt("id") == 41 && it.getString("active") == mode } }
                     SystemClock.sleep(300)
                     val workspace = bounds("workspace")
-                    val source = bounds(when (mode) {
+                    val source = bounds(if (resize) "divider-40" else when (mode) {
                         "attached" -> "tab-tool_settings"
                         "floating" -> "group-grip-41"
                         else -> "tab-layers"
                     }).center
-                    val first = bounds("tab-brushes").center
-                    val last = bounds("tab-sizes").center
+                    val first = if (resize) source + Offset(60f, 0f) else bounds("tab-brushes").center
+                    val last = if (resize) source + Offset(220f, 0f) else bounds("tab-sizes").center
                     val down = SystemClock.uptimeMillis()
                     fun eventOnMain(action: Int, point: Offset) {
                         val properties = arrayOf(MotionEvent.PointerProperties().apply {
@@ -131,7 +140,7 @@ class AndroidWorkspacePerformanceTest {
                     fun event(action: Int, point: Offset) = scenario.onActivity { eventOnMain(action, point) }
                     event(MotionEvent.ACTION_DOWN, source)
                     try {
-                        event(MotionEvent.ACTION_MOVE, if (mode == "attached") first else workspace.center)
+                        event(MotionEvent.ACTION_MOVE, if (resize || mode == "attached") first else workspace.center)
                         SystemClock.sleep(750)
                         var retainedSnapshot: JSONObject? = null
                         var retainedPanels: JSONObject? = null
@@ -182,10 +191,10 @@ class AndroidWorkspacePerformanceTest {
                         assertTrue("Android must render while dragging", timings.isNotEmpty())
                         fun percentile(values: List<Long>, fraction: Double) = values[((values.size - 1) * fraction).toInt()] / 1_000_000.0
                         val metrics = report()
-                        assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
+                        if (!resize) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
                         scenario.onActivity {
-                            assertSame(retainedSnapshot, host.snapshot)
-                            assertSame(retainedPanels, host.panelContent)
+                            if (!resize) assertSame(retainedSnapshot, host.snapshot)
+                            if (!resize) assertSame(retainedPanels, host.panelContent)
                             val geometry = host.workspaceGeometry!!
                             if (geometry.group != null) {
                                 val shown = find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-${geometry.group}")!!.boundsInRoot
@@ -203,7 +212,14 @@ class AndroidWorkspacePerformanceTest {
                             "deadline_misses" to rows.count { it.deadline > 0 && it.duration > it.deadline }, "lost_metrics" to lostMetrics,
                             "snapshot_attempts" to metrics.getLong("snapshot_attempts"), "snapshots" to metrics.getLong("snapshots_published"),
                             "workspace_updates" to metrics.getLong("workspace_updates_published"))
-                        Log.i("CapyDragPerf", result.toString())
+                        val publicationRows = metrics.getJSONArray("publications").let { a -> (0 until a.length()).map { a.getJSONArray(it) } }
+                        for ((column, name) in listOf("native", "parse", "prepare").withIndex()) {
+                            val values = publicationRows.map { it.getLong(column) }.sorted()
+                            if (values.isNotEmpty()) { result.put("${name}_p50_ms", percentile(values, .5)); result.put("${name}_p95_ms", percentile(values, .95)) }
+                        }
+                        result.put("publication_bytes", publicationRows.sumOf { it.getLong(3) })
+                        result.put("panel_content_changes", metrics.getLong("panel_content_changes"))
+                        Log.i(if (resize) "CapyResizePerf" else "CapyDragPerf", result.toString())
                     } finally {
                         measuring.set(false)
                         event(MotionEvent.ACTION_CANCEL, source)
@@ -216,6 +232,7 @@ class AndroidWorkspacePerformanceTest {
                 window.removeOnFrameMetricsAvailableListener(listener)
                 scenario.onActivity { owner.view.viewTreeObserver.removeOnDrawListener(drawListener) }
                 frames.quitSafely()
+                scenario.onActivity { host.clearActionError() }
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString() == saved.toString() }
             }

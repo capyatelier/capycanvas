@@ -97,6 +97,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val frameCosts = if (BuildConfig.DEBUG) LongArray(5) else null
     private var frameCount = 0
     private var inputCount = 0
+    private val measuredPublications = if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) LongArray(8192 * 4) else null
+    private var publicationCount = 0
+    private var panelContentChanges = 0L
     private var snapshotAttempts = 0L
     private var snapshotsPublished = 0L
     private var workspaceUpdatesPublished = 0L
@@ -394,10 +397,13 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
             "camera_updates_published" to cameraUpdatesPublished,
             "workspace_updates_published" to workspaceUpdatesPublished,
+            "publications" to rows(measuredPublications, publicationCount, 4),
+            "publication_fields" to JSONArray(listOf("native_ns", "parse_ns", "prepare_ns", "bytes")),
+            "panel_content_changes" to panelContentChanges,
             "pointer_allocations" to pointerAllocations,
             "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns")),
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
-        if (reset) { frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0; workspaceUpdatesPublished = 0 }
+        if (reset) { publicationCount = 0; panelContentChanges = 0; frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0; workspaceUpdatesPublished = 0 }
         main.post { reply(report) }
     }
     internal fun recordUiDraw() {
@@ -411,12 +417,25 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (!force && now - snapshotAt < 33) return
         snapshotAt = now
         if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) snapshotAttempts++
+        val publicationStart = if (measuredPublications != null) System.nanoTime() else 0L
         val serialized = Native.snapshot(handle) ?: return
+        val nativeEnd = if (measuredPublications != null) System.nanoTime() else 0L
         val next = JSONObject(serialized)
+        val parsedEnd = if (measuredPublications != null) System.nanoTime() else 0L
+        fun recordPublication() {
+            if (measuredPublications != null && publicationCount < 8192) {
+                val offset = publicationCount++ * 4
+                measuredPublications[offset] = nativeEnd - publicationStart
+                measuredPublications[offset + 1] = parsedEnd - nativeEnd
+                measuredPublications[offset + 2] = System.nanoTime() - parsedEnd
+                measuredPublications[offset + 3] = serialized.length.toLong()
+            }
+        }
         val geometry = next.objectOrNull("workspace_update")?.let(WorkspaceGeometry::read)
         if (geometry != null) lastWorkspaceUpdate = geometry
         if (!next.has("state") && geometry != null) {
             workspaceUpdatesPublished++
+            recordPublication()
             main.post {
                 applyWorkspaceGeometry(geometry)
                 next.objectOrNull("camera")?.let { camera ->
@@ -429,6 +448,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         }
         next.objectOrNull("camera")?.let { camera ->
             if (BuildConfig.DEBUG) cameraUpdatesPublished++
+            recordPublication()
             main.post {
                 // Retain the structural snapshot's identity: only CameraStatus
                 // observes the readout. Keep imperative state queries current.
@@ -477,6 +497,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val contentKey = content.toString()
         val changedContent = contentKey != panelContentKey
         panelContentKey = contentKey
+        if (changedContent && measuredPublications != null) panelContentChanges++
+        recordPublication()
         main.post {
             if (changedContent) panelContent = content
             snapshot = next
