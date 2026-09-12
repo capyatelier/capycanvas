@@ -1,10 +1,12 @@
 //! Native control/lifecycle integration on a hardware desktop. Control signals
 //! exercise GTK bindings; pen records exercise scheduling and GPU presentation.
 //! Physical tablet/touch delivery remains a human test (not faked here).
-#[path = "workspace_motion_tests.rs"]
-mod workspace_motion;
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
+#[path = "workspace_motion_tests.rs"]
+mod workspace_motion;
+#[path = "workspace_resize_tests.rs"]
+mod workspace_resize;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -12321,7 +12323,13 @@ fn native_collapsed_column_input() {
     w.window.present();
     pump(1200);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let initial = state(&w).workspace;
+    // A fresh workspace store can finish loading its preset after realization.
+    // This test addresses the fixed fixture's group IDs and tab configuration.
+    let initial = layer_ui::WorkspaceState::default();
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: initial.clone(),
+    });
+    pump(250);
     let native = w.window.surface().unwrap();
     let pointer = native.display().default_seat().unwrap().pointer().unwrap();
     let cursor = || native.device_cursor(&pointer).and_then(|c| c.name());

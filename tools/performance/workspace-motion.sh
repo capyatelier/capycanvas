@@ -49,8 +49,8 @@ else
     export LAYER_WEB_URL="http://127.0.0.1:$motion_port"
     sleep .2
     kill -0 "$motion_server_pid"
-    if [[ "$*" == --workspace-motion ]]; then
-        gjs apps/layer-linux/bench/native-input.js --web-workspace-motion 2>&1 | tee "$motion_run_dir/test.log"
+    if [[ "$*" == --workspace-motion || "$*" == --workspace-resize ]]; then
+        gjs apps/layer-linux/bench/native-input.js "--web-${1#--}" 2>&1 | tee "$motion_run_dir/test.log"
     else
         node apps/layer-web/test.mjs "$@" 2>&1 | tee "$motion_run_dir/test.log"
     fi

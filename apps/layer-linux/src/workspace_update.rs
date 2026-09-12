@@ -6,6 +6,8 @@ use super::*;
 #[derive(Default)]
 pub(super) struct Publication {
     pub model_revision: Cell<Option<u64>>,
+    pub content_revision: Cell<Option<u64>>,
+    layout_pending: Cell<bool>,
     pending: RefCell<Option<WorkspaceUpdate>>,
     current: RefCell<Option<WorkspaceUpdate>>,
     tick: RefCell<Option<gtk::TickCallbackId>>,
@@ -21,10 +23,17 @@ pub(super) struct Publication {
 
 impl Workspace {
     pub(super) fn reset_workspace_publication(&self) {
+        self.publication.layout_pending.set(false);
         self.publication.pending.borrow_mut().take();
         self.publication.current.borrow_mut().take();
         self.publication.placement.borrow_mut().take();
         self.publication.hits.borrow_mut().take();
+    }
+
+    pub(super) fn publish_workspace_layout(self: &Rc<Self>, update: WorkspaceUpdate) {
+        self.publication.layout_pending.set(true);
+        *self.publication.pending.borrow_mut() = Some(update);
+        self.queue_workspace_frame();
     }
 
     pub(super) fn publish_workspace(self: &Rc<Self>, update: WorkspaceUpdate) {
@@ -39,7 +48,13 @@ impl Workspace {
                 tick.remove();
             }
             self.present_workspace();
-        } else if self.publication.tick.borrow().is_none() {
+        } else {
+            self.queue_workspace_frame();
+        }
+    }
+
+    fn queue_workspace_frame(self: &Rc<Self>) {
+        if self.publication.tick.borrow().is_none() {
             let weak = Rc::downgrade(self);
             let tick = self.surface.add_tick_callback(move |_, _| {
                 if let Some(w) = weak.upgrade() {
@@ -56,6 +71,33 @@ impl Workspace {
         let Some(update) = self.publication.pending.borrow_mut().take() else {
             return;
         };
+        if self.publication.layout_pending.replace(false) {
+            let gpu = self.gpu.borrow();
+            let Some(gpu) = gpu.as_ref() else {
+                return;
+            };
+            if self.publication.content_revision.get() != Some(update.content_revision)
+                || gpu.session.workspace_model_revision() != update.model_revision
+            {
+                return;
+            }
+            // Keep widgets and their native render resources. GTK measures and
+            // reflows them at the new allocation in this same frame.
+            let source = &gpu.session.state().workspace.layout;
+            let mut layout = self.surface.imp().layout.borrow_mut();
+            layout.bands.clone_from(&source.bands);
+            layout.floating.clone_from(&source.floating);
+            layout.collapsed.clone_from(&source.collapsed);
+            layout.fit_tab_groups.clone_from(&source.fit_tab_groups);
+            layout.measurements.clone_from(&source.measurements);
+            drop(layout);
+            self.navigator.refresh(gpu.session.state());
+            self.publication
+                .model_revision
+                .set(Some(update.model_revision));
+            self.surface.queue_allocate();
+            return;
+        }
         if self.publication.model_revision.get() != Some(update.model_revision) {
             return;
         }

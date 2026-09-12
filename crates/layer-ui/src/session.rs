@@ -892,6 +892,23 @@ impl<R: CanvasRenderer> UiSession<R> {
             STATUS_HEIGHT,
         )
     }
+    /// Layout-aware hosts retain controls at content_revision and apply these
+    /// live dimensions on their display clock. Gesture completion remains full.
+    pub fn workspace_layout_update(&self, viewport: [f32; 2]) -> crate::WorkspaceLayoutUpdate<'_> {
+        let layout = &self.state.workspace.layout;
+        crate::WorkspaceLayoutUpdate {
+            workspace_update: self.workspace_update(),
+            layout: self.layout(viewport),
+            workspace_layout: crate::WorkspaceLayoutState {
+                bands: &layout.bands,
+                floating: &layout.floating,
+                collapsed: &layout.collapsed,
+                fit_tab_groups: &layout.fit_tab_groups,
+            },
+            camera: &self.state.camera,
+            panel_measurements: &layout.measurements,
+        }
+    }
     /// Hosts can slide the pressed tab while the shared gesture still owns its
     /// source group. Once detached, the floating panel supplies the feedback.
     pub fn dragging_attached_tab(&self) -> bool {

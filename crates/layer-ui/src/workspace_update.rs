@@ -43,6 +43,27 @@ pub struct WorkspaceUpdate {
     pub drag: Option<WorkspaceDragPresentation>,
 }
 
+/// Absolute reflow publication shared by native transports and Wasm. Apply only
+/// against retained models with the matching `content_revision`. This borrows
+/// the live workspace, excluding panel definitions and all editor content.
+#[derive(Serialize)]
+pub struct WorkspaceLayoutUpdate<'a> {
+    pub workspace_update: WorkspaceUpdate,
+    pub layout: crate::ResolvedLayout,
+    pub workspace_layout: WorkspaceLayoutState<'a>,
+    // Work area changes without a camera navigation revision.
+    pub camera: &'a crate::Camera,
+    pub panel_measurements: &'a [crate::PanelMeasurement],
+}
+
+#[derive(Serialize)]
+pub struct WorkspaceLayoutState<'a> {
+    pub bands: &'a [crate::DockBand],
+    pub floating: &'a [crate::FloatingGroup],
+    pub collapsed: &'a [crate::CollapsedColumn],
+    pub fit_tab_groups: &'a [u32],
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkspaceDragPresentation {
     pub group: Option<WorkspaceGroupPosition>,

@@ -1,4 +1,5 @@
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
+import {checkWorkspaceResize} from "./workspace-resize.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
 // browser flags or device settings are changed by this harness.
 import {checkDrawerDragging} from "./drawers.test.mjs";
@@ -46,10 +47,16 @@ const canvasPixels=async()=>{
 try {
   for(const domain of ["Page","Runtime","Log"])await call(`${domain}.enable`);
   await call("Page.bringToFront");
+  // Runtime.enable replays errors from the previous navigation. This run
+  // validates the page loaded below, including any startup errors it produces.
+  errors.length=0;
   await reload();
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--long-press-drag")) {
+  if (process.argv.includes("--workspace-resize")) {
+    await checkWorkspaceResize({call,evaluate,settle});
+    assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--long-press-drag")) {
     await checkLongPressDragging({call,evaluate,settle});
     assert.deepEqual(errors, []);
   } else if (process.argv.includes("--drawer-drag")) {

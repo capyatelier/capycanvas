@@ -574,6 +574,10 @@ impl WebApp {
     pub fn workspace_update(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.workspace_update())
     }
+    /// Shared live reflow packet; panel content stays at content_revision.
+    pub fn layout_update(&self, width: f32, height: f32) -> Result<JsValue, JsValue> {
+        serialize(&self.session.workspace_layout_update([width, height]))
+    }
     pub fn camera(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().camera)
     }
