@@ -652,7 +652,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                             message: match kind.as_str() {
                                 "reset_brushes" => "Restore every brush’s settings in this workspace to their defaults.".into(),
                                 "new" => "Copy your current tool settings and layout into a new workspace.".into(),
-                                "delete" => format!("Delete “{name}”?"),
+                                "delete" => format!("Delete “{name}”? This is permanent."),
                                 "reset" => format!("Restore “{}” to its starting layout?", self.view.name),
                                 _ => String::new(),
                             },
@@ -704,19 +704,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                     m.rename(&id, &name, &description, now).await?;
                                     Outcome::Done
                                 }
-                                "delete" => match m
-                                    .delete_item(
-                                        &form.id.ok_or_else(|| {
-                                            StoreError::invalid("Choose an item.")
-                                        })?,
-                                        None,
-                                        now,
-                                    )
-                                    .await?
-                                {
-                                    Some(s) => Outcome::adopt(s),
-                                    None => Outcome::Done,
-                                },
+                                "delete" => {
+                                    let id = form
+                                        .id
+                                        .ok_or_else(|| StoreError::invalid("Choose an item."))?;
+                                    let replacement = m.replacement_for_delete(&id, now).await?;
+                                    match m.delete_item(&id, replacement.as_deref(), now).await? {
+                                        Some(s) => Outcome::adopt(s),
+                                        None => Outcome::Done,
+                                    }
+                                }
                                 "reset" => Outcome::adopt(
                                     m.change_layout(
                                         &m.active_id().ok_or_else(|| {

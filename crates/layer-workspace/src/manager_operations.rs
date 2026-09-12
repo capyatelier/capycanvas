@@ -358,6 +358,27 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         );
         self.create_and_bind(entity, NamePolicy::Unique).await
     }
+    /// Choose an available included workspace when deleting the active one.
+    /// Inactive items need no replacement; this never creates a new workspace.
+    pub async fn replacement_for_delete(&self, id: &str, now: u64) -> Result<Option<String>> {
+        if self.active_id().as_deref() != Some(id) {
+            return Ok(None);
+        }
+        self.refresh().await?;
+        let items = self.items();
+        // Prefer Illustrator, then Painter and Photographer. Respect other windows' leases.
+        let replacement = [1, 0, 2].into_iter().find_map(|index| {
+            let default_id = DEFAULT_WORKSPACES[index].0;
+            let item = items.iter().find(|item| item.id == default_id)?;
+            let available = item.id != id
+                && item.metadata.deleted_at_ms.is_none()
+                && !item.claim.as_ref().is_some_and(|claim| {
+                    claim.owner != self.owner && claim.expires_at_ms > now
+                });
+            available.then(|| item.id.clone())
+        }).ok_or_else(|| StoreError::invalid("All default workspaces are open in other windows. Close one of those windows before deleting this workspace."))?;
+        Ok(Some(replacement))
+    }
     pub async fn delete_item(
         &self,
         id: &str,
