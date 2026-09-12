@@ -34,7 +34,18 @@ impl StoreReply {
     }
 }
 struct Worker {
-    sender: mpsc::Sender<Message>,
+    sender: Option<mpsc::Sender<Message>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        // The last native window drains already accepted requests and joins
+        // SQLite teardown before its Rust library/process can be unloaded.
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 #[derive(Clone)]
 pub struct StoreWorker(Arc<Worker>);
@@ -62,7 +73,7 @@ impl StoreWorker {
         }
         let (sender, receiver) = mpsc::channel::<Message>();
         let database = path.join("workspaces.sqlite3");
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("workspace-storage".into())
             .spawn(move || {
                 let mut store = SqliteStore::open(&database);
@@ -90,13 +101,21 @@ impl StoreWorker {
                 }
             })
             .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
-        let worker = Arc::new(Worker { sender });
+        let worker = Arc::new(Worker {
+            sender: Some(sender),
+            thread: Some(thread),
+        });
         workers.insert(path, Arc::downgrade(&worker));
         Ok(Self(worker))
     }
     pub fn request(&self, request: StoreRequest) -> StoreReply {
         let (sender, receiver) = async_channel::unbounded();
-        let _ = self.0.sender.send((WorkerRequest::Store(request), sender));
+        let _ = self
+            .0
+            .sender
+            .as_ref()
+            .unwrap()
+            .send((WorkerRequest::Store(request), sender));
         StoreReply(receiver)
     }
     /// Native recovery also works for databases with an unsupported model
@@ -106,22 +125,49 @@ impl StoreWorker {
         let _ = self
             .0
             .sender
+            .as_ref()
+            .unwrap()
             .send((WorkerRequest::Backup(destination.to_path_buf()), sender));
         StoreReply(receiver)
     }
 }
 
-fn backup_database(source: &Path, destination: &Path) -> Result<()> {
-    let source_path = std::fs::canonicalize(source)
-        .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
-    if std::fs::canonicalize(destination).ok().as_ref() == Some(&source_path)
-        || destination == PathBuf::from(format!("{}-wal", source.display()))
-        || destination == PathBuf::from(format!("{}-shm", source.display()))
-    {
-        return Err(StoreError::invalid(
-            "Choose an export file outside the live workspace database files.",
-        ));
+/// Native file transport must not replace the live database or its sidecars.
+/// Call on an I/O worker. Canonical parents also catch not-yet-created WAL/SHM
+/// files and folder aliases; in-memory package export works if storage vanished.
+pub fn validate_database_export_destination(source: &Path, destination: &Path) -> Result<()> {
+    fn resolved(path: &Path) -> PathBuf {
+        std::fs::canonicalize(path)
+            .or_else(|_| {
+                std::fs::canonicalize(path.parent().unwrap_or(Path::new(".")))
+                    .map(|parent| parent.join(path.file_name().unwrap_or_default()))
+            })
+            .unwrap_or_else(|_| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()))
     }
+    let destination = resolved(destination);
+    for protected in [
+        source.to_path_buf(),
+        PathBuf::from(format!("{}-wal", source.display())),
+        PathBuf::from(format!("{}-shm", source.display())),
+    ] {
+        let protected = resolved(&protected);
+        #[cfg(windows)]
+        let same = protected
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&destination.to_string_lossy());
+        #[cfg(not(windows))]
+        let same = protected == destination;
+        if same {
+            return Err(StoreError::invalid(
+                "Choose an export file outside the live workspace database files.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn backup_database(source: &Path, destination: &Path) -> Result<()> {
+    validate_database_export_destination(source, destination)?;
     let parent = destination
         .parent()
         .ok_or_else(|| StoreError::invalid("Choose a destination folder."))?;
@@ -143,7 +189,11 @@ fn backup_database(source: &Path, destination: &Path) -> Result<()> {
         )?;
         database.backup(rusqlite::MAIN_DB, &temporary, None)?;
         drop(database);
-        std::fs::File::open(&temporary)
+        // Windows FlushFileBuffers requires a writable handle. SQLite has
+        // closed its backup connection; reopen without truncating its result.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
             .and_then(|f| f.sync_all())
             .map_err(|e| StoreError::new(ErrorKind::FailedWrite, e.to_string()))?;
         std::fs::rename(&temporary, destination)

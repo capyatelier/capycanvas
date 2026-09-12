@@ -620,10 +620,46 @@ The serializer tests compare full and incremental wire values, release/cancel,
 Undo/Redo and camera state. Separate native tests cover mailbox coalescing,
 revision ordering and ordered input boundaries.
 
-Main through 3e14bab is integrated, including the other ports' workspace
-manager/recovery and held-layer improvements. Windows still needs workspace
-store/manager integration, multiwindow support, runtime filter package import,
+Main through 007c3e9 is integrated, including the approved shared workspace
+manager handoff. Workspace storage is integrated as described below. Windows
+still needs the full manager UI, multiwindow support, runtime filter package import,
 packaging, physical gestures, DPI/device lifecycle, full visual parity and all
 overlap/scroll/drag combinations. The intermittent shader-worker final join and
 strict GPU filter-reference mismatch remain open. Final painting presentation
 and input-latency acceptance remain deferred.
+
+## Workspace persistence and recovery
+
+The active workspace now autosaves its layout history and latest tool values in
+`workspaces.sqlite3`, beside the private preferences file. One shared native
+SQLite worker serves each application directory. Futures remain on the exclusive
+canvas owner and wake it only when replies arrive; idle service polling does not
+force GPU presentation. Full captures follow committed layout generations, and
+pending saves retain later edits for the next save.
+
+Startup adopts the saved workspace at the shared idle/brush-ready boundary.
+Workspace adoption and layout restoration reconcile native measurements even
+when the existing controls have unchanged sizes. Earlier Windows preferences
+never stored workspace layouts, so there is no legacy Windows layout to migrate.
+
+Lease expiry blocks editing and cancels active input until ownership is recovered.
+Failed saves retain the in-memory workspace and expose Retry, Save as New Workspace,
+and backup export. If the database cannot be opened, the original is preserved
+and the recovery view offers retry and database backup. Backups cannot replace the
+live database or its WAL/SHM sidecars. Normal close flushes the final edit and
+releases ownership before teardown; a failure offers Retry, Keep open, or explicit
+Close without saving. These recovery controls are separate from the full manager,
+whose approved UI is defined in the
+[host handoff](../../docs/ui/workspace-manager-host-handoff.md).
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-persistence.ps1 -Executable <native-exe>
+~~~
+
+This isolated native fixture checks autosave, layout/tool restoration, panel
+measurements after adoption, final-edit close, unreadable storage, editing guards,
+Keep open, repaired-storage retry, explicit discard, preservation of the original
+file and zero-exit shutdown. Captures, database files and logs remain ignored/local.
+Shared and bridge tests cover pending saves, ownership takeover, failed-operation
+identity, backup contents and worker teardown. This does not establish full manager,
+physical-device or presentation/input-latency acceptance.

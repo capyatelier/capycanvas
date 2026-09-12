@@ -51,6 +51,7 @@ pub struct NativeHost {
     last_camera_revision: Option<u64>,
     document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
+    service_changes: u32,
 }
 
 impl NativeHost {
@@ -80,7 +81,14 @@ impl NativeHost {
             last_camera_revision: None,
             document_view_revision: 0,
             last_durable_workspace: None,
+            service_changes: 0,
         })
+    }
+    /// Regions changed since the platform service last observed accepted input.
+    /// Independent of snapshot publication, so taking a UI update cannot erase
+    /// a pending persistence observation. Call only from the exclusive owner.
+    pub fn take_service_changes(&mut self) -> u32 {
+        std::mem::take(&mut self.service_changes)
     }
     /// Republish host-owned service state without changing the shared document.
     pub fn invalidate_snapshot(&mut self) {
@@ -224,6 +232,7 @@ impl NativeHost {
     /// models. Only acknowledge it if no unpublished structural change precedes
     /// it; otherwise the next snapshot must still include that pending change.
     pub fn apply_change(&mut self, previous: u64, change: layer_ui::UiChange) {
+        self.service_changes |= change.regions;
         self.dirty |= change.canvas_wake;
         if change.regions == layer_ui::regions::CAMERA
             && let Some(key) = &mut self.last_snapshot
@@ -1001,6 +1010,22 @@ mod tests {
             "A clipped-out tile has no child drawer"
         );
     }
+
+    #[test]
+    fn service_observation_survives_native_snapshot_publication() {
+        let mut app = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        app.take_service_changes();
+        app.dispatch(UiAction::SetBrushSize { value: 42. }).unwrap();
+        let revision = app.session.state().revision;
+        app.take_update_bytes().unwrap();
+        let changes = app.take_service_changes();
+        assert_ne!(changes & layer_ui::regions::BRUSH, 0);
+        assert_eq!(app.take_service_changes(), 0);
+        assert_eq!(app.session.state().revision, revision);
+        app.dispatch(UiAction::SetBrushSize { value: 63. }).unwrap();
+        assert_ne!(app.take_service_changes() & layer_ui::regions::BRUSH, 0);
+    }
+
     #[test]
     fn workspace_persistence_only_emits_committed_topology_changes() {
         for platform in [layer_ui::Platform::Mac, layer_ui::Platform::Ios] {

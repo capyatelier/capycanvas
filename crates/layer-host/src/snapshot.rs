@@ -130,35 +130,10 @@ impl NativeHost {
                 } == key
             })
         {
-            #[derive(Serialize)]
-            struct WorkspaceLayout<'a> {
-                bands: &'a [layer_ui::DockBand],
-                floating: &'a [layer_ui::FloatingGroup],
-                collapsed: &'a [layer_ui::CollapsedColumn],
-                fit_tab_groups: &'a [u32],
-            }
-            #[derive(Serialize)]
-            struct LayoutUpdate<'a> {
-                workspace_update: &'a layer_ui::WorkspaceUpdate,
-                layout: layer_ui::ResolvedLayout,
-                workspace_layout: WorkspaceLayout<'a>,
-                // work_area changes without a camera navigation revision.
-                camera: &'a layer_ui::Camera,
-                panel_measurements: &'a [layer_ui::PanelMeasurement],
-            }
-            let snapshot = LayoutUpdate {
-                workspace_update: update,
-                layout: self.session.layout(self.logical),
-                workspace_layout: WorkspaceLayout {
-                    bands: &self.session.state().workspace.layout.bands,
-                    floating: &self.session.state().workspace.layout.floating,
-                    collapsed: &self.session.state().workspace.layout.collapsed,
-                    fit_tab_groups: &self.session.state().workspace.layout.fit_tab_groups,
-                },
-                camera,
-                panel_measurements: &self.session.state().workspace.layout.measurements,
-            }
-            .serialize(serializer)?;
+            let snapshot = self
+                .session
+                .workspace_layout_update(self.logical)
+                .serialize(serializer)?;
             self.last_snapshot = Some(key);
             self.last_workspace_model_revision = Some(update.model_revision);
             self.last_camera_revision = Some(camera.revision);

@@ -21,6 +21,7 @@ static int DispatchCanvasCommand(CapyHost* host,CanvasCommand const& command) {
     switch(command.kind){
         case CanvasCommandKind::Input:return capy_input(host,json);
         case CanvasCommandKind::Document:return capy_document_action(host,json);
+        case CanvasCommandKind::Workspace:return capy_workspace_action(host,json);
         case CanvasCommandKind::Overviews:return capy_overviews(host,json);
         case CanvasCommandKind::Action:return capy_action(host,json);
     }
@@ -207,6 +208,10 @@ void CanvasWindow::Start() {
     workspaceDialogs=std::make_unique<WorkspaceDialogs>(send,model,root.XamlRoot(),
         [weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();},
         [weak=weak_from_this()](std::string error){if(auto self=weak.lock())self->Fail(std::move(error));});
+    workspaceStorage=std::make_unique<WorkspaceStorageView>(
+        [weak=weak_from_this()](std::string json){if(auto self=weak.lock())self->Send(std::move(json),CanvasCommandKind::Workspace);},
+        window,[weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyDialogs();});
+    root.Children().Append(workspaceStorage->Root());
     if(auto snapshot=capy_snapshot(host)){
         std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
         ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot)));
@@ -459,7 +464,8 @@ void CanvasWindow::Run() {
             bool pollServices=false;
             {
                 std::unique_lock lock(mutex);
-                wake.wait(lock,[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();});
+                if(!wake.wait_for(lock,std::chrono::milliseconds(250),[&]{return closing||resize||dirty||servicesReady||transportFailed||!work.Empty()||pendingHover.has_value()||!previewWork.Empty();}))
+                    servicesReady=true;
                 if(closing) break;
                 if(resize) {
                     paused=true;resize=false;probeReady=false;
@@ -471,13 +477,17 @@ void CanvasWindow::Run() {
                 pollServices=std::exchange(servicesReady,false);
             }
             if(pollServices){
-                if(capy_poll_services(host)<0){Fail(capy_error());break;}
+                auto serviceResult=capy_poll_services(host);
+                if(serviceResult<0){Fail(capy_error());break;}
+                dirty|=serviceResult!=0;
                 if(auto snapshot=capy_snapshot(host)){
                     std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
                     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
                     Publish(snapshot,model);
                 }
             }
+            // An idle service deadline can save/renew without submitting a frame.
+            {std::lock_guard lock(mutex);if(!dirty&&!transportFailed&&work.Empty()&&!pendingHover&&previewWork.Empty())continue;}
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
             auto acquired=capy_acquire(host);
             if(acquired<0) {Fail(capy_error());break;}
@@ -610,7 +620,7 @@ void CanvasWindow::Fail(std::string message) {
 void CanvasWindow::RequestClose() {
     {std::lock_guard lock(mutex);if(closing||closed)return;}
     if(!host||!renderer.joinable()||rendererDone.load()){Stop();return;}
-    if(documents&&documents->IsOpen())return;
+    if((documents&&documents->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen()))return;
     if(workspace)workspace->CancelGesture();
     // Commit the focused workspace draft before shared close policy checks dirty state.
     canvasFocus.Focus(FocusState::Programmatic);
@@ -628,6 +638,7 @@ void CanvasWindow::Stop() {
     if(settings)settings->Hide();
     if(documents)documents->Hide();
     if(workspaceDialogs)workspaceDialogs->Hide();
+    if(workspaceStorage)workspaceStorage->Hide();
     wake.notify_all();space.notify_all();
     if(inputController) {
         inputDispatcher.TryEnqueue([weak=weak_from_this()]{
@@ -643,7 +654,7 @@ void CanvasWindow::Stop() {
 }
 void CanvasWindow::Finish() {
     if(closed||finishing||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
-    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen()))return;
+    if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen()))return;
     finishing=true;
     CapyLifecycle("join_renderer");
     if(renderer.joinable()) renderer.join();
@@ -655,7 +666,7 @@ void CanvasWindow::Finish() {
     CapyLifecycle("host_destroyed");
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
-    settings.reset();documents.reset();workspaceDialogs.reset();header.reset();workspace.reset();
+    settings.reset();documents.reset();workspaceDialogs.reset();workspaceStorage.reset();header.reset();workspace.reset();
     root.Children().Clear();toolbar.Children().Clear();canvasFocus.Content(nullptr);
     window.Content(nullptr);
     canvasFocus=nullptr;panel=nullptr;status=nullptr;toolbar=nullptr;root=nullptr;
@@ -702,12 +713,13 @@ void CanvasWindow::ApplyDialogs() {
         dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->Finish();});
         return;
     }
-    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!lastModel.Size())return;
+    if(applyingDialogs||!settings||!documents||!workspaceDialogs||!workspaceStorage||!lastModel.Size())return;
     applyingDialogs=true;
     struct Reset{bool& flag;~Reset(){flag=false;}}reset{applyingDialogs};
-    if(!documents->IsOpen()&&!workspaceDialogs->IsOpen())settings->Apply(lastModel);
-    workspaceDialogs->Apply(lastModel,documents->IsOpen()||settings->IsOpen());
-    documents->Apply(lastModel,settings->IsOpen()||workspaceDialogs->IsOpen());
+    if(!documents->IsOpen()&&!workspaceDialogs->IsOpen()&&!workspaceStorage->IsOpen())settings->Apply(lastModel);
+    workspaceDialogs->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceStorage->IsOpen());
+    documents->Apply(lastModel,settings->IsOpen()||workspaceDialogs->IsOpen()||workspaceStorage->IsOpen());
+    workspaceStorage->Apply(lastModel,documents->IsOpen()||settings->IsOpen()||workspaceDialogs->IsOpen());
     UpdatePopup();
 }
 void CanvasWindow::Popup(bool open) {
@@ -715,8 +727,12 @@ void CanvasWindow::Popup(bool open) {
 }
 void CanvasWindow::UpdatePopup() {
     if(closing||closed)return;
-    bool blocked=(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen());
+    auto storage=CapyUi::object(lastModel,L"windows_workspace");
+    bool unavailable=storage.Size()&&(!CapyUi::flag(storage,L"ready")||CapyUi::flag(storage,L"busy")||CapyUi::flag(storage,L"owner_lost")||CapyUi::flag(storage,L"close_requested"));
+    bool blocked=unavailable||(settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen());
     canvasFocus.IsEnabled(!blocked);
+    if(workspace)workspace->Root().IsHitTestVisible(!unavailable);
+    if(header)header->Root().IsHitTestVisible(!unavailable);
     if(dialogOpen.exchange(blocked)!=blocked&&blocked){
         heldKeys.clear();Send(R"({"type":"blur"})",CanvasCommandKind::Input);
     }
@@ -754,7 +770,8 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     if(!workspace->Apply(model))return;
     lastModel=model;
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
-    if(flag(object(state,L"document_file"),L"close_ready")){Stop();return;}
+    auto storage=object(model,L"windows_workspace");
+    if(flag(object(state,L"document_file"),L"close_ready")&&(!storage.Size()||flag(storage,L"close_ready"))){Stop();return;}
     if(!statusFailed){
         auto message=str(model,L"error");
         if(message.empty())message=str(state,L"host_error");

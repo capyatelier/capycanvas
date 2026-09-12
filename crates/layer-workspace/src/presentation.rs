@@ -7,48 +7,34 @@ pub enum ManagerPage {
     Templates,
     ThisWorkspace,
     ToolbarLibrary,
-    RecentlyDeleted,
 }
 impl ManagerPage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspaces => "Workspaces",
-            Self::Templates => "Workspace Templates",
+            Self::Templates => "Saved Layouts",
             Self::ThisWorkspace => "This Workspace",
             Self::ToolbarLibrary => "Saved Toolbars",
-            Self::RecentlyDeleted => "Recently Deleted",
         }
     }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum ManagerAction {
     New,
-    ImportTemplate,
-    ImportToolbar,
-    Storage,
-    ExportCurrent,
-    ExportDatabase,
-    ImportBackup,
-    ClearOlderHistory,
     SaveAsNew,
     RetryStorage,
     RecoverInterrupted,
     Switch(String),
     SwitchToWindow(String),
-    NewFromTemplate(String),
+    UseTemplate(String),
     EditAsWorkspace(String),
     Rename(String),
     Duplicate(String),
     SaveAsTemplate(String),
     Reset(String),
     History(String),
-    Metadata(String),
     UpdateFromCurrent(String),
-    Export(String),
-    Versions(String),
     Delete(String),
-    RestoreDeleted(String),
-    DeletePermanently(String),
     AddToolbar(String),
     UpdateToolbar(String),
     ShowToolbar(Panel, bool),
@@ -62,32 +48,20 @@ impl ManagerAction {
     pub fn label(&self) -> &'static str {
         match self {
             Self::New => "New Workspace…",
-            Self::ImportTemplate => "Import Workspace Template…",
-            Self::ImportToolbar => "Import Toolbar…",
-            Self::Storage => "Backups and Storage…",
-            Self::ExportCurrent => "Save Backup…",
-            Self::ExportDatabase => "Export All Stored Data…",
-            Self::ImportBackup => "Restore from Backup…",
-            Self::ClearOlderHistory => "Clear Older History…",
             Self::SaveAsNew => "Save as New Workspace…",
             Self::RetryStorage => "Retry Storage",
             Self::RecoverInterrupted => "Recover Interrupted Changes…",
             Self::Switch(_) => "Switch",
             Self::SwitchToWindow(_) => "Switch to Window",
-            Self::NewFromTemplate(_) => "Use Layout…",
+            Self::UseTemplate(_) => "Load Layout",
             Self::EditAsWorkspace(_) => "Edit as Workspace…",
             Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
             Self::Duplicate(_) | Self::DuplicateToolbar(_) => "Duplicate…",
-            Self::SaveAsTemplate(_) => "Save Layout as Workspace Template…",
-            Self::Reset(_) => "Reset Layout…",
+            Self::SaveAsTemplate(_) => "Save Layout…",
+            Self::Reset(_) => "Restore Starting Layout…",
             Self::History(_) => "Layout History…",
-            Self::Metadata(_) => "Name and Description History…",
             Self::UpdateFromCurrent(_) => "Replace with Current Layout…",
-            Self::Export(_) => "Export…",
-            Self::Versions(_) => "Previous Versions…",
             Self::Delete(_) => "Delete…",
-            Self::RestoreDeleted(_) => "Restore",
-            Self::DeletePermanently(_) => "Delete Permanently…",
             Self::AddToolbar(_) => "Add to Workspace",
             Self::UpdateToolbar(_) => "Update from Workspace…",
             Self::ShowToolbar(_, true) => "Show",
@@ -98,10 +72,7 @@ impl ManagerAction {
         }
     }
     pub fn destructive(&self) -> bool {
-        matches!(
-            self,
-            Self::Delete(_) | Self::DeletePermanently(_) | Self::DeleteToolbar(_)
-        )
+        matches!(self, Self::Delete(_) | Self::DeleteToolbar(_))
     }
 }
 #[derive(Clone, Debug)]
@@ -142,27 +113,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         idle: bool,
         now: u64,
     ) -> ManagerDetails {
-        let mut details = self.details(stored, idle, now);
-        if let ItemContent::Workspace {
-            origin: Some(origin),
-            ..
-        } = &stored.entity.content
-            && let Ok(template) = self.load(&origin.id).await
-            && template.entity.metadata.deleted_at_ms.is_none()
-            && let ItemContent::Reusable { current, .. } = &template.entity.content
-            && current.id != origin.version
-        {
-            details.description.push_str("\nThis Workspace Template has been updated. Create a new workspace to try its latest layout.");
-            let mut button = ManagerButton::new(
-                ManagerAction::NewFromTemplate(origin.id.clone()),
-                idle,
-                false,
-            );
-            button.label = "New Workspace from Latest Workspace Template…".into();
-            details.actions.push(button);
-        }
-        details
+        self.details(stored, idle, now)
     }
+
     pub fn rows(&self, page: ManagerPage, query: &str, now: u64) -> Vec<ManagerRow> {
         if page == ManagerPage::ThisWorkspace {
             let Some(entity) = self.current() else {
@@ -197,17 +150,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         items
             .into_iter()
             .filter(|i| {
-                if page == ManagerPage::RecentlyDeleted {
-                    i.metadata.deleted_at_ms.is_some()
-                } else {
-                    i.metadata.deleted_at_ms.is_none()
-                        && i.metadata.kind
-                            == match page {
-                                ManagerPage::Workspaces => ItemKind::Workspace,
-                                ManagerPage::Templates => ItemKind::Template,
-                                _ => ItemKind::Toolbar,
-                            }
-                }
+                i.metadata.deleted_at_ms.is_none()
+                    && i.metadata.kind
+                        == match page {
+                            ManagerPage::Workspaces => ItemKind::Workspace,
+                            ManagerPage::Templates => ItemKind::Template,
+                            _ => ItemKind::Toolbar,
+                        }
             })
             .filter(|i| {
                 format!("{} {}", i.metadata.name, i.metadata.description)
@@ -217,13 +166,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .map(|i| {
                 let subtitle = if let Some(error) = i.error {
                     format!("Unavailable: {error}")
-                } else if let Some(deleted) = i.metadata.deleted_at_ms {
-                    format!(
-                        "{} · Deleted {} · Expires {}",
-                        i.metadata.kind.label(),
-                        date(deleted),
-                        date(deleted.saturating_add(TRASH_LIFETIME_MS))
-                    )
                 } else if active.as_ref() == Some(&i.id) {
                     "Current workspace".into()
                 } else if i
@@ -267,15 +209,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut actions = Vec::new();
         let mut add =
             |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
-        if entity.metadata.deleted_at_ms.is_some() {
-            description.push_str("\nRestore this item to use it again.");
-            add(ManagerAction::RestoreDeleted(id.clone()), !elsewhere, true);
-            add(
-                ManagerAction::DeletePermanently(id.clone()),
-                !elsewhere,
-                false,
-            );
-        } else {
+        if entity.metadata.deleted_at_ms.is_none() {
             match &entity.content {
                 ItemContent::Workspace { .. } => {
                     add(
@@ -297,10 +231,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         description.push_str("\nIncluded with CapyCanvas.");
                     }
                     if revision.content.kind() == ItemKind::Template {
-                        add(ManagerAction::NewFromTemplate(id.clone()), idle, true);
-                        if available {
-                            add(ManagerAction::UpdateFromCurrent(id.clone()), idle, false);
-                        }
+                        add(ManagerAction::UseTemplate(id.clone()), idle, true);
                     } else {
                         add(ManagerAction::AddToolbar(id.clone()), idle, true);
                         add(
@@ -312,9 +243,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     if available {
                         add(ManagerAction::Rename(id.clone()), true, false);
                     }
-                    add(ManagerAction::Export(id.clone()), true, false);
                     if available {
-                        add(ManagerAction::Versions(id.clone()), true, false);
                         add(ManagerAction::Delete(id.clone()), true, false);
                     }
                 }
@@ -353,27 +282,20 @@ pub struct WorkspacePrompt {
     pub confirm: &'static str,
 }
 pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
-    let ItemContent::Workspace { origin, .. } = &entity.content else {
+    let ItemContent::Workspace { .. } = &entity.content else {
         return Err(StoreError::invalid("Choose a workspace."));
     };
-    let target = origin.as_ref().map_or_else(
-        || "starting layout".into(),
-        |o| format!("original {} layout", o.name),
-    );
     Ok(WorkspacePrompt {
-        title: "Reset Layout".into(),
-        message: format!(
-            "Return {} to its {target}? You can undo this if you change your mind.",
-            entity.metadata.name
-        ),
-        confirm: "Reset Layout",
+        title: "Restore Starting Layout".into(),
+        message: format!("Restore “{}” to its starting layout?", entity.metadata.name),
+        confirm: "Restore Starting Layout",
     })
 }
 pub fn update_prompt(target: &Entity, source: &Entity) -> WorkspacePrompt {
     WorkspacePrompt {
         title: "Replace Saved Layout".into(),
         message: format!(
-            "Replace the layout saved in “{}” with the layout you’re using in “{}”? Choose this Workspace Template next time to start with the updated layout.",
+            "Replace the saved layout in “{}” with the layout from “{}”?",
             target.metadata.name, source.metadata.name
         ),
         confirm: "Replace Layout",

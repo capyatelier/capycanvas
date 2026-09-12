@@ -1,75 +1,89 @@
-# GTK workspace manager redesign
+# Approved GTK workspace manager design
 
-Ready for user review, 2026-09-11. This implements the latest GTK feedback;
-other hosts remain gated on approval.
+Approved by the user on 2026-09-12, including the final Load Layout menu label
+and the default saved-layout name. This is the visual reference for other hosts;
+use the [host implementation handoff](workspace-manager-host-handoff.md) for scope,
+integration responsibilities, and acceptance checks.
 
-## Window menu
+## Menus
 
-Undo Workspace Change and Redo Workspace Change come first, followed by
-Workspaces, direct panel visibility rows, and Quick Access Toolbars.
-Panel and toolbar names omit their generated type suffixes. New Toolbar and
-Manage Toolbars are inside Quick Access Toolbars.
+Window starts with Undo/Redo, followed by Workspaces, Quick Access Toolbars,
+and the direct panel rows. Quick Access Toolbars sits directly below Workspaces
+in the main Window menu. Its entries keep their short names.
+Workspaces groups its commands by purpose:
+
+- New Workspace / Manage Workspaces
+- Save Layout / Load Layout
+- Layout History / Restore Starting Layout
+
+Undo Layout Change and Redo Layout Change describe what the top-level actions undo.
+**Saved Layouts** are named arrangements that can be reused in any workspace;
+**Layout History** contains earlier arrangements of the current workspace.
 
 ![Window menu](workspace-manager-gtk/window-menu.png)
+![Workspaces submenu](workspace-manager-gtk/workspaces-menu.png)
 ![Quick Access Toolbars](workspace-manager-gtk/toolbars-menu.png)
 
 ## Manage Workspaces
 
-A single list provides New Workspace, Switch, and a per-workspace options menu
-with Rename and Delete. The current workspace is marked. Search appears for
-larger lists. Workspace Templates, Recently Deleted, and Backups and Storage
-are available through More options. Storage maintenance and recovery tools are
-under More storage options.
+The compact dialog has a selectable list, a square **+** button at the top right,
+and Cancel / Switch to Workspace buttons below the list. Rename and Delete remain
+in each row's options menu. Its explanation is:
 
-![Workspace list](workspace-manager-gtk/workspaces.png)
+> Workspaces save your tool settings and layout for different tasks.
+
+Selecting or double-clicking a row previews its layout in the editor behind the
+dialog. Only Switch to Workspace finalizes the selection. Cancel or closing the
+dialog restores the original layout. Browsing does not switch the active workspace
+or change either workspace's saved layout/history.
+
+![Workspace list with preview](workspace-manager-gtk/workspaces.png)
+
+## Saved Layouts
+
+The same compact design has a **+** button to save the current layout and Cancel /
+Load Layout buttons below the list. Saved rows retain Rename and Delete. Its
+introduction is:
+
+> Layouts save tool and panel arrangements to reuse in any workspace.
+
+The menu entry is **Load Layout…**; the dialog title is **Saved Layouts**. Save
+Layout suggests **<workspace name> Layout**, for example **Painting Layout**.
+The name remains editable; existing-name conflicts use the normal naming dialog.
+
+Selecting a row previews the layout without applying it. Load Layout applies the
+selection to the **current workspace** and closes the dialog, creating one undoable
+layout change. Cancel or closing restores the original layout. The included
+Default layout can also be selected and loaded.
+
+Recently Deleted, backups, import/export, and version-management controls remain
+absent from these managers.
+
+![Saved layout list with preview](workspace-manager-gtk/layouts.png)
+
+![Save Layout name](workspace-manager-gtk/save-layout.png)
 
 ## Layout History
 
-One modal contains a scrollable version list. Selecting a version previews the
-actual editor layout behind the dialog. Cancel restores the layout present when
-the dialog opened. Restore This Version commits one undoable change. Selecting
-the current version disables Restore.
+The scrollable list previews the actual editor layout. Cancel restores the layout
+from before opening the dialog; Restore This Version commits one undoable change.
+The title includes the current workspace name. There are no preview instructions.
 
-Previewing does not change autosave content, undo/redo, settings, or artwork.
-The workspace keeps its ownership lease while the dialog is open. The history
-modal uses lighter background shading to keep the preview visible.
+Restore Starting Layout returns to the layout the workspace began with, even after
+other saved layouts have been loaded. It remains undoable. Its command and
+confirmation replace the ambiguous Reset Layout label and sit beside Layout History.
 
-New history entries describe the action and affected panel or toolbar, such as
-“Moved Layers panel” and “Added Ink Tools toolbar.” Existing generic entries get
-names where their predecessor is known from retained undo/redo. Old abandoned
-branches without recorded ancestry appear as “Earlier layout”; their layouts
-remain previewable and restorable.
-
-![Live layout history preview](workspace-manager-gtk/history.png)
-
-## Language
-
-User-facing terminology consistently uses Workspace Template. The save dialog
-introduces its benefit before asking for a name:
-
-> A Workspace Template saves the exact layout of your tools and panels so you
-> can load it again whenever you want. Give this layout a name, such as “Inking”.
-
-Workspace, toolbar, deletion, backup, and recovery copy explains what the action
-helps the user do. Internal storage mechanics and redundant brush-setting
-assurances have been removed from normal flows.
+![Layout History](workspace-manager-gtk/history.png)
 
 ## Try it
 
-Close an older GTK instance and run from the repository root:
+Close the older GTK instance and run from the repository root:
 
 ```sh
 cargo run --locked --release -p layer-linux
 ```
 
-Review Window → Workspaces → Manage Workspaces, Save Layout as Workspace
-Template, and Layout History. Move a panel, preview an older version, cancel,
-then restore it and undo the restoration. Also open Quick Access Toolbars and a
-panel's right-click menu.
-
-Validation: 264 shared UI and 30 native storage tests; GTK manager/history,
-restart and independent windows, ownership takeover, unavailable-storage close
-recovery, backup export/import, and real pointer-driven Window/File/panel menus.
-The native history check verifies that selection changes the actual layout,
-leaves SQLite content unchanged, renews ownership while open, cancels cleanly,
-and restores exactly one undoable history event.
+Check Window → Workspaces, both managers, and Layout History. Save a layout
+using **+**, move a panel, preview that saved layout, then load it
+and undo the change. Also preview another workspace and cancel before trying
+Switch to Workspace.

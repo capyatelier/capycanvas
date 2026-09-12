@@ -3,9 +3,11 @@
 Target: implement [the proposal](../ui/workspace-manager-proposal.md) on GTK,
 validate it in the native application, and obtain user approval before adapting
 other hosts. Publish notable, tested milestones to main and integrate concurrent
-main changes. GTK implementation and automated/native acceptance checks are now
-complete through milestone 5; user review and approval remain pending. This record
-does not claim approval or acceptance of the other hosts.
+main changes. GTK implementation and validation are complete, and the user approved
+the design on 2026-09-12. Other hosts can proceed from the
+[approved handoff](../ui/workspace-manager-host-handoff.md). Their implementations
+and platform acceptance checks remain outstanding. Earlier approval/status notes
+below describe historical checkpoints rather than the current gate.
 
 ## Milestone 1: shared state and restoration
 
@@ -291,3 +293,150 @@ approval before adapting other hosts remains outstanding.
 Integrated the subsequent GTK/Web layer-hold milestone `ce3751b` before
 publication. The combined release build passes, and the native pointer-menu
 check passes again in 5.69s (`/tmp/capy-workspace-menus.Qa6ihE`).
+
+## Second GTK review corrections
+
+Moved Quick Access Toolbars into Workspaces and added its own Manage workspace
+templates menu entry. Removed the history preview instructions and used the
+requested autosave explanation verbatim within the workspace introduction.
+
+Workspace Templates now uses the same compact list as Workspaces: Save Current
+Layout, Use Layout, and Rename/Delete for saved entries. Use Layout applies to
+the current workspace, preserving identity, metadata, starting layout, and live
+values; it commits one undoable layout edit. Reapplying the same layout adds no
+history event. Failed publication keeps the existing layout and retries the
+original operation once.
+
+Removed Recently Deleted, backup/import/export, storage administration, template
+version screens, and their GTK actions. The ordinary managers have no header
+More menu. A failed save still offers Retry or Save as New Workspace; failed
+close offers Keep Open or Discard Unsaved Changes. Existing persistence/package
+formats and internal retention remain compatible; this UI change does not purge
+previously stored records.
+
+Validation with concurrent main through `76ec59a`:
+
+- 264 shared UI tests and 32 native store/coordinator tests pass. New coverage
+  verifies current-workspace application, one-step undo/redo, unchanged source
+  templates, no extra workspace, no-op application, deleted-source rejection,
+  failed-write preservation, and receipt-backed retry.
+- Four isolated GTK acceptance tests pass: template manager's actual Use Layout
+  button plus history preview/cancel/restore and lease renewal (15.44s), restart
+  and independent windows (3.87s), ownership takeover (1.81s), and failed-close
+  recovery without backup controls (1.15s).
+- Native pointer tests open the nested Quick Access Toolbars menu, both managers,
+  File, and a panel context menu (8.05s).
+- Release build and diff checks pass. Fresh screenshots were inspected and are
+  linked in the updated review guide. Logs: `/tmp/capy-workspace-review.6RVOEg`,
+  `/tmp/capy-workspace-menus.5nNc3c`, `/tmp/workspace-review-shared-tests.log`, and
+  `/tmp/workspace-review-release-build.log`.
+
+Ready for another user review. Other-host workspace-manager work still awaits
+GTK approval.
+
+Integrated concurrent main through `2bea478`. All 264 shared UI and 32 native
+store/coordinator tests and the release build pass on the combined tree
+(`/tmp/workspace-review-integrated-tests.log` and
+`/tmp/workspace-review-integrated-build.log`).
+
+An intermittent native automation crash had a core stack in GTK's Wayland
+input-method callback while the test rapidly closed a focused name field. The
+test now focuses the confirmation button and lets focus-out run before emitting
+its click, matching normal interaction more closely. The complete native
+manager/templates/history/lease-renewal scenario then passed three consecutive
+runs (15.84s, 15.53s, 15.39s; `/tmp/capy-workspace-review.4sfY3w`). This changes
+test interaction only; no production input-method workaround was introduced.
+
+## GTK row previews and compact managers
+
+Both workspace managers now use a compact list with Cancel and a single explicit
+Switch to Workspace / Load Layout button below it. Clicking, double-clicking,
+or pressing Enter on a row only selects and previews the layout behind the dialog.
+A square icon-only + button in the header creates a workspace or saves the current
+layout as a Workspace Template. Row options retain Rename and Delete.
+
+The managers share the history dialog's transient preview and lease renewal.
+Opening a preview flushes preceding edits; browsing adds no history or saved layout
+changes. Cancel, modal dismissal, and starting another manager action restore the
+original layout before proceeding. Selection generations discard late load results.
+Filtering away the selected row restores the original layout and disables apply.
+Window-close follows GTK's modal behavior: the first request dismisses the dialog;
+the subsequent window close saves the original layout.
+
+The workspaces introduction uses the user's exact sentence: “Workspaces save your
+tool and panel layouts for different tasks.” Workspace Template, creation, saving,
+renaming, reset, and toolbar text were shortened to remove repeated instructions.
+Quick Access Toolbars now sits directly below Workspaces in the Window menu, and
+Manage Workspace Templates uses the requested capitalization.
+
+Integrated concurrent main through `93221ce`, including retained GTK controls.
+Validation on the combined tree:
+
+- 264 shared UI tests and 32 native store/coordinator tests pass; release build
+  and diff checks pass (`/tmp/workspace-selection-shared-final.log`,
+  `/tmp/workspace-selection-build-final.log`).
+- Native manager/preview/history/lease checks pass (18.55s), including rapid row
+  selection, cancelled asynchronous loads, filtering, explicit switch/load,
+  unchanged stored layouts/history, undo/redo, and modal/window dismissal.
+- Restart/independent windows (4.13s), ownership takeover (1.48s), and failed-close
+  recovery (1.12s) pass. Logs: `/tmp/capy-workspace-review.SJaugJ`.
+- Actual pointer input opens both + dialogs, selects a row without applying it,
+  and opens Window/File/panel menus (9.95s; `/tmp/capy-workspace-menus.yuhCVY`).
+
+Fresh manager screenshots were inspected and added to the review guide. Ready
+for the next GTK review; other-host work continues to await user approval.
+
+## Layout terminology and recovery grouping
+
+Replaced the user-facing Workspace Template terminology with Layout. The manager
+is titled Saved Layouts, reached through Manage Layouts; its save dialog and menu
+action read Save Layout. Workspaces now explains that it saves tool settings and
+a layout for different tasks; Layouts describes reusable tool/panel arrangements.
+The existing storage behavior already matches that distinction.
+
+Kept the baseline recovery action as Restore Starting Layout, with a confirmation
+that names the workspace. It restores that workspace's starting arrangement, not
+the most recently loaded saved layout. Layout History and Restore Starting Layout
+now share a menu section; Save Layout and Manage Layouts share a separate section.
+The history title includes the workspace name. Top-level Undo/Redo now say Layout
+Change, matching the scope of those actions. Existing generated history entries
+using the old terminology are translated for display without rewriting history.
+
+Serialized record kinds, command identifiers, and package formats remain stable.
+Web/Android test selectors were updated to match the shared Undo/Redo captions;
+no other-host manager implementation was started.
+
+Validation: 264 shared UI and 32 native store/coordinator tests pass. The native
+manager/history test passes in 19.01s (`/tmp/capy-workspace-review.kcOpVI`), including
+the renamed restore action, saved layout loading, preview cancellation, undo/redo,
+and lease renewal. Real pointer menu/+ checks pass in 9.96s
+(`/tmp/capy-workspace-menus.QSSdit`). Release build, diff checks, and Web test script
+syntax pass. Shared/build logs: `/tmp/workspace-layout-terms-shared.log`,
+`/tmp/workspace-layout-terms-build.log`. The final shorter toolbar deletion copy
+also passed all 264 UI tests (`/tmp/workspace-layout-terms-copy-check.log`).
+
+Inspected fresh manager, history, and menu screenshots and updated the review
+guide. The renamed layouts screenshot is `workspace-manager-gtk/layouts.png`.
+Ready for another GTK review before adapting other hosts.
+
+## User approval and host handoff — 2026-09-12
+
+The user approved the design as sufficient for other-platform implementation.
+Finalized the Load Layout menu caption and the `<workspace name> Layout` default
+name, and recorded approval in the visual reference. The native pointer test
+now checks the actual default name in the + save dialog; it passes in 9.93s
+(`/tmp/capy-workspace-menus.7TsOLw`). The release build also passes
+(`/tmp/workspace-approved-build.log`). Fresh menu/save-dialog screenshots were
+inspected and added to the guide. The existing focused shared menu test passed
+when its final caption was changed.
+
+Added [the host handoff](../ui/workspace-manager-host-handoff.md) with approved
+scope, shared APIs, platform work, coordination of common bridge changes, and
+acceptance requirements. Marked the original proposal/review as historical and
+corrected the UI guides' obsolete statements that GTK had no named workspaces.
+Internal compatibility names and stored formats remain intact; unexposed legacy
+APIs are not instructions to restore removed UI features.
+
+GTK implementation, validation, and user approval are complete. There is no
+remaining GTK cleanup prerequisite for the other hosts; their platform-specific
+storage/bridge, lifecycle, migration, UI, and acceptance work is next.

@@ -1674,6 +1674,16 @@ impl Workspace {
                     }
                     return;
                 }
+                if let Some(update) = &publication
+                    && self.publication.content_revision.get() == Some(update.content_revision)
+                    && change.regions == (regions::LAYOUT | regions::CUSTOMIZATION)
+                {
+                    self.publish_workspace_layout(update.clone());
+                    if change.canvas_wake {
+                        self.wake();
+                    }
+                    return;
+                }
                 self.refresh_cursor();
                 if self.status.is_visible()
                     && self
@@ -1872,6 +1882,12 @@ impl Workspace {
         self.status.set_visible(true);
     }
     fn refresh(self: &Rc<Self>, regions: u32) {
+        self.publication.content_revision.set(
+            self.gpu
+                .borrow()
+                .as_ref()
+                .map(|g| g.session.workspace_content_revision()),
+        );
         self.publication.model_revision.set(
             self.gpu
                 .borrow()

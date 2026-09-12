@@ -1303,3 +1303,58 @@ input remain. The intermittent shader-worker shutdown delay and strict GPU
 filter-reference mismatch remain open. Final painting presentation and input
 latency benchmarks are deferred. Private captures, profiles, traces, logs and
 binaries remain ignored/local.
+
+## Windows workspace persistence and recovery
+
+Windows now uses the shared WorkspaceManager and native SQLite worker for its
+active workspace. Layout history and latest tool settings survive restart;
+preferences remain in their separate private settings file. No previous Windows
+layout store existed to migrate. Startup prepares and adopts a saved capture at
+the shared idle/active-brush boundary, without waiting for optional shader work.
+The full Workspaces / Saved Layouts / History UI remains the next milestone,
+using the approved host handoff integrated through main 007c3e9.
+
+The canvas owner retains non-Send manager futures and polls them only after a
+wake. Database work runs on StoreWorker, with no per-frame disk I/O. A separate
+service observation accumulator survives UI snapshot publication. Committed
+layout generations trigger full captures; ordinary tool edits update working
+state. Immutable saves preserve newer accepted edits, and idle service polling
+can publish status without forcing a GPU frame. Ownership renewal uses the shared
+lease policy. Expiry cancels live input and rejects queued editor mutations;
+preferences acknowledgements and native measurements can still complete.
+
+WinUI recovery controls offer Retry, Save as New Workspace and export of the
+current in-memory workspace. Unavailable storage preserves the original database
+and offers retry/database backup. A failed close retains the window until Retry,
+Keep open or explicit Close without saving. Normal close captures the final edit,
+flushes and releases ownership before teardown. Retained wakers are disarmed
+before their native callback context expires; the last SQLite client drains
+accepted requests and joins the worker. Native backup flush now uses a writable
+Windows handle, and exports reject the live database and WAL/SHM destinations.
+
+The integrated editor fixture exposed a measurement acknowledgement regression:
+adopting a saved layout discarded transient measurements, while identical retained
+native sizes suppressed a resend. Full model application now schedules measurement
+reconciliation even without another LayoutUpdated event. Controls remain retained.
+A separate document-worker regression found a lost shutdown notification between
+the stopping-predicate check and condition-variable wait. Changing that predicate
+under the mailbox mutex fixes the hang; the existing import-completion teardown
+fixture exercises 100 iterations. This is separate from the still-open occasional
+shader-worker final-join delay.
+
+Main through 007c3e9 is integrated. The combined tree passes 383 unit tests
+(264 UI, 24 host, 62 Windows, 33 workspace; three explicit GPU tests ignored),
+strict Windows Clippy, native queue/mailbox tests and the Rust/C++ build. The
+isolated persistence fixture passes autosave, restored layout/tool values,
+measurements after adoption, final-edit close, unreadable storage, editing guards,
+Keep open, retry after repair, explicit discard, original-file preservation and
+zero-exit shutdown. Its recovery dialog capture was visually inspected. The editor
+and OS-injected tab-drag suites pass, including retained controls, titlebar hit
+regions, both themes, matching GPU Navigator motion and five-second exit gates.
+
+This milestone does not establish full manager or multiwindow behavior, complete
+visual/gesture parity, physical input, DPI/device lifecycle, distribution packaging,
+or final painting/presentation latency. The strict GPU filter-reference mismatch
+and occasional shader-worker shutdown delay remain open. Final 120 Hz painting
+and physical input-to-present benchmarks remain deferred. Private profiles,
+databases, captures, traces, logs and binaries remain ignored/local.

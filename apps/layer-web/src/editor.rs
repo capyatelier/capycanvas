@@ -8,6 +8,7 @@ pub(super) struct NavigatorSurface {
     canvas: web_sys::HtmlCanvasElement,
     size: [f32; 2],
     scale: f32,
+    capacity: [u32; 2],
     gpu: Option<(
         wgpu::Surface<'static>,
         ViewportPresenter,
@@ -84,6 +85,7 @@ impl WebApp {
                 canvas,
                 size: [0.; 2],
                 scale: 1.,
+                capacity: [0; 2],
                 gpu: None,
             },
         );
@@ -97,7 +99,7 @@ impl WebApp {
         width: f32,
         height: f32,
         scale: f32,
-    ) -> Result<(), JsValue> {
+    ) -> Result<Vec<u32>, JsValue> {
         if ![width, height, scale].iter().all(|v| v.is_finite())
             || width < 0.
             || height < 0.
@@ -108,8 +110,20 @@ impl WebApp {
         if let Some(slot) = self.overviews.get_mut(&id) {
             slot.size = [width, height];
             slot.scale = scale;
+            // Grow in small native-pixel blocks and retain the allocation while
+            // shrinking. CSS clips a 1:1 canvas; it never scales a stale image.
+            for (capacity, size) in slot.capacity.iter_mut().zip(slot.size) {
+                let needed = (size * scale).round().max(1.) as u32;
+                *capacity = (*capacity).max(needed.div_ceil(64).saturating_mul(64));
+            }
+            return Ok(slot.capacity.to_vec());
         }
-        Ok(())
+        Ok(Vec::new())
+    }
+    /// Live DOM reflow must resize and redraw the backing canvas before the
+    /// browser presents that layout. Reuse the existing GPU document image.
+    pub fn reflow_navigators(&mut self) -> Result<bool, JsValue> {
+        self.present_navigators()
     }
     pub fn drawer(&self, query: JsValue) -> Result<JsValue, JsValue> {
         let q: DrawerQuery = serde_wasm_bindgen::from_value(query).map_err(js)?;
@@ -187,8 +201,7 @@ impl WebApp {
                 continue;
             };
             let scale = slot.scale;
-            let width = (slot.size[0] * scale).round().max(1.) as u32;
-            let height = (slot.size[1] * scale).round().max(1.) as u32;
+            let [width, height] = slot.capacity;
             if slot.gpu.is_none() {
                 let surface = gpu
                     .instance

@@ -357,18 +357,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => (),
                 }
             }
-            menu.sections = vec![
-                undo,
-                vec![workspace.menu(
-                    self.require_workspace_idle().is_ok(),
-                    durable_layout(&self.state.workspace.layout) != workspace.baseline,
-                )],
-                panels,
-                vec![ContextMenuItem::submenu(
-                    "Quick Access Toolbars",
-                    vec![toolbars, toolbar_actions],
-                )],
-            ];
+            let workspaces = workspace.menu(
+                self.require_workspace_idle().is_ok(),
+                durable_layout(&self.state.workspace.layout) != workspace.baseline,
+            );
+            let toolbars =
+                ContextMenuItem::submenu("Quick Access Toolbars", vec![toolbars, toolbar_actions]);
+            menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
@@ -915,6 +910,23 @@ impl<R: CanvasRenderer> UiSession<R> {
             STATUS_HEIGHT,
         )
     }
+    /// Layout-aware hosts retain controls at content_revision and apply these
+    /// live dimensions on their display clock. Gesture completion remains full.
+    pub fn workspace_layout_update(&self, viewport: [f32; 2]) -> crate::WorkspaceLayoutUpdate<'_> {
+        let layout = &self.state.workspace.layout;
+        crate::WorkspaceLayoutUpdate {
+            workspace_update: self.workspace_update(),
+            layout: self.layout(viewport),
+            workspace_layout: crate::WorkspaceLayoutState {
+                bands: &layout.bands,
+                floating: &layout.floating,
+                collapsed: &layout.collapsed,
+                fit_tab_groups: &layout.fit_tab_groups,
+            },
+            camera: &self.state.camera,
+            panel_measurements: &layout.measurements,
+        }
+    }
     /// Hosts can slide the pressed tab while the shared gesture still owns its
     /// source group. Once detached, the floating panel supplies the feedback.
     pub fn dragging_attached_tab(&self) -> bool {
@@ -1375,17 +1387,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
+        let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
+            "Restore Starting Layout…"
+        } else {
+            id.label()
+        };
         CommandState {
             checkable: id.is_toggle(),
             icon: self.command_icon(id),
             id,
-            label: if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-                "Reset Layout…"
-            } else {
-                id.label()
-            },
+            label,
             tooltip: self.state.settings.action_tooltip(
-                id.label(),
+                label,
                 &UiAction::Invoke { command: id },
                 self.state.platform,
             ),
@@ -1536,6 +1549,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !matches!(
                 &action,
                 UiAction::WorkspaceManager { .. }
+                    | UiAction::CompleteRequest { .. }
+                    | UiAction::CloseSettings
                     | UiAction::MeasureColumnDrawers { .. }
                     | UiAction::MeasureDrawerTiles { .. }
                     | UiAction::MeasureColumnScroll { .. }
@@ -1568,7 +1583,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_transition
             && !matches!(
                 &action,
-                UiAction::MeasureColumnDrawers { .. }
+                UiAction::CompleteRequest { .. }
+                    | UiAction::CloseSettings
+                    | UiAction::MeasureColumnDrawers { .. }
                     | UiAction::MeasureDrawerTiles { .. }
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::SystemThemeChanged { .. }
@@ -3500,7 +3517,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let (enabled, selected) = self.command_flags(id);
             let icon = self.command_icon(id);
             let label = if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
-                "Reset Layout…"
+                "Restore Starting Layout…"
             } else {
                 id.label()
             };
@@ -3510,6 +3527,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || previous.icon != icon
                     || previous.label != label
                 {
+                    if previous.label != label {
+                        previous.tooltip = self.state.settings.action_tooltip(
+                            label,
+                            &UiAction::Invoke { command: id },
+                            self.state.platform,
+                        );
+                    }
                     previous.enabled = enabled;
                     previous.selected = selected;
                     previous.icon = icon;
@@ -3939,7 +3963,7 @@ mod tests {
                 .sections
                 .iter()
                 .flatten()
-                .any(|i| i.label == "Save Layout as Workspace Template…")
+                .any(|i| i.label == "Save Layout…")
         );
         assert!(menu.sections[2].iter().any(|i| i.label == "Layers"));
         assert!(
@@ -3947,7 +3971,40 @@ mod tests {
                 .iter()
                 .all(|i| !i.label.ends_with(" panel"))
         );
-        let toolbars = &menu.sections[3][0];
+        assert_eq!(menu.sections.len(), 3);
+        let workspaces = &menu.sections[1][0];
+        assert_eq!(
+            workspaces
+                .sections
+                .iter()
+                .skip(1)
+                .map(|section| {
+                    section
+                        .iter()
+                        .map(|item| item.label.as_str())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec!["New Workspace…", "Manage Workspaces…"],
+                vec!["Save Layout…", "Load Layout…"],
+                vec!["Layout History…", "Restore Starting Layout…"],
+            ]
+        );
+        assert!(
+            s.command(CommandId::ResetLayout)
+                .tooltip
+                .contains("Restore Starting Layout")
+        );
+        assert!(
+            workspaces
+                .sections
+                .iter()
+                .flatten()
+                .any(|item| item.label == "Load Layout…")
+        );
+        assert_eq!(menu.sections[1].len(), 2);
+        let toolbars = &menu.sections[1][1];
         assert_eq!(toolbars.label, "Quick Access Toolbars");
         assert!(
             toolbars.sections[0]
@@ -6793,11 +6850,7 @@ mod tests {
             );
             let prompt = s.toolbar_prompt().unwrap();
             assert!(prompt.destructive && prompt.name.is_none());
-            assert!(
-                prompt
-                    .message
-                    .contains("Undo Workspace Change (Ctrl+Alt+Z)")
-            );
+            assert!(prompt.message.contains("Undo Layout Change (Ctrl+Alt+Z)"));
             let before = s.state.workspace.clone();
             edit(&mut s, CustomizationAction::ConfirmToolbar);
             assert!(s.state.workspace.layout.panel(copied.id).is_err());

@@ -352,6 +352,111 @@ fn interrupted_publication_recovers_after_reopen_and_cancels_delayed_delivery_at
 }
 
 #[test]
+fn workspace_template_replaces_current_layout_without_creating_a_workspace() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let original = m.current().unwrap();
+        let template = m.save_template("Inking", "", 2_000).await.unwrap();
+        let saved_template = m.load(&template).await.unwrap().entity;
+        let mut capture = original.capture().unwrap();
+        let mut changed = capture.history.layout().clone();
+        changed.bands[0].extent += 80.;
+        capture.history.append(&changed, "Resized Tools toolbar");
+        capture.working.zen_mode = true;
+        capture
+            .working
+            .tools
+            .set_override(capture.working.preset, "size", 87.)
+            .unwrap();
+        m.observe(capture.clone(), 3_000);
+        m.flush().await.unwrap();
+        let count = m.items().len();
+        let before = m.current().unwrap();
+        let applied = m.apply_template(&template, 4_000).await.unwrap();
+        assert_eq!(applied.entity.id, original.id);
+        assert_eq!(applied.entity.metadata, before.metadata);
+        let after = applied.entity.capture().unwrap();
+        assert_eq!(after.working, capture.working);
+        assert_eq!(
+            after.history.layout(),
+            original.capture().unwrap().history.layout()
+        );
+        assert_eq!(after.history.generation, capture.history.generation + 1);
+        assert_eq!(
+            after.history.revisions.len(),
+            capture.history.revisions.len() + 1
+        );
+        assert_eq!(
+            after.history.revisions[&after.history.current].description,
+            "Loaded “Inking” layout"
+        );
+        if let (
+            ItemContent::Workspace {
+                baseline: a,
+                origin: ao,
+                ..
+            },
+            ItemContent::Workspace {
+                baseline: b,
+                origin: bo,
+                ..
+            },
+        ) = (&before.content, &applied.entity.content)
+        {
+            assert_eq!(a, b);
+            assert_eq!(ao, bo);
+        } else {
+            panic!("Expected workspaces");
+        }
+        assert_eq!(m.load(&original.id).await.unwrap().entity, applied.entity);
+        m.activate(applied);
+        m.refresh().await.unwrap();
+        assert_eq!(m.items().len(), count);
+        assert_eq!(m.load(&template).await.unwrap().entity, saved_template);
+        let mut undo = after.history.clone();
+        assert!(undo.undo());
+        assert_eq!(undo.layout(), &changed);
+        assert!(undo.redo());
+        assert_eq!(undo.layout(), after.history.layout());
+        let same = m.apply_template(&template, 5_000).await.unwrap();
+        assert_eq!(same.entity.capture().unwrap().history, after.history);
+    });
+}
+
+#[test]
+fn applying_a_workspace_template_preserves_layout_on_failure_and_retries_once() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let template = m.save_template("Inking", "", 2_000).await.unwrap();
+        let deleted = m.save_template("Removed", "", 2_001).await.unwrap();
+        m.delete_item(&deleted, None, 2_002).await.unwrap();
+        let mut capture = m.current().unwrap().capture().unwrap();
+        let mut changed = capture.history.layout().clone();
+        changed.bands[0].extent += 80.;
+        capture.history.append(&changed, "Resized Tools toolbar");
+        m.observe(capture.clone(), 3_000);
+        m.flush().await.unwrap();
+        let before = m.current().unwrap();
+        assert!(m.apply_template(&deleted, 3_001).await.is_err());
+        assert_eq!(m.current().unwrap(), before);
+        m.store.fail.set(true);
+        assert!(m.apply_template(&template, 4_000).await.is_err());
+        assert_eq!(m.current().unwrap(), before);
+        assert_eq!(m.load(&before.id).await.unwrap().entity, before);
+        m.store.fail.set(false);
+        let applied = m.retry_failed_operation().await.unwrap().unwrap();
+        assert_eq!(
+            applied.entity.capture().unwrap().history.generation,
+            capture.history.generation + 1
+        );
+        assert_eq!(applied.entity.id, before.id);
+        assert!(m.retry_failed_operation().await.unwrap().is_none());
+    });
+}
+
+#[test]
 fn manager_recovery_library_and_backup_round_trip() {
     pollster::block_on(async {
         let f = Fixture::new();
@@ -392,16 +497,13 @@ fn manager_recovery_library_and_backup_round_trip() {
         let details = m
             .inspect_details(&m.current_record().unwrap(), true, 6_000)
             .await;
-        assert!(
-            details
-                .description
-                .contains("This Workspace Template has been updated")
-        );
-        assert!(
+        assert_eq!(
             details
                 .actions
                 .iter()
-                .any(|button| button.label == "New Workspace from Latest Workspace Template…")
+                .map(|a| a.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Current workspace", "Rename…", "Delete…"]
         );
         m.delete_item(&template, None, 7_000).await.unwrap();
         let reset = m

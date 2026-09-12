@@ -38,6 +38,36 @@ impl TabCapture {
     }
 }
 impl Action {
+    pub(crate) fn allowed_while_workspace_blocked(&self) -> bool {
+        let action = match self {
+            Self::Ordinary(action) | Self::Document { action, .. } => action,
+            Self::TabDrag { .. } => return false,
+        };
+        matches!(
+            action,
+            UiAction::CompleteRequest { .. }
+                | UiAction::CloseSettings
+                | UiAction::MeasureColumnDrawers { .. }
+                | UiAction::MeasureDrawerTiles { .. }
+                | UiAction::MeasureColumnScroll { .. }
+                | UiAction::MeasurePanels { .. }
+                | UiAction::MeasureTitlebar { .. }
+                | UiAction::SystemThemeChanged { .. }
+                | UiAction::WindowFullscreen { .. }
+                | UiAction::DragWorkspace {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+                | UiAction::DragDivider {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+                | UiAction::ResizeFloating {
+                    phase: ContactPhase::Up | ContactPhase::Cancel,
+                    ..
+                }
+        )
+    }
     pub(crate) fn dispatch(self, host: &mut NativeHost) -> Result<(), String> {
         let action = match self {
             Self::TabDrag {

@@ -37,7 +37,9 @@ __declspec(dllimport) int32_t capy_prepare_gpu(CapyHost*);
 /* Start/load on the render owner before queued user actions. Wake runs on the
    storage thread and must only signal owned synchronization state. */
 __declspec(dllimport) int32_t capy_start_services(CapyHost*, void* context, void (*wake)(void*));
+/* Returns 1 when canvas work is pending; 0 permits an idle service-only tick. */
 __declspec(dllimport) int32_t capy_poll_services(CapyHost*);
+__declspec(dllimport) int32_t capy_workspace_action(CapyHost*, const char* json);
 /* Logical native overview slots; call only on the canvas owner. */
 __declspec(dllimport) int32_t capy_overviews(CapyHost*, const char* json);
 /* Pure shared image bounds for the native cutout; output has four floats. */

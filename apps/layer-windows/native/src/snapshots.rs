@@ -8,6 +8,7 @@ pub(crate) struct WindowsMetadata {
     pub windows_importing: bool,
     pub windows_image_import: Option<Value>,
     pub windows_isolated_settings: bool,
+    pub windows_workspace: Option<crate::workspace_service::WorkspaceStatus>,
 }
 
 pub(crate) fn take(
@@ -38,6 +39,7 @@ mod tests {
             windows_importing: false,
             windows_image_import: None,
             windows_isolated_settings: true,
+            windows_workspace: None,
         }
     }
     fn packet(host: &mut NativeHost) -> (Value, usize) {
@@ -57,6 +59,7 @@ mod tests {
             "windows_importing",
             "windows_image_import",
             "windows_isolated_settings",
+            "windows_workspace",
         ] {
             actual.as_object_mut().unwrap().remove(field);
         }

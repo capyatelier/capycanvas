@@ -56,6 +56,8 @@ pub struct CapyHost {
     blank_presented: bool,
     services: Option<crate::settings::SettingsService>,
     documents: Option<crate::documents::DocumentService>,
+    workspaces: Option<crate::workspace_service::WorkspaceService<layer_workspace::StoreWorker>>,
+    blocked_contacts: std::collections::BTreeSet<u64>,
 }
 impl CapyHost {
     unsafe fn new(panel: *mut c_void, width: u32, height: u32, scale: f32) -> Result<Self, String> {
@@ -95,15 +97,34 @@ impl CapyHost {
             blank_presented: false,
             services: None,
             documents: None,
+            workspaces: None,
+            blocked_contacts: Default::default(),
         })
     }
 
+    fn accepts_workspace_input(&self) -> bool {
+        self.workspaces
+            .as_ref()
+            .is_none_or(|s| s.accepts_input(crate::workspace_service::now_ms()))
+    }
     fn poll_services(&mut self) -> Result<(), String> {
         if let Some(service) = self.documents.as_mut() {
             service.poll(&mut self.native)?;
         }
         if let Some(service) = self.services.as_mut() {
             service.poll(&mut self.native)?;
+        }
+        if let Some(service) = self.workspaces.as_mut() {
+            if self.native.session.state().document_file.close_ready
+                && !service.status().close_requested
+            {
+                service.request_close(&mut self.native);
+            }
+            service.poll(
+                &mut self.native,
+                std::time::Instant::now(),
+                crate::workspace_service::now_ms(),
+            );
         }
         Ok(())
     }
@@ -186,6 +207,7 @@ impl CapyHost {
         if let Some(service) = self.documents.as_mut() {
             service.after_frame(&mut self.native)?;
         }
+        self.poll_services()?;
         Ok(i32::from(self.native.dirty))
     }
 }
@@ -258,6 +280,20 @@ pub unsafe extern "C" fn capy_start_services(
                 },
             ));
         }
+        if host.workspaces.is_none() {
+            let context = context as usize;
+            let directory = crate::settings::data_directory()?;
+            let worker = layer_workspace::StoreWorker::shared(&directory).map_err(err)?;
+            let mut service =
+                crate::workspace_service::WorkspaceService::new(worker, directory, move || {
+                    if let Some(wake) = wake {
+                        wake(context as *mut c_void);
+                    }
+                });
+            service.start(crate::workspace_service::now_ms());
+            host.workspaces = Some(service);
+            host.poll_services()?;
+        }
         Ok(0)
     })
 }
@@ -267,7 +303,7 @@ pub unsafe extern "C" fn capy_start_services(
 pub unsafe extern "C" fn capy_poll_services(host: *mut CapyHost) -> i32 {
     guard(host, |host| {
         host.poll_services()?;
-        Ok(0)
+        Ok(i32::from(host.native.dirty))
     })
 }
 /// # Safety
@@ -279,6 +315,12 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         fail("Null canvas");
         return -1;
     };
+    let workspaces = catch_unwind(AssertUnwindSafe(|| {
+        if let Some(mut service) = host.workspaces.take() {
+            service.stop();
+        }
+    }))
+    .map_err(|_| "Workspace shutdown failed".to_string());
     // Cleanup must join the storage callback even when another host operation
     // poisoned the renderer. Do not dispatch more actions into a poisoned host.
     let documents = catch_unwind(AssertUnwindSafe(|| {
@@ -297,7 +339,7 @@ pub unsafe extern "C" fn capy_finish_services(host: *mut CapyHost) -> i32 {
         } else {
             Ok(())
         };
-        documents.and(settings)
+        documents.and(settings).and(workspaces)
     })) {
         Ok(Ok(())) => 0,
         Ok(Err(error)) => {
@@ -374,7 +416,18 @@ pub unsafe extern "C" fn capy_pointer(
         if count > 0 {
             let batch = unsafe { std::slice::from_raw_parts(records, count) };
             validate_batch(batch).map_err(err)?;
+            host.poll_services()?;
+            let blocked = !host.accepts_workspace_input();
             for sample in batch {
+                if blocked && sample.phase != 0 {
+                    host.blocked_contacts.insert(sample.id);
+                }
+                if blocked || host.blocked_contacts.contains(&sample.id) {
+                    if sample.phase == 3 || sample.phase == 4 {
+                        host.blocked_contacts.remove(&sample.id);
+                    }
+                    continue;
+                }
                 host.native.pointer_event(
                     sample.event(),
                     match sample.button {
@@ -388,6 +441,48 @@ pub unsafe extern "C" fn capy_pointer(
         Ok(0)
     })
 }
+/// Workspace recovery responses are serialized with document and canvas work.
+/// # Safety
+/// Exclusive access to a live host; json is a readable NUL-terminated buffer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const c_char) -> i32 {
+    guard(host, |host| {
+        use crate::workspace_service::{WorkspaceAction, now_ms};
+        let action = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        let service = host
+            .workspaces
+            .as_mut()
+            .ok_or("Workspace service is unavailable")?;
+        let result = match action {
+            WorkspaceAction::Retry => {
+                service.retry(&mut host.native, now_ms());
+                Ok(())
+            }
+            WorkspaceAction::KeepOpen => {
+                service.keep_open(&mut host.native);
+                Ok(())
+            }
+            WorkspaceAction::DiscardClose => service.discard_close(&mut host.native),
+            WorkspaceAction::SaveAsNew { name } => {
+                service.save_as_new(&mut host.native, name, now_ms())
+            }
+            WorkspaceAction::ExportBackup { path } => service.export_backup(&mut host.native, path),
+            WorkspaceAction::Failure { error } => Err(layer_workspace::StoreError::new(
+                layer_workspace::ErrorKind::Unavailable,
+                error,
+            )),
+            WorkspaceAction::BackupDatabase { path } => {
+                service.backup_database(&mut host.native, path)
+            }
+        };
+        if let Err(error) = result {
+            service.report_error(&mut host.native, error);
+        }
+        host.poll_services()?;
+        Ok(0)
+    })
+}
+
 unsafe fn read_json<'a>(json: *const c_char) -> Result<&'a str, String> {
     if json.is_null() {
         return Err("Null JSON".into());
@@ -403,6 +498,10 @@ pub unsafe extern "C" fn capy_action(host: *mut CapyHost, json: *const c_char) -
     guard(host, |host| {
         let action: crate::actions::Action =
             serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        host.poll_services()?;
+        if !host.accepts_workspace_input() && !action.allowed_while_workspace_blocked() {
+            return Ok(0); // A queued widget from before a workspace transition.
+        }
         if let Err(error) = action.dispatch(&mut host.native) {
             fail(error);
             return Ok(1); // A valid action can be unavailable in the current state.
@@ -440,6 +539,15 @@ pub unsafe extern "C" fn capy_document_action(host: *mut CapyHost, json: *const 
 pub unsafe extern "C" fn capy_input(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
         let input = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
+        host.poll_services()?;
+        if !host.accepts_workspace_input()
+            && !matches!(
+                &input,
+                layer_ui::UiInput::Blur | layer_ui::UiInput::Chrome { .. }
+            )
+        {
+            return Ok(0);
+        }
         if let layer_ui::UiInput::Chrome { facts, .. } = &input {
             host.chrome_facts = *facts;
             // This hit belongs only to that UI contact, never later canvas input.
@@ -464,6 +572,10 @@ pub unsafe extern "C" fn capy_scroll(
     horizontal: bool,
 ) -> i32 {
     guard(host, |host| {
+        host.poll_services()?;
+        if !host.accepts_workspace_input() {
+            return Ok(0);
+        }
         host.native
             .scroll([x, y], [dx, dy], density, zoom, horizontal)?;
         Ok(0)
@@ -551,6 +663,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .documents
                 .as_ref()
                 .and_then(|service| service.import_request()),
+            windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
             windows_isolated_settings: std::env::var_os("CAPY_SETTINGS_DIRECTORY")
                 .map(std::path::PathBuf::from)
                 .is_some_and(|path| path.is_absolute()),

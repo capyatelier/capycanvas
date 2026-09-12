@@ -394,10 +394,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     fn workspace_from_template(&self, template: &Entity, name: &str, now: u64) -> Result<Entity> {
         let ItemContent::Reusable { current, .. } = &template.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         let ReusableContent::Layout { layout } = &current.content else {
-            return Err(StoreError::invalid("Choose a Workspace Template."));
+            return Err(StoreError::invalid("Choose a saved layout."));
         };
         Ok(Entity::workspace(
             name,
@@ -442,7 +442,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let outcome = async {
             if incoming.entity.metadata.deleted_at_ms.is_some() {
                 return Err(StoreError::invalid(
-                    "Restore this workspace from Recently Deleted first.",
+                    "This workspace was deleted. Choose another workspace.",
                 ));
             }
             PreparedWorkspace::new(incoming.entity.capture()?).map_err(StoreError::invalid)?;
@@ -622,7 +622,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 _ => {
                     return Err(StoreError::new(
                         ErrorKind::Conflict,
-                        "Ownership expired while a save was awaiting confirmation. Your changes remain in memory. Use Save as New Workspace or export a backup.",
+                        "Ownership expired while a save was awaiting confirmation. Your changes remain in memory. Use Save as New Workspace to keep them.",
                     ));
                 }
             }
@@ -640,7 +640,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             self.release(&incoming).await;
             return Err(StoreError::new(
                 ErrorKind::Conflict,
-                "This workspace changed while the window was suspended. Your changes remain in memory. Use Save as New Workspace or export a backup.",
+                "This workspace changed while the window was suspended. Your changes remain in memory. Use Save as New Workspace to keep them.",
             ));
         }
         if self.active_id().as_deref() != Some(&saved.entity.id) {
