@@ -19,7 +19,7 @@ struct LayerPanel: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
-                if visible("layer_opacity") { header }
+                if visible("layer_opacity") { header.modifier(PanelBodyMeasurement(panel: "layers", part: "header")) }
                 if visible("layers") {
                     ScrollView {
                         LazyVStack(spacing: 0) {
@@ -35,10 +35,10 @@ struct LayerPanel: View {
                                     .onAppear { store.layerThumbnails.show(layer["id"].uint) }
                                     .onDisappear { store.layerThumbnails.hide(layer["id"].uint) }
                             }
-                        }
+                        }.modifier(PanelBodyMeasurement(panel: "layers", part: "rows"))
                     }.accessibilityIdentifier("layer-rows")
                 } else { Spacer(minLength: 0) }
-                if visible("layer_actions") { footer }
+                if visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }
             }
             if let drag, let layer = layers.first(where: { $0["id"].uint == drag.id }) {
                 LayerRow(store: store, layer: layer, previews: store.layerThumbnails, preview: true)

@@ -70,6 +70,59 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+The user's 2026-09-12 scope revision removes Save Layout and Load Layout from
+both Apple apps and the shared menus. These actions are excluded from future
+milestones. Workspace persistence, switching, layout history and panel sizing
+remain in scope. Earlier saved-layout implementation and validation below record
+the previous design and do not reinstate the removed UI.
+
+## Task workspaces and native panel measurements — 2026-09-12
+
+The Apple apps follow the revised shared design through `761b26b`: no Save/Load
+Layout menus, manager page or Apple apply/save operations. Existing stored records
+are preserved for the shared migration. New Workspace copies the current layout
+and tool settings into independent history. Painter, Illustrator and Photographer
+use shared seeded identities and appear beside the document title. Their renamed
+labels and selected state follow storage; switching to an owned workspace focuses
+its existing window. Reset All Brushes uses the shared confirmation and reset,
+flushes the resulting working values, and preserves layout history and artwork.
+
+Mounted SwiftUI bodies and lightweight tab labels now report intrinsic sizes to
+Rust. Floating panels follow natural content height, including visibility changes
+and added layers, while explicit resizing retains its chosen height. Tab groups
+fit measured labels. Cached transient measurements revalidate after restoration;
+settled facts stop publishing. Drawer measurements remain separate, and label
+measurement mounts no extra Navigator, filter or thumbnail content.
+
+Direct native checks cover both platform presets: manager actions and prompts,
+new-workspace copying, reset cancellation/confirmation, persisted reset values,
+independent workspaces, renamed default labels and focusing an existing owner;
+coordinator migration, saves, ownership and restart; panel measurement, width
+reflow, fitted tabs, control visibility, Undo and settled publication. These use
+invisible AppKit hosts. Native component captures cover the three task workspaces
+at narrow/wide widths in both themes; they exclude Metal and do not establish
+UIKit or Chrome pixel parity. Live resizing with retained content and full-editor
+visual validation remain open.
+
+The final integrated Rust suite passes 376 checks (38 Apple, 24 host, 273 UI and
+41 workspace; one existing hardware check ignored). Both signed Release targets
+build successfully. Coordinator migration/restart checks pass again after the
+final seed-migration integration. Twenty-four final AppKit editor-component
+captures cover both Apple presets, all three task workspaces, two widths and two
+themes; sixteen manager captures cover workspace/history pages before the last
+style-only update. These are component-layout evidence with the limitations above.
+
+Physical Mac/iPad drawing smoke checks completed with a one-second measured ink
+interval after ten seconds of warmup, with zero frame errors, rejected input or
+missing presentation callbacks. During the measured interval, Mac had two CPU
+frames over 11.11 ms and three long presentation intervals; iPad had no CPU frames
+over 8.33 ms or long intervals. One Mac and three iPad zero-time callbacks occurred
+outside the measured interval. These checks preceded the final pill-color,
+Photographer tile-size and seed-migration adjustment. They are startup/drawing
+integration evidence, not sustained performance acceptance. Both owned validation
+apps were closed afterward. Full parity, input, lifecycle and performance gates
+remain open on both platforms.
+
 ## Shared Apple workspace library and live previews — 2026-09-12
 
 The workspace library is enabled by default on both Apple targets. Shared Swift

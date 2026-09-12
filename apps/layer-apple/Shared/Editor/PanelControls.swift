@@ -4,8 +4,16 @@ struct PanelControls: View {
     @ObservedObject var store: EditorStore
     let panel: JSON
     var scrollable = true
+    var measureForWorkspace = true
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     var body: some View {
+        contents.environment(\.measuresWorkspacePanel, measureForWorkspace)
+            .background {
+                Color.clear.preference(key: PanelSizeFacts.self, value: measureForWorkspace
+                    ? [PanelSizeKey(panel: panel["id"].string, part: "present"): 0] : [:])
+            }
+    }
+    @ViewBuilder private var contents: some View {
         if panel["id"].string == "layers" { LayerPanel(store: store, panel: panel) }
         else if panel["id"].string == "adjustments" {
             if panel["controls"].array.contains(where: { $0["control"].string == "adjustments" && $0["visible_in_panel"].bool }) {
@@ -33,6 +41,7 @@ struct PanelControls: View {
                 }
         }.padding(panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .modifier(PanelBodyMeasurement(panel: panel["id"].string))
     }
     @ViewBuilder func control(_ item: JSON) -> some View {
         switch item["control"].string {

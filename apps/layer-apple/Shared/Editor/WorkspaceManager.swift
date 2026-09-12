@@ -35,7 +35,7 @@ import SwiftUI
     private var selectionTask: Task<Void, Never>?
     private var selectionGeneration: UInt64 = 0
     var library: WorkspaceLibrary? { store?.workspaceLibrary }
-    var title: String { catalog[toolbarMode ? "toolbar_title" : page == "templates" ? "template_title" : "title"].string }
+    var title: String { catalog[toolbarMode ? "toolbar_title" : "title"].string }
     init(store: EditorStore, files: WorkspacePackageFiles? = nil) {
         self.store = store; self.files = files ?? WorkspacePackageFiles()
     }
@@ -61,11 +61,10 @@ import SwiftUI
         let current = library?.status["active_id"] ?? JSON()
         switch command["type"].string {
         case "manage": try await show("workspaces")
-        case "manage_templates": try await show("templates")
         case "manage_toolbars": try await show("this_workspace")
         case "switch": try await run(JSON(["type": "switch", "value": command["id"].raw]))
         case "new": try await run(JSON(["type": "new"]))
-        case "save_as_template": try await run(JSON(["type": "save_as_template", "value": current.raw]))
+        case "reset_brushes": try await run(JSON(["type": "reset_brushes"]))
         case "reset_layout": try await run(JSON(["type": "reset", "value": current.raw]))
         case "layout_history": try await run(JSON(["type": "history", "value": current.raw]))
         case "save_toolbar": try await run(JSON(["type": "save_toolbar", "value": command["panel"].raw]))
@@ -81,6 +80,9 @@ import SwiftUI
         if catalog.isNull { catalog = try await service().read(["type": "catalog"]) }
     }
     func show(_ page: String) async throws {
+        guard ["workspaces", "this_workspace", "toolbar_library", "recently_deleted"].contains(page) else {
+            throw HostFailure(message: "This workspace page is unavailable")
+        }
         await selectionTask?.value
         try await library?.finishLayoutPreview()
         try await loadCatalog()
@@ -121,7 +123,7 @@ import SwiftUI
             guard selection == id && presented else { return }
             do {
                 try await refresh()
-                guard let library, ["workspaces", "templates"].contains(page) else { return }
+                guard let library, page == "workspaces" else { return }
                 guard let id, selection == id, presented,
                     !view["details"]["preview"].isNull, view["idle"].bool else {
                     try await library.finishLayoutPreview(); return
@@ -142,6 +144,9 @@ import SwiftUI
         }
     }
     func run(_ action: JSON) async throws {
+        guard !["save_as_template", "use_template", "update_from_current", "import_template", "edit_as_workspace", "new_from_template"].contains(action["type"].string) else {
+            throw HostFailure(message: "This workspace action is unavailable")
+        }
         guard !processing else { throw HostFailure(message: "Finish the current workspace action first") }
         processing = true
         let resumePreview = library?.previewingLayout == true
@@ -157,14 +162,18 @@ import SwiftUI
         switch type {
         case "switch":
             guard value.string != library.status["active_id"].string else { return }
-            _ = try await library.operation(["type": "switch", "id": value.raw]); presented = false
-        case "use_template":
-            _ = try await library.operation(["type": "use_template", "id": value.raw]); presented = false
+            let item = try await library.read(["type": "load", "id": value.raw])
+            let claim = item["claim"]
+            if !claim.isNull && claim["owner"]["id"].string != library.status["owner"].string
+                && (UInt64(claim["expires_at_ms"].string) ?? claim["expires_at_ms"].uint) > UInt64(Date().timeIntervalSince1970 * 1000) {
+                try focusWindow(value.string, item: item)
+            } else {
+                _ = try await library.operation(["type": "switch", "id": value.raw])
+            }
+            presented = false
         case "switch_to_window":
             let item = try await library.read(["type": "load", "id": value.raw])
-            guard let target = EditorStore.workspaceOwner(id: value.string, owner: item["claim"]["owner"]["id"].string),
-                let focus = target.focusWindow else { throw HostFailure(message: "This workspace is open in another application window. Use that window or duplicate the workspace.") }
-            focus(); presented = false
+            try focusWindow(value.string, item: item); presented = false
         case "history", "versions", "metadata":
             historyID = value.string; historyMode = type == "history" ? "layout" : type
             showingStorage = false; presented = true
@@ -184,8 +193,8 @@ import SwiftUI
         case "export_database":
             presented = true
             if try await files.exportDatabase(library) { note = "Database export completed." }
-        case "import_template", "import_toolbar", "import_backup":
-            let kind: WorkspacePackageKind = type == "import_template" ? .template : type == "import_toolbar" ? .toolbar : .workspaceBackup
+        case "import_toolbar", "import_backup":
+            let kind: WorkspacePackageKind = type == "import_toolbar" ? .toolbar : .workspaceBackup
             presented = true
             if let text = try await files.read(kind: kind) { try await importText(text, kind: kind) }
         case "retry_storage":
@@ -220,11 +229,13 @@ import SwiftUI
         var nextPage: String?
         var closeAfter = false
         switch type {
-        case "new", "new_from_template", "edit_as_workspace":
-            operation["type"] = "new"; operation["template"] = choice.isEmpty ? NSNull() : choice as Any; closeAfter = true
+        case "reset_brushes":
+            try await library.resetBrushes(); presented = false; return
+        case "new":
+            operation["type"] = "new"; closeAfter = true
         case "rename": operation["type"] = "rename"
-        case "duplicate", "save_as_template":
-            operation["type"] = type == "duplicate" ? "duplicate" : "save_template"
+        case "duplicate":
+            operation["type"] = "duplicate"
             let source = try await library.read(["type": "load", "id": value.raw])
             if source["entity"]["metadata"]["kind"].string == "workspace",
                 !source["claim"].isNull, source["claim"]["owner"]["id"].string != library.status["owner"].string,
@@ -233,12 +244,10 @@ import SwiftUI
                     throw HostFailure(message: "Close the workspace in its other application process to finish saving before copying it here.")
                 }
                 operation["source"] = try await other.snapshotForCopy().raw
-                operation["type"] = type == "duplicate" ? "duplicate_snapshot" : "save_template_snapshot"
+                operation["type"] = "duplicate_snapshot"
             }
-            closeAfter = type == "duplicate" && source["entity"]["metadata"]["kind"].string == "workspace"
-            if type == "save_as_template" { nextPage = "templates" }
+            closeAfter = source["entity"]["metadata"]["kind"].string == "workspace"
         case "reset": operation["type"] = "reset"
-        case "update_from_current": operation["type"] = "update_template"
         case "save_toolbar": operation["type"] = "save_toolbar"; operation["panel"] = value.raw; nextPage = "toolbar_library"
         case "update_toolbar": operation["type"] = "update_toolbar"; operation["panel"] = try JSON.decode(choice).raw
         case "delete":
@@ -262,6 +271,11 @@ import SwiftUI
         if !result["selected"].isNull { selection = result["selected"].string }
         if ["delete", "delete_permanently"].contains(type) { selection = nil }
         try await refresh()
+    }
+    private func focusWindow(_ id: String, item: JSON) throws {
+        guard let target = EditorStore.workspaceOwner(id: id, owner: item["claim"]["owner"]["id"].string),
+            let focus = target.focusWindow else { throw HostFailure(message: "This workspace is open in another application window. Use that window or duplicate the workspace.") }
+        focus()
     }
     private func form(_ spec: JSON, operation: (JSON) async throws -> Void) async throws -> Bool {
         var previous = JSON(), failure: String?
@@ -315,7 +329,7 @@ import SwiftUI
         }
     }
     func selectHistory(_ id: String) { Task { do { try await refreshHistory(id) } catch { self.error = error.localizedDescription } } }
-    func historyAction(open: Bool) {
+    func historyAction() {
         Task {
             guard !processing else { return }
             processing = true
@@ -327,12 +341,11 @@ import SwiftUI
                     return
                 }
                 let id = historyID, mode = historyMode, selected = history["selected"].string
-                _ = try await form(history[open ? "open" : "restore"]) { [self] fields in
-                    var operation: [String: Any] = ["id": id, "version": selected, "revision": selected, "name": fields["name"].string]
-                    operation["type"] = open ? (mode == "layout" ? "open_history" : "new_from_version")
-                        : mode == "layout" ? "reset" : mode == "versions" ? "restore_version" : "restore_metadata"
+                _ = try await form(history["restore"]) { [self] _ in
+                    var operation: [String: Any] = ["id": id, "version": selected]
+                    operation["type"] = mode == "versions" ? "restore_version" : "restore_metadata"
                     _ = try await service().operation(operation)
-                    if open { presented = false } else { try await refreshHistory(selected) }
+                    try await refreshHistory(selected)
                 }
             } catch { self.error = error.localizedDescription }
         }
@@ -353,12 +366,13 @@ import SwiftUI
         }
     }
     private func importText(_ text: String, kind: WorkspacePackageKind) async throws {
+        guard kind != .template else { throw HostFailure(message: "Loading saved layouts is no longer available") }
         let result = try await service().perform(["type": "import", "kind": kind.rawValue, "text": text])
         if kind == .workspaceBackup { presented = false }
         else {
-            page = kind == .template ? "templates" : "toolbar_library"; toolbarMode = kind == .toolbar
+            page = "toolbar_library"; toolbarMode = true
             history = JSON(); showingStorage = false; selection = result["selected"].string
-            note = kind == .template ? "Template imported. Choose Load Layout to use it." : "Toolbar imported. Choose Add to Workspace to use it."
+            note = "Toolbar imported. Choose Add to Workspace to use it."
             try await refresh()
         }
     }

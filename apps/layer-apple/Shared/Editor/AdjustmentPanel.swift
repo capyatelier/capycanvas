@@ -36,7 +36,7 @@ struct AdjustmentPanel: View {
                 IconTile(icon: "search", label: picker["search_label"].string, selected: !picker["search"].isNull) {
                     send(["op": "toggle_search"])
                 }.frame(width: 34, height: 34).accessibilityIdentifier("filter-search-toggle")
-            }.frame(minHeight: 34)
+            }.frame(minHeight: 34).modifier(PanelBodyMeasurement(panel: "adjustments", part: "header"))
             GeometryReader { viewport in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 2) {
@@ -57,10 +57,11 @@ struct AdjustmentPanel: View {
                                 .id(choice["id"].string)
                         }
                         if choices.isEmpty { Text(picker["empty_label"].string).foregroundStyle(palette["text"].opacity(0.55)).padding(8) }
-                    }
+                    }.modifier(PanelBodyMeasurement(panel: "adjustments", part: "choices"))
                 }.coordinateSpace(name: projection).accessibilityIdentifier("filter-list")
             }
         }.padding(6)
+            .modifier(PanelBodyMeasurement(panel: "adjustments", part: "insets", intrinsicHeight: 18))
             .onChange(of: picker["search"].isNull) { _, closed in searching = !closed }
             .onDisappear { store.filterPreviews.hidePanel(projection) }
     }

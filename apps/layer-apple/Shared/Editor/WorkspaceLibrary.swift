@@ -216,6 +216,30 @@ import SwiftUI
     func operation(_ value: [String: Any]) async throws -> JSON {
         try await perform(["type": "operation", "operation": value], recovering: value["type"] as? String == "save_as_new")
     }
+    func resetBrushes() async throws {
+        try await serialized { [self] in
+            guard ready && !closed && !readOnly && !previewingLayout else {
+                throw HostFailure(message: "Workspace editing is unavailable")
+            }
+            busy = true
+            defer { busy = false; if observed != edits { scheduleAutosave() } }
+            _ = try await session(["type": "begin"])
+            do {
+                _ = try await capture()
+                _ = try await request(["type": "flush"])
+                _ = try await session(["type": "reset_brushes"])
+                _ = try await capture()
+                _ = try await request(["type": "flush"])
+                _ = try await session(["type": "end"])
+                error = status["error"].isNull ? nil : status["error"]["message"].string
+            } catch {
+                _ = try? await session(["type": "end"])
+                self.error = error.localizedDescription
+                await protectOwnership(error)
+                throw error
+            }
+        }
+    }
     private func storedOnly(_ value: [String: Any]) async throws -> Bool {
         if value["type"] as? String == "import" { return value["kind"] as? String != "workspace_backup" }
         guard value["type"] as? String == "operation" else { return false }

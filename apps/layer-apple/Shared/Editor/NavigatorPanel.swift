@@ -17,6 +17,7 @@ struct NavigatorPanel: View {
                 }
             }
         }.padding(8)
+            .modifier(PanelBodyMeasurement(panel: "navigator", intrinsicHeight: 164 + 2 + 32 + 16))
     }
 }
 

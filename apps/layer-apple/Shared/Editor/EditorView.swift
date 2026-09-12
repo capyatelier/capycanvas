@@ -136,6 +136,9 @@ struct EditorView<Canvas: View>: View {
                 .fontWeight(.semibold).padding(.horizontal, 8).frame(height: 36)
                 .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
             HStack(spacing: 6) {
+                if let library = store.workspaceLibrary {
+                    WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette)
+                }
                 if SystemStatus.visible(policy: store.state["settings"]["show_clock"].string, fullscreen: store.state["fullscreen"].bool) {
                     SystemStatusView(palette: palette, dark: store.state["theme"].string == "dark")
                 }
@@ -213,7 +216,8 @@ private struct EditorHeaderLayout: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard subviews.count == 3 else { return }
         let title = subviews[1].sizeThatFits(.unspecified)
-        let trailing = subviews[2].sizeThatFits(.unspecified)
+        let minimumLeading = subviews[0].sizeThatFits(ProposedViewSize(width: 0, height: 36))
+        let trailing = subviews[2].sizeThatFits(ProposedViewSize(width: max(0, bounds.width - minimumLeading.width - 12), height: 36))
         let available = max(0, bounds.width - title.width - trailing.width - 12)
         let ideal = subviews[0].sizeThatFits(.unspecified)
         let leading = ideal.width <= available ? ideal : subviews[0].sizeThatFits(ProposedViewSize(width: available, height: 36))

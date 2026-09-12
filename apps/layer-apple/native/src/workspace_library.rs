@@ -113,12 +113,8 @@ enum Operation {
     Switch {
         id: String,
     },
-    UseTemplate {
-        id: String,
-    },
     New {
         name: String,
-        template: Option<String>,
     },
     Duplicate {
         id: String,
@@ -129,17 +125,9 @@ enum Operation {
         name: String,
         description: String,
     },
-    SaveTemplate {
-        id: String,
-        name: String,
-        description: String,
-    },
     SaveToolbar {
         panel: Panel,
         name: String,
-    },
-    UpdateTemplate {
-        id: String,
     },
     UpdateToolbar {
         id: String,
@@ -157,11 +145,6 @@ enum Operation {
     RestoreVersion {
         id: String,
         version: String,
-    },
-    NewFromVersion {
-        id: String,
-        version: String,
-        name: String,
     },
     RestoreMetadata {
         id: String,
@@ -187,17 +170,24 @@ enum Operation {
         source: Entity,
         name: String,
     },
-    SaveTemplateSnapshot {
-        #[serde(deserialize_with = "json_field")]
-        source: Entity,
-        name: String,
-        description: String,
-    },
 }
 
 impl CapyWorkspaceLibrary {
     fn status(&self) -> Value {
+        let items = self.manager.items();
+        let defaults: Vec<_> = DEFAULT_WORKSPACES
+            .iter()
+            .map(|(id, preset)| {
+                let name = items
+                    .iter()
+                    .find(|item| item.id == *id)
+                    .map(|item| item.metadata.name.as_str())
+                    .unwrap_or(preset.name());
+                json!({"id":id,"name":name})
+            })
+            .collect();
         json!({"active_id":self.manager.active_id(),"name":self.manager.active_name(),
+            "default_workspaces":defaults,
             "dirty":self.manager.dirty(),"saving":self.manager.saving(),"error":self.manager.error().or_else(||self.resume_error.clone()),
             "owner":self.manager.owner.id,"pending_adoption":self.pending.as_ref().map(|p|&p.0),
             "lease_expires_at_ms":self.manager.lease_expires_at_ms(),"renew_after_ms":OWNER_RENEW_MS})
@@ -233,11 +223,10 @@ impl CapyWorkspaceLibrary {
         }
         match request {
             Request::Catalog => Ok(
-                json!({"title":"Manage Workspaces","template_title":"Saved Layouts","toolbar_title":"Manage Toolbars",
-                    "load_label":ManagerAction::UseTemplate(String::new()).label(),"switch_label":ManagerAction::Switch(String::new()).label(),
-                    "description":"Switch between layouts you use for different tasks. Your changes to the layout are saved automatically as you move tools and panels around.",
-                    "template_description":"Save layouts you want to use again. Load Layout applies a saved layout to your current workspace.",
-                    "pages":([ManagerPage::Workspaces,ManagerPage::Templates,ManagerPage::ThisWorkspace,ManagerPage::ToolbarLibrary].map(|page|json!({"id":page,"label":page.label()})))
+                json!({"title":"Manage Workspaces","toolbar_title":"Manage Toolbars",
+                    "switch_label":ManagerAction::Switch(String::new()).label(),
+                    "description":"Workspaces save your tool settings and layout for different tasks.",
+                    "pages":([ManagerPage::Workspaces,ManagerPage::ThisWorkspace,ManagerPage::ToolbarLibrary].map(|page|json!({"id":page,"label":page.label()})))
                 }),
             ),
             Request::Initialize { now, preferred } => {
@@ -594,28 +583,14 @@ impl CapyWorkspaceLibrary {
                     .await?;
                 self.prepare(incoming)
             }),
-            Operation::SaveTemplateSnapshot {
-                source,
-                name,
-                description,
-            } => run!({
-                source.validate()?;
-                Ok(
-                    json!({"selected":self.manager.save_template_snapshot(source,&name,&description,now).await?}),
-                )
-            }),
-            Operation::UseTemplate { id } => run!({
-                let incoming = self.manager.apply_template(&id, now).await?;
-                self.prepare(incoming)
-            }),
             Operation::Switch { id } => run!({
                 let incoming = self.manager.prepare_switch(&id, now).await?;
                 self.prepare(incoming)
             }),
-            Operation::New { name, template } => run!({
+            Operation::New { name } => run!({
                 let incoming = self
                     .manager
-                    .create_workspace(&name, template.as_deref(), false, now)
+                    .create_workspace(&name, None, false, now)
                     .await?;
                 self.prepare(incoming)
             }),
@@ -638,33 +613,8 @@ impl CapyWorkspaceLibrary {
                 self.manager.rename(&id, &name, &description, now).await?;
                 Ok(json!({"binding":self.manager.binding()}))
             }),
-            Operation::SaveTemplate {
-                id,
-                name,
-                description,
-            } => run!({
-                Ok(
-                    json!({"selected":self.manager.save_template_from(&id, &name, &description, now).await?}),
-                )
-            }),
             Operation::SaveToolbar { panel, name } => run!({
                 Ok(json!({"selected":self.manager.save_toolbar(panel, &name, now).await?}))
-            }),
-            Operation::UpdateTemplate { id } => run!({
-                let current = self
-                    .manager
-                    .current()
-                    .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
-                self.manager
-                    .update_reusable(
-                        &id,
-                        ReusableContent::Layout {
-                            layout: current.capture()?.history.layout().clone(),
-                        },
-                        now,
-                    )
-                    .await?;
-                Ok(Value::Null)
             }),
             Operation::UpdateToolbar { id, panel } => run!({
                 let current = self
@@ -707,13 +657,6 @@ impl CapyWorkspaceLibrary {
                     .restore_reusable_version(&id, &version, now)
                     .await?;
                 Ok(Value::Null)
-            }),
-            Operation::NewFromVersion { id, version, name } => run!({
-                let incoming = self
-                    .manager
-                    .create_from_library_version(&id, &version, &name, now)
-                    .await?;
-                self.prepare(incoming)
             }),
             Operation::RestoreMetadata { id, version } => run!({
                 let entity = self.manager.load(&id).await?.entity;

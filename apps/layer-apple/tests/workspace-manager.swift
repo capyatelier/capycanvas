@@ -43,6 +43,9 @@ import SwiftUI
             let library = editor.workspaceLibrary!, manager = editor.workspaceManager
             precondition(library.ready, library.error ?? "Startup failed")
             let original = library.status["active_id"].string
+            let defaults = library.status["default_workspaces"].array
+            precondition(defaults.map { $0["name"].string } == ["Painter", "Illustrator", "Photographer"])
+            precondition(original == defaults[1]["id"].string)
             // Exercise the actual host request, rather than assuming the menu's
             // visible label means the editor/service action is connected.
             try await edit(editor, ["type": "workspace_manager", "command": ["type": "manage"]])
@@ -55,30 +58,34 @@ import SwiftUI
             precondition(!currentButton["enabled"].bool)
             try await form(manager, ["type": "new"], name: "Cancelled", cancel: true)
             precondition(library.status["active_id"].string == original)
-            try await form(manager, ["type": "new"], name: "Inking", choice: "builtin:default")
+            let newPrompt = try await library.read(["type": "prompt", "action": ["type": "new"]])
+            precondition(newPrompt["prompt"]["choices"].array.isEmpty)
+            try await form(manager, ["type": "new"], name: "Inking")
             let inking = library.status["active_id"].string
             precondition(inking != original && !manager.presented)
+            try await edit(editor, ["type": "set_brush_size", "value": 31])
+            try await edit(editor, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "sizes", "visible": false]])
+            let source = try await captureSession(editor)
             try await form(manager, ["type": "new"], name: "Inking", retryName: "Sketching")
             let sketching = library.status["active_id"].string
+            let created = try await captureSession(editor)
+            precondition(SnapshotProjection.equal(created["capture"]["working"].raw, source["capture"]["working"].raw))
+            let sourceRevision = source["capture"]["history"]["current"].string
+            let createdRevision = created["capture"]["history"]["current"].string
+            precondition(SnapshotProjection.equal(created["capture"]["history"]["revisions"][createdRevision]["layout"].raw,
+                source["capture"]["history"]["revisions"][sourceRevision]["layout"].raw))
+            precondition(created["capture"]["history"]["undo"].array.isEmpty, "A new workspace starts independent history")
             try await manager.run(JSON(["type": "switch", "value": original]))
             try await edit(editor, ["type": "set_brush_size", "value": 67])
             try await edit(editor, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": false]])
-            let savePrompt = try await library.read(["type": "prompt", "action": ["type": "save_as_template", "value": original]])
-            precondition(savePrompt["prompt"]["name"].string == library.status["name"].string + " Layout")
-            try await form(manager, ["type": "save_as_template", "value": original], name: "My Studio")
-            let template = manager.selection!
-            precondition(manager.page == "templates" && manager.view["details"]["title"].string == "My Studio")
             try await selectionPreview(editor, page: "workspaces", target: inking, cancel: true)
-            try await manager.show("templates")
-            precondition(manager.selection == nil && manager.view["details"].isNull)
-            try await capture(manager, platform: platform, phase: "layouts")
-            manager.selection = template; try await manager.refresh()
+            try await manager.show("workspaces")
             // Editing library metadata must remain available while a canvas
             // contact is held, and must not cancel that interaction.
             editor.input(["type": "pointer", "id": 900, "phase": "down", "kind": "pen", "button": "primary", "position": [500, 400]])
             let held = try await captureSession(editor)
             precondition(!held["idle"].bool)
-            try await form(manager, ["type": "rename", "value": template], name: "Studio v2")
+            try await form(manager, ["type": "rename", "value": inking], name: "Inking v2")
             let afterRename = try await captureSession(editor)
             precondition(!afterRename["idle"].bool)
             do { _ = try await library.operation(["type": "new", "name": "During Contact"]); preconditionFailure("Switching must require an idle canvas") }
@@ -86,44 +93,50 @@ import SwiftUI
             editor.input(["type": "pointer", "id": 900, "phase": "up", "kind": "pen", "button": "primary", "position": [500, 400]])
             let ended = try await captureSession(editor)
             precondition(ended["idle"].bool)
-            try await manager.run(JSON(["type": "metadata", "value": template]))
+            try await manager.run(JSON(["type": "metadata", "value": inking]))
             precondition(!manager.history["rows"].array.isEmpty && !manager.history["restore"].isNull)
-            manager.historyAction(open: false)
+            manager.historyAction()
             try await wait("metadata restore form") { manager.prompt != nil }
             manager.answer(confirm: true)
             try await wait("metadata restored") { !manager.processing && manager.prompt == nil }
-            let restored = try await library.read(["type": "load", "id": template])
-            precondition(restored["entity"]["metadata"]["name"].string == "My Studio")
+            let restored = try await library.read(["type": "load", "id": inking])
+            precondition(restored["entity"]["metadata"]["name"].string == "Inking")
             manager.back()
             try await form(manager, ["type": "reset", "value": original])
             precondition(editor.state["brush"]["diameter"].number == 67)
-            let beforeTemplate = try await captureSession(editor)
-            try await selectionPreview(editor, page: "templates", target: template, cancel: false)
-            try await manager.run(JSON(["type": "use_template", "value": template]))
-            precondition(library.status["active_id"].string == original && editor.state["brush"]["diameter"].number == 67)
-            let templateApplied = try await captureSession(editor)
-            precondition(templateApplied["capture"]["history"]["undo"].array.count == beforeTemplate["capture"]["history"]["undo"].array.count + 1)
-            try await edit(editor, ["type": "invoke", "command": "undo_workspace"])
-            let undoneTemplate = try await captureSession(editor)
-            precondition(undoneTemplate["capture"]["history"]["current"].string == beforeTemplate["capture"]["history"]["current"].string)
             try await liveHistory(editor, platform: platform)
-            try await form(manager, ["type": "update_from_current", "value": template])
-            try await manager.run(JSON(["type": "versions", "value": template]))
-            precondition(manager.history["rows"].array.count >= 2)
-            let oldVersion = manager.history["rows"].array.first { !$0["subtitle"].string.contains("Current") }!["id"].string
-            try await manager.refreshHistory(oldVersion)
-            precondition(!manager.history["restore"].isNull && !manager.historyPreview.isNull)
-            manager.back()
+            let beforeReset = try await captureSession(editor)
+            let layersBeforeReset = editor.state["layers"].stableKey
+            precondition(!beforeReset["capture"]["working"]["tools"]["overrides"].object.isEmpty)
+            try await form(manager, ["type": "reset_brushes"], cancel: true)
+            let canceledReset = try await captureSession(editor)
+            precondition(SnapshotProjection.equal(canceledReset["capture"].raw, beforeReset["capture"].raw))
+            try await form(manager, ["type": "reset_brushes"])
+            let afterReset = try await captureSession(editor)
+            precondition(afterReset["capture"]["working"]["tools"]["overrides"].object.isEmpty)
+            precondition(SnapshotProjection.equal(afterReset["capture"]["history"].raw, beforeReset["capture"]["history"].raw))
+            precondition(editor.state["layers"].stableKey == layersBeforeReset)
+            let storedReset = try await library.read(["type": "load", "id": original])
+            precondition(storedReset["entity"]["working"]["tools"]["overrides"].object.isEmpty)
+            let untouched = try await library.read(["type": "load", "id": inking])["entity"]["working"]
+            precondition(untouched["tools"]["overrides"][String(untouched["preset"].uint)]["size"].number == 31)
+            try await form(manager, ["type": "rename", "value": defaults[0]["id"].raw], name: "Paint")
+            precondition(library.status["default_workspaces"][0]["name"].string == "Paint")
             // A live source window's most recent edit must be copied before
             // its debounce timer writes. The source remains independently open.
             let other = EditorStore(platform: platform, persistence: storage, managedWorkspaces: true)
             try await wait("other window") { other.workspaceLibrary!.ready }
+            _ = try await other.workspaceLibrary!.operation(["type": "switch", "id": defaults[0]["id"].raw])
             let otherID = other.workspaceLibrary!.status["active_id"].string
             try await edit(other, ["type": "set_brush_size", "value": 113])
             var focused = false
             other.focusWindow = { focused = true }
             try await manager.run(JSON(["type": "switch_to_window", "value": otherID]))
             precondition(focused)
+            focused = false
+            try await manager.run(JSON(["type": "switch", "value": otherID]))
+            precondition(focused && library.status["active_id"].string == original,
+                "The header switch action must focus a claimed default workspace without taking it over")
             try await form(manager, ["type": "duplicate", "value": otherID], name: "Other Window Copy")
             precondition(editor.state["brush"]["diameter"].number == 113 && other.workspaceLibrary!.status["active_id"].string == otherID)
             try await manager.run(JSON(["type": "switch", "value": original]))
@@ -162,10 +175,11 @@ import SwiftUI
             precondition(manager.undoDeletion == sketching)
             try await manager.run(JSON(["type": "restore_deleted", "value": sketching]))
             precondition(manager.undoDeletion == nil)
-            try await form(manager, ["type": "delete", "value": original], choice: inking)
+            try await manager.run(JSON(["type": "switch", "value": sketching]))
+            try await form(manager, ["type": "delete", "value": sketching], choice: inking)
             precondition(library.status["active_id"].string == inking)
-            try await manager.run(JSON(["type": "restore_deleted", "value": original]))
-            try await packageDelivery(editor: editor, root: root, template: template)
+            try await manager.run(JSON(["type": "restore_deleted", "value": sketching]))
+            try await packageDelivery(editor: editor, root: root, toolbar: savedToolbar)
             let allowed: Bool = await withCheckedContinuation { continuation in editor.projectFiles.confirmClose { continuation.resume(returning: $0) } }
             precondition(allowed)
             let prepared: Bool = await withCheckedContinuation { continuation in editor.prepareClose { continuation.resume(returning: $0) } }
@@ -189,7 +203,7 @@ import SwiftUI
             let working = saved["entity"]["working"]
             precondition(working["tools"]["overrides"][String(working["preset"].uint)]["size"].number == 89,
                 "Explicit teardown must preserve the last saved copy after discarding unsaved changes")
-            print("PASS: platform \(platform), manager host commands, forms, inline validation, retained versions, live-window copying, toolbar actions, deletion replacement and native package delivery")
+            print("PASS: platform \(platform), manager host commands, forms, inline validation, workspace previews/history, live-window copying, toolbar actions, deletion replacement and native package delivery")
         }
     }
     @MainActor static func selectionPreview(_ editor: EditorStore, page: String, target: String, cancel: Bool) async throws {
@@ -255,7 +269,7 @@ import SwiftUI
         precondition(SnapshotProjection.equal(resumed["capture"].raw, before["capture"].raw))
         try await manager.run(JSON(["type": "history", "value": id]))
         try await manager.refreshHistory(earlier)
-        manager.historyAction(open: false)
+        manager.historyAction()
         try await wait("history restoration") { !manager.presented && !library.busy && !manager.processing }
         let restored = try await captureSession(editor)
         precondition(restored["capture"]["history"]["undo"].array.count == before["capture"]["history"]["undo"].array.count + 1)
@@ -301,31 +315,31 @@ import SwiftUI
             }
         }
     }
-    @MainActor static func packageDelivery(editor: EditorStore, root: URL, template: String) async throws {
-        let destination = root.appendingPathComponent("shared.capytemplate")
+    @MainActor static func packageDelivery(editor: EditorStore, root: URL, toolbar: String) async throws {
+        let destination = root.appendingPathComponent("shared.capytoolbar")
         var open: URL? = destination, save: URL? = destination
         let files = WorkspacePackageFiles(dialogs: .init(open: { _, done in done(open) }, save: { _, _, done in done(save) }, export: nil))
         let manager = WorkspaceManager(store: editor, files: files)
-        try await manager.run(JSON(["type": "export", "value": template]))
+        try await manager.run(JSON(["type": "export", "value": toolbar]))
         let bytes = try Data(contentsOf: destination)
         precondition(!bytes.isEmpty)
-        try await manager.run(JSON(["type": "import_template"]))
-        precondition(manager.selection != template && manager.page == "templates")
+        try await manager.run(JSON(["type": "import_toolbar"]))
+        precondition(manager.selection != toolbar && manager.page == "toolbar_library")
         let count = manager.view["rows"].array.count
         open = nil
-        try await manager.run(JSON(["type": "import_template"]))
+        try await manager.run(JSON(["type": "import_toolbar"]))
         precondition(manager.view["rows"].array.count == count)
         save = nil
-        try await manager.run(JSON(["type": "export", "value": template]))
+        try await manager.run(JSON(["type": "export", "value": toolbar]))
         let unchanged = try Data(contentsOf: destination)
         precondition(unchanged == bytes)
         open = destination
         try Data("broken package".utf8).write(to: destination)
-        do { try await manager.run(JSON(["type": "import_template"])); preconditionFailure("Corrupt import must fail") }
+        do { try await manager.run(JSON(["type": "import_toolbar"])); preconditionFailure("Corrupt import must fail") }
         catch { precondition(manager.view["rows"].array.count == count) }
         // A failed destination write leaves the old file bytes intact.
-        save = root.appendingPathComponent("missing/failed.capytemplate")
-        do { try await manager.run(JSON(["type": "export", "value": template])); preconditionFailure("Unavailable destination must fail") }
+        save = root.appendingPathComponent("missing/failed.capytoolbar")
+        do { try await manager.run(JSON(["type": "export", "value": toolbar])); preconditionFailure("Unavailable destination must fail") }
         catch { }
     }
 }

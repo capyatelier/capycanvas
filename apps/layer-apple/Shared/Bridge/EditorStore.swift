@@ -29,6 +29,7 @@ import SwiftUI
     lazy var filterPreviews = FilterPreviews(store: self)
     lazy var rendererStats = RendererStats(store: self)
     lazy var workspace = WorkspacePresentation(store: self)
+    lazy var panelMeasurements = PanelMeasurements(store: self)
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
     lazy var windowPresentation = WindowPresentation(store: self)

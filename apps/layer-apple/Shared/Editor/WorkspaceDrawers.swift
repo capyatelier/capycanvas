@@ -156,7 +156,7 @@ private struct DrawerPanelBody: View {
                         if !Task.isCancelled { tiles = result }
                     }
             } else {
-                PanelControls(store: store, panel: panel, scrollable: false)
+                PanelControls(store: store, panel: panel, scrollable: false, measureForWorkspace: false)
                     .frame(height: panel["id"].string == "layers" || panel["id"].string == "adjustments" ? 480 : panel["id"].string == "navigator" ? 240 : nil)
             }
         }

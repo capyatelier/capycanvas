@@ -43,7 +43,7 @@ import SQLite3
             precondition(!original.isEmpty && first.state["workspace"]["zen_mode"].bool)
             precondition(SnapshotProjection.equal(first.state["workspace"]["layout"].raw, legacy.state["workspace"]["layout"].raw))
             let initial = try await manager.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(initial["rows"].array.count == 2, "Equal scene layouts must remain distinct; fallback must alias a scene")
+            precondition(initial["rows"].array.count == 5, "Three defaults plus distinct migrated scenes; fallback must alias a scene")
             // The scene files are immutable migration inputs, even after edits.
             try await edit(first, ["type": "set_brush_size", "value": 73])
             try await edit(first, ["type": "customize", "action": ["type": "set_panel_visible", "panel": "navigator", "visible": true]])
@@ -55,13 +55,14 @@ import SQLite3
             // Switching immediately after accepted edits must capture them,
             // without waiting for the autosave timer or restoring stale tools.
             try await edit(first, ["type": "set_brush_size", "value": 87])
-            _ = try await manager.operation(["type": "new", "name": "Clean", "template": "builtin:default"])
+            _ = try await manager.operation(["type": "new", "name": "Clean"])
             let clean = manager.status["active_id"].string
-            precondition(clean != original && first.state["brush"]["diameter"].number != 87)
+            precondition(clean != original && first.state["brush"]["diameter"].number == 87)
+            try await edit(first, ["type": "set_brush_size", "value": 44])
             _ = try await manager.operation(["type": "switch", "id": original])
             precondition(first.state["brush"]["diameter"].number == 87)
             do {
-                _ = try await manager.operation(["type": "new", "name": "Clean", "template": "builtin:default"])
+                _ = try await manager.operation(["type": "new", "name": "Clean"])
                 preconditionFailure("A conflicting workspace name must fail")
             } catch { precondition(manager.status["active_id"].string == original && !manager.busy) }
             try await edit(first, ["type": "set_brush_size", "value": 91]) // Failure released the interaction lock.
@@ -96,7 +97,7 @@ import SQLite3
             precondition(restored.ready, restored.error ?? "Reopen failed")
             precondition(restored.status["active_id"].string == original && reopened.state["brush"]["diameter"].number == 91)
             let rows = try await restored.read(["type": "view", "page": "workspaces", "query": "", "idle": true])
-            precondition(rows["rows"].array.count == 3, "Scene restoration must not create an unused workspace beside another live window")
+            precondition(rows["rows"].array.count == 6, "Scene restoration must not create an unused workspace beside another live window")
             try await restored.close(); try await second.workspaceLibrary!.close()
             // Unknown legacy data must remain intact and must not create a
             // replacement default workspace or acknowledge a partial import.
@@ -180,31 +181,28 @@ import SQLite3
     }
     @MainActor static func libraryActions(_ manager: WorkspaceLibrary, editor: EditorStore, root: URL) async throws {
         let original = manager.status["active_id"].string
-        let saved = try await manager.operation(["type": "save_template", "id": original,
-            "name": "Studio", "description": "Layout only"])
-        let template = saved["selected"].string
-        precondition(!template.isEmpty)
-        let before = try await manager.read(["type": "load", "id": template])
+        let saved = try await manager.operation(["type": "save_toolbar", "panel": "toolbar", "name": "Studio"])
+        let reusable = saved["selected"].string
+        precondition(!reusable.isEmpty)
+        let before = try await manager.read(["type": "load", "id": reusable])
         precondition(before["entity"]["working"].isNull)
         let version = before["entity"]["content"]["current"]["id"].string
-        _ = try await manager.operation(["type": "rename", "id": template, "name": "Studio Template", "description": "Independent layout"])
-        let renamed = try await manager.read(["type": "load", "id": template])
+        _ = try await manager.operation(["type": "rename", "id": reusable, "name": "Studio Tools", "description": "Independent toolbar"])
+        let renamed = try await manager.read(["type": "load", "id": reusable])
         let metadata = renamed["entity"]["metadata"]["previous"][0]["id"].string
         precondition(!metadata.isEmpty)
-        _ = try await manager.operation(["type": "restore_metadata", "id": template, "version": metadata])
+        _ = try await manager.operation(["type": "restore_metadata", "id": reusable, "version": metadata])
         _ = try await manager.operation(["type": "reset", "id": original])
         precondition(editor.state["brush"]["diameter"].number == 91, "Layout reset must preserve current working values")
-        _ = try await manager.operation(["type": "update_template", "id": template])
-        _ = try await manager.operation(["type": "restore_version", "id": template, "version": version])
-        let preview = try await manager.read(["type": "view", "page": "templates", "query": "", "selected": template, "idle": true])
-        precondition(!preview["preview"]["groups"].array.isEmpty && preview["preview"]["canvas"]["width"].number > 0)
-        let exported = try await manager.read(["type": "export", "id": template])
+        _ = try await manager.operation(["type": "update_toolbar", "id": reusable, "panel": "toolbar"])
+        _ = try await manager.operation(["type": "restore_version", "id": reusable, "version": version])
+        let exported = try await manager.read(["type": "export", "id": reusable])
         let package = try JSON.decode(exported["text"].string)
-        precondition(package["working"].isNull && package["owner"].isNull && exported["extension"].string == "capytemplate")
-        let imported = try await manager.perform(["type": "import", "kind": "template", "text": exported["text"].string])
+        precondition(package["working"].isNull && package["owner"].isNull && exported["extension"].string == "capytoolbar")
+        let imported = try await manager.perform(["type": "import", "kind": "toolbar", "text": exported["text"].string])
         let importedID = imported["selected"].string
-        precondition(importedID != template)
-        let duplicate = try await manager.operation(["type": "duplicate", "id": template, "name": "Studio Copy"])
+        precondition(importedID != reusable)
+        let duplicate = try await manager.operation(["type": "duplicate", "id": reusable, "name": "Studio Copy"])
         for id in [importedID, duplicate["selected"].string] {
             _ = try await manager.operation(["type": "delete", "id": id])
             _ = try await manager.operation(["type": "restore_deleted", "id": id])
@@ -228,13 +226,12 @@ import SQLite3
         _ = try await manager.perform(["type": "import", "kind": "toolbar", "text": toolbarExport["text"].string])
         let local = try await manager.read(["type": "view", "page": "this_workspace", "query": "", "selected": panel.stableKey, "idle": true])
         precondition(local["details"]["title"].string == "Pencil Tools")
-        // Opening retained history/version creates independent workspaces and
+        // Opening retained history creates independent workspaces and
         // never consumes the original workspace's navigation or current tools.
         let source = try await manager.read(["type": "load", "id": original])
         let revision = source["entity"]["content"]["history"]["current"].string
         for operation: [String: Any] in [
             ["type": "open_history", "id": original, "revision": revision, "name": "History Copy"],
-            ["type": "new_from_version", "id": template, "version": version, "name": "Template Version"],
             ["type": "save_as_new", "name": "Recovered Copy"]
         ] {
             _ = try await manager.operation(operation)

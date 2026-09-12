@@ -42,15 +42,24 @@ Tool Set, Tool, Brush size, Color, Navigator/Diagnostics,
 Properties/Filters and Layers. Restoring a saved workspace preserves its layout
 and toolbar contents, including workspaces from earlier Apple builds.
 
-Both apps include Manage Workspaces, Saved Layouts, Layout History and toolbar
-management backed by the shared SQLite library. Selecting a workspace or saved
-layout previews it in the editor; Switch or Load applies the selection. Cancel
-restores the previous layout. Load Layout opens Saved Layouts with no selection;
-filtering away a preview also restores the previous arrangement. Loading a saved layout preserves the current
-workspace's identity, brush settings, colors and artwork. Shared Rust owns
+Both apps include Manage Workspaces, Layout History and toolbar management backed
+by the shared SQLite library. Selecting a workspace previews its arrangement in
+the editor; Switch to Workspace restores its latest layout and tool settings.
+Cancel and filtering away a selection restore the previous arrangement. New
+Workspace asks for a name and copies the current layout and tool settings into
+independent history. Save Layout, Load Layout and their separate manager page
+have been removed from the product scope. Shared Rust owns
 availability, forms, history and storage policy; the Apple coordinator keeps
 database work off the drawing owner. See [Apple persistence](PERSISTENCE.md#workspace-library)
 for migration, window ownership and direct workflow checks.
+
+The shared Painter, Illustrator and Photographer workspaces appear in the header
+between the document title and clock. Their stable identities retain edited
+names, arrangements and tool settings. Switching saves the outgoing workspace;
+an existing owner is focused instead of replaced. Fresh storage opens Illustrator,
+while upgrades resume their previous workspace. Reset All Brushes uses the shared
+confirmation and clears every brush override in the current workspace, preserving
+its color, selected tool, layout, document and other workspaces.
 
 Both hosts support all five shared toolbar styles: small, medium, large, medium
 labeled and large labeled. Ribbons, floating panels, content drawers and partial
@@ -76,8 +85,28 @@ layout transaction. A reopened drawer observes its own interaction state, so
 coalesced close/reopen and workspace history cannot leave its gestures disabled.
 The [tab comparison workflow](../../tools/visual/README.md#workspace-tabs) captures
 real shared SwiftUI headers and the corresponding live Chrome editor, without
-system-menu automation. Complete visual and automatic panel-sizing parity remain
-open; this focused workflow does not establish full editor acceptance.
+system-menu automation. Complete visual parity remains open; this focused
+workflow does not establish full editor acceptance.
+
+Native panel controls report intrinsic body heights and tab widths to the shared
+Rust `measure_panels` action. Rust fits floating panels and tab groups, caps their
+height and honors manual sizing. Measurements use the mounted controls before
+scroll clipping; lightweight copies measure inactive tab labels without mounting
+extra Navigator, thumbnail or filter content. Inactive bodies retain their last
+measurement until mounted again. Drawer bodies keep their separate width and
+measurement path. Changes are coalesced and quantized to 1/64 point to avoid
+float conversion feedback; transient restoration republishes cached facts without
+adding workspace history or storage writes.
+
+The direct check uses actual SwiftUI geometry in an invisible AppKit host for
+both Apple presets. It checks natural floating sizes, width reflow, tab fitting,
+control visibility, workspace Undo, growing layer content and settled measurement
+publication. UIKit pixels and sustained resizing performance require their own
+validation:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel-measurements.swift
+```
 
 Tool Set projects the shared groups and subtools for painting, figures, regions,
 rulers and Operation. Every catalog brush remains reachable through its family;

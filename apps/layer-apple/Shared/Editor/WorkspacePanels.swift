@@ -11,6 +11,7 @@ struct WorkspacePanels: View {
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
+            WorkspacePanelLabelMeasurements(store: store)
             if !workspace.expansion.isNull {
                 Color.clear.contentShape(Rectangle()).onTapGesture { store.customize(["type": "close_expanded"]) }
             }
@@ -57,6 +58,8 @@ struct WorkspacePanels: View {
             }
             .onDisappear { store.native?.navigatorPlacements(JSON([])) }
             .onPreferenceChange(WorkspaceSources.self) { workspace.sources = $0 }
+            .onPreferenceChange(PanelSizeFacts.self) { store.panelMeasurements.receive($0) }
+            .onChange(of: store.snapshot["panel_measurements"].stableKey) { _, _ in store.panelMeasurements.reconcile() }
             .onPreferenceChange(DrawerTileMeasurements.self) { store.contentDrawers.measureTiles($0) }
             .onPreferenceChange(ColumnDrawerMeasurements.self) { store.contentDrawers.measureColumns($0) }
             .onDisappear { store.contentDrawers.measureColumns([:]); store.contentDrawers.measureTiles([:]) }

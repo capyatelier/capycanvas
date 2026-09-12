@@ -41,11 +41,10 @@ struct WorkspaceManagerView: View {
                 Spacer()
                 if manager.prompt == nil && manager.history.isNull && !manager.toolbarMode {
                     Button {
-                        manager.activate(manager.page == "templates"
-                            ? JSON(["type": "save_as_template", "value": library.status["active_id"].raw]) : JSON(["type": "new"]))
+                        manager.activate(JSON(["type": "new"]))
                     } label: { Image(systemName: "plus").frame(width: 24, height: 24) }
-                        .accessibilityLabel(manager.page == "templates" ? "Save Layout" : "New Workspace")
-                        .accessibilityIdentifier(manager.page == "templates" ? "workspace-action-save_as_template" : "workspace-action-new")
+                        .accessibilityLabel("New Workspace")
+                        .accessibilityIdentifier("workspace-action-new")
                         .disabled(manager.processing)
                 } else if manager.prompt == nil && manager.history.isNull {
                     Button("Close", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
@@ -76,7 +75,7 @@ struct WorkspaceManagerView: View {
                     }
                 }
             } else {
-                Text(manager.catalog[manager.page == "templates" ? "template_description" : "description"].string)
+                Text(manager.catalog["description"].string)
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -104,7 +103,7 @@ struct WorkspaceManagerView: View {
                     Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("workspace-manager-close")
                     if manager.view["details"].isNull {
-                        Button(manager.catalog[manager.page == "templates" ? "load_label" : "switch_label"].string) { }
+                        Button(manager.catalog["switch_label"].string) { }
                             .disabled(true)
                     }
                     ForEach(manager.view["details"]["actions"].array.filter { $0["primary"].bool }, id: \.managerActionID) { button in action(button) }
@@ -158,7 +157,7 @@ struct WorkspaceManagerView: View {
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { manager.presented = false }.keyboardShortcut(.cancelAction)
-                Button("Restore This Version") { manager.historyAction(open: false) }
+                Button("Restore This Version") { manager.historyAction() }
                     .disabled(manager.processing || !library.previewingLayout || manager.history["restore"].isNull)
                     .accessibilityIdentifier("workspace-history-restore")
             }

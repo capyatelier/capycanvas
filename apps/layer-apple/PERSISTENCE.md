@@ -15,26 +15,33 @@ an iPad environment without multiple-window support reports that limitation.
 ## Workspace library
 
 Both Apple apps use the shared SQLite workspace library by default. Shared
-Swift manager pages follow the compact workspace and saved-layout design: New,
-Switch, Rename/Delete, Save Layout and Load Layout. Toolbars expose the
+Swift manager pages follow the compact workspace design: New, Switch and
+Rename/Delete. New Workspace copies the current layout and tool settings, with
+independent history and no saved-layout selector. Toolbars expose the
 shared current-workspace and saved-toolbar actions. Rust owns the rows, action
 availability, forms, validation and history policy. Row actions use metadata
 summaries without loading every item's retained layout history.
 
-Load Layout applies a saved layout to the current workspace as one
-undoable change, preserving its identity, brush settings, colors and artwork.
-Selecting a workspace or saved-layout row previews it in the actual editor
-before an explicit Switch or Load. Layout History uses the same preview
+Initialization seeds the shared Painter, Illustrator and Photographer workspaces
+idempotently. Stable IDs drive the header switcher, including current edited names.
+The defaults are editable and undeletable; existing user data and the last active
+workspace survive upgrades. Reset All Brushes locks the editor at an idle boundary,
+calls Rust's reset operation, then captures and flushes the current working values.
+It creates no layout-history event and leaves other workspaces unchanged.
+
+Selecting a workspace row previews its arrangement in the actual editor
+before an explicit Switch. Layout History uses the same preview
 mechanism. Every durable capture still sees the layout from before preview;
 Cancel restores that layout and Restore commits one undoable change. Closing
 or suspending the scene cancels a pending preview.
-The workspace browser initially selects the current workspace. Saved Layouts
-starts without a selection; filtering clears selection and preview. Late or rapid
-selection replies cannot revive a dismissed preview. Save Layout suggests the
-workspace name followed by “Layout”.
+The workspace browser initially selects the current workspace; filtering clears
+selection and preview. Late or rapid selection replies cannot revive a dismissed
+preview. Separate Save/Load Layout UI and Apple bridge operations have been
+removed. Existing shared template records remain preserved for core migration.
 
-The native package transport supports coordinated `.capyworkspace`,
-`.capytemplate` and `.capytoolbar` delivery and consistent database backup.
+The native package transport supports coordinated `.capyworkspace` and
+`.capytoolbar` delivery and consistent database backup. Opening a legacy
+`.capytemplate` reports that loading saved layouts is no longer available.
 These storage capabilities are covered by direct integration checks; the compact
 workspace screens follow the revised shared design without storage-administration,
 import/export, trash or metadata/version-management controls.
@@ -66,7 +73,7 @@ cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --feature
 ```
 
 They exercise latest-edit switching, failed-transition unlock, migration and
-restart beside another owner, templates/metadata/versions, toolbars, layout
+restart beside another owner, toolbar metadata/versions, toolbars, layout
 history, import/export packages, trash, consistent SQLite backup and recovery as
 a new workspace after a competing owner claims an expired lease. A deliberately
 locked temporary database verifies that the drawing owner still serves edits
@@ -183,7 +190,7 @@ Settings commits propagate to the process's other owners. Pending local writes
 defer incoming notifications; owners converge to the newest successful commit.
 A failed local save retains the accepted in-memory edit and offers Retry Save.
 Workspaces remain independent after their initial copy. A live workspace's
-Duplicate/Save Layout action captures its owning window's latest accepted
+Duplicate operation captures its owning window's latest accepted
 state instead of copying a stale on-disk version. Switch to Window focuses that
 owner through a small AppKit/UIKit adapter.
 

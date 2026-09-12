@@ -130,8 +130,8 @@ fn apple_workspace_library_handoff_round_trips_history_tools_and_scene_identity(
         assert_eq!(app.state()["brush"]["diameter"], 53.);
         app.invoke("redo_workspace");
         library.observe(&app, 6000);
-        let template = library.request(json!({"type":"operation","operation":{"type":"save_template","id":original,"name":"Drawing Layout","description":"A reusable layout"},"now":7000}));
-        let exported = library.request(json!({"type":"export","id":template["value"]["selected"]}));
+        let toolbar = library.request(json!({"type":"operation","operation":{"type":"save_toolbar","panel":"toolbar","name":"Drawing Tools"},"now":7000}));
+        let exported = library.request(json!({"type":"export","id":toolbar["value"]["selected"]}));
         let package: Value =
             serde_json::from_str(exported["value"]["text"].as_str().unwrap()).unwrap();
         assert!(package["working"].is_null());

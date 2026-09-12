@@ -21,6 +21,7 @@ enum SessionRequest {
         layout: layer_ui::DockLayout,
     },
     PreviewCancel,
+    ResetBrushes,
     Adopt {
         #[serde(deserialize_with = "json_field")]
         capture: WorkspaceCapture,
@@ -89,6 +90,7 @@ pub(crate) fn session_request(host: &mut NativeHost, value: Value) -> Result<Val
             host.session.preview_workspace_layout(&layout)?
         }
         SessionRequest::PreviewCancel => host.session.cancel_workspace_layout_preview(),
+        SessionRequest::ResetBrushes => host.session.reset_workspace_brushes()?,
         SessionRequest::Adopt { capture } => host
             .session
             .adopt_workspace(PreparedWorkspace::new(capture)?)?,
