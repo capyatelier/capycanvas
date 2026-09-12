@@ -18,7 +18,6 @@ import SwiftUI
     @Published private(set) var toolbarMode = false
     @Published var error: String?
     @Published var note: String?
-    @Published private(set) var undoDeletion: String?
     @Published private(set) var prompt: JSON?
     @Published var formName = ""
     @Published var formDescription = ""
@@ -92,13 +91,14 @@ import SwiftUI
         history = JSON(); showingStorage = false; presented = true
         try await refresh()
     }
-    func refresh() async throws {
+    func refresh(preferencesOnly: Bool = false) async throws {
         guard !showingStorage && history.isNull else { return }
         requestGeneration &+= 1
         let generation = requestGeneration
         let library = try service()
         var result = try await library.read(["type": "view", "page": page, "query": query,
-            "selected": selection as Any? ?? NSNull(), "idle": true])
+            "selected": selection as Any? ?? NSNull(), "idle": preferencesOnly ? view["idle"].bool : true],
+            captureEditor: !preferencesOnly)
         guard generation == requestGeneration else { return }
         if !result["rows"].array.contains(where: { $0["id"].string == selection }) { selection = nil }
         if selection == nil && toolbarMode, let first = result["rows"].array.first {
@@ -144,6 +144,13 @@ import SwiftUI
         }
     }
     func run(_ action: JSON) async throws {
+        if action["type"].string == "edit_switcher" {
+            guard !processing else { throw HostFailure(message: "Finish the current workspace action first") }
+            await selectionTask?.value
+            try await service().editSwitcher(action["edit"])
+            try await refresh(preferencesOnly: true)
+            return
+        }
         guard !["save_as_template", "use_template", "update_from_current", "import_template", "edit_as_workspace", "new_from_template"].contains(action["type"].string) else {
             throw HostFailure(message: "This workspace action is unavailable")
         }
@@ -206,7 +213,6 @@ import SwiftUI
             note = "Storage is available."; try await refresh()
         case "restore_deleted":
             _ = try await library.operation(["type": "restore_deleted", "id": value.raw])
-            if undoDeletion == value.string { undoDeletion = nil }
             selection = nil; try await refresh()
         case "add_toolbar":
             _ = try await library.installToolbar(id: value.string); presented = false
@@ -251,7 +257,7 @@ import SwiftUI
         case "save_toolbar": operation["type"] = "save_toolbar"; operation["panel"] = value.raw; nextPage = "toolbar_library"
         case "update_toolbar": operation["type"] = "update_toolbar"; operation["panel"] = try JSON.decode(choice).raw
         case "delete":
-            operation["type"] = "delete"; operation["replacement"] = choice.isEmpty ? NSNull() : choice as Any
+            operation["type"] = "delete"
         case "delete_permanently": operation["type"] = "delete_permanently"
         case "save_as_new": operation["type"] = "save_as_new"; closeAfter = true
         case "replace_toolbar":
@@ -265,7 +271,6 @@ import SwiftUI
         default: throw HostFailure(message: "This workspace form is unavailable")
         }
         let result = try await library.operation(operation)
-        if type == "delete" { undoDeletion = value.string; note = "Moved to Recently Deleted." }
         if closeAfter { presented = false; return }
         if let nextPage { page = nextPage; toolbarMode = nextPage == "toolbar_library" }
         if !result["selected"].isNull { selection = result["selected"].string }

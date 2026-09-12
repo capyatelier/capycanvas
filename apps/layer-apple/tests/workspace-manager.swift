@@ -172,12 +172,15 @@ import SwiftUI
                     : action == "duplicate_toolbar" ? titles.contains("Copied Ink") : !titles.contains("Renamed Ink"))
             }
             try await form(manager, ["type": "delete", "value": sketching])
-            precondition(manager.undoDeletion == sketching)
             try await manager.run(JSON(["type": "restore_deleted", "value": sketching]))
-            precondition(manager.undoDeletion == nil)
             try await manager.run(JSON(["type": "switch", "value": sketching]))
-            try await form(manager, ["type": "delete", "value": sketching], choice: inking)
-            precondition(library.status["active_id"].string == inking)
+            let deletion = try await library.read(["type": "prompt", "action": ["type": "delete", "value": sketching]])["prompt"]
+            precondition(deletion["choices"].array.isEmpty && deletion["message"].string.contains("permanent"))
+            let orderBeforeDelete = library.status["order"].array.map { $0.string }
+            try await form(manager, ["type": "delete", "value": sketching])
+            precondition(library.status["active_id"].string == "builtin:workspace:illustrator")
+            precondition(library.status["order"].array.map { $0.string } == orderBeforeDelete.filter { $0 != sketching },
+                "Deleting the active workspace must not create an extra replacement")
             try await manager.run(JSON(["type": "restore_deleted", "value": sketching]))
             try await packageDelivery(editor: editor, root: root, toolbar: savedToolbar)
             let allowed: Bool = await withCheckedContinuation { continuation in editor.projectFiles.confirmClose { continuation.resume(returning: $0) } }

@@ -85,6 +85,84 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
+## Configurable workspace switcher — 2026-09-12
+
+Both Apple hosts now project the shared saved pins and complete workspace order.
+The header temporarily prepends an unpinned current workspace, scrolls overflowing
+choices and uses the shared borderless recessed track. Manage Workspaces adds
+pin marks, narrow grips and Show in top bar / Move Up / Move Down actions.
+Preference edits preserve the current document, workspace identity and canvas
+preview, and refresh other windows without rebroadcasting passive refreshes.
+The manager follows the revised search-free workspace list and permanent-delete
+confirmation; deleting its active workspace selects an available included
+workspace through shared Rust policy instead of creating another workspace.
+The direct history view now uses the shared legacy-caption normalization and
+revision ordering, matching the controller-based hosts without rewriting saved
+history. Current-row captions and selected descriptions use the same vocabulary.
+
+Native AppKit/UIKit recognizers retain the actual device and contact. Mouse row
+bodies and all grips drag immediately; touch/pen bodies require a native hold.
+Touch/pen holds retain the menu after release and close it when the same contact
+starts dragging. SwiftUI button recognition can coexist with pickup; a recognized
+hold/drag suppresses the ordinary button action. Window loss, source invalidation
+and removing a captured list retire the interaction. Menu buttons support explicit
+keyboard focus, arrow navigation and Return. This migrates workspace-manager
+rows only; the other Apple sources in the drag inventory still need work.
+
+Validation at this checkpoint:
+
+- All 41 Apple Rust tests and 58 native workspace tests pass after integrating
+  the shared updates through `af09dfd`. Actual Swift manager workflows pass on
+  both presets, including deletion replacement without creating another workspace.
+- Final Debug builds and signature verification pass for both Apple targets.
+  The attached iPad retains the earlier switcher gesture build while its physical
+  check awaits feedback; final history-caption integration has not been installed.
+- The Swift switcher checks cover saved pins/order, the unpinned current choice,
+  unchanged document/history during preview, Cancel, two-window notifications,
+  invalid drops and restart. Measured-row checks preserve insertion before an
+  unmounted successor and cancel when the source disappears.
+- AppKit event delivery passes under both presets: ordinary click, mouse hold
+  without a menu, secondary click, keyboard menu action, immediate row/grip
+  dragging, shared drop, focus-loss cancellation and removal during an active
+  drag. Tablet-subtype events also cover early pen motion, native holds, retained
+  menus, same-contact dragging and immediate grips. A 21-row list verifies native
+  scroll phases dismiss menus, edge scrolling retains an offscreen source and
+  the persisted order matches the measured drop hint. The fixture uses actual
+  window hide/restore for focus loss and measures the current native clip after
+  resizing. These checks use one owned window and no system-menu automation.
+- The iPad simulator passes pin actions, early-motion rejection, stationary touch-hold menus, same-contact
+  held dragging, immediate grip dragging, retained row selection, Move Down and
+  pin/order persistence after restart. Offset menu buttons need measured in-app
+  pointer delivery because XCTest omits their hit point; resulting state is checked.
+  Physical iPad runner installation succeeds, but automation initialization times
+  out before test execution. The corrected signed app is installed and launches;
+  its physical Pencil row check is pending.
+- A focused iPad simulator long-list test passes with 27 workspaces created
+  through the real coordinator. Early touch motion scrolls without reordering;
+  scrolling dismisses a held menu; a grip contact scrolls the original rows out
+  of view and commits its drop. A separate SQLite read confirms only the dragged
+  workspace moved, retaining the other 26 rows' order and every pin. The helper
+  uses a disposable bundle and namespace, rediscovers the data container after
+  XCTest installation, and removes its own app and runner afterwards.
+- All 96 header component pairs retain full sRGB differences. Exact differing
+  pixels range from 3.414% to 12.149%, with maximum channel error 214. The maximum
+  position/size error is 1.220 logical points and edge error 1.078, so the full
+  geometry/pixel gate remains open. These AppKit component captures cover both
+  presets, not physical UIKit composition or dynamic overflow states.
+
+Reproduce focused checks with `tests/workspace-switcher.swift`,
+`tests/workspace-switcher-input.swift` and `tests/workspace-manager.swift` through
+the [Swift fixture script](../../apps/layer-apple/scripts/test-project-files.sh),
+or select `EditorLaunchTests/testWorkspaceSwitcher` in either Xcode scheme.
+For the seeded simulator workflow, run
+`python3 apps/layer-apple/scripts/test-workspace-scrolling.py` (optionally select
+an available iPad with `--simulator`). It requires one passing test with no skips
+and checks the final database; raw destinations, logs and results stay ignored.
+The [header capture guide](../../tools/visual/README.md#complete-header-components)
+describes the matched Chrome workflow. Raw results and device details remain in
+ignored local artifacts. Physical Pencil row gestures, full input/visual coverage
+and the existing hardware drawing performance gaps remain open.
+
 ## Owner resource lifetime and drawable admission — 2026-09-12
 
 Both Apple targets now drain temporary native objects after every serial owner

@@ -251,6 +251,32 @@ fn history_rows_repair_legacy_labels_without_rewriting_saved_versions() {
             .subtitle
             .starts_with("Current layout · ")
     );
+    // Apple and other direct manager clients must project the same captions,
+    // tied-timestamp order and selection details as the controller clients.
+    let direct = pollster::block_on(f.controller.manager.history_view(
+        f.controller.view.id.as_deref().unwrap(),
+        ManagerHistoryMode::Layout,
+        Some("r11"),
+        true,
+        f.backend.now.get(),
+    ))
+    .unwrap();
+    assert_eq!(
+        direct
+            .rows
+            .iter()
+            .map(|r| (&r.id, &r.title, &r.subtitle))
+            .collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| (&r.id, &r.title, &r.subtitle))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(direct.selected.as_deref(), Some("r11"));
+    assert_eq!(direct.description, "Restored starting layout");
+    assert_eq!(
+        direct.preview.as_ref(),
+        Some(&capture.history.revisions["r11"].layout)
+    );
     assert_eq!(f.host.session.capture_workspace().unwrap(), capture);
     assert_eq!(
         f.controller.manager.current().unwrap().capture().unwrap(),

@@ -61,7 +61,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         obj(scheme + "sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=builds, runOnlyForDeploymentPostprocessing=0),
         obj(scheme + "resources", "PBXResourcesBuildPhase", buildActionMask=2147483647, files=resources, runOnlyForDeploymentPostprocessing=0)]
     settings = {
-        "PRODUCT_NAME": scheme, "PRODUCT_BUNDLE_IDENTIFIER": "art.capycanvas.apple." + ("ipad" if platform == "iOS" else "mac"),
+        "PRODUCT_NAME": scheme, "PRODUCT_BUNDLE_IDENTIFIER": "$(CAPY_APPLE_BUNDLE_ID)",
+        "CAPY_APPLE_BUNDLE_ID": "art.capycanvas.apple." + ("ipad" if platform == "iOS" else "mac"),
         "CODE_SIGN_STYLE": "Automatic", "SWIFT_VERSION": "5.0", "CLANG_ENABLE_MODULES": "YES",
         "ENABLE_USER_SCRIPT_SANDBOXING": "NO", "SWIFT_OBJC_BRIDGING_HEADER": "$(SRCROOT)/native/include/CapyApple.h",
         "ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS": "NO",
@@ -92,7 +93,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         proxy = obj(test_name + "proxy", "PBXContainerItemProxy", containerPortal=ident("project"), proxyType=1, remoteGlobalIDString=target, remoteInfo=scheme)
         dependency = obj(test_name + "dependency", "PBXTargetDependency", target=target, targetProxy=proxy)
         test_settings = {
-            "PRODUCT_NAME": test_name, "PRODUCT_BUNDLE_IDENTIFIER": settings["PRODUCT_BUNDLE_IDENTIFIER"] + ".tests",
+            "PRODUCT_NAME": test_name, "PRODUCT_BUNDLE_IDENTIFIER": "$(CAPY_APPLE_BUNDLE_ID).tests",
+            "CAPY_APPLE_BUNDLE_ID": settings["CAPY_APPLE_BUNDLE_ID"],
             "CODE_SIGN_STYLE": "Automatic", "SWIFT_VERSION": "5.0", "SDKROOT": "iphoneos",
             "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "TARGETED_DEVICE_FAMILY": "2",
             "IPHONEOS_DEPLOYMENT_TARGET": "18.0", "GENERATE_INFOPLIST_FILE": "YES",

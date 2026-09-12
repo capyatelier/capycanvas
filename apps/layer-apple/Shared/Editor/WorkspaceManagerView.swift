@@ -78,14 +78,16 @@ struct WorkspaceManagerView: View {
                 Text(manager.catalog["description"].string)
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
+            if manager.toolbarMode { HStack {
                 TextField("Search", text: $manager.query).textFieldStyle(.roundedBorder)
                     .onChange(of: manager.query) { _, _ in manager.search() }.accessibilityIdentifier("workspace-manager-search")
                 if manager.page == "this_workspace" {
                     Button("New Toolbar…") { manager.activate(JSON(["type": "new_toolbar"])) }.accessibilityIdentifier("workspace-action-new_toolbar")
                 }
-            }
-            ScrollView {
+            } }
+            if manager.page == "workspaces" {
+                WorkspaceSwitcherRows(manager: manager, library: library)
+            } else { ScrollView {
                 LazyVStack(spacing: 8) {
                     if manager.view["rows"].array.isEmpty { Text("No items found.").foregroundStyle(.secondary).padding(20) }
                     ForEach(manager.view["rows"].array, id: \.managerID) { row in
@@ -96,7 +98,7 @@ struct WorkspaceManagerView: View {
                             .accessibilityElement(children: .contain).accessibilityIdentifier("workspace-item-" + row["id"].string)
                     }
                 }
-            }
+            } }
             if !manager.toolbarMode {
                 HStack {
                     Spacer()

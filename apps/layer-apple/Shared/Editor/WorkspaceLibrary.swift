@@ -8,11 +8,15 @@ import SwiftUI
     @Published private(set) var busy = false
     @Published private(set) var readOnly = false
     @Published private(set) var pendingEdits = false
+    @Published private(set) var switcherBusy = false
     @Published private(set) var status = JSON()
     @Published var error: String?
     private weak var store: EditorStore?
     private let owner: NativeWorkspaceLibrary
     private let scene: String
+    private let preferencesRoot: String
+    private static let preferencesChanged = Notification.Name("art.capycanvas.workspace-preferences-changed")
+    private var preferencesObserver: NSObjectProtocol?
     private var tail: Task<Void, Never>?
     private var autosave: Task<Void, Never>?
     private var renewal: Task<Void, Never>?
@@ -27,9 +31,23 @@ import SwiftUI
 
     init(store: EditorStore, platform: UInt32, root: URL, scene: String) throws {
         self.store = store; self.scene = UUID(uuidString: scene)?.uuidString ?? "default"
+        preferencesRoot = root.standardizedFileURL.path
         owner = try NativeWorkspaceLibrary(platform: platform, root: root, scene: scene)
+        preferencesObserver = NotificationCenter.default.addObserver(forName: Self.preferencesChanged, object: nil, queue: .main) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, event.object as AnyObject? !== self,
+                    event.userInfo?["root"] as? String == self.preferencesRoot else { return }
+                Task { do { try await self.refreshSwitcher() } catch { self.error = error.localizedDescription } }
+            }
+        }
     }
-    deinit { autosave?.cancel(); renewal?.cancel() }
+    deinit {
+        autosave?.cancel(); renewal?.cancel()
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+    }
+    private func announcePreferences() {
+        NotificationCenter.default.post(name: Self.preferencesChanged, object: self, userInfo: ["root": preferencesRoot])
+    }
     private var now: UInt64 { UInt64(Date().timeIntervalSince1970 * 1000) }
     private func serialized<T>(_ body: @escaping @MainActor () async throws -> T) async throws -> T {
         let previous = tail
@@ -55,7 +73,9 @@ import SwiftUI
     }
     private func checked(_ reply: JSON) throws -> JSON {
         if !reply["status"].isNull {
+            let previous = status["switcher_revision"].uint
             if !SnapshotProjection.equal(status.raw, reply["status"].raw) { status = reply["status"] }
+            if ready && previous != status["switcher_revision"].uint { announcePreferences() }
             if !status["error"].isNull { error = status["error"]["message"].string }
         }
         if !reply["error"].isNull {
@@ -98,6 +118,7 @@ import SwiftUI
                 try await adopt(incoming)
                 _ = try await session(["type": "end"])
                 ready = true; error = status["error"].isNull ? nil : status["error"]["message"].string
+                announcePreferences()
                 store?.native?.workspaceDidInitialize()
                 if let store { store.workspaceManager.receive(store.state.json) }
                 scheduleRenewal()
@@ -278,7 +299,29 @@ import SwiftUI
             }
         }
     }
-    func read(_ value: [String: Any]) async throws -> JSON {
+    /// Preference edits never capture/adopt editor state or cancel a preview.
+    /// A preference conflict must not trigger workspace-ownership recovery.
+    func editSwitcher(_ edit: JSON) async throws {
+        guard !switcherBusy else { throw HostFailure(message: "Finish the current workspace preference change first") }
+        switcherBusy = true
+        defer { switcherBusy = false }
+        try await serialized { [self] in
+            guard ready && !closed && !readOnly && (!busy || previewingLayout) else {
+                throw HostFailure(message: "Workspace preferences are unavailable")
+            }
+            _ = try await request(["type": "edit_switcher", "edit": edit.raw])
+        }
+    }
+    func refreshSwitcher() async throws {
+        try await serialized { [self] in
+            guard ready && !closed && !suspended else { return }
+            _ = try await request(["type": "refresh_switcher"])
+        }
+        if let manager = store?.workspaceManager, manager.presented && manager.page == "workspaces" {
+            try await manager.refresh(preferencesOnly: true)
+        }
+    }
+    func read(_ value: [String: Any], captureEditor: Bool = true) async throws -> JSON {
         try await serialized { [self] in
             var message = value; message["now"] = now
             let kind = value["type"] as? String ?? ""
@@ -286,7 +329,7 @@ import SwiftUI
                 !(value["apply"] as? Bool ?? false) else {
                 throw HostFailure(message: "This workspace operation requires an editor transition")
             }
-            if ["view", "prompt", "history"].contains(kind), ready && !closed { message["idle"] = try await capture() }
+            if captureEditor && ["view", "prompt", "history"].contains(kind), ready && !closed { message["idle"] = try await capture() }
             if kind == "export" {
                 if ready {
                     guard try await capture() else { throw HostFailure(message: "Finish the current interaction before exporting the workspace") }
@@ -443,6 +486,9 @@ import SwiftUI
                 scheduleRenewal()
                 if observed != edits { scheduleAutosave() }
             } catch { self.error = error.localizedDescription; throw error }
+        }
+        if let manager = store?.workspaceManager, manager.presented && manager.page == "workspaces" {
+            try await manager.refresh(preferencesOnly: true)
         }
     }
     private func scheduleRenewal() {

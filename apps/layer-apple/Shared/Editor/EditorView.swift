@@ -163,7 +163,8 @@ struct EditorHeader: View {
             if let library = store.workspaceLibrary {
                 WorkspaceSwitcher(library: library, manager: store.workspaceManager, palette: palette,
                     compact: store.snapshot["layout"]["viewport"][0].number <= 760,
-                    textSize: store.catalog["text_size_pt"].number * 4 / 3)
+                    textSize: store.catalog["text_size_pt"].number * 4 / 3,
+                    maximumWidth: min(420, store.snapshot["layout"]["viewport"][0].number * 0.4))
             }
             HStack(spacing: spacing) {
                 if SystemStatus.visible(policy: store.state["settings"]["show_clock"].string, fullscreen: store.state["fullscreen"].bool) {

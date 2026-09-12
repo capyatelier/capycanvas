@@ -131,6 +131,12 @@
 			"path" = "Shared/Bridge/RendererStats.swift";
 			"sourceTree" = "<group>";
 		};
+		"52A6DE9CF2B74A90111CFB10" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Bridge/ReorderContact.swift";
+			"sourceTree" = "<group>";
+		};
 		"E832721D179945D955147A0B" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -383,10 +389,22 @@
 			"path" = "Shared/Editor/WorkspacePlacement.swift";
 			"sourceTree" = "<group>";
 		};
+		"32CE895CD943EDF19EFDD8AE" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/WorkspaceRowInteraction.swift";
+			"sourceTree" = "<group>";
+		};
 		"DFA085199CDF1637BFB0F954" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "Shared/Editor/WorkspaceSwitcher.swift";
+			"sourceTree" = "<group>";
+		};
+		"FCC3A7639F50BAEB899F8C49" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Editor/WorkspaceSwitcherRows.swift";
 			"sourceTree" = "<group>";
 		};
 		"33DE45A2478E0B7B143CCBBD" = {
@@ -497,6 +515,12 @@
 			"path" = "Shared/Tests/WorkspaceLibraryChecks.swift";
 			"sourceTree" = "<group>";
 		};
+		"72815D43FDAE4C688FEE20F3" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Tests/WorkspaceSwitcherChecks.swift";
+			"sourceTree" = "<group>";
+		};
 		"3C91C035833DF3A77367A99A" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -539,6 +563,12 @@
 			"path" = "iOS/Platform/DocumentScene.swift";
 			"sourceTree" = "<group>";
 		};
+		"B6A91FAD38C90953906B7E60" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Platform/NativeReorderInput.swift";
+			"sourceTree" = "<group>";
+		};
 		"50310923A19004D5BF8FDCCF" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -555,6 +585,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "iOS/Tests/EditorLaunchTests.swift";
+			"sourceTree" = "<group>";
+		};
+		"E3074AFA18004156B1184C29" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "iOS/Tests/WorkspaceSwitcherScrollChecks.swift";
 			"sourceTree" = "<group>";
 		};
 		"38A94B87502172530B078A49" = {
@@ -603,6 +639,12 @@
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
 			"path" = "macOS/Platform/ContextAction.swift";
+			"sourceTree" = "<group>";
+		};
+		"DEECB91A3DE993B42A773DB9" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "macOS/Platform/NativeReorderInput.swift";
 			"sourceTree" = "<group>";
 		};
 		"F91440B57C22D445A5BE2440" = {
@@ -730,6 +772,10 @@
 		"7863B359422595310635ECDA" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "048E4DA63B9119CBFFDA23AA";
+		};
+		"2393889F1FE827C549C31153" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "52A6DE9CF2B74A90111CFB10";
 		};
 		"C248632021C1E487A35F87DA" = {
 			"isa" = "PBXBuildFile";
@@ -899,9 +945,17 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "8F3A9688124B6EB1060D3F57";
 		};
+		"5DF7264DFB06F920DE7861B2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "32CE895CD943EDF19EFDD8AE";
+		};
 		"91A2CE2EF7A595EA9274E5B9" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "DFA085199CDF1637BFB0F954";
+		};
+		"F2C5C254EEF9551A76635BAD" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "FCC3A7639F50BAEB899F8C49";
 		};
 		"681F1D27952F88E476084775" = {
 			"isa" = "PBXBuildFile";
@@ -942,6 +996,10 @@
 		"A54EA1B42FDE69B923E0A57F" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "25EC3074B1CBAC53FDB152BF";
+		};
+		"4D74C50F6055C208741B5E50" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "B6A91FAD38C90953906B7E60";
 		};
 		"7E69E8F237D3F717B7D32EF1" = {
 			"isa" = "PBXBuildFile";
@@ -1003,6 +1061,7 @@
 				"F50DC2BE26FE8179D64D8A73",
 				"93969D7097B8A7D12073539B",
 				"7863B359422595310635ECDA",
+				"2393889F1FE827C549C31153",
 				"C248632021C1E487A35F87DA",
 				"8AA03AE1B26A86FF3C369FBC",
 				"AC4319FB6DA2ED48F3D4AFE6",
@@ -1045,7 +1104,9 @@
 				"8D8330E6176726D97C42B7D4",
 				"408BC58F4EE0367DE9CA66CC",
 				"1474D1D9A0B5344CB759A3AB",
+				"5DF7264DFB06F920DE7861B2",
 				"91A2CE2EF7A595EA9274E5B9",
+				"F2C5C254EEF9551A76635BAD",
 				"681F1D27952F88E476084775",
 				"E09BE1327B3D23B442432117",
 				"B68FB072791C9BF24A385213",
@@ -1056,6 +1117,7 @@
 				"3EB0013C828C28A7D5C3D95D",
 				"0AAB755A28F6FEEE1762BD43",
 				"A54EA1B42FDE69B923E0A57F",
+				"4D74C50F6055C208741B5E50",
 				"7E69E8F237D3F717B7D32EF1",
 				"F9C788D506A6E35C3D50DB47",
 			);
@@ -1076,7 +1138,8 @@
 			"name" = "Debug";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPad";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.ipad";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -1119,7 +1182,8 @@
 			"name" = "Release";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPad";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.ipad";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -1249,9 +1313,17 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "2144CC44808A6A98BB0CE901";
 		};
+		"A1AD62B21AD1F20F962AA4E2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "72815D43FDAE4C688FEE20F3";
+		};
 		"8C4ED6217549AA38906B85BB" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "421C829F55D51AEC9446F61C";
+		};
+		"E3F46F0FEC67C3D9C998E0C3" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "E3074AFA18004156B1184C29";
 		};
 		"CD9746FFB707F79FE4FD8788" = {
 			"isa" = "PBXSourcesBuildPhase";
@@ -1272,7 +1344,9 @@
 				"9D10CC40B55E7B83E53A1483",
 				"72C96E52E0432B42F134FF6D",
 				"A503A43C13BB1BC8EC0713E4",
+				"A1AD62B21AD1F20F962AA4E2",
 				"8C4ED6217549AA38906B85BB",
+				"E3F46F0FEC67C3D9C998E0C3",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -1293,7 +1367,8 @@
 			"name" = "Debug";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPadTests";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.ipad.tests";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "iphoneos";
@@ -1315,7 +1390,8 @@
 			"name" = "Release";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPadTests";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.ipad.tests";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "iphoneos";
@@ -1446,6 +1522,10 @@
 		"99B5A105ECA2B65294481030" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "048E4DA63B9119CBFFDA23AA";
+		};
+		"E97407AD2585DC9C218492B5" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "52A6DE9CF2B74A90111CFB10";
 		};
 		"72D82EEAAFFF95BB60C3A2D7" = {
 			"isa" = "PBXBuildFile";
@@ -1615,9 +1695,17 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "8F3A9688124B6EB1060D3F57";
 		};
+		"030FC352040CD1F0D49F5873" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "32CE895CD943EDF19EFDD8AE";
+		};
 		"4E1D1D715EA5C9CF237F66E8" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "DFA085199CDF1637BFB0F954";
+		};
+		"021504F0DBB7686EC1AD9FE2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "FCC3A7639F50BAEB899F8C49";
 		};
 		"5F6E9E287A03E9AC9D047E40" = {
 			"isa" = "PBXBuildFile";
@@ -1662,6 +1750,10 @@
 		"2EE5A95F4E8123A9A93D960C" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "C111DBD1BF5E1FFB9D1C6086";
+		};
+		"F55DBC0AC6F4926CC6024C1D" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "DEECB91A3DE993B42A773DB9";
 		};
 		"1181F9ED0788A3DCD693CD1E" = {
 			"isa" = "PBXBuildFile";
@@ -1723,6 +1815,7 @@
 				"CC012D02BB507E3F9DA79ED5",
 				"68286FB7F48B646C9E1FF98E",
 				"99B5A105ECA2B65294481030",
+				"E97407AD2585DC9C218492B5",
 				"72D82EEAAFFF95BB60C3A2D7",
 				"DA7E84475D9883296C8DFA6E",
 				"1F503BEB3A4ED50AB01B963D",
@@ -1765,7 +1858,9 @@
 				"103551C0646E97ECC57A7F54",
 				"4326CAA0ACAAA6275A768535",
 				"089F7C17AFF0FE879C1C7E27",
+				"030FC352040CD1F0D49F5873",
 				"4E1D1D715EA5C9CF237F66E8",
+				"021504F0DBB7686EC1AD9FE2",
 				"5F6E9E287A03E9AC9D047E40",
 				"36090694B66DBB82370ADDE0",
 				"FD7CCCAA3B19927D44E89D14",
@@ -1777,6 +1872,7 @@
 				"FEFE1DDD3AC62E6CDE165FEC",
 				"C11679B3358D93ECE4378DF3",
 				"2EE5A95F4E8123A9A93D960C",
+				"F55DBC0AC6F4926CC6024C1D",
 				"1181F9ED0788A3DCD693CD1E",
 				"950CDE4AA49F2D2500E6753D",
 			);
@@ -1797,7 +1893,8 @@
 			"name" = "Debug";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-Mac";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.mac";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -1837,7 +1934,8 @@
 			"name" = "Release";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-Mac";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.mac";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -1964,6 +2062,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "2144CC44808A6A98BB0CE901";
 		};
+		"62D9A4523356B3317CD0A1B2" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "72815D43FDAE4C688FEE20F3";
+		};
 		"62EB3167D3EF614906196C40" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "8CD9B8D9ED5284F2DA37EB4B";
@@ -1987,6 +2089,7 @@
 				"9CC8458FC2FAB23BD85A9986",
 				"067C9AC99D911BEF00B8851C",
 				"307F64E92CD0BE96B88A3951",
+				"62D9A4523356B3317CD0A1B2",
 				"62EB3167D3EF614906196C40",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
@@ -2008,7 +2111,8 @@
 			"name" = "Debug";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-MacTests";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.mac.tests";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "macosx";
@@ -2029,7 +2133,8 @@
 			"name" = "Release";
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-MacTests";
-				"PRODUCT_BUNDLE_IDENTIFIER" = "art.capycanvas.apple.mac.tests";
+				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "macosx";
@@ -2105,6 +2210,7 @@
 				"C3FDDA87759819D4E7E73E39",
 				"73EF1EED028F6303F5095E50",
 				"048E4DA63B9119CBFFDA23AA",
+				"52A6DE9CF2B74A90111CFB10",
 				"E832721D179945D955147A0B",
 				"4E6053EE38F5B2266BA47B1A",
 				"8B57FA149A633B918CF038E2",
@@ -2147,7 +2253,9 @@
 				"3734373BDE66C6D80EF56D3C",
 				"B3370AE659EC6772C651ABB0",
 				"8F3A9688124B6EB1060D3F57",
+				"32CE895CD943EDF19EFDD8AE",
 				"DFA085199CDF1637BFB0F954",
+				"FCC3A7639F50BAEB899F8C49",
 				"33DE45A2478E0B7B143CCBBD",
 				"11A2FD2C356E5A4C26E7FC91",
 				"D23E8C490C68E2A0BC924244",
@@ -2166,6 +2274,7 @@
 				"29F97BFAF43665DB4FAD6DD2",
 				"96289F8914530B6F5BA36FB3",
 				"2144CC44808A6A98BB0CE901",
+				"72815D43FDAE4C688FEE20F3",
 				"3C91C035833DF3A77367A99A",
 				"111E32BF3BBAC2C3EEA5ECEB",
 				"B9F11ADE897A32410402A510",
@@ -2173,9 +2282,11 @@
 				"7C875E8D7840E1DB9E96AD8D",
 				"E0041892EC32CC1F566BEEB5",
 				"25EC3074B1CBAC53FDB152BF",
+				"B6A91FAD38C90953906B7E60",
 				"50310923A19004D5BF8FDCCF",
 				"A448F54CB6160438B9BE6307",
 				"421C829F55D51AEC9446F61C",
+				"E3074AFA18004156B1184C29",
 				"38A94B87502172530B078A49",
 				"413EE5F302E2B8B53A5FD5F1",
 				"99431BCB42B98C4E6DD2034B",
@@ -2184,6 +2295,7 @@
 				"75AF5B7422F7BFB95BAF508B",
 				"CEBE18A28E15055326B50AC1",
 				"C111DBD1BF5E1FFB9D1C6086",
+				"DEECB91A3DE993B42A773DB9",
 				"F91440B57C22D445A5BE2440",
 				"692C302C46D7D2304E6304E9",
 				"8CD9B8D9ED5284F2DA37EB4B",

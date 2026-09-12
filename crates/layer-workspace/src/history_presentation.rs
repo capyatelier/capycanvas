@@ -110,21 +110,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let ItemContent::Workspace { history, .. } = &entity.content else {
                     return Err(StoreError::invalid("Choose a workspace."));
                 };
-                for (id, revision) in &history.revisions {
+                for revision in layout_history_versions(history) {
                     entries.push((
                         revision.timestamp_ms,
                         ManagerRow {
-                            id: id.clone(),
-                            title: revision.description.clone(),
-                            subtitle: format!(
-                                "{}{}",
-                                date(revision.timestamp_ms),
-                                if id == &history.current {
-                                    " · Current"
-                                } else {
-                                    ""
-                                }
-                            ),
+                            subtitle: if revision.id == history.current {
+                                format!("Current layout · {}", date(revision.timestamp_ms))
+                            } else {
+                                date(revision.timestamp_ms)
+                            },
+                            id: revision.id,
+                            title: revision.description,
                             builtin: false,
                         },
                     ));
@@ -168,7 +164,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 }
             }
         }
-        entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        if mode != ManagerHistoryMode::Layout {
+            entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id)));
+        }
         view.rows = entries.into_iter().map(|(_, row)| row).collect();
         view.selected = selected
             .filter(|s| view.rows.iter().any(|r| r.id == *s))
@@ -190,7 +188,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 };
                 let revision = &history.revisions[selected];
                 view.preview = Some(revision.layout.clone());
-                view.description = revision.description.clone();
+                view.description = view
+                    .rows
+                    .iter()
+                    .find(|row| row.id == selected)
+                    .unwrap()
+                    .title
+                    .clone();
                 can_restore &= idle && selected != history.current;
                 idle
             }

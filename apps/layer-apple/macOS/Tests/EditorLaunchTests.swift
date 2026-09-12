@@ -3,6 +3,10 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testWorkspaceSwitcher() {
+        checkWorkspaceSwitcher(in: editorTestApplication())
+    }
+
     @MainActor func testWorkspaceLibraryHistory() {
         checkWorkspaceLibraryHistory(in: editorTestApplication())
     }

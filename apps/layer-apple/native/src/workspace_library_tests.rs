@@ -59,6 +59,89 @@ impl Drop for Directory {
 }
 
 #[test]
+fn apple_switcher_preferences_preserve_records_and_publish_shared_order() {
+    for platform in [0, 1] {
+        let directory = Directory(
+            std::env::temp_dir().join(format!("capy-apple-switcher-{}", layer_workspace::new_id())),
+        );
+        let library = Library::new(platform, &directory.0, "switcher:first");
+        let app = App::new(platform);
+        app.request(6, json!({"type":"begin"})).unwrap();
+        let initial = library.request(json!({"type":"initialize","now":1000}));
+        let current = library.adopt(&app, &initial);
+        let status = library.request(json!({"type":"refresh_switcher"}))["status"].clone();
+        assert_eq!(status["switcher"].as_array().unwrap().len(), 3);
+        let stored = library.request(json!({"type":"load","id":current}))["value"].clone();
+        let hidden = library.request(
+            json!({"type":"edit_switcher","edit":{"type":"show","id":current,"visible":false}}),
+        );
+        assert!(
+            !hidden["status"]["switcher"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["id"] == current)
+        );
+        assert_eq!(hidden["status"]["switcher_display"][0]["id"], current);
+        assert_eq!(hidden["status"]["order"], status["order"]);
+        assert!(
+            hidden["status"]["switcher_revision"].as_u64().unwrap()
+                > status["switcher_revision"].as_u64().unwrap()
+        );
+        let moved = library.request(
+            json!({"type":"edit_switcher","edit":{"type":"move","id":current,"before":null}}),
+        );
+        assert_eq!(
+            moved["status"]["order"].as_array().unwrap().last().unwrap(),
+            &current
+        );
+        assert_eq!(moved["status"]["switcher_display"][0]["id"], current);
+        assert_eq!(
+            library.request(json!({"type":"load","id":current}))["value"],
+            stored,
+            "Preferences must not claim or edit the workspace, its history or working state"
+        );
+        let view = library.request(json!({"type":"view","page":"workspaces","query":"","selected":current,"idle":true,"now":2000}));
+        let rows = view["value"]["rows"].as_array().unwrap();
+        assert_eq!(rows.last().unwrap()["id"], current);
+        let actions = &rows.last().unwrap()["switcher_actions"];
+        assert_eq!(actions[0]["checked"], false);
+        assert_eq!(actions[1]["enabled"], true);
+        assert_eq!(actions[2]["enabled"], false);
+        let passive = Library::new(platform, &directory.0, "switcher:passive");
+        let refreshed = passive.request(json!({"type":"refresh_switcher"}));
+        assert_eq!(refreshed["status"]["order"], moved["status"]["order"]);
+        assert_eq!(refreshed["status"]["switcher"], moved["status"]["switcher"]);
+        assert!(refreshed["status"]["active_id"].is_null());
+        assert_eq!(
+            refreshed["status"]["switcher_revision"], 0,
+            "Refresh must not rebroadcast another window's mutation"
+        );
+        assert!(
+            library.raw(
+                json!({"type":"edit_switcher","edit":{"type":"move","id":"missing","before":null}})
+            )["error"]
+                .is_object()
+        );
+        assert_eq!(
+            library.request(json!({"type":"load","id":current}))["value"],
+            stored
+        );
+        library.request(json!({"type":"close"}));
+        drop(library);
+        let reopened = Library::new(platform, &directory.0, "switcher:first");
+        app.request(6, json!({"type":"begin"})).unwrap();
+        let incoming = reopened.request(json!({"type":"initialize","now":3000}));
+        assert_eq!(reopened.adopt(&app, &incoming), current);
+        let restored = reopened.request(json!({"type":"refresh_switcher"}));
+        assert_eq!(restored["status"]["switcher"], moved["status"]["switcher"]);
+        assert_eq!(restored["status"]["order"], moved["status"]["order"]);
+        assert_eq!(restored["status"]["switcher_display"][0]["id"], current);
+        reopened.request(json!({"type":"close"}));
+    }
+}
+
+#[test]
 fn apple_workspace_library_handoff_round_trips_history_tools_and_scene_identity() {
     for platform in [0, 1] {
         let directory = Directory(std::env::temp_dir().join(format!(

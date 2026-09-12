@@ -222,33 +222,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 let s = source.as_ref().unwrap();
                 let mut p = ManagerPrompt::confirm(
                     "Delete",
-                    format!("Delete “{}”?", s.metadata.name),
+                    format!("Delete “{}”? This is permanent.", s.metadata.name),
                     "Delete",
                 );
                 if self.active_id().as_deref() == Some(id) {
                     p.message
-                        .push_str(" This window will switch to the replacement workspace.");
-                    let mut choices = vec![ManagerChoice {
-                        id: String::new(),
-                        label: "New workspace from Default".into(),
-                    }];
-                    choices.extend(
-                        self.items()
-                            .into_iter()
-                            .filter(|i| {
-                                i.id != *id
-                                    && i.metadata.kind == ItemKind::Workspace
-                                    && i.metadata.deleted_at_ms.is_none()
-                                    && !i.claim.as_ref().is_some_and(|c| {
-                                        c.owner != self.owner && c.expires_at_ms > now
-                                    })
-                            })
-                            .map(|i| ManagerChoice {
-                                id: i.id,
-                                label: i.metadata.name,
-                            }),
-                    );
-                    p = p.choices("Replacement workspace", choices, None);
+                        .push_str(" This window will switch to an available default workspace.");
                 }
                 p.destructive = true;
                 p

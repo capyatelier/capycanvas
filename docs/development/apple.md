@@ -67,3 +67,35 @@ Build success does not establish complete input or UI parity. The
 including physical Pencil checks, file integration and remaining performance work.
 The [Apple host notes](../../apps/layer-apple/README.md) contain focused test and
 capture commands.
+
+## Testing and debugging on local hardware
+
+Run commands from the repository root with `DEVELOPER_DIR` pointing to your
+Xcode installation's `Contents/Developer` directory.
+
+- Discover destinations with `xcrun devicectl list devices` (attached iPad) and
+  `xcodebuild -showdestinations -project apps/layer-apple/CapyCanvas.xcodeproj -scheme CapyCanvas-iPad`.
+  Use this environment's identifiers and signing team; follow
+  [install/run](../../apps/layer-apple/README.md#install-and-run).
+  Wait for each build/install to finish before launching. Attach Xcode/LLDB to
+  the launched app process for breakpoints and native errors.
+- Start with [focused checks](../../apps/layer-apple/README.md#validation):
+  `bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift`
+  exercises the real Swift/Rust coordinator on Mac; select another fixture as needed.
+  For native UI delivery, use the
+  relevant Xcode test with `-only-testing`; test editor actions rather than macOS
+  system-menu mechanics. Inspect the `.xcresult` for failures and resolve any
+  reported device-trust or automation/capture permission blocker before retrying.
+  Simulator and injected input do not replace the
+  [physical Pencil check](../../apps/layer-apple/INPUT.md#physical-pencil-smoke-check).
+- Use the [isolated drawing workloads](../../apps/layer-apple/PERFORMANCE.md#repeatable-native-drawing-workloads)
+  for Release hardware measurements. [Capture/export](../../apps/layer-apple/PERFORMANCE.md#capture-locally)
+  and [Metal frame correlation](../../apps/layer-apple/PERFORMANCE.md#correlating-native-drawing-frames)
+  cover device traces and GPU debugging. Measure the display's actual refresh
+  rate; keep builds and UI automation idle during timing.
+- Keep raw logs and screenshots in ignored `artifacts/` or
+  `apps/layer-apple/DerivedData/`; never commit private device or signing details.
+  Use isolated test storage/bundles, record the tested revision and launched PID,
+  and close only owned test processes.
+  For pixel comparisons, use the [visual tools](../../tools/visual/README.md) with
+  matching state, viewport, scale and color space on native and local Chrome.

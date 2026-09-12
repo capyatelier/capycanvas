@@ -46,6 +46,11 @@ macOS/iPadOS build commands, signing and running in Xcode. Rerun
 `scripts/prepare.py` when shared assets change and `scripts/project.py` when adding
 or removing Swift files. Edit the generators rather than generated project entries.
 
+For isolated device installs and UI tests, set `CAPY_APPLE_BUNDLE_ID` on the
+`xcodebuild` command. The app uses that identity and its test target uses the
+`.tests` suffix, so the regular editor can remain installed. Use a private
+`CAPY_PERSISTENCE_NAMESPACE` for Debug UI fixtures as described below.
+
 The shared SVG generator preserves fixed colors and ordered `currentColor` paints
 as vector assets, with a bundled paint manifest read once by the shared icon view.
 It retains the single-image path for ordinary symbolic icons. See the
@@ -70,9 +75,17 @@ availability, forms, history and storage policy; the Apple coordinator keeps
 database work off the drawing owner. See [Apple persistence](PERSISTENCE.md#workspace-library)
 for migration, window ownership and direct workflow checks.
 
-The shared Painter, Illustrator and Photographer workspaces appear in the header
-between the document title and clock. Their stable identities retain edited
-names, arrangements and tool settings. Switching saves the outgoing workspace;
+The header follows saved workspace pins and list order. Manage Workspaces offers
+Show in top bar, Move Up/Down and narrow row grips; new workspaces are pinned by
+the shared manager. An unpinned current workspace appears temporarily at the
+front. These preferences survive restart and refresh across windows without
+changing the canvas preview, document or layout history. The compact workspace
+list has no search field; toolbar management retains its search controls.
+Deleting the active workspace selects an available included workspace through
+shared policy. The confirmation describes deletion as permanent.
+
+The included Painter, Illustrator and Photographer workspaces retain stable
+identities, edited names, arrangements and tool settings. Switching saves the outgoing workspace;
 an existing owner is focused instead of replaced. Fresh storage opens Illustrator,
 while upgrades resume their previous workspace. Reset All Brushes uses the shared
 confirmation and clears every brush override in the current workspace, preserving
@@ -380,6 +393,11 @@ cargo test -p layer-host --lib
 cargo test -p layer-apple --lib
 ```
 
+`python3 apps/layer-apple/scripts/test-workspace-scrolling.py` runs the focused
+iPad simulator long-list workflow with coordinator-created data, a disposable
+app identity and a final persisted-order check. Use `--simulator` to select an
+available iPad; results stay under ignored `artifacts/` and owned apps are removed.
+
 The Apple tests dispatch through the real C ABI for both platform configurations.
 They check brush/zoom/settings actions, session isolation, committed ink after
 pen-up, and exact GPU document pixels through undo/redo. The GPU tests require
@@ -668,3 +686,6 @@ full pixel-difference validation, and measured iPad and Mac hardware performance
 Mac tablet/proximity, mouse, wheel, trackpad and keyboard adapters are present;
 physical tablet sensors and the full shortcut/lifecycle contract still require
 validation. Both platforms must complete the expanded acceptance matrix.
+
+For a fresh environment, start with the concise
+[Mac/iPad testing and debugging handoff](../../docs/development/apple.md#testing-and-debugging-on-local-hardware).

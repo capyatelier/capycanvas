@@ -13,12 +13,17 @@ pub struct CapyWorkspaceLibrary {
     pending: Option<(String, StoredEntity)>,
     resume_key: String,
     resume_error: Option<StoreError>,
+    switcher_revision: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Request {
     Catalog,
+    RefreshSwitcher,
+    EditSwitcher {
+        edit: SwitcherEdit,
+    },
     Initialize {
         now: u64,
         preferred: Option<String>,
@@ -173,8 +178,27 @@ enum Operation {
 }
 
 impl CapyWorkspaceLibrary {
+    fn switcher_signature(&self) -> Value {
+        json!([
+            self.manager.switcher_ids(),
+            self.manager.workspace_ids(),
+            self.manager
+                .items()
+                .iter()
+                .map(|item| (&item.id, &item.metadata.name))
+                .collect::<Vec<_>>()
+        ])
+    }
     fn status(&self) -> Value {
         let items = self.manager.items();
+        let choices = |ids: Vec<String>| {
+            ids.into_iter()
+                .filter_map(|id| {
+                    let item = items.iter().find(|item| item.id == id)?;
+                    Some(json!({"id":id,"name":item.metadata.name}))
+                })
+                .collect::<Vec<_>>()
+        };
         let defaults: Vec<_> = DEFAULT_WORKSPACES
             .iter()
             .map(|(id, preset)| {
@@ -188,6 +212,9 @@ impl CapyWorkspaceLibrary {
             .collect();
         json!({"active_id":self.manager.active_id(),"name":self.manager.active_name(),
             "default_workspaces":defaults,
+            "switcher":choices(self.manager.switcher_ids()),
+            "switcher_display":choices(self.manager.switcher_display_ids()),
+            "order":self.manager.workspace_ids(),"switcher_revision":self.switcher_revision,
             "dirty":self.manager.dirty(),"saving":self.manager.saving(),"error":self.manager.error().or_else(||self.resume_error.clone()),
             "owner":self.manager.owner.id,"pending_adoption":self.pending.as_ref().map(|p|&p.0),
             "lease_expires_at_ms":self.manager.lease_expires_at_ms(),"renew_after_ms":OWNER_RENEW_MS})
@@ -207,6 +234,24 @@ impl CapyWorkspaceLibrary {
         Ok(result)
     }
     async fn request(&mut self, request: Request) -> Result<Value> {
+        // Only local mutations broadcast a revision. Refreshes from another
+        // window must not cause a notification loop or include its active ID.
+        let previous = matches!(
+            &request,
+            Request::EditSwitcher { .. }
+                | Request::Operation { .. }
+                | Request::Retry
+                | Request::Recover { .. }
+                | Request::Import { .. }
+        )
+        .then(|| self.switcher_signature());
+        let result = self.dispatch(request).await;
+        if previous.is_some_and(|previous| previous != self.switcher_signature()) {
+            self.switcher_revision = self.switcher_revision.wrapping_add(1);
+        }
+        result
+    }
+    async fn dispatch(&mut self, request: Request) -> Result<Value> {
         if self.pending.is_some()
             && !matches!(
                 request,
@@ -222,6 +267,15 @@ impl CapyWorkspaceLibrary {
             ));
         }
         match request {
+            Request::RefreshSwitcher => {
+                self.manager.refresh().await?;
+                self.manager.refresh_switcher().await?;
+                Ok(Value::Null)
+            }
+            Request::EditSwitcher { edit } => {
+                self.manager.edit_switcher(edit).await?;
+                Ok(Value::Null)
+            }
             Request::Catalog => Ok(
                 json!({"title":"Manage Workspaces","toolbar_title":"Manage Toolbars",
                     "switch_label":ManagerAction::Switch(String::new()).label(),
@@ -274,6 +328,11 @@ impl CapyWorkspaceLibrary {
                 } else {
                     self.manager.initialize(now).await?
                 };
+                if let Err(error) = self.manager.refresh_switcher().await {
+                    self.manager.release(&incoming).await;
+                    self.manager.finish_transition();
+                    return Err(error);
+                }
                 self.prepare(incoming)
             }
             Request::Migrate {
@@ -299,6 +358,7 @@ impl CapyWorkspaceLibrary {
                 now,
             } => {
                 self.manager.refresh().await?;
+                self.manager.refresh_switcher().await?;
                 let rows = self.manager.rows(page, &query, now);
                 let mut detail_error = None;
                 let details =
@@ -352,6 +412,49 @@ impl CapyWorkspaceLibrary {
                         };
                         let mut value = serde_json::to_value(row).unwrap();
                         value["actions"] = json!(actions);
+                        if page == ManagerPage::Workspaces {
+                            let id = value["id"].as_str().unwrap();
+                            let pinned = self.manager.switcher_ids().iter().any(|item| item == id);
+                            let order = self.manager.workspace_ids();
+                            let index = order.iter().position(|item| item == id).unwrap();
+                            let preference =
+                                |key: &str, label: &str, edit: SwitcherEdit, enabled: bool| {
+                                    json!({"id":key,"label":label,"enabled":enabled,
+                                    "action":{"type":"edit_switcher","edit":edit}})
+                                };
+                            let mut show = preference(
+                                "pin",
+                                "Show in top bar",
+                                SwitcherEdit::Show {
+                                    id: id.into(),
+                                    visible: !pinned,
+                                },
+                                true,
+                            );
+                            show["checked"] = json!(pinned);
+                            value["switcher_actions"] = json!([
+                                show,
+                                preference(
+                                    "up",
+                                    "Move Up",
+                                    SwitcherEdit::Move {
+                                        id: id.into(),
+                                        before: index.checked_sub(1).map(|i| order[i].clone())
+                                    },
+                                    index > 0
+                                ),
+                                preference(
+                                    "down",
+                                    "Move Down",
+                                    SwitcherEdit::Move {
+                                        id: id.into(),
+                                        before: order.get(index + 2).cloned()
+                                    },
+                                    index + 1 < order.len()
+                                )
+                            ]);
+                            value["pinned"] = json!(pinned);
+                        }
                         value
                     })
                     .collect::<Vec<_>>();
@@ -454,6 +557,8 @@ impl CapyWorkspaceLibrary {
             }
             Request::Revalidate { now } => {
                 self.manager.revalidate_owner(now).await?;
+                self.manager.refresh().await?;
+                self.manager.refresh_switcher().await?;
                 Ok(Value::Null)
             }
             Request::Retry => {
@@ -674,6 +779,10 @@ impl CapyWorkspaceLibrary {
                 Ok(json!({"binding":self.manager.binding()}))
             }),
             Operation::Delete { id, replacement } => run!({
+                let replacement = match replacement {
+                    Some(id) => Some(id),
+                    None => self.manager.replacement_for_delete(&id, now).await?,
+                };
                 match self
                     .manager
                     .delete_item(&id, replacement.as_deref(), now)
@@ -728,6 +837,7 @@ pub unsafe extern "C" fn capy_workspace_library_create(
             pending: None,
             resume_key,
             resume_error: None,
+            switcher_revision: 0,
         })))
     })
     .ok()
