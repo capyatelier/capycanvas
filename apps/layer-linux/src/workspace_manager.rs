@@ -1,0 +1,400 @@
+//! GTK lifecycle and asynchronous transport for the shared workspace manager.
+use super::*;
+use layer_workspace::{StoreError, StoreWorker, StoredEntity, WorkspaceManager};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+type Manager = WorkspaceManager<StoreWorker>;
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+pub(crate) struct NativeWorkspaces {
+    pub manager: Option<Rc<Manager>>,
+    pub root: gtk::Box,
+    pub label: gtk::Label,
+    retry: gtk::Button,
+    pub ready: Cell<bool>,
+    pub busy: Cell<bool>,
+    close_ready: Cell<bool>,
+    close_requested: Cell<bool>,
+    layout_pending: Cell<bool>,
+    last_edit: Cell<Instant>,
+    last_save: Cell<Instant>,
+    last_renew: Cell<Instant>,
+    failed_snapshot: RefCell<Option<WorkspaceCapture>>,
+}
+impl NativeWorkspaces {
+    pub fn new() -> Self {
+        let directory = std::env::var_os("CAPY_WORKSPACE_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                (!cfg!(test)).then(|| glib::user_data_dir().join("art.capycanvas.CapyCanvas"))
+            });
+        let manager = directory
+            .and_then(|directory| StoreWorker::shared(&directory).ok())
+            .map(|worker| Rc::new(Manager::new(worker, Platform::Gtk)));
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        root.set_widget_name("workspace-save-status");
+        root.add_css_class("workspace-save-status");
+        for set in [
+            gtk::prelude::WidgetExt::set_margin_start,
+            gtk::prelude::WidgetExt::set_margin_end,
+        ] {
+            set(&root, 12);
+        }
+        let label = gtk::Label::new(None);
+        label.set_xalign(0.);
+        label.set_hexpand(true);
+        label.set_wrap(true);
+        let retry = gtk::Button::with_label("Retry");
+        retry.set_widget_name("workspace-save-retry");
+        retry.set_visible(false);
+        root.append(&label);
+        root.append(&retry);
+        root.set_visible(manager.is_some());
+        let now = Instant::now();
+        Self {
+            ready: Cell::new(manager.is_none()),
+            manager,
+            root,
+            label,
+            retry,
+            busy: Cell::new(false),
+            close_ready: Cell::new(false),
+            close_requested: Cell::new(false),
+            layout_pending: Cell::new(false),
+            last_edit: Cell::new(now),
+            last_save: Cell::new(now),
+            last_renew: Cell::new(now),
+            failed_snapshot: RefCell::new(None),
+        }
+    }
+    pub fn bind(&self, w: &Rc<Workspace>) {
+        self.retry.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                if w.workspaces.ready.get() {
+                    w.workspaces.save(&w, true);
+                } else {
+                    w.workspaces.start(&w);
+                }
+            }
+        ));
+        if self.manager.is_none() {
+            return;
+        }
+        glib::timeout_add_local(
+            Duration::from_millis(250),
+            glib::clone!(
+                #[weak]
+                w,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || {
+                    w.workspaces.tick(&w);
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
+    }
+    pub fn start(&self, w: &Rc<Workspace>) {
+        let Some(manager) = self.manager.clone() else {
+            return;
+        };
+        if self.busy.replace(true) {
+            return;
+        }
+        let recovery = w
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .and_then(|g| g.session.capture_workspace().ok())
+            .filter(|capture| {
+                self.failed_snapshot
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|old| old != capture)
+            });
+        if let Err(error) = w
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .ok_or("Canvas unavailable".to_string())
+            .and_then(|g| g.session.begin_workspace_transition())
+        {
+            self.busy.set(false);
+            self.show_error(StoreError::invalid(error));
+            return;
+        }
+        w.surface.set_sensitive(false);
+        self.label.set_text("Opening workspace…");
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                let _ = manager
+                    .store
+                    .request(layer_workspace::StoreRequest::Reopen)
+                    .await;
+                let mut result = manager.initialize(now_ms()).await;
+                if let (Ok(incoming), Some(capture)) = (&result, recovery) {
+                    manager.release(incoming).await;
+                    result = manager
+                        .save_as_new(capture, "Recovered Workspace", now_ms())
+                        .await;
+                }
+                w.workspaces.adopt(&w, result).await;
+            }
+        ));
+    }
+    pub async fn adopt(&self, w: &Rc<Workspace>, incoming: Result<StoredEntity, StoreError>) {
+        let manager = self.manager.as_ref().unwrap();
+        match incoming {
+            Ok(incoming) => {
+                let result = incoming
+                    .entity
+                    .capture()
+                    .and_then(|capture| {
+                        PreparedWorkspace::new(capture).map_err(StoreError::invalid)
+                    })
+                    .and_then(|prepared| {
+                        w.gpu
+                            .borrow_mut()
+                            .as_mut()
+                            .ok_or_else(|| StoreError::invalid("Canvas unavailable."))?
+                            .session
+                            .adopt_workspace(prepared)
+                            .map_err(StoreError::invalid)
+                    });
+                match result {
+                    Ok(change) => {
+                        let outgoing = manager.activate(incoming);
+                        self.ready.set(true);
+                        self.layout_pending.set(false);
+                        w.changed(Ok(change));
+                        if let Some(outgoing) = outgoing
+                            && manager.active_id().as_deref() != Some(&outgoing.entity.id)
+                        {
+                            manager.release(&outgoing).await;
+                        }
+                        if let Err(error) = manager.refresh().await {
+                            self.show_error(error);
+                        }
+                    }
+                    Err(error) => {
+                        manager.release(&incoming).await;
+                        self.show_error(error);
+                    }
+                }
+            }
+            Err(error) => {
+                if !self.ready.get() {
+                    *self.failed_snapshot.borrow_mut() = w
+                        .gpu
+                        .borrow_mut()
+                        .as_mut()
+                        .and_then(|g| g.session.capture_workspace().ok());
+                }
+                self.show_error(error);
+            }
+        }
+        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+            gpu.session.end_workspace_transition();
+        }
+        manager.finish_transition();
+        self.busy.set(false);
+        w.surface.set_sensitive(true);
+        self.update_status();
+        if self.close_requested.get() {
+            w.window.close();
+        }
+    }
+    pub fn observe(&self, w: &Workspace, regions: u32) {
+        if !self.ready.get() || self.busy.get() {
+            return;
+        }
+        let Some(manager) = self.manager.as_ref() else {
+            return;
+        };
+        if regions & (regions::LAYOUT | regions::CUSTOMIZATION) != 0 {
+            self.layout_pending.set(true);
+        }
+        if regions & (regions::BRUSH | regions::LAYOUT | regions::COMMANDS) != 0 {
+            if let Some(gpu) = w.gpu.borrow().as_ref() {
+                manager.observe_working(gpu.session.workspace_working_state());
+            }
+            self.last_edit.set(Instant::now());
+        }
+        self.capture(w);
+        self.update_status();
+    }
+    fn capture(&self, w: &Workspace) {
+        if !self.layout_pending.get() {
+            return;
+        }
+        if let Some(manager) = &self.manager
+            && let Some(gpu) = w.gpu.borrow_mut().as_mut()
+            && let Ok(capture) = gpu.session.capture_workspace()
+        {
+            manager.observe(capture, now_ms());
+            self.layout_pending.set(false);
+        }
+    }
+    fn tick(&self, w: &Rc<Workspace>) {
+        if !self.ready.get() || self.busy.get() {
+            return;
+        }
+        let Some(manager) = &self.manager else {
+            return;
+        };
+        self.capture(w);
+        if self.last_renew.get().elapsed() >= Duration::from_millis(layer_workspace::OWNER_RENEW_MS)
+        {
+            self.last_renew.set(Instant::now());
+            let manager = manager.clone();
+            glib::spawn_future_local(glib::clone!(
+                #[weak]
+                w,
+                async move {
+                    if let Err(error) = manager.renew().await {
+                        w.workspaces.show_error(error);
+                    }
+                    w.workspaces.update_status();
+                }
+            ));
+        }
+        if manager.dirty()
+            && !manager.saving()
+            && manager.error().is_none()
+            && (self.last_edit.get().elapsed() >= Duration::from_millis(250)
+                || self.last_save.get().elapsed() >= Duration::from_secs(2))
+        {
+            self.save(w, false);
+        }
+    }
+    fn save(&self, w: &Rc<Workspace>, retry: bool) {
+        let Some(manager) = self.manager.clone() else {
+            return;
+        };
+        if self.busy.get() || manager.saving() || (!retry && manager.error().is_some()) {
+            return;
+        }
+        self.capture(w);
+        self.last_save.set(Instant::now());
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                if let Err(error) = manager.save_once().await {
+                    w.workspaces.show_error(error);
+                }
+                w.workspaces.update_status();
+            }
+        ));
+    }
+    pub fn show_error(&self, error: StoreError) {
+        if let Some(manager) = &self.manager
+            && manager.error().as_ref() != Some(&error)
+        {
+            manager.set_error(error.clone());
+        }
+        self.label.set_text(&error.message);
+        self.label.add_css_class("error");
+        self.retry.set_visible(true);
+    }
+    pub fn update_status(&self) {
+        let Some(manager) = &self.manager else {
+            return;
+        };
+        if let Some(error) = manager.error() {
+            self.root.set_visible(true);
+            self.label.set_text(&format!(
+                "{} — {}",
+                manager
+                    .active_name()
+                    .unwrap_or_else(|| "Session-only workspace".into()),
+                error.message
+            ));
+            self.label.add_css_class("error");
+            self.retry.set_visible(true);
+        } else {
+            self.root.set_visible(self.busy.get() || !self.ready.get());
+            self.label.remove_css_class("error");
+            self.retry.set_visible(false);
+            self.label.set_text(&format!(
+                "{} · {}",
+                manager
+                    .active_name()
+                    .unwrap_or_else(|| "My Workspace".into()),
+                if self.busy.get() {
+                    "Opening workspace…"
+                } else if manager.dirty() || manager.saving() {
+                    "Saving changes…"
+                } else {
+                    "Changes saved automatically"
+                }
+            ));
+        }
+    }
+    /// Return true while the close must wait for acknowledged workspace writes.
+    pub fn request_close(&self, w: &Rc<Workspace>) -> bool {
+        let Some(manager) = self.manager.clone() else {
+            return false;
+        };
+        if self.close_ready.get() {
+            return false;
+        }
+        if !self.ready.get() {
+            let capture = w
+                .gpu
+                .borrow_mut()
+                .as_mut()
+                .and_then(|g| g.session.capture_workspace().ok());
+            if capture.as_ref() != self.failed_snapshot.borrow().as_ref() {
+                self.show_error(StoreError::new(layer_workspace::ErrorKind::Unavailable,
+                    "Workspace storage is unavailable. Keep this window open to recover your changes with Retry or export."));
+                return true;
+            }
+        }
+        self.close_requested.set(true);
+        if self.busy.get() {
+            return true;
+        }
+        let captured = w
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .map(|g| g.session.capture_workspace());
+        if let Some(Ok(capture)) = captured {
+            manager.observe(capture, now_ms());
+        }
+        self.busy.set(true);
+        w.surface.set_sensitive(false);
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                while manager.saving() {
+                    glib::timeout_future(Duration::from_millis(10)).await;
+                }
+                match manager.close().await {
+                    Ok(()) => {
+                        w.workspaces.close_ready.set(true);
+                        w.window.close();
+                    }
+                    Err(error) => {
+                        w.workspaces.close_requested.set(false);
+                        w.workspaces.show_error(error);
+                        w.surface.set_sensitive(true);
+                    }
+                }
+                w.workspaces.busy.set(false);
+            }
+        ));
+        true
+    }
+}

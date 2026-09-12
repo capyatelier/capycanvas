@@ -82,6 +82,17 @@ impl PreparedWorkspace {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    pub fn begin_workspace_transition(&mut self) -> Result<(), String> {
+        self.require_workspace_idle()?;
+        if self.workspace_transition {
+            return Err("A workspace change is already in progress".into());
+        }
+        self.workspace_transition = true;
+        Ok(())
+    }
+    pub fn end_workspace_transition(&mut self) {
+        self.workspace_transition = false;
+    }
     pub fn require_workspace_idle(&self) -> Result<(), String> {
         self.require_document_idle()?;
         if self.workspace_history.gesture_start().is_some()
@@ -171,6 +182,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.cursor.hover.reset();
         self.interaction.keep_chrome_until_contact = working.zen_mode;
         self.refresh_tools();
+        self.sync_work_area();
         self.refresh_commands();
         Ok(self.changed(
             regions::LAYOUT | regions::CUSTOMIZATION | regions::BRUSH | regions::COMMANDS,
@@ -192,6 +204,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_history
             .record_named(before, &self.state.workspace, description);
         self.state.customization = CustomizationState::default();
+        self.sync_work_area();
         self.refresh_commands();
         Ok(self.changed(
             regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,

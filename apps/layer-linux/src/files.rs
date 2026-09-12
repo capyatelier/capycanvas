@@ -21,14 +21,22 @@ impl Workspace {
             #[upgrade_or]
             glib::Propagation::Proceed,
             move |_| {
+                if w.gpu
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|g| g.session.state().document_file.close_ready)
+                {
+                    return if w.workspaces.request_close(&w) {
+                        glib::Propagation::Stop
+                    } else {
+                        glib::Propagation::Proceed
+                    };
+                }
                 let result = {
                     let mut gpu = w.gpu.borrow_mut();
                     let Some(gpu) = gpu.as_mut() else {
                         return glib::Propagation::Proceed;
                     };
-                    if gpu.session.state().document_file.close_ready {
-                        return glib::Propagation::Proceed;
-                    }
                     gpu.session.request_document_close()
                 };
                 glib::idle_add_local_once(glib::clone!(

@@ -6,7 +6,7 @@ license.workspace = true
 description = "Shared workspace records, management policy and asynchronous persistence"
 
 [features]
-native = ["dep:rusqlite"]
+native = ["dep:rusqlite", "dep:async-channel"]
 
 [dependencies]
 layer-ui = { path = "../layer-ui" }
@@ -15,3 +15,7 @@ serde_json = "1"
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "js"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"], optional = true }
+async-channel = { version = "2", optional = true }
+
+[dev-dependencies]
+pollster = "0.4"

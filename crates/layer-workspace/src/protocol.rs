@@ -4,6 +4,13 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// One asynchronous record protocol; native and browser implementations provide
+/// transport without duplicating application decisions or workspace semantics.
+#[allow(async_fn_in_trait)]
+pub trait WorkspaceStore {
+    async fn execute(&self, request: StoreRequest) -> Result<StoreResponse, StoreError>;
+}
+
 pub fn content_id(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }

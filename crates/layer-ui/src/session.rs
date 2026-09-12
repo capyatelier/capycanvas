@@ -81,6 +81,7 @@ pub struct UiSession<R: CanvasRenderer> {
     workspace_drag: Option<WorkspaceDrag>,
     workspace_tab_drag: Option<crate::tab_drag::TabDrag>,
     workspace_history: workspace::WorkspaceHistory,
+    workspace_transition: bool,
     interaction: Interaction,
     cursor: cursor::Cursor,
     next_request: u32,
@@ -130,6 +131,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             workspace_drag: None,
             workspace_tab_drag: None,
             workspace_history: workspace::WorkspaceHistory::default(),
+            workspace_transition: false,
             interaction: Interaction::default(),
             cursor: cursor::Cursor::default(),
             next_request: 1,
@@ -384,6 +386,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             ..Default::default()
         };
         let mut contact = None;
+        if self.workspace_transition {
+            reply.handled = true;
+            return Ok(reply);
+        }
         let mut released_chrome_pin = false;
         match input {
             UiInput::Chrome {
@@ -1318,6 +1324,19 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn dispatch(&mut self, action: UiAction) -> Result<UiChange, String> {
+        if self.workspace_transition
+            && !matches!(
+                &action,
+                UiAction::MeasureColumnDrawers { .. }
+                    | UiAction::MeasureDrawerTiles { .. }
+                    | UiAction::MeasureColumnScroll { .. }
+                    | UiAction::SystemThemeChanged { .. }
+                    | UiAction::MeasurePanels { .. }
+                    | UiAction::WindowFullscreen { .. }
+            )
+        {
+            return Err("A workspace change is in progress".into());
+        }
         use regions::*;
         let revision = self.engine.document().revision;
         let transforming = self.operation.active();
@@ -2160,6 +2179,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
+        if self.workspace_transition {
+            return Ok(());
+        }
         if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) {
             self.region_pen(event);
             return Ok(());
@@ -3366,6 +3388,26 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn pending_workspace_adoption_blocks_new_input_without_touching_artwork() {
+        let mut s = session();
+        let capture = s.capture_workspace().unwrap();
+        let before = s.engine.document().clone();
+        s.begin_workspace_transition().unwrap();
+        assert!(s.begin_workspace_transition().is_err());
+        assert!(s.dispatch(UiAction::SetBrushSize { value: 50. }).is_err());
+        s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+        s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
+        s.frame(3, 3).unwrap();
+        assert_eq!(s.engine.document(), &before);
+        s.adopt_workspace(PreparedWorkspace::new(capture).unwrap())
+            .unwrap();
+        s.end_workspace_transition();
+        s.dispatch(UiAction::SetBrushSize { value: 50. }).unwrap();
+        assert_eq!(s.state.brush.diameter, 50.);
+        assert_eq!(s.engine.document(), &before);
     }
 
     #[test]

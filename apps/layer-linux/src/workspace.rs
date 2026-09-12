@@ -21,6 +21,8 @@ mod customization;
 mod drawers;
 #[path = "workspace_zen.rs"]
 mod zen;
+#[path = "workspace_manager.rs"]
+mod manager;
 #[path = "workspace_tab_drag.rs"]
 mod tab_drag;
 use tab_drag::NativeTabSlide;
@@ -782,6 +784,7 @@ pub struct Workspace {
     view_info: gtk::Label,
     status: gtk::Label,
     pub(crate) preferences: crate::preferences::Preferences,
+    pub(crate) workspaces: manager::NativeWorkspaces,
     pub(crate) servicing: Cell<bool>,
     pub(crate) open_document: RefCell<Option<crate::files::OpenDocument>>,
     initial_project: RefCell<Option<(layer_core::Project, Option<DocumentLocation>)>>,
@@ -898,8 +901,10 @@ impl Workspace {
         status.set_visible(false);
         status.add_css_class("error");
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let workspaces = manager::NativeWorkspaces::new();
         content.append(&surface);
         content.append(&status);
+        content.append(&workspaces.root);
         window.set_content(Some(&content));
         let this = Rc::new(Self {
             window,
@@ -949,6 +954,7 @@ impl Workspace {
             view_info,
             status,
             preferences: crate::preferences::Preferences::new(),
+            workspaces,
             servicing: Cell::new(false),
             open_document: RefCell::new(None),
             initial_project: RefCell::new(project),
@@ -975,6 +981,7 @@ impl Workspace {
         this.navigator_overviews.bind(&this);
         this.customization.bind(&this);
         this.preferences.bind(&this);
+        this.workspaces.bind(&this);
         this.install_chrome();
         crate::input::install(&this);
         this.install_gpu();
@@ -1587,6 +1594,7 @@ impl Workspace {
                 }
                 if change.regions != 0 {
                     self.refresh(change.regions);
+                    self.workspaces.observe(self, change.regions);
                 }
                 if change.canvas_wake {
                     self.wake();
@@ -1736,6 +1744,7 @@ impl Workspace {
                         *this.gpu.borrow_mut() = Some(gpu);
                         this.fullscreen_changed(this.window.is_fullscreen());
                         this.refresh(regions::ALL);
+                        this.workspaces.start(&this);
                         this.wake();
                     }
                     Err(error) => this.gpu_error(&error),

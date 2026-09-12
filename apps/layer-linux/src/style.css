@@ -24,6 +24,7 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .document-title { font-weight: 600; min-height: 24px; padding: 6px; }
 .header-clock { min-height: 36px; padding: 0 6px; }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
+.workspace-save-status { background: var(--window-bg-color); padding: 6px 0; color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }
 .dock-panel { background: var(--panel-bg); border-radius: 8px; box-shadow: 0 2px 8px alpha(black, .16); font-size: var(--ui-text-size); }
 .content-drawer { box-shadow: 0 8px 24px alpha(black, .4); }

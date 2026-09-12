@@ -1,7 +1,9 @@
 //! Workspace ownership and storage policy shared by native and browser hosts.
 //! Hosts provide asynchronous transport, lifecycle events and native controls.
+mod manager;
 mod model;
 mod protocol;
+pub use manager::*;
 pub use model::*;
 pub use protocol::*;
 #[cfg(feature = "native")]

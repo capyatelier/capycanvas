@@ -9,6 +9,7 @@ layer-core = { path = "../../crates/layer-core" }
 layer-render = { path = "../../crates/layer-render", features = ["png"] }
 layer-engine = { path = "../../crates/layer-engine" }
 layer-ui = { path = "../../crates/layer-ui" }
+layer-workspace = { path = "../../crates/layer-workspace", features = ["native"] }
 layer-render-wgpu = { path = "../../crates/layer-render-wgpu" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
 pango = { version = "0.22", features = ["v1_56"] }

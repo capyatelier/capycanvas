@@ -6,22 +6,22 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, StoreError>;
-type Message = (StoreRequest, mpsc::Sender<Result<StoreResponse>>);
-pub struct StoreReply(mpsc::Receiver<Result<StoreResponse>>);
+type Message = (StoreRequest, async_channel::Sender<Result<StoreResponse>>);
+pub struct StoreReply(async_channel::Receiver<Result<StoreResponse>>);
 impl StoreReply {
     /// Hosts poll from their event loop; no disk or SQLite lock is acquired here.
     pub fn poll(&self) -> Option<Result<StoreResponse>> {
         match self.0.try_recv() {
             Ok(value) => Some(value),
-            Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(Err(StoreError::new(
+            Err(async_channel::TryRecvError::Empty) => None,
+            Err(async_channel::TryRecvError::Closed) => Some(Err(StoreError::new(
                 ErrorKind::Unavailable,
                 "Workspace storage worker stopped.",
             ))),
         }
     }
     pub fn wait(self) -> Result<StoreResponse> {
-        self.0.recv().unwrap_or_else(|_| {
+        self.0.recv_blocking().unwrap_or_else(|_| {
             Err(StoreError::new(
                 ErrorKind::Unavailable,
                 "Workspace storage worker stopped.",
@@ -72,7 +72,7 @@ impl StoreWorker {
                     };
                     // A dropped receiver leaves the persisted receipt/pending payload
                     // available for retry. It must never imply that a write failed.
-                    let _ = reply.send(result);
+                    let _ = reply.try_send(result);
                 }
             })
             .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
@@ -81,8 +81,28 @@ impl StoreWorker {
         Ok(Self(worker))
     }
     pub fn request(&self, request: StoreRequest) -> StoreReply {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = async_channel::unbounded();
         let _ = self.0.sender.send((request, sender));
         StoreReply(receiver)
+    }
+}
+
+impl std::future::IntoFuture for StoreReply {
+    type Output = Result<StoreResponse>;
+    type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output>>>;
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            self.0.recv().await.unwrap_or_else(|_| {
+                Err(StoreError::new(
+                    ErrorKind::Unavailable,
+                    "Workspace storage worker stopped.",
+                ))
+            })
+        })
+    }
+}
+impl WorkspaceStore for StoreWorker {
+    async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
+        self.request(request).await
     }
 }

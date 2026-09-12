@@ -69,3 +69,37 @@ After integrating the concurrent GTK/Web tab-drag changes, combined validation
 passed 255 shared UI tests and 14 native store tests, plus doc tests:
 `cargo test --locked -p layer-ui -p layer-workspace --features layer-workspace/native`.
 `cargo check --locked -p layer-linux` also passed on that combined tree.
+
+## Milestone 3: GTK persistence and session coordination
+
+GTK now opens the shared SQLite service, creates My Workspace from Default on
+first launch, resumes the last workspace, and gives additional windows independent
+workspaces. Accepted layout gestures and latest working values save asynchronously;
+working saves debounce and also run periodically during long interactions. Close
+waits for acknowledged writes. A failed save retains the pending immutable operation
+and accepted newer values for Retry. Save errors remain visible; successful routine
+saves do not add persistent chrome in Zen. Tests use isolated CAPY_WORKSPACE_DIR
+directories; normal GTK storage is under its application data directory.
+
+Shared coordination includes prepared switching, independent create/duplicate,
+layout-only template creation, names, and ownership renewal. A shared session gate
+prevents new document/tool input while workspace adoption is pending. The manager
+UI, recovery packages, retention, and full suspend/takeover presentation remain
+unfinished and are still required before GTK approval.
+
+Validation:
+
+- 256 shared UI and 17 store/coordinator tests pass, including edits arriving while
+  an earlier save awaits acknowledgement, errors scoped to the affected operation,
+  failed outgoing save/incoming load, template defaults, and independent histories.
+- `native_workspace_database_resume_and_independent_windows` passed using actual
+  GTK, Wayland and NVIDIA Vulkan with fatal GTK criticals enabled. It changes a
+  layout and working settings, closes/reopens, verifies Undo → reopen → Redo, and
+  confirms two windows keep independent working values. Artwork stays unchanged.
+- Reviewed the native capture at `/tmp/capy-workspace-persistence.png`. Removed
+  the routine saved-state row from Zen; persistent storage errors still appear.
+
+After integrating the next Android and GTK/Web changes, 258 shared UI tests and
+17 store/coordinator tests passed. The native test passed again in 4.38 seconds.
+Its layout assertions compare durable fields, excluding transient GTK widget
+measurements, which can arrive at different times after each realization.

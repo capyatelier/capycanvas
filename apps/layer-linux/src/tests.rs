@@ -13170,3 +13170,69 @@ fn find_css(root: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
     }
     None
 }
+
+#[test]
+#[ignore = "private Wayland display, Vulkan and CAPY_WORKSPACE_DIR: native SQLite workspace resume"]
+fn native_workspace_database_resume_and_independent_windows() {
+    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some(), "Use an isolated CAPY_WORKSPACE_DIR for this test");
+    let app = native_test_app("art.capycanvas.WorkspacePersistence");
+    let wait_ready = |w: &Workspace| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+            pump(20);
+            assert!(Instant::now() < deadline, "workspace startup: {:?}", w.workspaces.manager.as_ref().unwrap().error());
+        }
+    };
+    let wait_saved = |w: &Workspace| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let manager = w.workspaces.manager.as_ref().unwrap();
+        while manager.dirty() || manager.saving() {
+            pump(20);
+            assert!(manager.error().is_none(), "workspace save: {:?}", manager.error());
+            assert!(Instant::now() < deadline, "workspace save deadline");
+        }
+        assert!(manager.error().is_none());
+    };
+    let w = Workspace::new(&app); w.window.present(); wait_ready(&w);
+    let id = w.workspaces.manager.as_ref().unwrap().active_id().unwrap();
+    let baseline = durable_layout(&state(&w).workspace.layout);
+    let document = w.gpu.borrow().as_ref().unwrap().session.engine().document().clone();
+    w.dispatch(UiAction::MovePanel { panel: Panel::Layers, target: DockTarget::Float { position: [420., 180.] }, viewport: [1200., 900.] });
+    w.dispatch(UiAction::SetBrushSize { value: 73. });
+    w.dispatch(UiAction::SetColor { rgba: [0.2, 0.4, 0.6, 1.] });
+    w.dispatch(UiAction::Invoke { command: CommandId::ZenMode });
+    let moved = durable_layout(&state(&w).workspace.layout);
+    assert_ne!(moved, baseline);
+    wait_saved(&w);
+    assert_eq!(w.gpu.borrow().as_ref().unwrap().session.engine().document(), &document);
+    w.window.close();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while w.window.is_visible() { pump(20); assert!(Instant::now() < deadline, "acknowledged close"); }
+    drop(w); pump(30);
+    let reopened = Workspace::new(&app); reopened.window.present(); wait_ready(&reopened);
+    assert_eq!(reopened.workspaces.manager.as_ref().unwrap().active_id().unwrap(), id);
+    assert_eq!(durable_layout(&state(&reopened).workspace.layout), moved);
+    assert_eq!(state(&reopened).brush.diameter, 73.);
+    assert_eq!(state(&reopened).colors.foreground, [0.2, 0.4, 0.6, 1.]);
+    assert!(state(&reopened).workspace.zen_mode);
+    reopened.dispatch(UiAction::Invoke { command: CommandId::UndoWorkspace });
+    assert_eq!(durable_layout(&state(&reopened).workspace.layout), baseline);
+    assert_eq!(state(&reopened).brush.diameter, 73.);
+    assert!(state(&reopened).workspace.zen_mode);
+    wait_saved(&reopened);
+    reopened.window.close();
+    while reopened.window.is_visible() { pump(20); assert!(Instant::now() < deadline + Duration::from_secs(20)); }
+    drop(reopened); pump(30);
+    let again = Workspace::new(&app); again.window.present(); wait_ready(&again);
+    again.dispatch(UiAction::Invoke { command: CommandId::RedoWorkspace });
+    assert_eq!(durable_layout(&state(&again).workspace.layout), moved);
+    assert_eq!(state(&again).brush.diameter, 73.);
+    wait_saved(&again);
+    let second = Workspace::new(&app); second.window.present(); wait_ready(&second);
+    assert_ne!(again.workspaces.manager.as_ref().unwrap().active_id(), second.workspaces.manager.as_ref().unwrap().active_id());
+    second.dispatch(UiAction::SetBrushSize { value: 121. }); wait_saved(&second);
+    assert_eq!(state(&again).brush.diameter, 73.);
+    assert_eq!(state(&second).brush.diameter, 121.);
+    crate::capture(&second, "/tmp/capy-workspace-persistence.png");
+    second.window.close(); again.window.close(); pump(500);
+}
