@@ -19,7 +19,8 @@ pub use color::{
 pub use tool_settings::{ToolSetting, ToolSettingAction};
 use tools::preset;
 pub use tools::{
-    Tool, ToolFamily, ToolGroup, ToolSetItem, ToolSetView, brush_catalog, brush_categories,
+    Tool, ToolFamily, ToolGroup, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
+    brush_categories,
 };
 mod cursor;
 mod customization;
@@ -76,7 +77,7 @@ pub use layout::{
 pub use numeric::{
     NumericControl, NumericKind, NumericMapping, NumericOperation, NumericRequest, NumericValue,
 };
-pub use session::{LayerControls, UiSession};
+pub use session::{LayerControls, PreparedWorkspace, UiSession};
 pub use settings::{
     ChoicePresentation, ClockVisibility, HostRequest, HostRequestKind, Platform, PreferenceAction,
     PreferenceGroup, PreferenceId, PreferenceKind, PreferencePage, PreferenceReset, PreferenceRow,
@@ -88,7 +89,10 @@ pub use shortcuts::{
     TextEditMenuItem, text_edit_menu,
 };
 pub use theme::{HexColor, Theme, ThemePalette};
-pub use workspace::WorkspaceState;
+pub use workspace::{
+    LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
+    durable_layout,
+};
 
 /// Logical units; rendering still uses the entire physical window viewport.
 pub const HEADER_HEIGHT: f32 = 48.0;

@@ -49,7 +49,8 @@ pub enum ColorAction {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ColorState {
     /// Display-encoded sRGB, not linear canvas pigment.
     pub foreground: [f32; 4],
@@ -101,6 +102,22 @@ impl Default for ColorState {
     }
 }
 impl ColorState {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self
+            .foreground
+            .iter()
+            .chain(&self.background)
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+            || self
+                .hues
+                .iter()
+                .any(|v| !v.is_finite() || !(0.0..=360.0).contains(v))
+            || self.paint_slot == ColorSlot::Transparent
+        {
+            return Err("Invalid workspace colors".into());
+        }
+        Ok(())
+    }
     pub fn view(&self) -> ColorPanelView {
         let geometry = ColorWheelGeometry::new(1.).unwrap();
         let components = self.components();
