@@ -255,30 +255,22 @@ impl NativeWorkspaces {
                             && !item.claim.as_ref().is_some_and(|claim| {
                                 claim.owner != manager.owner && claim.expires_at_ms > now
                             });
-                        available.then(|| (item.id.clone(), item.metadata.name.clone()))
+                        available.then(|| item.id.clone())
                     }).ok_or_else(|| StoreError::invalid("All default workspaces are open in other windows. Close one of those windows before deleting this workspace."))?;
                     Some(replacement)
                 } else {
                     None
                 };
                 let message = format!(
-                    "Delete “{}”?{}",
-                    stored.entity.metadata.name,
-                    replacement
-                        .as_ref()
-                        .map(|(_, name)| format!(" You’ll switch to “{name}”."))
-                        .unwrap_or_default()
+                    "Delete “{}”? This is permanent.",
+                    stored.entity.metadata.name
                 );
                 if !dialog::confirm(w, "Delete", &message, "Delete", true).await {
                     return Ok(());
                 }
                 let _operation = self.begin_operation(w).await?;
                 let result = manager
-                    .delete_item(
-                        &id,
-                        replacement.as_ref().map(|(id, _)| id.as_str()),
-                        now_ms(),
-                    )
+                    .delete_item(&id, replacement.as_deref(), now_ms())
                     .await;
                 match result {
                     Ok(Some(incoming)) => self.adopt(w, Ok(incoming)).await,
