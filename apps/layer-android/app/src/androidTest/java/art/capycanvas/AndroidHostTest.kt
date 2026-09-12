@@ -276,7 +276,7 @@ class AndroidHostTest {
         action(obj("type" to "restore_workspace", "workspace" to fixture))
         val root = compose.onNodeWithTag("workspace")
         val native = (root.fetchSemanticsNode().root as ViewRootForTest).view
-        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
+        fun bounds(tag: String) = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.translate(-root.fetchSemanticsNode().boundsInRoot.topLeft)
         fun saved() = state().getJSONObject("workspace").toString()
         fun settle() { compose.waitForIdle(); SystemClock.sleep(120); compose.waitForIdle() }
         fun event(point: androidx.compose.ui.geometry.Offset, tool: Int): MotionEvent {

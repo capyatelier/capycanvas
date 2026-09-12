@@ -729,6 +729,7 @@ impl FloatingToolbarLayout {
 pub struct PanelMeasurement {
     pub panel: Panel,
     pub tab_width: f32,
+    /// Zero means the body has not been measured; use the default floating height.
     pub content_height: f32,
 }
 
@@ -2824,6 +2825,9 @@ impl DockLayout {
                     .measurements
                     .iter()
                     .find(|m| m.panel == *active)
+                    // Hosts can measure a tab before mounting its body. A zero
+                    // body measurement must not turn tear-off into a header only.
+                    .filter(|m| m.content_height > 0.0)
                     .map_or(320.0, |m| m.content_height)
                     + if panels.len() == 1 && config.hide_tab {
                         PANEL_GRIP_HEIGHT
@@ -5378,6 +5382,39 @@ mod tests {
             )
             .unwrap();
         assert!(layout.panel(Panel::Sizes).unwrap().hide_tab);
+    }
+
+    #[test]
+    fn tab_only_measurements_preserve_floating_panel_bodies() {
+        for panel in [Panel::Layers, Panel::Adjustments, Panel::Properties] {
+            let mut layout = DockLayout::default();
+            layout
+                .move_panel(
+                    [1200.0, 900.0],
+                    panel,
+                    DockTarget::Float {
+                        position: [500.0, 300.0],
+                    },
+                )
+                .unwrap();
+            let height = |layout: &DockLayout| {
+                group(
+                    &layout.workspace(1200.0, 900.0, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT),
+                    panel,
+                )
+                .height
+            };
+            let default_height = height(&layout);
+            assert!(default_height > TAB_BAR_HEIGHT);
+            layout.measurements.push(PanelMeasurement {
+                panel,
+                tab_width: 140.0,
+                content_height: 0.0,
+            });
+            assert_eq!(height(&layout), default_height);
+            layout.measurements[0].content_height = 180.0;
+            assert_eq!(height(&layout), 180.0 + TAB_BAR_HEIGHT);
+        }
     }
 
     #[test]

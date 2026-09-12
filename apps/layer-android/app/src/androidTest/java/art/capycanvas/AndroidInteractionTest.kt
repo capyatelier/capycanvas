@@ -21,10 +21,11 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** Real window-dispatched finger/pen contacts, including popup focus and CANCEL.
+/** Native finger/pen MotionEvents on the tablet, including popup focus and CANCEL.
  * Keep the real frame clock: a held contact must survive opening a native popup. */
 class AndroidInteractionTest {
     private lateinit var scenario: ActivityScenario<MainActivity>
@@ -38,8 +39,11 @@ class AndroidInteractionTest {
     private var contact = false
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
-    private var systemInput = true
+    // View dispatch keeps exact geometry deterministic. Opt into the OS input
+    // dispatcher with -e systemInput true where system injection is available.
+    private var systemInput = InstrumentationRegistry.getArguments().getString("systemInput") == "true"
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    private val recovery get() = File(instrumentation.targetContext.filesDir, "interaction-workspace-recovery.json")
 
     private inline fun <reified T> findView(view: View): T? {
         val pending = ArrayDeque<View>().apply { add(view) }
@@ -95,7 +99,11 @@ class AndroidInteractionTest {
         val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords,
             0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_STYLUS) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_TOUCHSCREEN, 0)
         try {
-            if (systemInput) assertTrue(instrumentation.uiAutomation.injectInputEvent(motion, true))
+            if (systemInput) {
+                val accepted = instrumentation.uiAutomation.injectInputEvent(motion, true)
+                if (!accepted && action == MotionEvent.ACTION_DOWN) contact = false
+                assertTrue("System accepts ${MotionEvent.actionToString(action)} at $next (screen ${coords[0].x}, ${coords[0].y}; origin ${location.toList()}; rotation ${owner.view.display.rotation})", accepted)
+            }
             else scenario.onActivity { motion.offsetLocation(-location[0].toFloat(), -location[1].toFloat()); owner.view.dispatchTouchEvent(motion) }
         } finally { motion.recycle() }
         if (systemInput && action == MotionEvent.ACTION_MOVE) {
@@ -105,7 +113,9 @@ class AndroidInteractionTest {
             SystemClock.sleep(24)
             val stopped = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords,
                 0, 0, 1f, 1f, 0, 0, if (tool == MotionEvent.TOOL_TYPE_STYLUS) InputDevice.SOURCE_STYLUS else InputDevice.SOURCE_TOUCHSCREEN, 0)
-            try { assertTrue(instrumentation.uiAutomation.injectInputEvent(stopped, true)) } finally { stopped.recycle() }
+            try {
+                assertTrue(instrumentation.uiAutomation.injectInputEvent(stopped, true))
+            } finally { stopped.recycle() }
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) contact = false
     }
@@ -113,13 +123,13 @@ class AndroidInteractionTest {
     private fun doubleTap(at: Offset) { tap(at); SystemClock.sleep(80); tap(at); settle() }
     private fun back() { instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK); settle() }
     private fun popupCount(): Int {
-        var count = 0
-        instrumentation.runOnMainSync {
-            count = android.view.inspector.WindowInspector.getGlobalWindowViews().count { view ->
+        fun count() = android.view.inspector.WindowInspector.getGlobalWindowViews().count { view ->
                 findView<ViewRootForTest>(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "workspace-menu") != null } == true
             }
-        }
-        return count
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return count()
+        var result = 0
+        instrumentation.runOnMainSync { result = count() }
+        return result
     }
     @Before fun ready() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
@@ -129,7 +139,10 @@ class AndroidInteractionTest {
             density = it.resources.displayMetrics.density
         }
         waitFor("brush ready", 60_000) { snapshot().optBoolean("brush_ready") }
-        scenario.onActivity { saved = JSONObject(workspace()) }
+        scenario.onActivity {
+            saved = if (recovery.exists()) JSONObject(recovery.readText())
+                else JSONObject(workspace()).also { recovery.writeText(it.toString()) }
+        }
         val defaults = Native.create(false)
         try { fixture = JSONObject(Native.snapshot(defaults)!!).getJSONObject("state").getJSONObject("workspace") }
         finally { Native.destroy(defaults) }
@@ -147,9 +160,14 @@ class AndroidInteractionTest {
         restore()
     }
     @After fun cleanup() {
-        if (contact) event(MotionEvent.ACTION_CANCEL)
-        if (::saved.isInitialized) action(obj("type" to "restore_workspace", "workspace" to saved))
-        if (::scenario.isInitialized) scenario.close()
+        try { if (contact) event(MotionEvent.ACTION_CANCEL) }
+        finally {
+            try { if (::saved.isInitialized) {
+                action(obj("type" to "restore_workspace", "workspace" to saved))
+                recovery.delete()
+            } }
+            finally { if (::scenario.isInitialized) scenario.close() }
+        }
     }
 
     @Test fun longPressRetainsEveryWorkspaceDragSource() {
@@ -182,6 +200,7 @@ class AndroidInteractionTest {
                 event(MotionEvent.ACTION_DOWN, press)
                 SystemClock.sleep(700)
                 assertEquals("$pointer/$kind opens its menu during contact", 1, popupCount())
+                scenario.onActivity { assertTrue("Held menu preserves the original window contact", owner.view.hasWindowFocus()) }
                 event(MotionEvent.ACTION_UP)
                 settle()
                 assertEquals("$pointer/$kind release retains menu", 1, popupCount())
@@ -192,7 +211,7 @@ class AndroidInteractionTest {
                 assertEquals("$pointer/$kind second hold", 1, popupCount())
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
                 waitFor("$pointer/$kind continues original drag") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
-                assertEquals("$pointer/$kind drag closes menu", 0, popupCount())
+                waitFor("$pointer/$kind drag closes menu") { popupCount() == 0 }
                 event(MotionEvent.ACTION_CANCEL)
                 waitFor("$pointer/$kind cancel") { workspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
             }
@@ -210,6 +229,7 @@ class AndroidInteractionTest {
             val halfway = next.width / 2
             event(MotionEvent.ACTION_DOWN, press)
             event(MotionEvent.ACTION_MOVE, press + Offset(halfway - density, 0f)); settle()
+            waitFor("tab slide preview") { host.workspaceGeometry?.tab != null }
             assertEquals(0f, host.workspaceGeometry!!.tab!!.offsets[2]!!, .01f)
             event(MotionEvent.ACTION_MOVE, press + Offset(halfway + density, 0f)); settle()
             assertEquals(-source.width / density, host.workspaceGeometry!!.tab!!.offsets[2]!!, 1f)
@@ -338,6 +358,105 @@ class AndroidInteractionTest {
             }
     }
 
+    @Test fun emptyHeadersCollapseButTabsDoNot() {
+        fixture.getJSONObject("layout").array("bands").objects().forEach { it.getJSONObject("root").put("tab_style", "icon") }
+        for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (id in listOf(41, 43)) {
+            tool = pointer; restore()
+            val active = if (id == 41) "brushes" else "navigator"
+            doubleTap(bounds("tab-$active").center)
+            assertFalse("A double tap on a tab keeps its column open", exists("collapsed-column-$id"))
+            val last = bounds("tab-${if (id == 41) "tool_settings" else "properties"}")
+            val grip = bounds("group-grip-$id")
+            val empty = Offset((last.right + grip.left) / 2, grip.center.y)
+            assertTrue("Fixture has empty header space", empty.x > last.right + 10 * density)
+            doubleTap(empty)
+            waitFor("Empty header collapses $id") { exists("collapsed-column-$id") }
+            action(obj("type" to "invoke", "command" to "undo_workspace"))
+            assertFalse(exists("collapsed-column-$id"))
+            // CANCEL and a long hold must not count as the first half of a double tap.
+            event(MotionEvent.ACTION_DOWN, empty); event(MotionEvent.ACTION_CANCEL); tap(empty); settle()
+            assertFalse(exists("collapsed-column-$id"))
+        }
+    }
+
+    @Test fun drawerTabsKeepActiveColorsAndPadding() {
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        try { for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); restore()
+            val docked = bounds("tab-brushes")
+            val name = bounds("tab-name-brushes")
+            val icon = bounds("tab-icon-brushes")
+            fun pixels(tag: String): Pair<Int, Int> {
+                val rect = bounds(tag)
+                val image = instrumentation.uiAutomation.takeScreenshot()
+                val location = IntArray(2)
+                scenario.onActivity { owner.view.getLocationOnScreen(location) }
+                fun sample(x: Float, y: Float) = image.getPixel((x + location[0]).toInt(), (y + location[1]).toInt())
+                val background = sample(rect.center.x, rect.top + 3 * density)
+                val text = bounds("tab-name-brushes")
+                val counts = mutableMapOf<Int, Int>()
+                for (y in text.top.toInt() until text.bottom.toInt()) for (x in text.left.toInt() until text.right.toInt()) {
+                    val color = sample(x.toFloat(), y.toFloat())
+                    if (color != background) counts[color] = (counts[color] ?: 0) + 1
+                }
+                image.recycle()
+                return background to counts.maxBy { it.value }.key
+            }
+            val colors = pixels("tab-brushes")
+            customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+            tap(bounds("column-icon-brushes").center); waitFor("Drawer tabs") { exists("drawer-tab-brushes") }; settle()
+            val drawer = bounds("drawer-tab-brushes")
+            assertEquals("Drawer uses the same tab width", docked.width, drawer.width, 1f)
+            assertEquals("Drawer uses the same tab height", docked.height, drawer.height, 1f)
+            assertEquals("Drawer name padding", name.left - docked.left, bounds("tab-name-brushes").left - drawer.left, 1f)
+            assertEquals("Drawer icon padding", icon.left - docked.left, bounds("tab-icon-brushes").left - drawer.left, 1f)
+            assertEquals("Drawer active background and text match the docked tab in $theme", colors, pixels("drawer-tab-brushes"))
+        } } finally { action(obj("type" to "set_theme", "theme" to originalTheme)) }
+    }
+
+    @Test fun detachedPanelsKeepBodiesAndWiderResizeTargets() {
+        systemInput = false
+        val root = fixture.getJSONObject("layout").array("bands").getJSONObject(1).getJSONObject("root")
+        root.put("panels", JSONArray(listOf("navigator", "layers", "properties", "adjustments"))).put("tab_style", "icon")
+        for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS))
+            for (panel in listOf("properties", "adjustments", "layers")) for (wholeGroup in listOf(false, true)) {
+                tool = pointer; restore()
+                if (wholeGroup) action(obj("type" to "select_panel_tab", "group" to 43, "panel" to panel))
+                val before = workspace()
+                event(MotionEvent.ACTION_DOWN, bounds(if (wholeGroup) "group-grip-43" else "tab-$panel").center)
+                event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
+                waitFor("$panel detaches") { group(panel).optBoolean("floating") }
+                settle()
+                assertTrue("$panel floating body is visible during contact", bounds("panel-body-$panel").height > 60 * density)
+                val content = when (panel) { "adjustments" -> "filter-list"; "properties" -> "layer-properties"; else -> "layer-rows" }
+                assertTrue("$panel controls are painted below the header", bounds(content).height > 20 * density)
+                event(MotionEvent.ACTION_MOVE, point + Offset(24 * density, 30 * density)); settle()
+                assertTrue("$panel body remains visible while moving", bounds(content).height > 20 * density)
+                event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(before, workspace())
+                event(MotionEvent.ACTION_DOWN, bounds(if (wholeGroup) "group-grip-43" else "tab-$panel").center)
+                event(MotionEvent.ACTION_MOVE, bounds("workspace").center); settle(); event(MotionEvent.ACTION_UP); settle()
+                assertTrue(group(panel).optBoolean("floating"))
+                val floating = workspace()
+                val floatingId = group(panel).getInt("id")
+                val edge = bounds("resize-$floatingId-right")
+                assertTrue("Floating side target is at least 12dp", edge.width >= 12 * density - 1)
+                val press = Offset(edge.right - 2 * density, edge.center.y)
+                event(MotionEvent.ACTION_DOWN, press)
+                event(MotionEvent.ACTION_MOVE, press + Offset(40 * density, 0f)); settle()
+                assertNotEquals("Outer part of the widened handle resizes", floating, workspace())
+                event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(floating, workspace())
+                action(obj("type" to "invoke", "command" to "undo_workspace")); assertEquals(before, workspace())
+            }
+        restore()
+        val divider = bounds("divider-40")
+        assertTrue("Column resize target is at least 16dp", divider.width >= 16 * density - 1)
+        val before = workspace()
+        val press = Offset(divider.right - density, divider.center.y)
+        event(MotionEvent.ACTION_DOWN, press); event(MotionEvent.ACTION_MOVE, press + Offset(45 * density, 0f)); settle()
+        assertNotEquals("Wider column target resizes", before, workspace())
+        event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(before, workspace())
+    }
+
     @Test fun layerHandleLongPressDragCancelAndUndo() {
         action(obj("type" to "select_panel_tab", "group" to 43, "panel" to "layers"))
         val original = state().array("layers").objects().map { it.getLong("id") }
@@ -348,13 +467,14 @@ class AndroidInteractionTest {
             repeat(2) { layer(obj("op" to "new", "group" to false, "clipped" to false)); additions++ }
             val before = state().array("layers").objects().map { it.getLong("id") }
             val source = before[0]; val target = before[1]
-            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (handle in listOf(true, false)) {
                 tool = pointer
                 val sourceBounds = bounds("layer-row-$source")
-                val press = Offset(sourceBounds.right - 12 * density, sourceBounds.center.y)
+                val press = Offset(if (handle) sourceBounds.right - 12 * density else sourceBounds.center.x, sourceBounds.center.y)
                 val destination = bounds("layer-row-$target").let { Offset(it.right - 12 * density, it.bottom - 3 * density) }
                 event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
                 assertEquals("Layer context opens while held", 1, popupCount())
+                scenario.onActivity { assertTrue("Layer menu preserves window focus during contact", owner.view.hasWindowFocus()) }
                 event(MotionEvent.ACTION_UP); settle(); assertEquals(1, popupCount()); back()
                 event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
                 event(MotionEvent.ACTION_MOVE, destination); settle(); assertEquals(0, popupCount())

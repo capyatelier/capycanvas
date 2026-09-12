@@ -25,9 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.zIndex
@@ -43,8 +41,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
@@ -245,7 +241,8 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             layout.array("groups").objects().filter { !hidden || (it.optBoolean("floating") && !snapshot.optBoolean("hide_floating_panels")) }
                 .sortedBy { it.getInt("id") == dock.expansion?.getInt("group") }.forEachIndexed { index, group ->
                 key(group.getInt("id")) {
-                  CompositionLocalProvider(LocalWorkspaceZ provides index) {
+                  val z = (if (group.optBoolean("floating")) 180 else 100) + index
+                  CompositionLocalProvider(LocalWorkspaceZ provides z) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }
                     val base = group.getJSONObject("bounds")
                     val shown = if (group.optBoolean("floating")) floatingBounds(base, dock.dragging, host, group.getInt("id")) else base
@@ -253,7 +250,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
                         ?.let { expandedShape(it, density) } ?: RoundedCornerShape(8.dp)
                     val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
-                    Box(placement.zIndex(100f + index).testTag("group-${group.getInt("id")}").chromeRegion(dock)
+                    Box(placement.zIndex(z.toFloat()).testTag("group-${group.getInt("id")}").chromeRegion(dock)
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
@@ -266,7 +263,16 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         }
                     }
                     if (expansion == null) group.array("resize_handles").objects().forEach { handle ->
-                        Box(Modifier.workspacePlaced(host, group.getInt("id"), handle.getJSONObject("bounds"), base, density).zIndex(100f + index)
+                        val edge = handle.getString("edge")
+                        val hit = handle.getJSONObject("bounds").rect().let { r ->
+                            // Extend external handles outward, keeping panel
+                            // controls and tabs fully reachable.
+                            obj("x" to (r.left - if ("left" in edge) 6f else 0f),
+                                "y" to (r.top - if ("top" in edge) 6f else 0f),
+                                "width" to (r.width + if ("left" in edge || "right" in edge) 6f else 0f),
+                                "height" to (r.height + if ("top" in edge || "bottom" in edge) 6f else 0f))
+                        }
+                        Box(Modifier.workspacePlaced(host, group.getInt("id"), hit, base, density).zIndex(z.toFloat())
                             .testTag("resize-${group.getInt("id")}-${handle.getString("edge")}").workspaceSource(dock,
                             obj("type" to "resize_floating", "group" to group.getInt("id"), "edge" to handle.getString("edge")),
                             priority = 4, cursor = resizePointerIcon(handle.getString("edge"))))
@@ -276,9 +282,18 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
             }
             if (!hidden) layout.array("dividers").objects().forEach { divider ->
                 val rect = divider.getJSONObject("bounds")
-                Box(Modifier.placed(rect, density).testTag("divider-${divider.getInt("id")}").workspaceSource(dock,
-                    obj("type" to "drag_divider", "id" to divider.getInt("id")), priority = 4,
-                    cursor = if (divider.getString("axis") == "horizontal") AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW else AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW))
+                val horizontal = divider.getString("axis") == "horizontal"
+                val hit = JSONObject(rect.toString()).apply {
+                    val extent = if (horizontal) "width" else "height"
+                    val start = if (horizontal) "x" else "y"
+                    val extra = (16f - rect.number(extent)).coerceAtLeast(0f)
+                    put(start, rect.number(start) - extra / 2); put(extent, rect.number(extent) + extra)
+                }
+                CompositionLocalProvider(LocalWorkspaceZ provides 170) {
+                    Box(Modifier.placed(hit, density).zIndex(170f).testTag("divider-${divider.getInt("id")}").workspaceSource(dock,
+                        obj("type" to "drag_divider", "id" to divider.getInt("id")), priority = 4,
+                        cursor = if (horizontal) AndroidPointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW else AndroidPointerIcon.TYPE_VERTICAL_DOUBLE_ARROW))
+                }
             }
             if (!hidden) Row(Modifier.placed(layout.getJSONObject("status"), density).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
                 Surface(color = colors.surround, shape = RoundedCornerShape(20.dp)) {
@@ -409,19 +424,6 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     val panel = panels[active] ?: return
     val tabsVisible = group.getBoolean("tabs_visible")
     val groupItem = obj("kind" to "group", "group" to group.getInt("id"))
-    val measurer = rememberTextMeasurer()
-    val textStyle = LocalTextStyle.current.copy(fontWeight = FontWeight.Bold)
-    group.array("panels").values().forEach { id ->
-        panels[id.toString()]?.let { view ->
-            val tab = view.getJSONObject("tab")
-            val showIcon = tab.getBoolean("show_icon")
-            val showName = tab.getBoolean("show_name")
-            val width = 16f + (if (showIcon) 16f else 0f) +
-                (if (showName) measurer.measure(AnnotatedString(view.getString("title")), textStyle).size.width / dock.density else 0f) +
-                (if (showIcon && showName) 6f else 0f)
-            SideEffect { dock.measure(id.toString(), tabWidth = width) }
-        }
-    }
     DisposableEffect(group.getInt("id"), group.array("panels").toString()) {
         val prefix = "${group.getInt("id")}:"
         onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabSlots.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.getInt("id")) }
@@ -431,13 +433,11 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             if (tabsVisible) PanelHeaderFeedback {
                 Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                        onDoubleClick = { dock.doubleClickHandle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
+                        onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f).onGloballyPositioned { dock.tabClips[group.getInt("id")] = it.boundsInRoot().translate(-dock.origin) }
                         .horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
                         group.array("panels").values().forEachIndexed { index, id ->
                             val p = panels[id.toString()] ?: return@forEachIndexed
-                            val selected = id == active
-                            val content = p.getJSONObject("tab")
                             val tab = Modifier.testTag("tab-$id").dragSource(dock, obj("kind" to "panel", "panel" to id))
                                 .onGloballyPositioned { coords ->
                                     val r = coords.boundsInRoot(); val pos = (r.topLeft - dock.origin) / dock.density
@@ -447,42 +447,22 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                                     val natural = (coords.positionInRoot() - dock.origin) / dock.density
                                     dock.tabSlots["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
                                         "bounds" to obj("x" to natural.x, "y" to natural.y, "width" to coords.size.width / dock.density, "height" to coords.size.height / dock.density))
-                                }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier)
-                                .zIndex(if (dock.isDraggedTab(id.toString())) 2f else if (selected) 1f else 0f)
-                                .workspaceTabMotion(host, group.getInt("id"), id.toString(), index, dock.density)
-                                .drawBehind {
-                                    if (selected) {
-                                        val r = 6.dp.toPx(); val w = size.width; val h = size.height
-                                        val path = Path().apply {
-                                            moveTo(r, 0f); lineTo(w-r, 0f); quadraticTo(w, 0f, w, r)
-                                            lineTo(w, h-r); quadraticTo(w, h, w+r, h)
-                                            lineTo(-r, h); quadraticTo(0f, h, 0f, h-r)
-                                            lineTo(0f, r); quadraticTo(0f, 0f, r, 0f); close()
-                                        }
-                                        drawPath(path, colors.panel)
-                                    }
                                 }
-                                .combinedClickable(onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to id)) },
-                                    onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) }).padding(horizontal = 8.dp)
-                            Row(tab, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
-                                if (content.getBoolean("show_icon")) SharedIcon(p.getString("icon"), if (content.getBoolean("show_name")) null else p.getString("title"), Modifier.testTag("tab-icon-$id"))
-                                if (content.getBoolean("show_name")) Text(p.getString("title"), Modifier.testTag("tab-name-$id"), fontWeight = FontWeight.Bold)
-                            }
+                            WorkspaceTab(host, dock, p, group.getInt("id"), index, id == active, tab)
                         }
                     }
                     Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
                         .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                            onDoubleClick = { dock.doubleClickHandle(groupItem) },
                             onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
                 }
             }
-            Box(Modifier.weight(1f)) {
+            Box(Modifier.weight(1f).testTag("panel-body-$active")) {
                 if (group.objectOrNull("tiles") != null) ToolRibbon(host, panel, group.getJSONObject("tiles"), dock, Modifier.fillMaxSize(), group.optString("axis") == "vertical")
                 else PanelControls(host, state, panel, Modifier.fillMaxSize()) { dock.measure(active, contentHeight = it) }
             }
             group.objectOrNull("footer_grip")?.let { grip ->
                 Box(Modifier.fillMaxWidth().height(grip.number("height").dp).testTag("group-grip-${group.getInt("id")}").dragSource(dock, groupItem)
-                    .combinedClickable(onClick = {}, onDoubleClick = { dock.doubleClickHandle(groupItem) },
+                    .combinedClickable(onClick = {},
                         onLongClick = { dock.context(groupItem) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group", vertical = true) }
             }
         }

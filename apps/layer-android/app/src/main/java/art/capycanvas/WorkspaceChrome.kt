@@ -4,9 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.indication
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
@@ -111,7 +108,7 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                     val item = obj("kind" to "column", "column" to id)
                     val context = obj("kind" to "group", "group" to column.array("groups").getJSONObject(0).getInt("group"))
                     Box(Modifier.placed(column.getJSONObject("grip").relativeTo(bounds), dock.density)
-                        .testTag("column-grip-$id").dragSource(dock, item, context), contentAlignment = Alignment.Center) { PanelGrip("Move column", false) }
+                        .testTag("column-grip-$id").dragSource(dock, item, context), contentAlignment = Alignment.Center) { PanelGrip("Move column", vertical = true) }
                 }
             }
         }
@@ -198,20 +195,12 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                                         tabs.array("panels").values().forEachIndexed { tabIndex, panelId ->
                                             val panel = bodies[panelId.toString()] ?: return@forEachIndexed
                                             key(panelId.toString()) {
-                                                val presentation = panel.getJSONObject("tab")
-                                                val interaction = remember { MutableInteractionSource() }
-                                                TextButton({ host.dispatch(obj("type" to "select_panel_tab", "group" to group, "panel" to panelId)) },
-                                                    enabled = current != null,
-                                                    interactionSource = interaction,
-                                                    modifier = Modifier.height(tabHeight.dp).testTag("drawer-tab-$panelId")
-                                                        .indication(interaction, LocalIndication.current)
+                                                WorkspaceTab(host, dock, panel, group, tabIndex,
+                                                    panelId == tabs.getString("active"),
+                                                    Modifier.testTag("drawer-tab-$panelId")
                                                         .then(if (current != null) Modifier.dragSource(dock, obj("kind" to "panel", "panel" to panelId)) else Modifier)
-                                                        .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null)
-                                                        .zIndex(if (dock.isDraggedTab(panelId.toString())) 2f else 0f)
-                                                        .workspaceTabMotion(host, group, panelId.toString(), tabIndex, dock.density)) {
-                                                    if (presentation.getBoolean("show_icon")) SharedIcon(panel.getString("icon"), null)
-                                                    if (presentation.getBoolean("show_name")) Text(panel.getString("title"))
-                                                }
+                                                        .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null),
+                                                    enabled = current != null)
                                             }
                                         }
                                     }

@@ -251,11 +251,11 @@ internal class DockInteraction(val host: CanvasHost) {
  * reparent during tear-off. Long presses retain this original source and press
  * position, including grips without a child click handler. */
 internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = pointerInput(dock) {
-    var dividerTap: Triple<Int, Long, Offset>? = null
+    var chromeTap: Triple<String, Long, Offset>? = null
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        val previousTap = dividerTap
-        dividerTap = null
+        val previousTap = chromeTap
+        chromeTap = null
         if (dock.chromeRegions.values.any { it.contains(down.position) }) {
             val tab = dock.tabs.values.firstOrNull { it.getJSONObject("bounds").let { b ->
                 Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
@@ -279,6 +279,13 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
             var remaining = viewConfiguration.longPressTimeoutMillis
             var eventTime = down.uptimeMillis
             val divider = source.action.takeIf { it.optString("type") == "drag_divider" }?.getInt("id")
+            val group = source.action.takeIf { it.optString("type") == "drag_workspace" }?.objectOrNull("item")
+                ?.takeIf { it.optString("kind") == "group" }
+            val band = divider != null && dock.host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
+                ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
+            // The registered source distinguishes empty header/grip contacts
+            // from tabs, even inside a scrollable tab strip.
+            val tapTarget = if (band) "divider:$divider" else group?.let { "group:${it.getInt("group")}" }
             dock.contactHeld = true
             try {
                 do {
@@ -307,15 +314,15 @@ internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = point
                     }
                     if (!change.pressed) {
                         if (started) dock.finish(false)
-                        else if (divider != null && !held && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
+                        else if (tapTarget != null && !held && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
                             val gap = down.uptimeMillis - (previousTap?.second ?: 0)
-                            val band = dock.host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
-                                ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
-                            if (band && previousTap?.first == divider &&
+                            if (previousTap?.first == tapTarget &&
                                 gap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
                                 (down.position - previousTap.third).getDistance() <= viewConfiguration.touchSlop * 2) {
-                                dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
-                            } else dividerTap = Triple(divider, change.uptimeMillis, change.position)
+                                change.consume()
+                                if (band) dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
+                                else group?.let(dock::doubleClickHandle)
+                            } else chromeTap = Triple(tapTarget, change.uptimeMillis, change.position)
                         }
                         released = true; break
                     }

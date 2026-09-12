@@ -235,8 +235,10 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
     val latest by rememberUpdatedState(layer)
     var origin by remember { mutableStateOf(Offset.Zero) }
     var press by remember { mutableStateOf(Offset.Zero) }
+    var longPressed by remember { mutableStateOf(false) }
     val density=LocalDensity.current.density
     fun select(mask:Boolean=false) = host.layer(obj("op" to "select","id" to id,"mask" to mask))
+    fun openContext(mask:Boolean) { longPressed=true; context(mask,origin+press) }
     Row(modifier.fillMaxWidth().heightIn(min=40.dp).then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned { origin=it.boundsInRoot().topLeft }
         .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
         .drawWithContent {
@@ -247,20 +249,24 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
         }.then(if(preview) Modifier else Modifier.pointerInput(id) {
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
+                longPressed=false
                 val row=latest
-                val canDrag=row.getBoolean("can_drop_below") &&
-                    (down.type!=PointerType.Touch || down.position.x>=size.width-20*density)
+                val directDrag=down.type!=PointerType.Touch || down.position.x>=size.width-20*density
                 var dragging=false
                 held(true)
                 try { do {
                     val event=awaitPointerEvent(PointerEventPass.Initial); val change=event.changes.find { it.id==down.id } ?: break
                     if (!change.pressed && change.isConsumed) break
-                    if (canDrag && !dragging && change.pressed && (change.position-down.position).getDistance()>6*density) dragging=true
+                    // Ordinary finger movement scrolls the list. Once a row's
+                    // context menu opens, the same contact can reorder it.
+                    if (row.getBoolean("can_drop_below") && (directDrag || longPressed) && !dragging && change.pressed &&
+                        (change.position-down.position).getDistance()>6*density) dragging=true
                     if (dragging) { change.consume(); drag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
+                    if (longPressed) change.consume()
                     if (!change.pressed) break
-                } while(true) } finally { if(dragging)drag(origin+down.position,true,true); held(false) }
+                } while(true) } finally { if(dragging)drag(origin+down.position,true,true); longPressed=false; held(false) }
             }
-        }.combinedClickable(onClick={select()},onLongClick={context(false,origin+press)}))
+        }.combinedClickable(onClick={select()},onLongClick={openContext(false)}))
         .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
         LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.getBoolean("visible"))"Hide layer" else "Show layer",
             action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
@@ -275,7 +281,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             val label=if(group) "Expand or collapse group" else if(mask) "Edit layer mask" else "Edit layer content"
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp)) {
             Box(Modifier.fillMaxSize().then(if(group)Modifier else Modifier.background(colors.input,RoundedCornerShape(3.dp)))
-                .combinedClickable(onClick={host.layer(operation)},onLongClick={context(mask,origin+press)})
+                .combinedClickable(onClick={host.layer(operation)},onLongClick={openContext(mask)})
                 .drawWithContent {
                     drawContent()
                     if(selected) for((x,y,dx,dy) in listOf(listOf(1f,1f,1f,1f),listOf(size.width-1,1f,-1f,1f),listOf(1f,size.height-1,1f,-1f),listOf(size.width-1,size.height-1,-1f,-1f))) {
@@ -306,7 +312,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     textStyle=LocalTextStyle.current.copy(color=colors.text),singleLine=true,keyboardOptions=KeyboardOptions(imeAction=ImeAction.Done),keyboardActions=KeyboardActions(onDone={finish()}))
                 LaunchedEffect(id) { focus.requestFocus() }
                 DisposableEffect(id) { onDispose { host.editingText=false } }
-            } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={context(false,origin+press)}),
+            } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
             val meta=listOf(if(layer.getInt("blend")!=0)layer.getString("blend_label") else "",if(layer.number("opacity")<1f)"${(layer.number("opacity")*100).roundToInt()}%" else "").filter { it.isNotEmpty() }.joinToString(" · ")
             if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
