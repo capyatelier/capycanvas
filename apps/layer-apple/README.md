@@ -38,6 +38,12 @@ macOS/iPadOS build commands, signing and running in Xcode. Rerun
 `scripts/prepare.py` when shared assets change and `scripts/project.py` when adding
 or removing Swift files. Edit the generators rather than generated project entries.
 
+The shared SVG generator preserves fixed colors and ordered `currentColor` paints
+as vector assets, with a bundled paint manifest read once by the shared icon view.
+It retains the single-image path for ordinary symbolic icons. See the
+[icon comparison guide](../../tools/visual/README.md#shared-icon-paints) for direct
+native/Chrome captures and compositing checks.
+
 ## Shared editor controls
 
 Fresh editors use the shared full editor preset: the Tools and Commands bars,

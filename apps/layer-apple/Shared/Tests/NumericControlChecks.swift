@@ -23,6 +23,16 @@ extension XCTestCase {
         let overview = app.descendants(matching: .any)["navigator-overview"].firstMatch
         expectation(for: NSPredicate(format: "value == %@", "Live preview"), evaluatedWith: overview)
         waitForExpectations(timeout: 10)
+        // GPU submission and Navigator readiness precede thumbnail readback.
+        // Wait for the real visible images, not the empty input-colored boxes.
+        if app.launchEnvironment["CAPY_CAPTURE_PROBE"] == "1" {
+            let thumbnails = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-"))
+            XCTAssertGreaterThan(thumbnails.count, 0)
+            for thumbnail in thumbnails.allElementsBoundByIndex where thumbnail.isHittable {
+                expectation(for: NSPredicate(format: "value == %@", "Preview ready"), evaluatedWith: thumbnail)
+            }
+            waitForExpectations(timeout: 30)
+        }
         #if os(macOS)
         let window = app.windows.firstMatch
         // Open and close panel configuration to dismiss native help without

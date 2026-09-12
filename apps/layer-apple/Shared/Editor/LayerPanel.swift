@@ -273,8 +273,19 @@ private struct LayerRow: View {
                 // iPad thumbnail hits can consume the adjacent checkbox tap.
                 .contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel(mask ? "Edit layer mask" : layer["group"].bool ? "Collapse or expand group" : "Edit layer content")
+            .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
+            .accessibilityValue(thumbnailCaptureStatus(mask: mask))
             .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
             .editorContextAction { context(mask) }
+    }
+    private func thumbnailCaptureStatus(mask: Bool) -> String {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CAPY_CAPTURE_PROBE"] == "1" {
+            let symbolic = !mask && (layer["group"].bool || !layer["content_icon"].isNull)
+            return symbolic || previews.images[LayerThumbnails.key(id, mask)] != nil ? "Preview ready" : "Preview pending"
+        }
+        #endif
+        return ""
     }
 }
 

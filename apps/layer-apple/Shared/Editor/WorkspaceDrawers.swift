@@ -38,9 +38,12 @@ private struct WorkspaceCollapsedColumn: View {
     var body: some View {
         let base = column["bounds"], clip = column["content"]
         ZStack(alignment: .topLeading) {
-            IconTile(icon: "column-expand", label: "Expand column") {
+            Button {
                 store.customize(["type": "set_column_collapsed", "group": column["id"].raw, "collapsed": false])
-            }.placed(column["expand"].relative(to: base)).accessibilityIdentifier("expand-column-\(column["id"].uint)")
+            } label: {
+                Text("»").fontWeight(.bold).frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
+            }.buttonStyle(EditorControlButtonStyle()).accessibilityLabel("Expand column").help("Expand column")
+                .placed(column["expand"].relative(to: base)).accessibilityIdentifier("expand-column-\(column["id"].uint)")
             ScrollView(.vertical) {
                 let bottom = column["groups"].array.map { $0["bounds"].rect.maxY }.max() ?? clip.rect.minY
                 ZStack(alignment: .topLeading) {

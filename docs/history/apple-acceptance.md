@@ -76,6 +76,41 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared vector icon paints and settled captures — 2026-09-12
+
+Both Apple targets now preserve fixed colors in the canonical SVGs while tinting
+`currentColor` with the editor foreground. The shared generator emits ordered
+vector paints and a bundled manifest; the view reads it once and composites mixed
+icons before applying disabled opacity. The Color tab is green, and overlapping
+foreground/background swatches retain their black/white fills and drawing order.
+Collapsed-column expansion uses the browser's foreground-colored `»` label.
+The 92 ordinary symbolic icons retain their single-image path. No new package or
+hand-maintained native icon geometry is introduced.
+
+Six generator checks cover opacity, paint order, fill-before-stroke, unsupported
+mixed compositing and the complete 96-icon catalog. Direct native and Chrome
+captures cover all icons at three sizes, two palettes and normal/accent/disabled
+states: 18 grids and 1,728 glyphs per host. All 216 independent flat-paint samples
+pass with maximum channel error one. Complete comparisons retain 15,925,248
+pixels: 527,943 differ exactly, with per-grid fractions 1.467–11.404%, weighted
+mean channel error 0.226276 and maximum 107. Edge rasterization differences remain;
+these component checks do not establish full UIKit or editor pixel parity.
+
+The first live iPad Simulator capture exposed a startup race: Navigator/GPU
+readiness can precede thumbnail readback and enabled command publication. The
+shared capture fixture now waits for visible thumbnail images using opt-in Debug
+metadata, ignored by Release. The corrected capture passes and differs from the
+preceding native image at only 316 pixels in the Color tab icon. Its full matching
+Chrome comparison differs at 303,396 of 5,680,128 pixels (5.341359%), with mean
+channel error 1.108850 and maximum 255. The early capture is retained as invalid
+startup-state evidence; it is not substituted for the settled result.
+
+Both signed Release targets build and verify. Reproduction is in the
+[icon comparison guide](../../tools/visual/README.md#shared-icon-paints).
+Physical iPad/live Mac rendering, the remaining feature/visual/lifecycle matrix
+and sustained Mac 90 Hz / iPad 120 Hz performance gates remain open. Save/Load
+Layout remains excluded.
+
 ## Shared color-field rendering — 2026-09-12
 
 Both Apple targets now draw the HSV field and hue ring with Canvas gradients.

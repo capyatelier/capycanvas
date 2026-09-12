@@ -20,6 +20,7 @@ extension XCTestCase {
         let app = editorTestApplication()
         app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
         app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
+        app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"
         return app
     }
 

@@ -96,6 +96,50 @@ or tolerance waivers. These invisible AppKit captures and delegate checks cover
 shared Apple components; physical UIKit widgets, pointer delivery, full-editor
 pixels and sustained performance require separate evidence.
 
+## Shared icon paints
+
+Apple generates ordered vector paints from the canonical browser SVGs. Fixed
+fills remain original colors; `currentColor` paints follow the native foreground.
+Ordinary symbolic icons remain one image. Mixed paints retain drawing order and
+composite as a group before disabled opacity. The generator rejects unsupported
+mixed groups/effects rather than silently changing their compositing semantics.
+
+The direct fixture captures all 96 compiled icons at 16/24/32 points, two explicit
+foreground/background palettes, and normal/accent/disabled states: 18 complete
+grids with 1,728 glyphs per host. These are shared AppKit component captures;
+building the iPad target does not turn them into UIKit pixel evidence.
+
+```sh
+python3 apps/layer-apple/tests/test_icon_assets.py
+python3 apps/layer-apple/scripts/prepare.py
+# Build the Mac app after preparing assets, then:
+CAPY_TEST_ASSETS_APP="$PWD/apps/layer-apple/DerivedData/ColorMac/Build/Products/Release/CapyCanvas-Mac.app" \
+CAPY_ICON_SOURCES="$PWD/apps/layer-web/icons" \
+CAPY_ICON_CAPTURES="$PWD/artifacts/apple-icons" \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/icon-capture.swift
+node tools/visual/chrome-capture.mjs 576 384 2 artifacts/apple-icons light icons \
+  artifacts/apple-icons/fixtures.json
+artifacts/ui/parity/python-env/bin/python tools/visual/check_icon_paints.py \
+  artifacts/apple-icons --output artifacts/apple-icons/paint-check.json
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/apple-icons/web-light-32-normal.png artifacts/apple-icons/native-light-32-normal.png \
+  --output artifacts/apple-icons/diff-light-32-normal
+```
+
+Repeat complete comparison for every manifest name. All 216 focused flat-paint
+samples pass with maximum channel error one, including fixed fills, foreground
+outlines, overlapping swatches and disabled blending. Full comparisons retain
+15,925,248 pixels: 527,943 differ exactly, per-grid fractions are 1.467–11.404%,
+weighted mean channel error is 0.226276 and maximum is 107. Exact parity fails;
+the flat-paint check does not waive edge rasterization differences.
+
+The full native editor fixture now waits for visible layer thumbnails using
+opt-in Debug metadata (`CAPY_CAPTURE_PROBE`); an early GPU/Navigator readiness
+signal alone can capture empty thumbnail placeholders and disabled commands.
+Release ignores the probe. The settled iPad Simulator initial capture differs
+from the preceding native image only at the corrected Color tab icon. Its full
+Chrome comparison still differs at 303,396 of 5,680,128 pixels (5.341359%).
+
 ## Complete Color panels
 
 The `color-panel` fixture renders the production shared Apple panel in invisible

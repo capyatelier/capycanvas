@@ -32,10 +32,30 @@ struct SharedIcon: View {
     let name: String
     var size: CGFloat = 16
     var body: some View {
-        Image("icon-" + name.replacingOccurrences(of: "layer-", with: "").replacingOccurrences(of: "-symbolic", with: ""))
-            .resizable().renderingMode(.template).scaledToFit().frame(width: size, height: size)
-            .accessibilityHidden(true)
+        let key = name.replacingOccurrences(of: "layer-", with: "").replacingOccurrences(of: "-symbolic", with: "")
+        Group {
+            if let layers = Self.layers[key] {
+                ZStack {
+                    ForEach(layers, id: \.asset) { layer in
+                        glyph(layer.asset, template: layer.template)
+                    }
+                }.compositingGroup()
+            } else {
+                glyph("icon-" + key, template: true)
+            }
+        }.accessibilityHidden(true)
     }
+    private func glyph(_ asset: String, template: Bool) -> some View {
+        Image(asset).resizable().renderingMode(template ? .template : .original)
+            .scaledToFit().frame(width: size, height: size)
+    }
+    private struct Layer: Decodable { let asset: String; let template: Bool }
+    // The generated data asset shares Assets.car with the vectors on both hosts.
+    // Load once; fixed paints and foreground masks retain SVG painter order.
+    private static let layers: [String: [Layer]] = {
+        guard let data = NSDataAsset(name: "shared-icon-paints")?.data else { return [:] }
+        return (try? JSONDecoder().decode([String: [Layer]].self, from: data)) ?? [:]
+    }()
 }
 struct IconTile: View {
     let icon: String
