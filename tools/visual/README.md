@@ -122,9 +122,26 @@ including the paint interiors and all three numeric controls. All 1,488 measured
 rectangles are within one logical point. Measurement readers are disabled in
 ordinary editors; the fixture creates no visible native windows or drawing data.
 
-Full exact pixel comparison still fails, with 14.789–24.191% differing pixels
-across these AppKit pairs and mean channel error 2.487 over all 22,233,600 pixels.
-Gradient, text and edge differences remain unmasked. This establishes component
+Each native case also writes `oracle-NAME.json`, containing the actual Rust
+paint color, remembered hue and wheel bounds. Sample either host against the
+same independent picker oracle; this checks interior color correctness separately
+from the complete pixel comparison:
+
+```sh
+cargo build -p layer-ui --example color_wheel_reference
+artifacts/ui/parity/python-env/bin/python tools/visual/check_color_wheel.py \
+  artifacts/apple-color-panel/final/native-0-light-hls-foreground-160.png \
+  artifacts/apple-color-panel/final/oracle-0-light-hls-foreground-160.json \
+  --output artifacts/apple-color-panel/final/native-oracle-0-light-hls-foreground-160.json
+```
+
+Run this for all manifest names and the corresponding `web-NAME.png` images.
+Keep failures from both capture paths; a bitmap result alone cannot validate the
+live UIKit/AppKit renderer.
+
+Full exact pixel comparison still fails, with 9.777–20.803% differing pixels
+across these AppKit pairs and mean channel error 1.617740 over all 22,233,600 pixels.
+Text, edge and remaining color differences remain unmasked. This establishes component
 geometry, not physical UIKit/Mac rendering or full-editor acceptance.
 
 The separate `testColorControls` workflow uses the real workspace library and
@@ -135,9 +152,24 @@ reference. Release builds ignore that variable. Native input, sampled color
 correctness and complete pixel parity remain distinct checks.
 
 The current simulator HSV capture passes 853 samples at the existing two-level
-channel tolerance. HLS still fails one of 680 samples at error 3, including after
-recording the actual Rust color. Retain that failure; neither the tolerance nor
-the wheel renderer was changed for this layout milestone.
+channel tolerance. HLS passes 680 samples with hue-ring error at most two and
+exact agreement for all 310 field samples. Both sets of 48 bitmap captures pass
+27,160 samples per host. Complete image differences above remain separate.
+
+The Apple renderer uses Canvas gradients for HSV/the ring and a shared Rust
+RGBA8 field for HLS. One cached image is regenerated only on hue or physical-size
+changes. Check the raster against the picker, validate the C boundary/cache
+lifetime, and measure generation cost without GUI automation:
+
+```sh
+cargo test -p layer-ui hls_raster
+cargo test -p layer-apple hls_raster
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/color-field-cache.swift
+cargo run --release -p layer-ui --example color_field_benchmark
+```
+
+The benchmark excludes host allocation, upload and presentation. It measures
+CPU field generation, not sustained editor performance or input latency.
 
 ## Complete header components
 

@@ -129,6 +129,31 @@ pub extern "C" fn capy_apple_color_hit(x: f32, y: f32, size: f32, space: u32) ->
         Some(layer_ui::ColorWheelPart::Field) => 2,
     }
 }
+/// Stateless display-encoded HLS field. No editor, GPU or file access.
+/// # Safety
+/// `rgba` must point to `count` writable bytes exclusively borrowed for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_hls_field(
+    side: u32,
+    hue: f32,
+    rgba: *mut u8,
+    count: usize,
+) -> i32 {
+    let length = (side as usize)
+        .checked_mul(side as usize)
+        .and_then(|n| n.checked_mul(4));
+    if side == 0
+        || !hue.is_finite()
+        || rgba.is_null()
+        || length != Some(count)
+        || count > isize::MAX as usize
+    {
+        return 0;
+    }
+    i32::from(layer_ui::render_hls_field(side, hue, unsafe {
+        std::slice::from_raw_parts_mut(rgba, count)
+    }))
+}
 /// # Safety
 /// Valid handle; json must be a NUL-terminated UTF-8 string except for requests 3, 5 and 7.
 #[unsafe(no_mangle)]

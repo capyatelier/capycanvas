@@ -18,6 +18,30 @@ mod workspace_library;
 mod workspace_motion;
 
 #[test]
+fn hls_raster_ffi_validates_buffer_and_matches_shared_pixels() {
+    let mut bytes = [23; 16];
+    unsafe {
+        for (side, hue, count) in [
+            (0, 0., 16),
+            (2, f32::NAN, 16),
+            (2, 60., 15),
+            (u32::MAX, 0., usize::MAX),
+        ] {
+            assert_eq!(
+                capy_apple_hls_field(side, hue, bytes.as_mut_ptr(), count),
+                0
+            );
+            assert_eq!(bytes, [23; 16]);
+        }
+        assert_eq!(capy_apple_hls_field(2, 60., std::ptr::null_mut(), 16), 0);
+        assert_eq!(capy_apple_hls_field(2, 60., bytes.as_mut_ptr(), 16), 1);
+    }
+    let mut reference = [0; 16];
+    assert!(layer_ui::render_hls_field(2, 60., &mut reference));
+    assert_eq!(bytes, reference);
+}
+
+#[test]
 fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {
     for platform in [0, 1] {
         let app = App::new(platform);

@@ -101,59 +101,6 @@ private struct ColorSwatchesLayout: Layout {
     }
 }
 
-private struct ColorWheelDrawing: View {
-    let model: JSON
-    var body: some View {
-        GeometryReader { allocation in
-            let size = min(allocation.size.width, allocation.size.height)
-            let geometry = model["geometry"]
-            let hue = model["hue_color"].paintColor
-            ZStack(alignment: .topLeading) {
-                if model["space"].string == "hsv" {
-                    let square = geometry["square"]
-                    Rectangle().fill(.linearGradient(Gradient(colors: [.white, hue]).colorSpace(.device), startPoint: .leading, endPoint: .trailing))
-                        .overlay(Rectangle().fill(.linearGradient(Gradient(colors: [.clear, .black]).colorSpace(.device), startPoint: .top, endPoint: .bottom)))
-                        .frame(width: square[2].number * size, height: square[2].number * size)
-                        .offset(x: square[0].number * size, y: square[1].number * size)
-                } else {
-                    let vertices = geometry["triangle"].array
-                    // The equilateral triangle's white and hue barycentric
-                    // weights are affine gradients. Add them in device color
-                    // space to match Rust's display-encoded interpolation.
-                    let white = UnitPoint(x: vertices[0][0].number, y: vertices[0][1].number)
-                    let opposite = UnitPoint(x: (vertices[1][0].number + vertices[2][0].number) / 2,
-                        y: (vertices[1][1].number + vertices[2][1].number) / 2)
-                    Rectangle().fill(.linearGradient(Gradient(colors: [.white, .black]).colorSpace(.device),
-                        startPoint: white, endPoint: opposite))
-                        .overlay(Rectangle().fill(.linearGradient(Gradient(colors: [.black, hue]).colorSpace(.device),
-                            startPoint: UnitPoint(x: vertices[0][0].number, y: 0.5),
-                            endPoint: UnitPoint(x: vertices[2][0].number, y: 0.5))).blendMode(.plusLighter))
-                        .compositingGroup().clipShape(ColorTriangle(vertices: vertices))
-                }
-                Circle().stroke(.angularGradient(Gradient(colors: model["hue_stops"].array.map(\.paintColor)).colorSpace(.device), center: .center,
-                    startAngle: .degrees(model["hue_start_degrees"].number), endAngle: .degrees(model["hue_start_degrees"].number + 360)),
-                    lineWidth: (geometry["outer"].number - geometry["inner"].number) * size)
-                    .frame(width: (geometry["outer"].number + geometry["inner"].number) * size,
-                        height: (geometry["outer"].number + geometry["inner"].number) * size)
-                    .position(x: geometry["center"][0].number * size, y: geometry["center"][1].number * size)
-                ForEach(["hue_marker", "field_marker"], id: \.self) { key in
-                    Circle().stroke(.black, lineWidth: 3).overlay(Circle().stroke(.white, lineWidth: 1.5))
-                        .frame(width: 7, height: 7).position(x: model[key][0].number * size, y: model[key][1].number * size)
-                }
-            }.frame(width: size, height: size)
-        }
-    }
-}
-
-private struct ColorTriangle: Shape {
-    let vertices: [JSON]
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.addLines(vertices.map { CGPoint(x: $0[0].number * rect.width, y: $0[1].number * rect.height) })
-            path.closeSubpath()
-        }
-    }
-}
 /// The shared paint slots show their alpha over a five-point checkerboard.
 /// Selected/pressed buttons replace that background, including transparent paint.
 private struct PaintSlotButtonStyle: ButtonStyle {

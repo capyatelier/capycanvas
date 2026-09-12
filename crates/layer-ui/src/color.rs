@@ -360,6 +360,45 @@ pub fn hue_color(hue: f32) -> [f32; 3] {
     }
 }
 
+/// Display-encoded RGBA8 for the HLS field, at physical pixel centers. Hosts
+/// cache this by hue and pixel size; markers and the hue ring stay independent.
+/// Transparent pixels outside the triangle have zero RGB. No allocation occurs.
+pub fn render_hls_field(side: u32, hue: f32, rgba: &mut [u8]) -> bool {
+    let Some(length) = (side as usize)
+        .checked_mul(side as usize)
+        .and_then(|n| n.checked_mul(4))
+    else {
+        return false;
+    };
+    if side == 0 || !hue.is_finite() || rgba.len() != length {
+        return false;
+    }
+    rgba.fill(0);
+    let scale = side as f32;
+    let triangle = ColorWheelGeometry::new(scale).unwrap().triangle;
+    let color = hue_color(hue);
+    let left = triangle[0][0].floor() as u32;
+    let right = triangle[2][0].ceil().min(scale) as u32;
+    let top = triangle[0][1].floor() as u32;
+    let bottom = triangle[1][1].ceil().min(scale) as u32;
+    for y in top..bottom {
+        for x in left..right {
+            let weights = barycentric(triangle, [x as f32 + 0.5, y as f32 + 0.5]);
+            if weights.into_iter().any(|w| w < -1e-5) {
+                continue;
+            }
+            let pixel = &mut rgba[((y as usize * side as usize + x as usize) * 4)..][..4];
+            for channel in 0..3 {
+                pixel[channel] = ((weights[0] + weights[2] * color[channel]) * 255.)
+                    .round()
+                    .clamp(0., 255.) as u8;
+            }
+            pixel[3] = 255;
+        }
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ColorWheelGeometry {
     pub center: [f32; 2],
@@ -455,6 +494,67 @@ fn triangle_weights(triangle: [[f32; 2]; 3], p: [f32; 2]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hls_raster_matches_picker_at_physical_pixel_centers() {
+        for side in [1, 31, 160, 320, 452] {
+            for hue in [0., 60., 140.000015, 150., 240., 340., 360.] {
+                let mut pixels = vec![17; side as usize * side as usize * 4];
+                assert!(render_hls_field(side, hue, &mut pixels));
+                let mut state = ColorState {
+                    space: ColorSpace::Hls,
+                    ..Default::default()
+                };
+                state
+                    .apply(ColorAction::Component {
+                        index: 0,
+                        value: hue,
+                    })
+                    .unwrap();
+                let geometry = ColorWheelGeometry::new(side as f32).unwrap();
+                for y in 0..side {
+                    for x in 0..side {
+                        let point = [x as f32 + 0.5, y as f32 + 0.5];
+                        let pixel = &pixels[((y * side + x) * 4) as usize..][..4];
+                        if geometry.hit(point, ColorSpace::Hls) != Some(ColorWheelPart::Field) {
+                            assert_eq!(pixel, [0; 4]);
+                            continue;
+                        }
+                        // Avoid accumulating tiny hue conversion errors across picks.
+                        let mut picked = state.clone();
+                        picked
+                            .apply(ColorAction::Pick {
+                                part: ColorWheelPart::Field,
+                                point,
+                                size: side as f32,
+                            })
+                            .unwrap();
+                        assert_eq!(pixel[3], 255, "missing pixel {side}/{hue}/{point:?}");
+                        for (actual, expected) in pixel[..3].iter().zip(picked.rgba()) {
+                            assert!(
+                                (*actual as f32 - expected * 255.).abs() <= 0.501,
+                                "{side}/{hue}/{point:?}: {pixel:?} != {:?}",
+                                picked.rgba()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn hls_raster_invalid_requests_preserve_caller_buffer() {
+        for (side, hue) in [
+            (0, 0.),
+            (2, f32::NAN),
+            (2, f32::INFINITY),
+            (3, 60.),
+            (u32::MAX, 0.),
+        ] {
+            let mut bytes = [19; 16];
+            assert!(!render_hls_field(side, hue, &mut bytes));
+            assert_eq!(bytes, [19; 16]);
+        }
+    }
     fn close(a: [f32; 4], b: [f32; 4]) {
         assert!(
             a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5),

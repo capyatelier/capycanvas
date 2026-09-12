@@ -76,6 +76,14 @@ import SwiftUI
                             let frames = geometry.panel.merging(geometry.numbers) { _, new in new }
                             precondition(geometry.panel.count == 10 && geometry.numbers.count == 21)
                             precondition(store.failure == nil, store.failure ?? "")
+                            let wheel = geometry.panel["wheel"]!
+                            let paint = store.state["colors"]["paint_slot"].string
+                            try JSON(["space": model["space"].raw,
+                                "rgba": store.state["colors"][paint].raw,
+                                "hue": model["components"][0]["value"].raw,
+                                "viewport": [width, height],
+                                "wheel": [wheel.minX, wheel.minY, wheel.width, wheel.height]])
+                                .encoded().write(to: directory.appendingPathComponent("oracle-\(name).json"), atomically: true, encoding: .utf8)
                             fixtures.append(JSON(["name": name, "platform": platform, "width": width, "height": height,
                                 "scale": Double(bitmap.pixelsWide) / width, "theme": theme, "space": space, "slot": slot,
                                 "text_size": store.catalog["text_size_pt"].number * 4 / 3, "palette": store.state["palette"].raw,
