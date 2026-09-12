@@ -5,6 +5,7 @@ use super::*;
 struct Strip {
     id: u32,
     root: gtk::Box,
+    expand_icon: gtk::Image,
     key: Vec<(u32, Vec<Panel>)>,
     buttons: Vec<(Panel, gtk::Button)>,
     scroll: gtk::Adjustment,
@@ -82,9 +83,9 @@ impl Columns {
                 let expand = w.action_button(c.expand_label(), c.expand_action());
                 expand.set_widget_name(&format!("expand-column-{}", c.id));
                 expand.add_css_class("flat");
-                expand.set_child(Some(&gtk::Image::from_icon_name(
-                    "layer-column-expand-symbolic",
-                )));
+                let expand_icon = gtk::Image::new();
+                expand_icon.set_pixel_size(16);
+                expand.set_child(Some(&expand_icon));
                 expand.set_height_request(c.expand.height as i32);
                 root.append(&expand);
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -187,6 +188,7 @@ impl Columns {
                 strips.push(Strip {
                     id: c.id,
                     root,
+                    expand_icon,
                     key,
                     buttons,
                     scroll: scroll.vadjustment(),
@@ -194,6 +196,16 @@ impl Columns {
                 });
             }
             let strip = strips.iter().find(|s| s.id == c.id).unwrap();
+            let expand_icon = if c.bounds.x + c.bounds.width * 0.5
+                < resolved.work_area.x + resolved.work_area.width * 0.5
+            {
+                "layer-chevron-double-right-symbolic"
+            } else {
+                "layer-chevron-double-left-symbolic"
+            };
+            if strip.expand_icon.icon_name().as_deref() != Some(expand_icon) {
+                strip.expand_icon.set_icon_name(Some(expand_icon));
+            }
             let offset = layout
                 .column_scroll
                 .iter()

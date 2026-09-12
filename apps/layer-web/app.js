@@ -139,7 +139,7 @@ function commandButton(id, text) {
 const icons = new Map();
 async function loadIcons() {
   await Promise.all(
-    [...catalog.icons, "fullscreen-enter", "fullscreen-exit", "chevron-down"].map(async (name) => {
+    [...catalog.icons, "fullscreen-enter", "fullscreen-exit", "chevron-down", "chevron-double-left", "chevron-double-right"].map(async (name) => {
       const response = await fetch(asset(`./icons/layer-${name}-symbolic.svg`));
       if (!response.ok) throw new Error(`Cannot load icon ${name}`);
       const svg = new DOMParser().parseFromString(
@@ -721,6 +721,13 @@ function update(regions) {
 // records; CSS animates the returned visibility without resizing the canvas.
 let revealPointer = null;
 let workspaceGesture = null;
+// Watch only until pickup: an invalidated held tile must not leave a grab cursor.
+// Disconnect before dragging, when shared updates may deliberately reparent it.
+const workspaceGestureSourceObserver = new MutationObserver(() => {
+  const drag = workspaceGesture;
+  if (drag && (!drag.node.isConnected || drag.node.parentNode !== drag.parent))
+    endWorkspaceGesture(null, true);
+});
 function grabTabSlide(drag) {
   if (!drag.node.matches(".dock-tab")) return;
   const strip = drag.node.parentElement;
@@ -862,6 +869,7 @@ function workspaceGestureEvent(phase, e) {
 function endWorkspaceGesture(e, cancel = false) {
   const drag = workspaceGesture;
   if (!drag || (e && drag.id !== e.pointerId)) return;
+  workspaceGestureSourceObserver.disconnect();
   if (drag.started) {
     if (drag.tile) {
       if (!cancel) dropItem(drag.action.item, dropHint(e || drag.last, drag.action.item));
@@ -885,6 +893,8 @@ workspace.addEventListener("pointerdown", e => {
     start: e, last: e, started: false, node, parent: node.parentNode,
     waitForHold: node.dataset.dragPickup === "hold", cursor: getComputedStyle(node).cursor };
   workspaceGesture.tile = workspaceGesture.action.item?.kind === "tile";
+  if (workspaceGesture.waitForHold)
+    workspaceGestureSourceObserver.observe(workspace, { childList: true, subtree: true });
   grabTabSlide(workspaceGesture);
   // External resize strips are outside the unselectable panel. Prevent a
   // native text-selection drag from stealing their pointer sequence.
@@ -903,6 +913,7 @@ workspace.addEventListener("pointermove", e => {
     if (drag.waitForHold && !drag.held) { endWorkspaceGesture(e, true); return; }
     customization.dismissContext();
     drag.started = true;
+    workspaceGestureSourceObserver.disconnect();
     // Capture on the stable workspace before Rust tears off/rebuilds a tab.
     workspace.setPointerCapture(e.pointerId);
     groups.forEach(node => node.getAnimations().forEach(a => a.cancel()));
@@ -934,22 +945,26 @@ workspace.addEventListener("lostpointercapture", e => {
   if (e.target === workspace || (!workspace.hasPointerCapture(e.pointerId)
     && workspaceGesture?.node.contains(e.target))) endWorkspaceGesture(e, true);
 });
+function armWorkspaceDrag(drag) {
+  drag.held = true;
+  if (drag.waitForHold && ["mouse", "pen"].includes(drag.start.pointerType))
+    workspaceCursor("grab");
+  // Keep this contact even when a context menu covers the original tile/tab.
+  workspace.setPointerCapture(drag.id);
+}
 workspace.addEventListener("workspace-context-claimed", e => {
   const drag = workspaceGesture;
   if (drag && (drag.node.contains(e.target) || e.target.contains(drag.node))) {
     // A late native contextmenu event must not interrupt an existing drag.
     if (drag.started) { e.preventDefault(); return; }
     drag.context = true;
-    drag.held = true;
-    // Keep receiving this contact even when the menu covers the original tab.
-    workspace.setPointerCapture(drag.id);
+    armWorkspaceDrag(drag);
   } else endWorkspaceGesture(null, true);
 });
 workspace.addEventListener("workspace-drag-held", e => {
   const drag = workspaceGesture;
   if (drag?.waitForHold && !drag.started && drag.node.contains(e.target)) {
-    drag.held = true;
-    workspace.setPointerCapture(drag.id);
+    armWorkspaceDrag(drag);
   }
 });
 workspace.addEventListener("dblclick", e => {

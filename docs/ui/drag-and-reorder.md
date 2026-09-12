@@ -33,9 +33,9 @@ Pen includes stylus contacts such as Apple Pencil. Do not infer mouse behavior
 from “not touch,” the absence of a touch sequence, or synthesized mouse events
 when the native API provides the original device type.
 
-GTK mouse/pen feedback on reorderable tiles (including toolbar/drawer tiles and
-collapsed-column panel icons) is the regular pointer before pickup, `grab` after
-the hold arms pickup, and `grabbing` during dragging. Release, cancellation,
+GTK and Web mouse/pen feedback on reorderable tiles (including toolbar/drawer
+tiles and collapsed-column panel icons) is the regular pointer before pickup,
+`grab` after the hold arms pickup, and `grabbing` during dragging. Release, cancellation,
 focus loss, or source invalidation restores the cursor. This feedback does not
 change the immediate pickup rule for handles and title/tab bars.
 

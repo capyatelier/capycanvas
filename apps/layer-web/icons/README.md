@@ -14,6 +14,8 @@ there are no generated copies or toolkit-specific icon drawings to maintain.
 `layer-ui` supplies command/icon identities to both hosts.
 Web-only browser-window controls load the original two-arrow fullscreen icons
 from this bank directly; no fullscreen button is added to GTK.
+Collapsed-sidebar expand buttons use `chevron-double-right` on the left and
+`chevron-double-left` on the right, centered and pointing toward the canvas.
 
 Keep 16×16 icon geometry (the capybara retains its own viewBox).
 Stroked paths declare `transparent-fill foreground-stroke` plus per-path stroke

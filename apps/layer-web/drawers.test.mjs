@@ -124,6 +124,12 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
       await send({type:'set_theme',theme});await send({type:'restore_workspace',workspace:fixture});
       for(const [group,panel] of [[41,'brushes'],[43,'layers']]) {
         await customize({type:'set_column_collapsed',group,collapsed:true});
+        const expandSelector=`.collapsed-column[data-column="${group}"] .column-expand`;
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)}).querySelector('svg').dataset.asset`),
+          group===41?'chevron-double-right':'chevron-double-left','Both chevrons point toward the canvas');
+        const expandBounds=await rect(expandSelector),glyphBounds=await rect(`${expandSelector} svg`);
+        assert.ok(Math.abs(glyphBounds.x+glyphBounds.width/2-expandBounds.x-expandBounds.width/2)<.01,'Expand icon is horizontally centered');
+        assert.ok(Math.abs(glyphBounds.y+glyphBounds.height/2-expandBounds.y-expandBounds.height/2)<.01,'Expand icon is vertically centered');
         const selector=`.collapsed-column [data-panel="${panel}"]`;
         assert.equal((await style(selector)).background,'rgba(0, 0, 0, 0)','Closed buttons have no selection tint');
         const b=await rect(selector);
@@ -142,6 +148,9 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         assert.equal((await style(alternateSelector)).selected,'true','Sidebar selection follows the drawer tab');
         await check(alternateSelector,group,`${theme}-switched-column-${group}`);
         await click(alternateSelector);assert.equal((await style(alternateSelector)).background,'rgba(0, 0, 0, 0)');
+        await click(expandSelector);
+        assert.equal(await evaluate(`document.querySelector(${JSON.stringify(expandSelector)})`),null,'Expand button still opens the column');
+        await customize({type:'set_column_collapsed',group,collapsed:true});
       }
       for(const edge of ['top','bottom','left','right']) {
         await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge,outer:true}});

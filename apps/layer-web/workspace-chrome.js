@@ -60,12 +60,14 @@ export function createWorkspaceChrome({app,state,workspace,element,button,icon,p
     resolved=layout;const live=new Set();
     for(const column of layout.collapsed) {
       live.add(column.id);let root=columns.get(column.id);
-      const key=JSON.stringify([column,state().customization.column_drawers,state().workspace.layout.panels.map(p=>[p.id,p.name])]);
+      const expandIcon=column.bounds.x+column.bounds.width/2<layout.work_area.x+layout.work_area.width/2?'chevron-double-right':'chevron-double-left';
+      const key=JSON.stringify([column,expandIcon,state().customization.column_drawers,state().workspace.layout.panels.map(p=>[p.id,p.name])]);
       if(root?.dataset.key===key)continue;
       if(!root){root=element("section","collapsed-column");root.dataset.column=column.id;workspace.append(root);columns.set(column.id,root);}
       root.dataset.key=key;root.replaceChildren();place(root,column.bounds);
       customization.target(root,{kind:"group",group:column.groups[0]?.group ?? column.id});
-      const expand=button("»",()=>send({type:"set_column_collapsed",group:column.id,collapsed:false}),"column-expand");
+      const expand=button("",()=>send({type:"set_column_collapsed",group:column.id,collapsed:false}),"column-expand");
+      expand.append(icon(expandIcon));
       expand.setAttribute("aria-label","Expand column");place(expand,local(column.expand,column.bounds));root.append(expand);
       const content=element("div","collapsed-content");place(content,local(column.content,column.bounds));root.append(content);
       content.onwheel=e=>{e.preventDefault();const old=state().workspace.layout.column_scroll.find(([id])=>id===column.id)?.[1]||0;dispatch({type:"measure_column_scroll",column:column.id,offset:Math.max(0,old+e.deltaY)});};

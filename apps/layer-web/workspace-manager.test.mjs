@@ -50,6 +50,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
   await idle(); const original = (await view()).id, originalCapture = await capture(); let created;
   try {
     console.log('Workspace UI: opening manager'); await menu('Manage Workspaces…');
+    assert.equal(await evaluate('document.querySelector(".workspace-manager input[type=search]")'),null);
     assert.equal(await evaluate('document.querySelector(".workspace-manager footer .suggested-action").disabled'),true);
     await shot('workspaces'); await click('.workspace-add');
     const name=`Web Painting ${Date.now()}`; await text('.workspace-form input',name); await shot('new-workspace');
@@ -64,14 +65,10 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     assert.equal((await view()).id,created,'Selection only previews');
     assert.deepEqual(normalized(await capture()),normalized(changed),'Durable capture excludes preview');
     await shot('preview-original');
-    // Filtering away the selected row cancels the preview and disables apply.
-    await text('.workspace-filter','No matching workspace');
-    await wait('JSON.parse(layerApp.app.workspace_view()).selected === null');
-    assert.equal((await view()).enabled,false);
+    assert.equal((await view()).enabled,true);
     await call('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
     await call('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
-    // Search fields consume their first Escape to clear the query.
-    if ((await view()).page) { await click('.workspace-manager footer button'); }
+    assert.equal(await evaluate('document.querySelector(".workspace-manager").open'),false,'One Escape cancels the preview and closes the manager');
     await idle(); assert.deepEqual(normalized(await capture()),normalized(changed));
     await menu('Manage Workspaces…'); await click(`.workspace-choice[data-id="${original}"]`);
     await click('.workspace-manager footer .suggested-action'); await idle();
@@ -80,6 +77,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await menu('Manage Workspaces…'); await click(`.workspace-choice[data-id="${created}"]`); await click('.workspace-manager footer .suggested-action'); await idle();
     assert.deepEqual((await capture()).working,changed.working);
     await menu('Layout History…'); assert.equal((await view()).enabled,false); await shot('history');
+    assert.equal(await evaluate('document.querySelector(".workspace-manager input[type=search]")'),null);
     await click('.workspace-choice[data-id="r0"]'); await click('.workspace-manager footer .suggested-action'); await idle();
     assert.deepEqual((await capture()).working,changed.working,'History restores layout and preserves tools');
     await send({type:'invoke',command:'undo_workspace'});
@@ -140,7 +138,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await menu('Manage Workspaces…'); assert.ok(!(await view()).rows.some(row=>row.id===deleted),'Deleted workspace stays absent after reload');
     await click('.workspace-manager footer button');
     if(original!==illustrator){await click(`.workspace-switcher button[data-workspace-id="${original}"]`);await idle();}
-    console.log('PASS: real Web menu/dialog input, New, Rename, preview/filter/cancel, explicit switch, default pill, tools, history, undo, restart, starting layout, brush reset and active deletion/cancel/reload');
+    console.log('PASS: real Web menu/dialog input, search-free manager/history, New, Rename, preview/cancel, explicit switch, default pill, tools, history, undo, restart, starting layout, brush reset and active deletion/cancel/reload');
   } catch (error) { console.error("Workspace acceptance failed", error, await view()); await writeFile(`${directory}/input-events.json`,JSON.stringify(await evaluate('workspaceTestEvents'),null,2)); await shot("failure"); throw error; } finally {
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');
     await evaluate('layerApp.app.workspace_input(JSON.stringify({type:"cancel"}));null');

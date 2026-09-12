@@ -6,14 +6,12 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const add = button("+", () => send({ type: "form", kind: "new" }), "workspace-add");
   const close = button("×", cancel, "dialog-close"); close.setAttribute("aria-label", "Close");
   header.append(heading, add, close);
-  const intro = element("p", "workspace-intro"), filter = element("input", "workspace-filter");
-  filter.type = "search"; filter.placeholder = "Search"; filter.setAttribute("aria-label", "Search workspaces");
-  filter.addEventListener("input", () => send({ type: "filter", query: filter.value }));
+  const intro = element("p", "workspace-intro");
   const list = element("div", "workspace-list"); list.setAttribute("role", "listbox");
   const error = element("p", "workspace-error"), footer = element("footer");
   const primary = button("", () => send({ type: "confirm" }), "suggested-action");
   const retry = button("Retry", () => send({type:"retry"})); retry.hidden = true;
-  footer.append(button("Cancel", cancel), retry, primary); dialog.append(header, intro, filter, list, error, footer);
+  footer.append(button("Cancel", cancel), retry, primary); dialog.append(header, intro, list, error, footer);
   document.body.append(dialog, formDialog);
   const switcher = createWorkspaceSwitcher({dialog, list, element, button, icon, send, getView:() => view,
     redraw:() => { lastView = null; render(); }});
@@ -54,8 +52,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     if (switcherRevision != null && switcherRevision !== view.switcher_revision) channel?.postMessage({switcher:true});
     switcherRevision = view.switcher_revision;
     if (view.focus_window) { channel?.postMessage({ focus: view.focus_window }); message("The workspace is open in another tab or window. Switch to that window to continue."); }
-    if (view.page !== pageKey) { pageKey = view.page; filter.value = ""; list.scrollTop = 0; }
-    filter.setAttribute("aria-label", view.page === "history" ? "Search layout history" : "Search workspaces");
+    if (view.page !== pageKey) { pageKey = view.page; list.scrollTop = 0; }
     heading.textContent = view.title; intro.textContent = view.intro; intro.hidden = !view.intro;
     add.hidden = view.page === "history"; add.disabled = view.busy || view.switcher_busy;
     add.setAttribute("aria-label", "New Workspace");

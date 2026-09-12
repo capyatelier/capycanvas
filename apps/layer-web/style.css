@@ -5,7 +5,6 @@ body { --popover: var(--panel); }
 .workspace-manager::backdrop, .workspace-form::backdrop { background:#0003; }
 .workspace-manager .workspace-intro { margin:12px 20px; line-height:1.5; }
 .workspace-manager .workspace-add { position:absolute; right:48px; width:30px; height:30px; padding:0; font-size:22px; border-radius:6px; background:var(--button); }
-.workspace-manager .workspace-filter { margin:0 20px 10px; width:calc(100% - 40px); box-sizing:border-box; }
 .workspace-list { margin:0 20px; height:315px; max-height:45dvh; overflow:auto; border-radius:10px; background:color-mix(in srgb,var(--text) 9%,var(--settings)); }
 .workspace-row { display:flex; position:relative; border-bottom:1px solid color-mix(in srgb,var(--text) 12%,transparent); }
 .workspace-choice { display:flex; flex:1; flex-direction:column; align-items:start; gap:4px; min-height:56px; text-align:left; border-radius:0; background:transparent; padding:10px 12px; font-weight:400; }
@@ -216,6 +215,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .tab-list { display: flex; align-items: center; flex: 1; min-width: 0; height: var(--tab-bar-height); overflow: auto hidden; scrollbar-width: none; }
 .tab-list > .dock-tab { flex: none; }
 .dock-tab { position: relative; white-space: nowrap; cursor: grab; height: 36px; min-height: 36px; padding: 4px 8px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; touch-action: none; }
+[data-drag-pickup="hold"] { cursor: default; }
 .panel-grip { touch-action: none; }
 .dock-tab.icon-only-tab { width: 36px; justify-content: center; }
 .drag-source { opacity: .5; }
@@ -566,7 +566,7 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 [data-drawer-source-corners~="1"] { border-top-right-radius:0 !important; }
 [data-drawer-source-corners~="2"] { border-bottom-right-radius:0 !important; }
 [data-drawer-source-corners~="3"] { border-bottom-left-radius:0 !important; }
-.column-expand { padding:0; min-height:0; }
+.column-expand { display:grid; place-items:center; padding:0; min-height:0; }
 .zen-toolbars { display:none; }
 .partial-zen.zen-hidden > .zen-toolbars { display:contents; }
 .zen-toolbar { position:absolute; z-index:1002; background:var(--panel); border-radius:8px; overflow:hidden; }

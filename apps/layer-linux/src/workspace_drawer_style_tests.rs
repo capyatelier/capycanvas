@@ -289,6 +289,22 @@ fn check_theme(
             &format!("collapsed-column-{}", column.id),
         )
         .unwrap();
+        let expand = find_named(&root, &format!("expand-column-{}", column.id))
+            .unwrap()
+            .downcast::<gtk::Button>()
+            .unwrap();
+        let glyph = expand.child().unwrap().downcast::<gtk::Image>().unwrap();
+        let expected = if column.bounds.x < viewport[0] * 0.5 {
+            "layer-chevron-double-right-symbolic"
+        } else {
+            "layer-chevron-double-left-symbolic"
+        };
+        assert_eq!(glyph.icon_name().as_deref(), Some(expected));
+        let glyph_bounds = glyph.compute_bounds(&expand).unwrap();
+        assert!(
+            (glyph_bounds.x() + glyph_bounds.width() * 0.5 - expand.width() as f32 * 0.5).abs()
+                <= 1.
+        );
         fn separators(root: &gtk::Widget, lines: &mut Vec<gtk::Widget>) {
             if root.is::<gtk::Separator>() {
                 lines.push(root.clone());
