@@ -2,6 +2,9 @@ package art.capycanvas
 
 import android.annotation.SuppressLint
 import android.content.res.Configuration
+import android.app.ActivityManager
+import androidx.activity.OnBackPressedCallback
+import java.lang.ref.WeakReference
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -14,9 +17,23 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        private val windows = mutableListOf<WeakReference<MainActivity>>()
+        internal fun focusWorkspace(id: String): Boolean {
+            windows.removeAll { it.get() == null }
+            val activity = windows.firstNotNullOfOrNull { it.get()?.takeIf { a -> a.host.workspaceManager?.optString("id") == id } } ?: return false
+            activity.getSystemService(ActivityManager::class.java).appTasks.firstOrNull { it.taskInfo?.taskId == activity.taskId }?.moveToFront()
+            activity.window.decorView.requestFocus()
+            return true
+        }
+    }
     val host: CanvasHost by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        windows.add(WeakReference(this))
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() { host.closeWorkspaceWindow { finish() } }
+        })
         enableEdgeToEdge()
         enterFullscreen()
         updateTheme(resources.configuration)
@@ -38,6 +55,18 @@ class MainActivity : ComponentActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         updateTheme(newConfig)
+    }
+    override fun onStart() {
+        super.onStart()
+        host.workspaceInput(obj("type" to "resume"))
+    }
+    override fun onStop() {
+        host.workspaceInput(obj("type" to "suspend"))
+        super.onStop()
+    }
+    override fun onDestroy() {
+        windows.removeAll { it.get() == null || it.get() === this }
+        super.onDestroy()
     }
     // This is Activity's public Window.Callback override. AndroidX's internal
     // superclass carries a class-wide restriction that lint also inherits here.

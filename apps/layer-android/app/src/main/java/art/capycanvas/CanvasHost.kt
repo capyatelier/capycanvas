@@ -38,9 +38,53 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     companion object {
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
+        @Volatile internal var workspaceDirectoryForTest: String? = null
     }
     var snapshot by mutableStateOf<JSONObject?>(null)
         private set
+    internal var workspaceManager by mutableStateOf<JSONObject?>(null)
+        private set
+    private var workspaceManagerKey: String? = null
+    private val workspaceTick = object : Runnable {
+        override fun run() {
+            if (disposed || handle == 0L) return
+            attempt(canvas = false) { updateWorkspaceManager(obj("type" to "tick")); publish(false) }
+            worker.postDelayed(this, 100)
+        }
+    }
+    private fun updateWorkspaceManager(request: JSONObject) {
+        val result = JSONObject(Native.workspace(handle, request.toString()).takeUnless { it == "null" } ?: "{}")
+        if (result.optBoolean("refresh")) refreshChrome()
+        if (result.optBoolean("wake")) wake()
+        val text = result.objectOrNull("view")?.toString() ?: return
+        if (text != workspaceManagerKey && text != "null") {
+            workspaceManagerKey = text
+            val view = JSONObject(text)
+            main.post { workspaceManager = view }
+        }
+    }
+    internal fun workspaceInput(request: JSONObject) = post {
+        updateWorkspaceManager(request); refreshChrome(); publish(true); wake()
+    }
+    private var closingWorkspaceWindow = false
+    internal fun closeWorkspaceWindow(complete: () -> Unit) = post {
+        if (closingWorkspaceWindow) return@post
+        closingWorkspaceWindow = true
+        updateWorkspaceManager(obj("type" to "suspend"))
+        val check = object : Runnable {
+            override fun run() {
+                if (disposed || handle == 0L) return
+                attempt(canvas = false) {
+                    updateWorkspaceManager(obj("type" to "tick"))
+                    val view = workspaceManagerKey?.let(::JSONObject)
+                    if (view?.optBoolean("busy") == true) { worker.postDelayed(this, 20); return@attempt }
+                    closingWorkspaceWindow = false
+                    if (view == null || (view.isNull("error") && !view.optBoolean("dirty"))) main.post(complete)
+                }
+            }
+        }
+        worker.post(check)
+    }
     // Panel controls do not depend on workspace positions or the global
     // revision. Retain their model identity when only placement changes.
     internal var panelContent by mutableStateOf<JSONObject?>(null)
@@ -90,7 +134,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var startupCacheFinished = false
     private var lastStartupStage = -1
     private val startupTimes = LongArray(4)
-    private var savedWorkspace = ""
     private var documentEpoch = 0L
     private val measuredFrames = if (BuildConfig.DEBUG) LongArray(8192 * 11) else null
     private val measuredInputs = if (BuildConfig.DEBUG) LongArray(8192 * 5) else null
@@ -127,7 +170,12 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     saved.getString("settings", null)?.let { Native.dispatch(handle, obj("type" to "restore_settings", "settings" to JSONObject(it)).toString()) }
                 }
                 attempt(canvas = false) {
-                    saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
+                    val legacyError = runCatching {
+                        saved.getString("workspace", null)?.let { Native.dispatch(handle, obj("type" to "restore_workspace", "workspace" to JSONObject(it)).toString()) }
+                    }.exceptionOrNull()?.message
+                    val directory = workspaceDirectoryForTest ?: java.io.File(application.filesDir, "workspaces").absolutePath
+                    updateWorkspaceManager(obj("type" to "start", "directory" to directory, "legacy" to saved.contains("workspace"), "legacy_error" to legacyError))
+                    worker.post(workspaceTick)
                 }
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))
                 main.post { catalog = value }
@@ -505,11 +553,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             documentEpoch = epoch
             main.post { filterPreviewCache.images.clear() }
         }
-        val workspace = next.objectOrNull("workspace_persistence")?.toString()
-        if (workspace != null && workspace != savedWorkspace) {
-            savedWorkspace = workspace
-            saved.edit().putString("workspace", workspace).apply()
-        }
+        // Legacy preferences remain a migration backup. Named workspaces are
+        // saved asynchronously by Rust's shared SQLite worker.
         state.array("requests").objects().forEach { request ->
             val kind = request.getJSONObject("kind")
             when (kind.getString("type")) {
@@ -549,9 +594,27 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     override fun onCleared() {
         worker.post {
-            disposed = true; attached = false
-            if (handle != 0L) { Native.destroy(handle); handle = 0 }
-            thread.quitSafely()
+            disposed = true
+            worker.removeCallbacks(workspaceTick)
+            attached = false
+            if (handle != 0L) attempt(canvas = false) { updateWorkspaceManager(obj("type" to "close")) }
+            // Continue polling storage replies on their exclusive native owner
+            // after Activity teardown. Never block the UI or discard an accepted
+            // close just because its SQLite reply has not arrived yet.
+            val drain = object : Runnable {
+                override fun run() {
+                    var busy = false
+                    if (handle != 0L) runCatching {
+                        val result = JSONObject(Native.workspace(handle, obj("type" to "tick").toString()))
+                        busy = result.objectOrNull("view")?.optBoolean("busy") == true
+                    }
+                    if (busy) { worker.postDelayed(this, 20); return }
+                    disposed = true
+                    if (handle != 0L) { Native.destroy(handle); handle = 0 }
+                    thread.quitSafely()
+                }
+            }
+            worker.post(drain)
         }
     }
 }

@@ -148,6 +148,8 @@ pub struct WorkspaceController<S: WorkspaceStore + 'static> {
     legacy: Option<WorkspaceCapture>,
     source: String,
     legacy_error: Option<String>,
+    binding_key: Option<String>,
+    pending_binding: Option<layer_ui::ManagedWorkspace>,
 }
 impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     pub fn new(
@@ -192,6 +194,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             legacy,
             source,
             legacy_error: None,
+            binding_key: None,
+            pending_binding: None,
         };
         c.initialize(now);
         c
@@ -775,12 +779,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     if self.view.page.is_none() && self.incoming.is_none() {
                         self.end_transition(session);
                     }
-                    if let Some(binding) = self.manager.binding() {
-                        if let Ok(c) = session.configure_workspace_manager(binding) {
-                            change.regions |= c.regions;
-                            change.revision = c.revision;
-                        }
-                    }
+                    self.pending_binding = self.manager.binding();
                 }
                 Err(e) => {
                     self.view.error = Some(e.to_string());
@@ -864,12 +863,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     self.generation = session.workspace_layout_generation();
                     session.set_workspace_read_only(self.suspended);
                     self.end_transition(session);
-                    if let Some(binding) = self.manager.binding() {
-                        if let Ok(c) = session.configure_workspace_manager(binding) {
-                            change.regions |= c.regions;
-                            change.revision = c.revision;
-                        }
-                    }
+                    self.pending_binding = self.manager.binding();
                 }
                 Err(e) => {
                     self.incoming = Some(incoming);
@@ -963,6 +957,24 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         }
         if presentation_changed {
             self.rows(now);
+        }
+        // Autosave acknowledgements do not change menus. Reconfiguring them
+        // during a resize refreshes command state and invalidates retained tool
+        // controls. Publish actual catalog changes only at an idle boundary.
+        if self.pending_binding.is_some() && session.require_workspace_idle().is_ok() {
+            let binding = self.pending_binding.take().unwrap();
+            if let Ok(key) = serde_json::to_string(&binding) {
+                if self.binding_key.as_ref() != Some(&key) {
+                    match session.configure_workspace_manager(binding) {
+                        Ok(c) => {
+                            self.binding_key = Some(key);
+                            change.regions |= c.regions;
+                            change.revision = c.revision;
+                        }
+                        Err(e) => self.view.error = Some(e),
+                    }
+                }
+            }
         }
         self.view.busy = self.task.is_some() || self.incoming.is_some();
         self.view.dirty = self.manager.dirty();

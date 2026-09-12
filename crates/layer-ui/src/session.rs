@@ -293,7 +293,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .map(|p| p[0]),
                 _ => None,
             };
-            if let Some(panel) = panel.filter(|p| p.kind() == PanelKind::Tiles) {
+            // Web and Android retain their existing simple toolbar manager;
+            // they do not expose a separate saved-toolbar library yet.
+            if let Some(panel) = panel.filter(|p| {
+                p.kind() == PanelKind::Tiles
+                    && !matches!(self.state.platform, Platform::Web | Platform::Android)
+            }) {
                 menu.sections.push(vec![ContextMenuItem::command(
                     "Save to Toolbar Library…",
                     UiAction::WorkspaceManager {
@@ -4038,6 +4043,23 @@ mod tests {
                 .all(|i| !i.label.ends_with(" toolbar"))
         );
         assert_eq!(toolbars.sections[1][0].label, "New Toolbar…");
+        for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+            s.set_platform(platform);
+            let context = s
+                .context_menu(ContextTarget::Panel {
+                    panel: Panel::Toolbar,
+                })
+                .unwrap();
+            assert_eq!(
+                context.sections.iter().flatten().any(|item| matches!(
+                    item.action,
+                    Some(UiAction::WorkspaceManager {
+                        command: WorkspaceCommand::SaveToolbar { .. }
+                    })
+                )),
+                platform == Platform::Gtk
+            );
+        }
     }
 
     #[test]

@@ -118,6 +118,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
         CompositionLocalProvider(LocalPalette provides colors, LocalCanvasHost provides host, LocalContentColor provides colors.text) {
             ProvideTextStyle(textStyle) {
                 DocumentRequests(host)
+                WorkspaceManager(host)
                 // Status/navigation bars overlay this immersive workspace. Their
                 // visibility (including startup animations) must never resize the
                 // SurfaceView or the shared canvas layout. Protect physical screen
@@ -413,6 +414,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Android always uses an immersive fullscreen workspace.
+            WorkspaceSwitcher(host)
             if (state.getJSONObject("settings").optString("show_clock") != "never") SystemStatus()
             IconTile("settings", state.array("commands").objects().first { it.getString("id") == "settings" }.getString("tooltip"), modifier = Modifier.testTag("header-settings")) { host.invoke("settings") }
         }

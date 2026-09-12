@@ -4,6 +4,8 @@
 mod android;
 #[cfg(target_os = "android")]
 mod app;
+#[cfg(target_os = "android")]
+mod workspaces;
 
 #[cfg(target_os = "android")]
 mod documents;

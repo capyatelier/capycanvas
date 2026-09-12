@@ -1,3 +1,6 @@
+import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkWorkspaceWindows} from "./workspace-windows.test.mjs";
+import {checkWorkspaceStore} from "./workspace-store.test.mjs";
 import {checkLayerHolding} from "./layer-hold.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 // Real Chrome + Wasm + WebGPU smoke/conformance test. No browser framework.
@@ -127,6 +130,7 @@ async function evaluate(expression) {
     );
   return result.result.value;
 }
+const reload = async () => { await call("Page.reload", {ignoreCache:true}); await new Promise(r=>setTimeout(r,1000)); };
 const settle = () =>
   evaluate(
     "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
@@ -185,6 +189,7 @@ try {
     `new Promise((resolve, reject) => { const started = performance.now(); function check() { if (window.layerApp && document.body.dataset.gpu === 'ready' && layerApp.app.brush_ready()) resolve(true); else if (performance.now() - started > 25000) reject(new Error(document.querySelector('#gpu-notice')?.textContent || document.querySelector('#status')?.textContent)); else setTimeout(check, 100); } check(); })`,
   );
   await settle();
+  await evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy)resolve();else if(performance.now()>deadline)reject(Error('Workspace startup: '+JSON.stringify(v)));else setTimeout(check,100);}check();})`);
   if (process.argv.includes("--layer-hold")) {
     await checkLayerHolding({call,evaluate,settle});
     assert.deepEqual(errors, []);
@@ -206,6 +211,15 @@ try {
   } else if (process.argv.includes("--drag-cursors")) {
     await checkDragCursors({ call, evaluate, settle });
     assert.deepEqual(errors, []);
+  } else if (process.argv.includes("--workspace-windows")) {
+    await checkWorkspaceWindows({call,evaluate});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--workspace-manager")) {
+    await checkWorkspaceManager({call,evaluate,settle,reload});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--workspace-store")) {
+    await checkWorkspaceStore({evaluate});
+    assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--drawer-switch")) {
     await checkToolbarDrawerSwitching({call,evaluate,settle});
     assert.deepEqual(errors,[]);

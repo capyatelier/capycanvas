@@ -1,3 +1,5 @@
+import {checkWorkspaceManager} from "./workspace-manager.test.mjs";
+import {checkWorkspaceStore} from "./workspace-store.test.mjs";
 import {checkLongPressDragging} from "./long-press-drag.test.mjs";
 import {checkWorkspaceResize} from "./workspace-resize.test.mjs";
 // Run against an already forwarded Android Chrome endpoint. No profile reset,
@@ -13,12 +15,12 @@ const url=process.env.LAYER_WEB_URL||"http://127.0.0.1:8127/";
 let tab;
 const openingDeadline=Date.now()+10000;
 while(!tab && Date.now()<openingDeadline) {
-  const tabs=await(await fetch(`${endpoint}/json/list`)).json();tab=tabs.find(t=>t.url===url);
+  const tabs=await(await fetch(`${endpoint}/json/list`,{signal:AbortSignal.timeout(10000)})).json();tab=tabs.find(t=>t.url===url);
   if(!tab)await new Promise(resolve=>setTimeout(resolve,100));
 }
 if(!tab)throw Error(`Open ${url} on the tablet first`);
 const socket=new WebSocket(tab.webSocketDebuggerUrl);
-await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
+await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Tablet Chrome connection timed out')),10000);socket.onopen=()=>{clearTimeout(timeout);resolve();};socket.onerror=e=>{clearTimeout(timeout);reject(e);};});
 let sequence=0,onLoad;const pending=new Map(),errors=[];
 socket.onmessage=event=>{
   const m=JSON.parse(event.data);
@@ -44,6 +46,9 @@ const canvasPixels=async()=>{
   const shot=await call("Page.captureScreenshot",{format:"png"});
   return evaluate(`(async()=>{const image=new Image();image.src="data:image/png;base64,${shot.data}";await image.decode();const canvas=document.createElement("canvas");canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext("2d",{willReadFrequently:true});ctx.drawImage(image,0,0);const rgba=ctx.getImageData(0,0,canvas.width,canvas.height).data;let white=0;for(let i=0;i<rgba.length;i+=4)if(rgba[i]>245&&rgba[i+1]>245&&rgba[i+2]>245)white++;return{white,total:rgba.length/4};})()`);
 };
+const workspaceIdle=()=>evaluate(`new Promise((resolve,reject)=>{const deadline=performance.now()+30000;function check(){const v=JSON.parse(layerApp.app.workspace_view());if(v?.ready&&!v.busy&&!v.dirty)resolve(v);else if(performance.now()>deadline)reject(Error(JSON.stringify(v)));else setTimeout(check,100);}check();})`);
+const workspaceInput=value=>evaluate(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify(value))});null`);
+let workspaceIsolation;
 try {
   for(const domain of ["Page","Runtime","Log"])await call(`${domain}.enable`);
   await call("Page.bringToFront");
@@ -52,8 +57,23 @@ try {
   errors.length=0;
   await reload();
   await evaluate('new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp?.startupTimes.complete!=null)resolve(true);else if(performance.now()-start>55000)reject(Error(document.querySelector("#gpu-notice").textContent));else setTimeout(check,100);}check();})');
+  await workspaceIdle();
+  if (['--workspace-resize','--drawer-switch','--drawer-style','--drawer-drag','--long-press-drag','--medium-tiles'].some(flag=>process.argv.includes(flag))) {
+    const original=(await workspaceIdle()).id;
+    const capture=await evaluate('layerApp.app.workspace_capture()');
+    await workspaceInput({type:'form',kind:'new'});
+    await workspaceInput({type:'submit',name:`Tablet regression ${Date.now()}`});
+    const created=(await workspaceIdle()).id; assert.notEqual(created,original);
+    workspaceIsolation={original,created,capture};
+  }
   console.log("Tablet",await evaluate('(async()=>{const adapter=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,viewport:[innerWidth,innerHeight],gpu:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,device:adapter.info.device,description:adapter.info.description},platform:await navigator.userAgentData?.getHighEntropyValues(["platform","model","architecture"])}})()'));
-  if (process.argv.includes("--drawer-switch")) {
+  if (process.argv.includes("--workspace-manager")) {
+    await checkWorkspaceManager({call,evaluate,settle,reload,touch:true});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--workspace-store")) {
+    await checkWorkspaceStore({evaluate});
+    assert.deepEqual(errors,[]);
+  } else if (process.argv.includes("--drawer-switch")) {
     await checkToolbarDrawerSwitching({call,evaluate,settle});
     assert.deepEqual(errors,[]);
   } else if (process.argv.includes("--drawer-style")) {
@@ -97,4 +117,13 @@ try {
   await mkdir(directory,{recursive:true});await writeFile(`${directory}/tablet-startup.json`,JSON.stringify(timings,null,2));
   console.log("Tablet touch zoom/rotate and startup passed",timings);
   }
-} finally {socket.close();for(const p of pending.values())clearTimeout(p.timer);}
+} finally {
+  try { if(workspaceIsolation) {
+    await workspaceInput({type:'cancel'}); await workspaceInput({type:'cancel'});
+    await workspaceInput({type:'switch',id:workspaceIsolation.original}); await workspaceIdle();
+    await workspaceInput({type:'form',kind:'delete',id:workspaceIsolation.created});
+    await workspaceInput({type:'submit',name:''}); await workspaceIdle();
+    const normalize=text=>JSON.stringify(JSON.parse(text),(key,value)=>key==='timestamp_ms'?'date':value);
+    assert.equal(normalize(await evaluate('layerApp.app.workspace_capture()')),normalize(workspaceIsolation.capture),'The original workspace and its history remain intact');
+  } } finally { socket.close();for(const p of pending.values())clearTimeout(p.timer); }
+}

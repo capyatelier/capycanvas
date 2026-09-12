@@ -1414,8 +1414,8 @@ remain open. Final 120 Hz painting and physical input-to-present benchmarks rema
 deferred until the rest of the app is ready. Profiles, databases, captures, logs,
 traces and binaries remain ignored/local.
 
-Publication integration through 5ed2ebf adds the shared host controller/browser
-store and Apple retained-resize work. The final merged tree passes 419 unit tests
+Publication integration through a398e46 adds the shared host controller/browser
+store, Web/Android workspace hosts and Apple retained-resize work. The final merged tree passes 419 unit tests
 (273 UI, 24 host, 73 Windows, 49 workspace; three explicit GPU tests ignored),
 strict Windows-crate Clippy and the Rust/C++ build. These additive shared/browser
 and Apple changes leave the exercised Windows UI paths unchanged.
