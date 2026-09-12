@@ -2499,12 +2499,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .filter_map(|d| match d.anchor {
                     DrawerAnchor::Column { group, origin, .. } => {
                         // These hosts draw the sidebar selection and connector at the visible tab.
-                        let origin =
-                            if matches!(self.state.platform, Platform::Android | Platform::Web) {
-                                self.state.workspace.layout.active_panel(origin)?
-                            } else {
-                                origin
-                            };
+                        let origin = if matches!(
+                            self.state.platform,
+                            Platform::Gtk | Platform::Android | Platform::Web
+                        ) {
+                            self.state.workspace.layout.active_panel(origin)?
+                        } else {
+                            origin
+                        };
                         ContentDrawer::for_column(&self.state.workspace.layout, group, origin).ok()
                     }
                     _ => None,
@@ -10242,8 +10244,8 @@ mod tests {
     }
 
     #[test]
-    fn column_drawer_anchor_follows_tab_and_sidebar_selection_on_android_and_web() {
-        for platform in [Platform::Android, Platform::Web] {
+    fn column_drawer_anchor_follows_tab_and_sidebar_selection_on_gtk_android_and_web() {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
             let mut s = session();
             s.set_platform(platform);
             let viewport = [1200., 900.];
@@ -10361,7 +10363,7 @@ mod tests {
         })
         .unwrap();
         assert!(s.state.customization.expanded.is_none());
-        open(&mut s, 8, Panel::Layers);
+        open(&mut s, 8, Panel::Properties);
         assert_eq!(s.state.customization.column_drawers.len(), 1);
         open(&mut s, 6, Panel::Sizes);
         assert_eq!(s.state.customization.column_drawers.len(), 1);

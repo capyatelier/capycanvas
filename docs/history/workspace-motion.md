@@ -48,6 +48,12 @@ desktop. `LAYER_MOTION_REFRESH` changes the monitor rate; `LAYER_WEB_PORT` chang
 the local server port. The minimum rate is optional for slower test machines.
 Raw measurements and screenshots are written to `artifacts/workspace-motion/`.
 
+GTK motion/resize benchmarks and the drawer pixel matrix use the in-memory
+workspace fixture. This keeps asynchronous workspace adoption and periodic
+storage maintenance from replacing the fixture or interrupting input. Native
+drawer/column interaction tests and workspace-manager integration tests retain
+their isolated storage; the timing benchmarks do not measure storage latency.
+
 Each benchmark supplies 550 motion samples at requested 4 ms intervals for floating groups,
 attached tabs, torn-off tabs and a visible Navigator, using both mouse and touch.
 The steady-state probe starts after gesture activation and startup work finishes.
@@ -105,6 +111,14 @@ and all 550 touch events per case; Chrome received 267–270 native events per
 case after toolkit coalescing.
 
 ## Measurement scope
+
+GTK drawer parity validation on 2026-09-12 retained 116.42–120.02 Hz dragging
+and 118.65–119.11 Hz resizing across native mouse and touch. All 14 cases passed
+the 115 Hz floor with zero full model refreshes; maximum per-case p95 dispatch
+was 0.052 ms for dragging and 0.030 ms for resizing. These follow-up runs used
+the in-memory fixture described above. A preliminary storage-enabled tear-off
+run reached 110.61 Hz, and another encountered fixture/input interference;
+the isolated results do not establish the same rate during storage activity.
 
 Measured on 2026-09-11 using an NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation
 Edition, NVIDIA 610.57.04, Mutter 50.4, GTK 4.22.4, Chrome 152.0.7977.64,

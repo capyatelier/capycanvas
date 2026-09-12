@@ -808,7 +808,7 @@ fn native_nested_tool_drawers() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
-    let original = state(&w).workspace;
+    let original = layer_ui::WorkspaceState::default();
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let output = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(output).unwrap();
@@ -1681,7 +1681,7 @@ fn native_collapsed_columns() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
-    let original_workspace = state(&w).workspace.clone();
+    let original_workspace = layer_ui::WorkspaceState::default();
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let output = "../../artifacts/familiar-workspace";
     std::fs::create_dir_all(output).unwrap();
@@ -1790,6 +1790,8 @@ fn native_collapsed_columns() {
         );
         capture_reference(&w, &format!("{output}/columns-drawers-{theme:?}.png"), 1.0);
         press("column-icon-Layers");
+        assert_eq!(state(&w).customization.column_drawers.len(), 2);
+        press("column-icon-Layers");
         assert_eq!(state(&w).customization.column_drawers.len(), 1);
         press("column-icon-Sizes");
         assert_eq!(state(&w).customization.column_drawers.len(), 1);
@@ -1804,6 +1806,7 @@ fn native_collapsed_columns() {
         let destination = [right.x - 2., right.y + 200.];
         w.workspace_drag_input(ContactPhase::Down, point, None);
         w.workspace_drag_input(ContactPhase::Move, destination, None);
+        pump(50); // Workspace geometry and hints publish on the display clock.
         assert!(w.drop_hint.borrow().is_some());
         w.workspace_drag_input(ContactPhase::Up, destination, None);
         pump(250);
@@ -1885,7 +1888,7 @@ fn native_tool_drawers() {
     w.window.present();
     pump(800);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let mut workspace = state(&w).workspace;
+    let mut workspace = layer_ui::WorkspaceState::default();
     let old = workspace
         .layout
         .panel(Panel::Toolbar)
@@ -6368,8 +6371,13 @@ fn native_zen_behaviors() {
                     + (x + offset.x()).floor() as usize * 4;
                 &bytes[i..i + 3]
             };
-            let c = placement.connection().unwrap().bounds;
-            let expected = pixel(c.x + c.width * 0.5, c.y + c.height * 0.5);
+            let [x, y] = match placement.direction {
+                Edge::Top => [anchor.x + anchor.width * 0.5, anchor.y + 2.],
+                Edge::Bottom => [anchor.x + anchor.width * 0.5, anchor.y + anchor.height - 2.],
+                Edge::Left => [anchor.x + 2., anchor.y + anchor.height * 0.5],
+                Edge::Right => [anchor.x + anchor.width - 2., anchor.y + anchor.height * 0.5],
+            };
+            let expected = pixel(x, y);
             for (joined, [x, y]) in placement.source_corners(anchor).into_iter().zip([
                 [anchor.x + 1.0, anchor.y + 1.0],
                 [anchor.x + anchor.width - 2.0, anchor.y + 1.0],
@@ -6404,8 +6412,8 @@ fn native_zen_behaviors() {
                     ]
                 };
                 assert!(
-                    pixel(x, y).iter().zip(expected).all(|(a, b)| *a + 2 < *b),
-                    "source toolbar should be subtly darker than its connected tile"
+                    pixel(x, y) != expected,
+                    "source toolbar keeps a distinct background from its active tile"
                 );
             }
             capture_reference(&w, &format!("{dir}/zen-drawer-{edge:?}-{name}.png"), 1.0);

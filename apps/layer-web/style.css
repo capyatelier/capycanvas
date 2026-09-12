@@ -511,6 +511,7 @@ body[data-theme="light"] .shortcut-capture .preferences-error { color: #9c5700; 
 .column-tab[aria-selected="true"]::before, .column-tab[aria-selected="true"]::after { content:none; }
 :where(:root:not([data-touch])) .column-tab:hover:not([aria-selected="true"]) { background:color-mix(in srgb, var(--text) 8%, transparent); }
 .column-tab:active { background:var(--selected); }
+.toolbar-controls .tool-tile > button[data-drawer-facing] { background:var(--selected); }
 [data-drawer-facing="top"] { border-top-left-radius:0 !important; border-top-right-radius:0 !important; }
 [data-drawer-facing="right"] { border-top-right-radius:0 !important; border-bottom-right-radius:0 !important; }
 [data-drawer-facing="bottom"] { border-bottom-left-radius:0 !important; border-bottom-right-radius:0 !important; }

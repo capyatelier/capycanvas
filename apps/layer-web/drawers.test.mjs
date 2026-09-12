@@ -110,6 +110,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
     const shot=await call('Page.captureScreenshot',{format:'png'});
     await writeFile(`${dir}/${name}.png`,Buffer.from(shot.data,'base64'));
     const pixels=await sample(shot.data,points),fill=pixels[{left:0,right:1,top:2,bottom:3}[s.facing]];
+    assert.ok(fill[2]-fill[0]>12&&fill[2]-fill[1]>6,`${name}: the open drawer tile is active blue: ${fill}`);
     for(const color of pixels.slice(-2))assert.ok(color.every((v,i)=>Math.abs(v-fill[i])<=1),`${name}: ancestors preserve square source corners`);
     // Compare actual pixels with shadows disabled; catches alpha blending and stacking contexts.
     await evaluate(`(()=>{const s=document.createElement('style');s.id='drawer-shadow-check';s.textContent='.drawer-shadow,.content-drawer{box-shadow:none!important}';document.head.append(s)})()`);await wait();
@@ -147,6 +148,7 @@ export async function checkDrawerStyling({call,evaluate,settle}) {
         await click(tool);await check(tool,'tool',`${theme}-toolbar-${edge}`);
         await click(alternateTool);await check(alternateTool,'tool',`${theme}-toolbar-${edge}-switched`);
         assert.equal((await style(tool)).facing,undefined,'Previous toolbar source returns to rounded corners');
+        assert.equal((await style(tool)).background,'rgba(0, 0, 0, 0)','Previous panel opener loses its active blue');
         await click(tool);await check(tool,'tool',`${theme}-toolbar-${edge}-switched-back`);await click(tool);
       }
       await send({type:'move_panel',panel:'toolbar',target:{kind:'tab',group:41,index:null}});

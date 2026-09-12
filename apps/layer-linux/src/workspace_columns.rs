@@ -47,6 +47,17 @@ impl Columns {
             .find(|(p, _)| *p == panel)
             .map(|(_, b)| b.clone())
     }
+    pub fn mark_drawer_origin(&self, column: u32, origin: Option<(Panel, Edge)>) {
+        let strips = self.strips.borrow();
+        if let Some(strip) = strips.iter().find(|s| s.id == column) {
+            for (panel, button) in &strip.buttons {
+                customization::drawer_origin(
+                    button,
+                    origin.filter(|(p, _)| p == panel).map(|(_, edge)| edge),
+                );
+            }
+        }
+    }
     pub fn reconcile(&self, w: &Rc<Workspace>, layout: &DockLayout, resolved: &ResolvedLayout) {
         let mut strips = self.strips.borrow_mut();
         strips.retain(|s| resolved.collapsed.iter().any(|c| c.id == s.id));

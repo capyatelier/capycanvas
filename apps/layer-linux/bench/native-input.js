@@ -23,12 +23,17 @@ const workspaceMenus = ARGV.includes('--workspace-menus');
 const workspaceResize = ARGV.includes('--workspace-resize') || ARGV.includes('--web-workspace-resize');
 const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('--web-workspace-resize');
 const workspaceMotion = ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
-const process = Gio.Subprocess.new([
+const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
+// Rendering matrices and motion benchmarks use the in-memory fixture. Storage
+// adoption/maintenance can replace it or suspend input; native persistence and
+// drawer/column interaction tests exercise storage separately.
+if (drawerStyle || workspaceMotion) launcher.unsetenv('CAPY_WORKSPACE_DIR');
+const process = launcher.spawnv([
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
         'cargo', 'test', '--release', '-p', 'layer-linux', drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
-], Gio.SubprocessFlags.NONE);
+]);
 let passed = false;
 process.wait_async(null, (p, result) => {
     p.wait_finish(result);

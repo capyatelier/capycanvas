@@ -214,7 +214,10 @@ mod allocation {
                 })
                 .unwrap_or_default();
             for (slot, child) in self.children.borrow().iter() {
-                if matches!(slot, Slot::Drawer(0) | Slot::DrawerConnection(0)) {
+                if matches!(
+                    slot,
+                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0)
+                ) {
                     continue; // Allocate parents before measuring child origins.
                 }
                 let bounds = match slot {
@@ -238,7 +241,7 @@ mod allocation {
                         height: TILE_SIZE,
                     }),
                     Slot::Status => Some(resolved.status),
-                    Slot::Drawer(id) => {
+                    Slot::Drawer(id) | Slot::DrawerShadow(id) => {
                         drawers.iter().find(|(i, _)| i == id).map(|(_, d)| d.bounds)
                     }
                     Slot::DrawerConnection(id) => drawers
@@ -289,7 +292,9 @@ mod allocation {
                 let placement = owner.drawer.geometry(&owner);
                 for (slot, child) in self.children.borrow().iter() {
                     let bounds = match slot {
-                        Slot::Drawer(0) => placement.as_ref().map(|p| p.bounds),
+                        Slot::Drawer(0) | Slot::DrawerShadow(0) => {
+                            placement.as_ref().map(|p| p.bounds)
+                        }
                         Slot::DrawerConnection(0) => placement
                             .as_ref()
                             .and_then(|p| p.connection().map(|c| c.bounds)),
@@ -335,7 +340,7 @@ mod allocation {
                 if child.has_css_class("expanded-panel") {
                     native.pop();
                 }
-                let mut node = native.to_node();
+                let node = native.to_node();
                 if let Some(owner) = &owner {
                     holes.extend(
                         owner
@@ -344,19 +349,6 @@ mod allocation {
                             .into_iter()
                             .map(|hole| (order, hole)),
                     );
-                }
-                if let Slot::DrawerConnection(id) = *slot
-                    && child.is_mapped()
-                    && !child.has_css_class("zen-hidden")
-                    && let Some(owner) = &owner
-                    && let Some(drawer) = owner.drawers().into_iter().find(|d| d.id == id)
-                {
-                    let native = gtk::Snapshot::new();
-                    if let Some(node) = &node {
-                        native.append_node(node);
-                    }
-                    drawer.snapshot_origin(owner, &native);
-                    node = native.to_node();
                 }
                 nodes.push((*slot, node));
             }
@@ -474,6 +466,7 @@ enum Slot {
     Divider(u32),
     FloatingResize(u32, ResizeEdge),
     Drawer(u32),
+    DrawerShadow(u32),
     DrawerConnection(u32),
     Column(u32),
     ZenToolbars,
@@ -484,7 +477,27 @@ glib::wrapper! {
 }
 impl DockSurface {
     fn raise_drawer(&self, id: u32) {
+        let source = self.imp().owner.borrow().upgrade().and_then(|w| {
+            w.drawers()
+                .into_iter()
+                .find(|d| d.id == id)
+                .and_then(|d| d.source_container(&w))
+        });
         let mut children = self.imp().children.borrow_mut();
+        // Paint each shadow beneath its source container. A translucent active
+        // tile then composites once on clean chrome, including nested drawers.
+        if let Some(source) = source
+            && let Some(index) = children.iter().position(|(s, _)| *s == Slot::DrawerShadow(id))
+            && children.get(index + 1).is_none_or(|(_, w)| *w != source)
+        {
+            let shadow = children.remove(index);
+            if let Some(index) = children.iter().position(|(_, w)| *w == source) {
+                shadow.1.insert_before(self, Some(&source));
+                children.insert(index, shadow);
+            } else {
+                children.insert(index, shadow);
+            }
+        }
         if children
             .iter()
             .rev()
@@ -536,6 +549,7 @@ impl DockSurface {
                     | Slot::ZenButton
                     | Slot::Status
                     | Slot::Drawer(_)
+                    | Slot::DrawerShadow(_)
                     | Slot::DrawerConnection(_)
                     | Slot::ZenToolbars
                     | Slot::Divider(_)
@@ -1527,7 +1541,10 @@ impl Workspace {
             if !matches!(slot, Slot::Canvas) {
                 let hidden = if *slot == Slot::ZenToolbars {
                     !partial_zen
-                } else if matches!(slot, Slot::Drawer(0) | Slot::DrawerConnection(0)) && partial_zen
+                } else if matches!(
+                    slot,
+                    Slot::Drawer(0) | Slot::DrawerConnection(0) | Slot::DrawerShadow(0)
+                ) && partial_zen
                 {
                     false
                 } else if *slot == Slot::ZenButton {
@@ -1540,7 +1557,8 @@ impl Workspace {
                 } else {
                     hidden && (hide_floating_panels || !widget.has_css_class("floating-panel"))
                 };
-                if widget.has_css_class("zen-hidden") == hidden && widget.can_target() != hidden {
+                let can_target = !hidden && !matches!(slot, Slot::DrawerShadow(_));
+                if widget.has_css_class("zen-hidden") == hidden && widget.can_target() == can_target {
                     continue;
                 }
                 if hidden {
@@ -1548,7 +1566,7 @@ impl Workspace {
                 } else {
                     widget.remove_css_class("zen-hidden");
                 }
-                widget.set_can_target(!hidden);
+                widget.set_can_target(can_target);
             }
         }
     }

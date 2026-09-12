@@ -165,6 +165,7 @@ impl Body {
 }
 struct View {
     root: Columns,
+    shadow: gtk::Box,
     connection: gtk::DrawingArea,
     connection_geometry: Rc<Cell<Option<DrawerConnection>>>,
     columns: Vec<gtk::Box>,
@@ -206,6 +207,10 @@ impl View {
         root.add_css_class("dock-panel");
         root.add_css_class("content-drawer");
         root.set_overflow(gtk::Overflow::Hidden);
+        let shadow = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        shadow.add_css_class("drawer-shadow");
+        shadow.set_widget_name("drawer-shadow");
+        shadow.set_can_target(false);
         let mut columns = Vec::new();
         let mut clips = Vec::new();
         let mut bodies = Vec::new();
@@ -282,7 +287,10 @@ impl View {
                 header.set_height_request(TAB_BAR_HEIGHT as i32);
                 let labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 w.install_panel_drag(&header, DockItem::Group { group: tabs.group });
-                w.install_context(&header, layer_ui::ContextTarget::Group { group: tabs.group });
+                w.install_context(
+                    &header,
+                    layer_ui::ContextTarget::Group { group: tabs.group },
+                );
                 let layout = w.surface.imp().layout.borrow();
                 for panel in &tabs.panels {
                     let config = layout.panel(*panel).unwrap();
@@ -344,6 +352,7 @@ impl View {
         }
         Self {
             root,
+            shadow,
             connection,
             connection_geometry,
             columns,
@@ -364,6 +373,7 @@ pub(crate) struct Drawer {
     progress: Cell<f32>,
     closing: Cell<bool>,
     animation: RefCell<Option<adw::TimedAnimation>>,
+    source_corners: RefCell<Vec<(gtk::Widget, [bool; 4])>>,
 }
 impl Drawer {
     pub fn new(id: u32) -> Rc<Self> {
@@ -376,6 +386,7 @@ impl Drawer {
             progress: Cell::new(1.0),
             closing: Cell::new(false),
             animation: RefCell::default(),
+            source_corners: RefCell::default(),
         })
     }
     pub fn layers(&self) -> Option<Rc<LayerPanel>> {
@@ -549,11 +560,9 @@ impl Drawer {
     pub fn is_closed(&self) -> bool {
         self.state.borrow().is_none()
     }
-    pub fn snapshot_origin(&self, w: &Workspace, snapshot: &gtk::Snapshot) {
-        let Some(anchor) = self.state.borrow().as_ref().map(|s| s.anchor) else {
-            return;
-        };
-        let Some(button) = (match anchor {
+    fn source_button(&self, w: &Workspace) -> Option<gtk::Button> {
+        let anchor = self.state.borrow().as_ref()?.anchor;
+        match anchor {
             DrawerAnchor::Tile { panel, tile } => w
                 .zen
                 .drawer_button(TileAnchor { panel, tile })
@@ -566,22 +575,17 @@ impl Drawer {
                 })
                 .or_else(|| w.customization.drawer_button(TileAnchor { panel, tile })),
             DrawerAnchor::Column { column, origin, .. } => w.columns.button(column, origin),
-        }) else {
-            return;
-        };
-        let Some(parent) = button.parent() else {
-            return;
-        };
-        let Some(position) = parent.compute_point(&w.surface, &gtk::graphene::Point::new(0.0, 0.0))
-        else {
-            return;
-        };
-        // Reuse GTK's cached native button node above the drawer shadow. No
-        // reparenting, texture copies or duplicate input widget are involved.
-        snapshot.save();
-        snapshot.translate(&position);
-        parent.snapshot_child(&button, snapshot);
-        snapshot.restore();
+        }
+    }
+    pub fn source_container(&self, w: &Workspace) -> Option<gtk::Widget> {
+        let mut widget: gtk::Widget = self.source_button(w)?.upcast();
+        while let Some(parent) = widget.parent() {
+            if parent == w.surface.clone().upcast::<gtk::Widget>() {
+                return Some(widget);
+            }
+            widget = parent;
+        }
+        None
     }
     fn target(&self, w: &Workspace) -> Option<DrawerPlacement> {
         let state = self.state.borrow();
@@ -644,8 +648,10 @@ impl Drawer {
             {
                 if connection.is_some_and(|c| c.square_corners[index]) {
                     view.root.add_css_class(class);
+                    view.shadow.add_css_class(class);
                 } else {
                     view.root.remove_css_class(class);
+                    view.shadow.remove_css_class(class);
                 }
             }
         }
@@ -654,7 +660,20 @@ impl Drawer {
         Some(result)
     }
     fn mark_origin(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
+        let placement = placement.filter(|p| !self.closing.get() && p.connection().is_some());
+        self.mark_source_corners(w, placement);
         if self.id != 0 {
+            let origin = self
+                .state
+                .borrow()
+                .as_ref()
+                .and_then(|s| match s.anchor {
+                    DrawerAnchor::Column { origin, .. } => Some(origin),
+                    _ => None,
+                })
+                .zip(placement)
+                .map(|(origin, p)| (origin, p.direction));
+            w.columns.mark_drawer_origin(self.id, origin);
             return;
         }
         let origin = self
@@ -670,6 +689,52 @@ impl Drawer {
         }
         w.zen.mark_drawer_origin(origin);
     }
+    fn mark_source_corners(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
+        let mut next = Vec::new();
+        if let Some(placement) = placement {
+            let mut ancestor = self.source_button(w).and_then(|b| b.parent());
+            while let Some(widget) = ancestor {
+                if widget == w.surface.clone().upcast::<gtk::Widget>() {
+                    break;
+                }
+                if let Some(b) = widget.compute_bounds(&w.surface) {
+                    let corners = placement.source_corners(Bounds {
+                        x: b.x(),
+                        y: b.y(),
+                        width: b.width(),
+                        height: b.height(),
+                    });
+                    if corners.into_iter().any(|c| c) {
+                        next.push((widget.clone(), corners));
+                    }
+                }
+                ancestor = widget.parent();
+            }
+        }
+        let mut old = self.source_corners.borrow_mut();
+        if *old == next {
+            return;
+        }
+        let classes = [
+            "drawer-source-nw",
+            "drawer-source-ne",
+            "drawer-source-se",
+            "drawer-source-sw",
+        ];
+        for (widget, _) in old.iter() {
+            for class in classes {
+                widget.remove_css_class(class);
+            }
+        }
+        for (widget, corners) in &next {
+            for (joined, class) in corners.iter().zip(classes) {
+                if *joined {
+                    widget.add_css_class(class);
+                }
+            }
+        }
+        *old = next;
+    }
     fn animate(self: &Rc<Self>, w: &Rc<Workspace>, closing: bool) {
         if let Some(animation) = self.animation.take() {
             animation.pause();
@@ -678,6 +743,9 @@ impl Drawer {
             .placement()
             .or_else(|| self.target(w).map(|p| p.closed()));
         self.closing.set(closing);
+        if closing {
+            self.mark_origin(w, None);
+        }
         self.progress.set(0.0);
         let target = adw::CallbackAnimationTarget::new(glib::clone!(
             #[weak]
@@ -700,10 +768,8 @@ impl Drawer {
                 drawer.from.borrow_mut().take();
                 if drawer.closing.get() {
                     w.surface
-                        .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) if id == drawer.id));
-                    if drawer.id == 0 {
-                        drawer.mark_origin(&w, None);
-                    }
+                        .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) | Slot::DrawerShadow(id) if id == drawer.id));
+                    drawer.mark_origin(&w, None);
                     drawer.view.borrow_mut().take();
                     drawer.state.borrow_mut().take();
                     drawer.presented.borrow_mut().take();
@@ -728,6 +794,11 @@ impl Drawer {
             return;
         };
         let changed = self.state.borrow().as_ref() != Some(next) || self.closing.get();
+        let switching = self
+            .state
+            .borrow()
+            .as_ref()
+            .is_some_and(|old| old.anchor != next.anchor);
         let rebuild = self
             .state
             .borrow()
@@ -735,14 +806,16 @@ impl Drawer {
             .is_none_or(|old| old.columns != next.columns || old.tabs != next.tabs);
         if rebuild {
             w.surface
-                .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) if id == self.id));
+                .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) | Slot::DrawerShadow(id) if id == self.id));
             let view = Rc::new(View::new(w, next));
+            w.surface.add(Slot::DrawerShadow(self.id), &view.shadow);
             w.surface.add(Slot::Drawer(self.id), &view.root);
             w.surface
                 .add(Slot::DrawerConnection(self.id), &view.connection);
             *self.view.borrow_mut() = Some(view);
         }
         *self.state.borrow_mut() = Some(next.clone());
+        self.closing.set(false);
         let mut refreshed = false;
         if let Some(view) = self.view.borrow().as_ref() {
             for body in &view.bodies {
@@ -755,6 +828,16 @@ impl Drawer {
         // Change opener styles before GTK allocates/snapshots the toolbar.
         // Different tiles can share one retained drawer body, so body rebuilds
         // and size changes cannot be used as a proxy for opener changes.
+        if switching {
+            // Move the body with its new opener, keeping the connector present
+            // throughout a switch, including a nested toolbar in a column drawer.
+            if let Some(animation) = self.animation.take() {
+                animation.pause();
+            }
+            self.from.borrow_mut().take();
+            self.closing.set(false);
+            self.progress.set(1.0);
+        }
         if changed {
             self.mark_origin(w, self.target(w).as_ref());
         }
@@ -763,7 +846,7 @@ impl Drawer {
                 .target(w)
                 .zip(self.placement())
                 .is_some_and(|(to, from)| to.bounds != from.bounds);
-        if changed || resized {
+        if !switching && (changed || resized) {
             self.animate(w, false);
         }
         w.surface.raise_drawer(self.id);
