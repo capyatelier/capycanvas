@@ -36,12 +36,12 @@ import kotlin.math.roundToInt
                 val kind = control.getString("kind")
                 val icon = tile.optString("icon").takeIf { it != "null" && it.isNotEmpty() }
                     ?: when (kind) { "color" -> "color"; "opacity" -> "opacity"; "size" -> "size"; else -> "brush" }
+                val modifier = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
+                    obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")), holdToDrag = true)
                 if (kind == "divider") {
-                    ToolbarDivider(Modifier.placed(bounds, density).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}"), horizontal = vertical)
+                    ToolbarDivider(modifier, horizontal = vertical)
                     return@forEachIndexed
                 }
-                val modifier = Modifier.placed(bounds, density).drawerTile(dock, panel.getString("id"), tile.getInt("id")).testTag("tile-${panel.getString("id")}-${tile.getInt("id")}").dragSource(dock,
-                    obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id")))
                 val fill = if (kind == "color") host.panelContent?.getJSONObject("state")?.getJSONObject("brush")?.array("color")?.let {
                         Color(it.getDouble(0).toFloat(), it.getDouble(1).toFloat(), it.getDouble(2).toFloat())
                     } else null
@@ -54,7 +54,7 @@ import kotlin.math.roundToInt
                 Row(Modifier.fillMaxSize().clip(shape).alpha(if (tile.getBoolean("enabled")) 1f else .4f)
                     .background(if (tile.optBoolean("selected")) colors.active else Color.Transparent)
                     .combinedClickable(enabled = tile.getBoolean("enabled"),
-                        onLongClick = { dock.context(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
+                        onLongClick = { dock.holdContext(obj("kind" to "tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) },
                         onClick = { host.dispatch(obj("type" to "activate_tile", "panel" to panel.getString("id"), "tile" to tile.getInt("id"))) }),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
@@ -72,7 +72,7 @@ import kotlin.math.roundToInt
             Box(Modifier.placed(grip, density).testTag("ribbon-grip-${panel.getString("id")}").dragSource(dock, item,
                 context = obj("kind" to "ribbon", "panel" to panel.getString("id")))
                 .combinedClickable(onClick = {}, onDoubleClick = { dock.doubleClickHandle(item) },
-                    onLongClick = { dock.context(obj("kind" to "ribbon", "panel" to panel.getString("id"))) }), contentAlignment = Alignment.Center) {
+                    onLongClick = { dock.holdContext(obj("kind" to "ribbon", "panel" to panel.getString("id"))) }), contentAlignment = Alignment.Center) {
                 PanelGrip("Move toolbar", vertical)
             }
         }

@@ -49,7 +49,7 @@ import org.json.JSONObject
         }
         .combinedClickable(enabled = enabled,
             onClick = { host.dispatch(obj("type" to "select_panel_tab", "group" to group, "panel" to id)) },
-            onLongClick = { dock.context(obj("kind" to "panel", "panel" to id)) })
+            onLongClick = { dock.holdContext(obj("kind" to "panel", "panel" to id)) })
         .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)) {
         if (showIcon) SharedIcon(panel.getString("icon"), if (showName) null else panel.getString("title"),

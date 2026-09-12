@@ -25,10 +25,11 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/** Native finger/pen MotionEvents on the tablet, including popup focus and CANCEL.
+/** Native mouse/finger/pen MotionEvents on the tablet, including popup focus and CANCEL.
  * Keep the real frame clock: a held contact must survive opening a native popup. */
 class AndroidInteractionTest {
     private lateinit var scenario: ActivityScenario<MainActivity>
+    private lateinit var activity: MainActivity
     private lateinit var host: CanvasHost
     private lateinit var owner: ViewRootForTest
     private lateinit var surface: CanvasSurfaceView
@@ -39,6 +40,7 @@ class AndroidInteractionTest {
     private var contact = false
     private var point = Offset.Zero
     private var tool = MotionEvent.TOOL_TYPE_FINGER
+    private var mouseButton = MotionEvent.BUTTON_PRIMARY
     // View dispatch keeps exact geometry deterministic. Opt into the OS input
     // dispatcher with -e systemInput true where system injection is available.
     private var systemInput = InstrumentationRegistry.getArguments().getString("systemInput") == "true"
@@ -59,7 +61,7 @@ class AndroidInteractionTest {
         else node.children.firstNotNullOfOrNull { find(it, tag) }
     private fun bounds(tag: String): Rect {
         var result: Rect? = null
-        scenario.onActivity { result = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot }
+        instrumentation.runOnMainSync { result = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag)?.boundsInRoot }
         return checkNotNull(result) { "Missing $tag" }
     }
     private fun exists(tag: String) = find(owner.semanticsOwner.unmergedRootSemanticsNode, tag) != null
@@ -72,16 +74,18 @@ class AndroidInteractionTest {
         val deadline = SystemClock.uptimeMillis() + timeout
         do {
             var ready = false
-            scenario.onActivity { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
+            instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError); ready = condition() }
             if (ready) return
             SystemClock.sleep(16)
         } while (SystemClock.uptimeMillis() < deadline)
         fail("Timed out: $label")
     }
-    private fun settle() { SystemClock.sleep(180); instrumentation.waitForIdleSync() }
+    // A held contact at a scroll edge can keep native overscroll animation
+    // alive. Drain main-thread work without waiting forever for global idleness.
+    private fun settle() { SystemClock.sleep(180); instrumentation.runOnMainSync { assertNull(host.failure); assertNull(host.actionError) } }
     private fun action(value: JSONObject) {
         val done = CountDownLatch(1)
-        scenario.onActivity { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
+        instrumentation.runOnMainSync { host.dispatch(value); host.query(obj("type" to "catalog")) { done.countDown() } }
         assertTrue(done.await(10, TimeUnit.SECONDS))
         settle()
     }
@@ -91,7 +95,7 @@ class AndroidInteractionTest {
         point = next
         if (action == MotionEvent.ACTION_DOWN) { downAt = SystemClock.uptimeMillis(); contact = true }
         val location = IntArray(2)
-        scenario.onActivity { owner.view.getLocationOnScreen(location) }
+        instrumentation.runOnMainSync { owner.view.getLocationOnScreen(location) }
         val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = tool })
         val coords = arrayOf(MotionEvent.PointerCoords().apply {
             x = next.x + location[0]; y = next.y + location[1]; pressure = if (action == MotionEvent.ACTION_UP) 0f else .7f
@@ -101,7 +105,7 @@ class AndroidInteractionTest {
             MotionEvent.TOOL_TYPE_STYLUS -> InputDevice.SOURCE_STYLUS
             else -> InputDevice.SOURCE_TOUCHSCREEN
         }
-        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) MotionEvent.BUTTON_PRIMARY else 0
+        val buttons = if (tool == MotionEvent.TOOL_TYPE_MOUSE && action !in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) mouseButton else 0
         val motion = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, 1, properties, coords,
             0, buttons, 1f, 1f, 0, 0, source, 0)
         try {
@@ -110,7 +114,7 @@ class AndroidInteractionTest {
                 if (!accepted && action == MotionEvent.ACTION_DOWN) contact = false
                 assertTrue("System accepts ${MotionEvent.actionToString(action)} at $next (screen ${coords[0].x}, ${coords[0].y}; origin ${location.toList()}; rotation ${owner.view.display.rotation})", accepted)
             }
-            else scenario.onActivity { motion.offsetLocation(-location[0].toFloat(), -location[1].toFloat()); owner.view.dispatchTouchEvent(motion) }
+            else instrumentation.runOnMainSync { motion.offsetLocation(-location[0].toFloat(), -location[1].toFloat()); owner.view.dispatchTouchEvent(motion) }
         } finally { motion.recycle() }
         if (systemInput && action == MotionEvent.ACTION_MOVE) {
             // Android resamples a lone high-velocity event beyond its supplied
@@ -127,7 +131,19 @@ class AndroidInteractionTest {
     }
     private fun tap(at: Offset) { event(MotionEvent.ACTION_DOWN, at); SystemClock.sleep(40); event(MotionEvent.ACTION_UP) }
     private fun doubleTap(at: Offset) { tap(at); SystemClock.sleep(80); tap(at); settle() }
-    private fun back() { instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK); settle() }
+    private fun back() {
+        // Composition can expose a menu before WindowManager transfers focus.
+        // Sending Back in that gap can finish the Activity instead of the menu.
+        waitFor("native menu receives keyboard focus") {
+            android.view.inspector.WindowInspector.getGlobalWindowViews().any { view ->
+                view.hasWindowFocus() && findView<ViewRootForTest>(view)?.let {
+                    find(it.semanticsOwner.unmergedRootSemanticsNode,"workspace-menu")!=null
+                }==true
+            }
+        }
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+        waitFor("native menu closes") { popupCount()==0 && owner.view.hasWindowFocus() }; settle()
+    }
     private fun popupCount(): Int {
         fun count() = android.view.inspector.WindowInspector.getGlobalWindowViews().count { view ->
                 findView<ViewRootForTest>(view)?.let { find(it.semanticsOwner.unmergedRootSemanticsNode, "workspace-menu") != null } == true
@@ -137,17 +153,28 @@ class AndroidInteractionTest {
         instrumentation.runOnMainSync { result = count() }
         return result
     }
+    private fun workspaceDragging() = surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING)
+    private val holdMenuCount get()=if(tool==MotionEvent.TOOL_TYPE_MOUSE) 0 else 1
+    private val pointerTools = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)
+    private fun resetLayerScroll(first: Long) {
+        instrumentation.runOnMainSync {
+            find(owner.semanticsOwner.unmergedRootSemanticsNode,"layer-rows")!!.config[
+                androidx.compose.ui.semantics.SemanticsActions.ScrollToIndex].action!!.invoke(0)
+        }
+        waitFor("list reset") { exists("layer-row-$first") }; settle()
+    }
     @Before fun ready() {
         CanvasHost.workspaceDirectoryForTest = File(instrumentation.targetContext.filesDir, "interaction-workspace-tests/${java.util.UUID.randomUUID()}").absolutePath
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario.onActivity {
+            activity=it
             host = it.host; owner = findView<ViewRootForTest>(it.window.decorView)!!
             surface = findView<CanvasSurfaceView>(it.window.decorView)!!
             density = it.resources.displayMetrics.density
         }
         waitFor("brush ready", 60_000) { snapshot().optBoolean("brush_ready") }
         waitFor("workspace ready", 60_000) { host.workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true }
-        scenario.onActivity {
+        instrumentation.runOnMainSync {
             saved = if (recovery.exists()) JSONObject(recovery.readText())
                 else JSONObject(workspace()).also { recovery.writeText(it.toString()) }
         }
@@ -179,7 +206,7 @@ class AndroidInteractionTest {
     }
 
     @Test fun longPressRetainsEveryWorkspaceDragSource() {
-        for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) {
+        for (pointer in pointerTools) {
             tool = pointer
             for (kind in listOf("tab", "group", "floating", "drawer-tab", "drawer-grip", "drawer-tile", "tile", "ribbon", "column")) {
                 restore()
@@ -207,22 +234,100 @@ class AndroidInteractionTest {
                 val press = bounds(tag).center
                 event(MotionEvent.ACTION_DOWN, press)
                 SystemClock.sleep(700)
-                assertEquals("$pointer/$kind opens its menu during contact", 1, popupCount())
-                scenario.onActivity { assertTrue("Held menu preserves the original window contact", owner.view.hasWindowFocus()) }
+                assertEquals("$pointer/$kind only touch/pen holds open menus", holdMenuCount, popupCount())
+                instrumentation.runOnMainSync { assertTrue("Held menu preserves the original window contact", owner.view.hasWindowFocus()) }
                 event(MotionEvent.ACTION_UP)
                 settle()
-                assertEquals("$pointer/$kind release retains menu", 1, popupCount())
-                back()
+                assertEquals("$pointer/$kind release retains touch/pen menu", holdMenuCount, popupCount())
+                if(holdMenuCount>0)back()
                 assertEquals(0, popupCount())
                 event(MotionEvent.ACTION_DOWN, press)
                 SystemClock.sleep(700)
-                assertEquals("$pointer/$kind second hold", 1, popupCount())
+                assertEquals("$pointer/$kind second hold", holdMenuCount, popupCount())
                 event(MotionEvent.ACTION_MOVE, bounds("workspace").center)
                 waitFor("$pointer/$kind continues original drag") { surface.pointerIcon == PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
                 waitFor("$pointer/$kind drag closes menu") { popupCount() == 0 }
                 event(MotionEvent.ACTION_CANCEL)
                 waitFor("$pointer/$kind cancel") { workspace() == before && surface.pointerIcon != PointerIcon.getSystemIcon(surface.context, PointerIcon.TYPE_GRABBING) }
             }
+        }
+    }
+
+    @Test fun tilePickupRequiresStationaryHoldAcrossPresentations() {
+        for (pointer in pointerTools) for (kind in listOf("tile", "divider", "drawer-tile", "drawer-divider", "floating", "vertical", "wrapped", "column")) {
+            tool=pointer; restore()
+            val viewport=JSONArray(listOf(bounds("workspace").width/density,bounds("workspace").height/density))
+            if (kind.startsWith("drawer") || kind=="wrapped") action(obj("type" to "move_panel", "panel" to "toolbar",
+                "target" to obj("kind" to "tab", "group" to 41, "index" to 3), "viewport" to viewport))
+            if (kind=="wrapped") action(obj("type" to "select_panel_tab", "group" to 41, "panel" to "toolbar"))
+            if (kind=="floating") action(obj("type" to "move_group", "group" to 45,
+                "target" to obj("kind" to "float", "position" to JSONArray(listOf(460,250))), "viewport" to viewport))
+            if (kind=="vertical") {
+                val vertical=JSONObject(fixture.toString())
+                vertical.getJSONObject("layout").array("bands").getJSONObject(2).put("edge","left")
+                action(obj("type" to "restore_workspace", "workspace" to vertical))
+            }
+            if (kind.startsWith("drawer") || kind=="column") {
+                customize(obj("type" to "set_column_collapsed", "group" to 41, "collapsed" to true))
+                if (kind.startsWith("drawer")) {
+                    tap(bounds("column-icon-toolbar").center)
+                    waitFor("toolbar drawer") { exists("column-drawer-41") }; settle()
+                }
+            }
+            val tiles=host.panelContent!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").objects()
+            val source=tiles.first { (it.getJSONObject("control").getString("kind")=="divider")==kind.endsWith("divider") }
+            val tag=if(kind=="column") "column-icon-sizes"
+                else "tile-toolbar-${source.getInt("id")}"
+            val press=bounds(tag).center
+            val destination=if(kind=="column") bounds("workspace").center else {
+                val target=tiles.first { it.getInt("id")!=source.getInt("id") && it.getJSONObject("control").getString("kind")!="divider" &&
+                    (bounds("tile-toolbar-${it.getInt("id")}").center-press).getDistance()>30*density }
+                bounds("tile-toolbar-${target.getInt("id")}").let { Offset(it.right-2*density,it.bottom-2*density) }
+            }
+            val before=workspace()
+            val label="$pointer/$kind"
+            // Moving before the deadline retires the hold, even if contact then
+            // pauses long enough to trigger a child control's long-click timer.
+            event(MotionEvent.ACTION_DOWN,press); event(MotionEvent.ACTION_MOVE,destination)
+            SystemClock.sleep(700)
+            assertFalse("$label cannot pick up early",workspaceDragging())
+            assertEquals("$label cannot open a menu after early motion",0,popupCount())
+            event(MotionEvent.ACTION_UP); settle(); assertEquals("$label early release",before,workspace())
+            event(MotionEvent.ACTION_DOWN,press); event(MotionEvent.ACTION_CANCEL); SystemClock.sleep(700)
+            assertEquals("$label canceled hold",0,popupCount()); assertFalse(workspaceDragging())
+            event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700)
+            assertEquals("$label only touch/pen holds open menus",holdMenuCount,popupCount()); assertEquals(before,workspace())
+            event(MotionEvent.ACTION_CANCEL); settle()
+            assertEquals("$label canceled menu",0,popupCount()); assertFalse(workspaceDragging())
+            event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700)
+            event(MotionEvent.ACTION_UP); settle(); assertEquals("$label release retains touch/pen menu",holdMenuCount,popupCount())
+            if(holdMenuCount>0)back()
+            event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700)
+            event(MotionEvent.ACTION_MOVE,destination); waitFor("$label held pickup") { workspaceDragging() }
+            waitFor("$label closes menu for drag") { popupCount()==0 }
+            event(MotionEvent.ACTION_CANCEL); settle(); assertEquals("$label canceled drag",before,workspace())
+            event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700)
+            event(MotionEvent.ACTION_MOVE,destination); settle(); event(MotionEvent.ACTION_UP); settle()
+            val after=workspace(); assertNotEquals("$label commits drop",before,after)
+            action(obj("type" to "invoke","command" to "undo_workspace")); assertEquals("$label one undo",before,workspace())
+            action(obj("type" to "invoke","command" to "redo_workspace")); assertEquals("$label one redo",after,workspace())
+            assertFalse("$label releases cursor",workspaceDragging())
+        }
+    }
+
+    @Test fun tabsAndGripsStillPickUpImmediately() {
+        for(pointer in pointerTools) for(kind in listOf("tab","ribbon","group","drawer-tab","drawer-grip","column")) {
+            tool=pointer; restore()
+            if(kind.startsWith("drawer") || kind=="column") {
+                customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to true))
+                if(kind.startsWith("drawer")) { tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle() }
+            }
+            val tag=when(kind) { "tab"->"tab-sizes"; "ribbon"->"ribbon-grip-toolbar"; "group"->"group-grip-41"
+                "drawer-tab"->"drawer-tab-sizes"; "drawer-grip"->"column-drawer-grip-41"; else->"column-grip-41" }
+            val before=workspace()
+            event(MotionEvent.ACTION_DOWN,bounds(tag).center); event(MotionEvent.ACTION_MOVE,bounds("workspace").center)
+            waitFor("$pointer/$kind immediate pickup",400) { workspaceDragging() }
+            assertEquals(0,popupCount()); event(MotionEvent.ACTION_CANCEL); settle(); assertEquals(before,workspace())
         }
     }
 
@@ -540,7 +645,7 @@ class AndroidInteractionTest {
             settle()
             val image = instrumentation.uiAutomation.takeScreenshot()
             val location = IntArray(2)
-            scenario.onActivity { owner.view.getLocationOnScreen(location) }
+            instrumentation.runOnMainSync { owner.view.getLocationOnScreen(location) }
             try {
                 val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/drawer-style-$name.png")
                 file.parentFile!!.mkdirs()
@@ -671,7 +776,7 @@ class AndroidInteractionTest {
                 val rect = bounds(tag)
                 val image = instrumentation.uiAutomation.takeScreenshot()
                 val location = IntArray(2)
-                scenario.onActivity { owner.view.getLocationOnScreen(location) }
+                instrumentation.runOnMainSync { owner.view.getLocationOnScreen(location) }
                 fun sample(x: Float, y: Float) = image.getPixel((x + location[0]).toInt(), (y + location[1]).toInt())
                 val background = sample(rect.center.x, rect.top + 3 * density)
                 val text = bounds("tab-name-brushes")
@@ -748,15 +853,15 @@ class AndroidInteractionTest {
             repeat(2) { layer(obj("op" to "new", "group" to false, "clipped" to false)); additions++ }
             val before = state().array("layers").objects().map { it.getLong("id") }
             val source = before[0]; val target = before[1]
-            for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (handle in listOf(true, false)) {
+            for (pointer in pointerTools) for (handle in listOf(true, false)) {
                 tool = pointer
                 val sourceBounds = bounds("layer-row-$source")
                 val press = Offset(if (handle) sourceBounds.right - 12 * density else sourceBounds.center.x, sourceBounds.center.y)
                 val destination = bounds("layer-row-$target").let { Offset(it.right - 12 * density, it.bottom - 3 * density) }
                 event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
-                assertEquals("Layer context opens while held", 1, popupCount())
-                scenario.onActivity { assertTrue("Layer menu preserves window focus during contact", owner.view.hasWindowFocus()) }
-                event(MotionEvent.ACTION_UP); settle(); assertEquals(1, popupCount()); back()
+                assertEquals("Only touch/pen holds open layer context", holdMenuCount, popupCount())
+                instrumentation.runOnMainSync { assertTrue("Layer menu preserves window focus during contact", owner.view.hasWindowFocus()) }
+                event(MotionEvent.ACTION_UP); settle(); assertEquals(holdMenuCount, popupCount()); if(holdMenuCount>0)back()
                 event(MotionEvent.ACTION_DOWN, press); SystemClock.sleep(700)
                 event(MotionEvent.ACTION_MOVE, destination); settle(); assertEquals(0, popupCount())
                 event(MotionEvent.ACTION_CANCEL); settle()
@@ -774,5 +879,164 @@ class AndroidInteractionTest {
             repeat(additions) { action(obj("type" to "invoke", "command" to "undo")) }
             assertEquals(original, state().array("layers").objects().map { it.getLong("id") })
         }
+    }
+
+    @Test fun layerBodiesReserveTouchAndPenForScrollingUntilHeld() {
+        action(obj("type" to "select_panel_tab","group" to 43,"panel" to "layers"))
+        val original=state().array("layers").objects().map { it.getLong("id") }
+        var additions=0
+        var committed=false
+        try {
+            repeat(28) { action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false))); additions++ }
+            val before=state().array("layers").objects().map { it.getLong("id") }
+            for(pointer in pointerTools) for(handle in listOf(false,true)) {
+                tool=pointer
+                resetLayerScroll(before[0])
+                val source=bounds("layer-row-${before[0]}")
+                val target=bounds("layer-row-${before[1]}")
+                val press=Offset(if(handle)source.right-12*density else source.center.x,source.center.y)
+                val destination=Offset(press.x,target.bottom-3*density)
+                event(MotionEvent.ACTION_DOWN,press); event(MotionEvent.ACTION_MOVE,destination); settle()
+                val direct=handle || pointer==MotionEvent.TOOL_TYPE_MOUSE
+                assertEquals("$pointer/$handle pickup before hold",direct,exists("layer-drag-preview"))
+                if(!direct) { SystemClock.sleep(700); assertEquals("Early motion retires row hold",0,popupCount()); assertFalse(exists("layer-drag-preview")) }
+                event(MotionEvent.ACTION_UP); settle()
+                if(direct) {
+                    committed=true
+                    val after=listOf(before[1],before[0])+before.drop(2)
+                    assertEquals(after,state().array("layers").objects().map { it.getLong("id") })
+                    action(obj("type" to "invoke","command" to "undo")); committed=false
+                    assertEquals(before,state().array("layers").objects().map { it.getLong("id") })
+                    action(obj("type" to "invoke","command" to "redo")); committed=true
+                    assertEquals(after,state().array("layers").objects().map { it.getLong("id") })
+                    action(obj("type" to "invoke","command" to "undo")); committed=false
+                }
+                assertEquals(before,state().array("layers").objects().map { it.getLong("id") })
+            }
+            for(pointer in listOf(MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS)) {
+                tool=pointer
+                resetLayerScroll(before[0])
+                val press=bounds("layer-rows").center
+                event(MotionEvent.ACTION_DOWN,press)
+                repeat(5) { step -> event(MotionEvent.ACTION_MOVE,press-Offset(0f,(step+1)*30*density)); SystemClock.sleep(25) }
+                SystemClock.sleep(700)
+                assertEquals("$pointer scrolling does not open menu",0,popupCount())
+                assertFalse("$pointer scrolling does not reorder",exists("layer-drag-preview"))
+                event(MotionEvent.ACTION_UP); settle()
+                assertFalse("$pointer moved the native list",exists("layer-row-${before[0]}"))
+                assertEquals(before,state().array("layers").objects().map { it.getLong("id") })
+            }
+        } finally {
+            if(contact)event(MotionEvent.ACTION_CANCEL)
+            if(committed)action(obj("type" to "invoke","command" to "undo"))
+            repeat(additions) { action(obj("type" to "invoke","command" to "undo")) }
+            assertEquals(original,state().array("layers").objects().map { it.getLong("id") })
+        }
+    }
+
+    @Test fun pendingTileSourceRemovalAndWindowBlurRetirePickup() {
+        for(pointer in pointerTools) for(mode in listOf("removed","held-removed","blur","drag-blur")) {
+            tool=pointer; restore()
+            customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to true))
+            val before=workspace()
+            val press=bounds("column-icon-sizes").center
+            event(MotionEvent.ACTION_DOWN,press)
+            var blurWindow: android.app.Dialog?=null
+            if(mode.endsWith("removed")) {
+                if(mode=="held-removed") { SystemClock.sleep(700); assertEquals(holdMenuCount,popupCount()) }
+                customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to false))
+            }
+            else {
+                if(mode=="drag-blur") {
+                    SystemClock.sleep(700); event(MotionEvent.ACTION_MOVE,bounds("workspace").center)
+                    waitFor("drag before blur") { workspaceDragging() }
+                }
+                instrumentation.runOnMainSync {
+                    blurWindow=android.app.Dialog(activity).apply { setContentView(View(activity)); show() }
+                }
+                waitFor("native window loses focus") { !owner.view.hasWindowFocus() }
+            }
+            SystemClock.sleep(700)
+            assertEquals("$pointer/$mode retires menu",0,popupCount()); assertFalse(workspaceDragging())
+            event(MotionEvent.ACTION_CANCEL)
+            if(!mode.endsWith("removed")) {
+                instrumentation.runOnMainSync { blurWindow!!.dismiss() }
+                waitFor("native window regains focus") { owner.view.hasWindowFocus() }; settle()
+                assertEquals("$pointer/$mode restores layout",before,workspace())
+            }
+        }
+    }
+
+    @Test fun rowChildHoldsSuppressClicksAndSecondaryClickKeepsContext() {
+        action(obj("type" to "select_panel_tab","group" to 43,"panel" to "layers"))
+        val id=state().array("layers").objects().first().getLong("id")
+        fun row()=state().array("layers").objects().first { it.getLong("id")==id }
+        for(pointer in pointerTools) for(offset in listOf(18f,44f,84f,150f)) {
+            tool=pointer
+            val r=bounds("layer-row-$id")
+            val press=Offset(r.left+offset*density,r.center.y)
+            event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700)
+            waitFor("$pointer/$offset only touch/pen child holds open menus") { popupCount()==holdMenuCount }
+            val visible=row().getBoolean("visible")
+            val selected=row().getBoolean("selected")
+            event(MotionEvent.ACTION_UP); settle()
+            assertEquals("Held visibility control does not click",visible,row().getBoolean("visible"))
+            assertEquals("Held selection control does not click",selected,row().getBoolean("selected"))
+            assertEquals(holdMenuCount,popupCount()); if(holdMenuCount>0)back()
+            event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700); event(MotionEvent.ACTION_CANCEL); settle()
+            assertEquals("Canceled child hold clears row menu",0,popupCount())
+        }
+        tool=MotionEvent.TOOL_TYPE_MOUSE; mouseButton=MotionEvent.BUTTON_SECONDARY
+        try {
+            tap(bounds("layer-row-$id").center)
+            waitFor("Secondary row click opens menu") { popupCount()==1 }; back()
+            val tile=host.panelContent!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").getJSONObject(0).getInt("id")
+            tap(bounds("tile-toolbar-$tile").center)
+            waitFor("Secondary tile click opens menu") { popupCount()==1 }; back()
+        } finally { mouseButton=MotionEvent.BUTTON_PRIMARY }
+    }
+
+    @Test fun collapsedIconsKeepTheirSourceWhenDrawerTabsAreVisible() {
+        for(pointer in pointerTools) for(panel in listOf("brushes","sizes")) {
+            tool=pointer; restore()
+            customize(obj("type" to "set_column_collapsed","group" to 41,"collapsed" to true))
+            tap(bounds("column-icon-brushes").center); waitFor("drawer") { exists("column-drawer-41") }; settle()
+            val before=workspace()
+            val press=bounds("column-icon-$panel").center
+            val destination=bounds("workspace").center
+            for(cancel in listOf(true,false)) {
+                event(MotionEvent.ACTION_DOWN,press); SystemClock.sleep(700)
+                event(MotionEvent.ACTION_MOVE,destination)
+                waitFor("$pointer/$panel icon pickup") { workspaceDragging() }
+                assertNull("Icon pickup is not tab sliding",host.workspaceGeometry?.tab)
+                event(if(cancel)MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP); settle()
+                if(cancel)assertEquals(before,workspace())
+                else {
+                    val after=workspace(); assertNotEquals(before,after)
+                    action(obj("type" to "invoke","command" to "undo_workspace")); assertEquals(before,workspace())
+                    action(obj("type" to "invoke","command" to "redo_workspace")); assertEquals(after,workspace())
+                }
+            }
+        }
+    }
+
+    @Test fun mouseZenHoldsStaySilentWhileSecondaryClickOpensMenu() {
+        tool=MotionEvent.TOOL_TYPE_MOUSE
+        action(obj("type" to "invoke","command" to "zen_mode"))
+        waitFor("Zen chrome") { exists("zen-button") }; settle()
+        val before=workspace()
+        val targets=mutableListOf("zen-button")
+        val tiles=host.panelContent!!.array("panels").objects().first { it.getString("id")=="toolbar" }.array("tiles").objects()
+        tiles.firstOrNull { exists("tile-toolbar-${it.getInt("id")}") }?.let { targets.add("tile-toolbar-${it.getInt("id")}") }
+        for(tag in targets) {
+            event(MotionEvent.ACTION_DOWN,bounds(tag).center); SystemClock.sleep(700)
+            assertEquals("Mouse hold stays silent on $tag",0,popupCount())
+            event(MotionEvent.ACTION_UP); settle(); assertEquals(before,workspace())
+        }
+        mouseButton=MotionEvent.BUTTON_SECONDARY
+        try {
+            tap(bounds("zen-button").center)
+            waitFor("Secondary click opens Zen menu") { popupCount()==1 }; back()
+        } finally { mouseButton=MotionEvent.BUTTON_PRIMARY }
     }
 }

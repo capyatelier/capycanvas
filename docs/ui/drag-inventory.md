@@ -2,10 +2,10 @@
 
 [Required convention](drag-and-reorder.md) · [Workspace and UI](README.md)
 
-Source audit on 2026-09-12, updated after the GTK/Web pickup migration.
+Source audit on 2026-09-12, updated after the GTK/Web/Android pickup migrations.
 Other-platform follow-up: [short handoff](drag-pickup-handoff.md).
 Hold menus are touch/pen only everywhere; mouse tile holds only arm pickup.
-Preserve secondary-click and keyboard menus. GTK/Web enforce this distinction.
+Preserve secondary-click and keyboard menus. GTK/Web/Android enforce this distinction.
 
 **Change** means source code contradicts the required pickup rule. **Keep** means
 the visible registration/recognition path already has the required timing;
@@ -67,11 +67,11 @@ GTK `DropTarget` receivers are destinations, not additional pickup surfaces.
 
 | Surface | Current source behavior | Required work |
 | --- | --- | --- |
-| Toolbar tiles, including toolbar bodies reused in drawers | [`Panels.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Panels.kt), `dragSource`; [`WorkspaceInput.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceInput.kt), `workspaceGestures`, tracks a hold but starts on `touchSlop` even when `held` is false. | **Change mouse, touch, and pen** pickup eligibility. Context-menu timing already exists; it is not currently a mandatory tile gate. |
+| Toolbar tiles, including disabled commands, divider tiles, and retained drawer presentations | [`Panels.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Panels.kt) explicitly registers held sources; [`WorkspaceInput.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceInput.kt) keeps capture at the workspace root. | **Migrated.** Native stationary holds arm all devices. Early motion retires pickup and leaves scrolling available. Zen retains its existing customization restriction. |
 | Individual tabs, group/title bars, toolbar/group/footer/column grips, drawer tabs/headers | [`Workspace.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Workspace.kt), [`WorkspaceChrome.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceChrome.kt), common `workspaceGestures` | **Keep immediate pickup**. Split the tile gate from these sources. |
-| Layer-row bodies | [`Layers.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Layers.kt), `directDrag = down.type != PointerType.Touch || ...grip area...` | **Change pen body pickup**: only mouse or an explicit grip should use the direct path. Keep pre-hold scrolling and same-contact menu continuation. |
+| Layer-row bodies, including child controls and thumbnails | [`Layers.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Layers.kt) distinguishes mouse from touch/pen and recognizes native holds across the row. | **Migrated.** Mouse is immediate; touch/pen scroll before holding. Touch/pen holds retain context-menu contact; all holds suppress child clicks, and name editing keeps native ownership. |
 | Layer-row trailing grip area | [`Layers.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Layers.kt), trailing 20 dp hit region | **Keep immediate pickup** for all devices; verify the visual handle and hit region agree. |
-| Collapsed-column icon bodies; divider tiles | [`WorkspaceChrome.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceChrome.kt) installs context/click on icons, without `dragSource`. [`Panels.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Panels.kt) returns early for divider tiles before registering a source. | **Availability gaps**, not hold-gating violations. Any added reordering must use the tile policy. |
+| Collapsed-column icon bodies | [`WorkspaceChrome.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/WorkspaceChrome.kt) explicitly registers held panel sources, independently of the panel payload. | **Added.** Icons hold before dragging, including with their drawer open. Drawer tabs and footer grips remain immediate. |
 | Resize strips, numeric sliders, color wheel, Navigator, curves/gradient controls, canvas/tool gestures | `Workspace.kt`, [`NumberControl.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/NumberControl.kt), [`ColorPanel.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/ColorPanel.kt), [`Navigator.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Navigator.kt), [`Effects.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/Effects.kt) | Direct manipulation; no reorder delay. |
 
 ## Apple: macOS and iPadOS
@@ -112,7 +112,7 @@ drops likewise receive validated edit actions after native pickup. These contrac
 must remain the movement/drop/history path; changing a shared distance threshold
 cannot implement this convention.
 
-Remaining implementation work is on Android, Apple, and Windows; see the
+Remaining implementation work is on Apple and Windows; see the
 [short handoff](drag-pickup-handoff.md). Keep hold timing out of motion benchmarks.
 
 ## Tests that need coverage changes
@@ -125,9 +125,10 @@ Remaining implementation work is on Android, Apple, and Windows; see the
   browser-delivered mouse/touch/pen contacts, including automatic holds and early
   rejection. Existing hold suites cover menus and native touch scrolling.
   Physical stylus hardware testing remains.
-- Android: extend [`AndroidInteractionTest.kt`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt)
-  beyond hold-then-drag success to assert the forbidden early pickups for each
-  device and immediate handle behavior. Preserve native cancellation and history.
+- Android: [`AndroidInteractionTest.kt`](../../apps/layer-android/app/src/androidTest/java/art/capycanvas/AndroidInteractionTest.kt)
+  delivers native mouse/touch/pen MotionEvents on the tablet. It covers early
+  rejection, toolbar/divider/drawer/collapsed-icon holds, immediate grips/tabs,
+  native row scrolling, menus, source removal, focus loss, and undo/redo.
 - Apple/Windows: add device-specific native pickup and scrolling checks to the
   existing workspace and layer workflow suites; verify real Pencil/stylus and
   mouse behavior rather than relying on generic drag actions or OS defaults.

@@ -9,6 +9,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -16,6 +17,7 @@ import androidx.compose.ui.input.pointer.stylusHoverIcon
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalWindowInfo
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -51,7 +53,8 @@ internal fun resizePointerIcon(edge: String) = when (edge) {
  * docking, sizing, undo transactions and Zen visibility on every platform. */
 internal class DockInteraction(val host: CanvasHost) {
     data class DrawerSource(val direction: String, val bounds: Rect)
-    data class Region(val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int, val context: JSONObject?, val cursor: Int)
+    data class Region(val token: Any, val action: JSONObject, val bounds: Rect, val z: Int, val priority: Int,
+        val context: JSONObject?, val cursor: Int, val holdToDrag: Boolean)
     val regions = mutableMapOf<Any, Region>()
     val chromeRegions = mutableMapOf<Any, Rect>()
     var drawer: JSONObject? = null
@@ -72,6 +75,7 @@ internal class DockInteraction(val host: CanvasHost) {
     var density = 1f
     var viewport = JSONArray(listOf(1, 1))
     var enabled = true
+    var focused = true
     var hint by mutableStateOf<JSONObject?>(null)
     var dragging by mutableStateOf(false)
         private set
@@ -81,6 +85,9 @@ internal class DockInteraction(val host: CanvasHost) {
     var configurationHeight by mutableFloatStateOf(0f)
     var contextMenu by mutableStateOf<JSONObject?>(null)
     var contactHeld by mutableStateOf(false)
+    var contactType: PointerType? = null
+    var contactSource: Any? = null
+    var retiredContext: String? = null
     var contextAnchor = Rect.Zero
     var popupOpen = false
     private var active: JSONObject? = null
@@ -138,8 +145,9 @@ internal class DockInteraction(val host: CanvasHost) {
     fun refresh() = host.chrome(obj("kind" to "refresh"), facts())
     fun anchorKey(item: JSONObject) = "${item.optString("kind").replace("ribbon", "panel")}:${item.optString("column")}:${item.optString("group")}:${item.optString("panel")}:${item.optString("tile")}"
     fun context(target: JSONObject) {
-        if (dragging) return
+        if (dragging || !focused) return
         val key = anchorKey(target)
+        if (contactHeld && retiredContext == key) return
         val anchor = anchors[key] ?: return
         if (contextTarget == key) return
         contextTarget = key
@@ -147,6 +155,9 @@ internal class DockInteraction(val host: CanvasHost) {
         host.query(obj("type" to "context", "target" to target)) {
             if (!dragging && request == generation) { contextAnchor = anchor; contextMenu = it as? JSONObject; refresh() }
         }
+    }
+    fun holdContext(target: JSONObject) {
+        if (contactType != PointerType.Mouse) context(target)
     }
     fun closeContext() { generation++; contextTarget = null; contextMenu = null; refresh() }
     fun doubleClickHandle(item: JSONObject) {
@@ -192,8 +203,12 @@ internal class DockInteraction(val host: CanvasHost) {
         host.beginWorkspaceGesture()
         active = action; position = point; dragging = true; generation++
         contextMenu = null; contextTarget = null
-        frozenPanel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
-        frozenTabGroup = tabs.values.firstOrNull { it.optString("panel") == frozenPanel }?.getInt("group")
+        val panel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
+        // An open drawer also publishes tabs for its collapsed icons. Freeze
+        // slots only when the actual press came from the tab, not the icon/grip.
+        val tab = tabs.values.firstOrNull { it.optString("panel") == panel && it.getJSONObject("bounds").rect().contains(point) }
+        frozenPanel = tab?.optString("panel")
+        frozenTabGroup = tab?.getInt("group")
         frozenTabs = tabSlots.values.filter { it.optInt("group") == frozenTabGroup }.map { JSONObject(it.toString()) }
         frozenTabClip = frozenTabGroup?.let { tabClips[it] }?.let { Rect(it.left / density, it.top / density, it.right / density, it.bottom / density) }
         dragCursor = if (action.optJSONObject("item") != null) AndroidPointerIcon.TYPE_GRABBING else cursor
@@ -228,112 +243,153 @@ internal class DockInteraction(val host: CanvasHost) {
 }
 
 @Composable internal fun Modifier.workspaceSource(dock: DockInteraction, action: JSONObject,
-    priority: Int = 0, anchor: JSONObject? = null, cursor: Int = AndroidPointerIcon.TYPE_GRAB): Modifier {
+    priority: Int = 0, anchor: JSONObject? = null, cursor: Int = AndroidPointerIcon.TYPE_GRAB,
+    holdToDrag: Boolean = false): Modifier {
     val token = remember { Any() }
     val z = LocalWorkspaceZ.current
     val key = anchor?.let(dock::anchorKey)
     DisposableEffect(dock, token, key) {
-        onDispose { dock.regions.remove(token); if (key != null) dock.anchors.remove(key) }
+        onDispose {
+            dock.regions.remove(token)
+            if (key != null) dock.anchors.remove(key)
+            if (dock.contactSource == token && !dock.dragging) {
+                dock.retiredContext = key
+                dock.closeContext()
+            }
+        }
     }
-    SideEffect { dock.regions[token]?.let { dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor) } }
+    SideEffect { dock.regions[token]?.let { dock.regions[token] = it.copy(action = action, z = z, priority = priority, context = anchor, cursor = cursor, holdToDrag = holdToDrag) } }
     return workspacePointerIcon(if (dock.enabled) cursor else null).onGloballyPositioned {
         val bounds = it.boundsInRoot().translate(-dock.origin)
-        dock.regions[token] = DockInteraction.Region(action, bounds, z, priority, anchor, cursor)
+        dock.regions[token] = DockInteraction.Region(token, action, bounds, z, priority, anchor, cursor, holdToDrag)
         if (key != null) dock.anchors[key] = bounds
     }
 }
 
-@Composable internal fun Modifier.dragSource(dock: DockInteraction, item: JSONObject, context: JSONObject = item): Modifier {
+@Composable internal fun Modifier.dragSource(dock: DockInteraction, item: JSONObject, context: JSONObject = item,
+    holdToDrag: Boolean = false): Modifier {
     val kind = item.getString("kind")
     return workspaceSource(dock, obj("type" to if (kind == "tile") "tile_drag" else "drag_workspace", "item" to item),
-        priority = when (kind) { "tile" -> 3; "panel" -> 2; else -> 1 }, anchor = context)
+        priority = when (kind) { "tile" -> 3; "panel" -> 2; else -> 1 }, anchor = context, holdToDrag = holdToDrag)
 }
 
 /** Capture belongs to the stable workspace, not a tab or ribbon that Rust may
  * reparent during tear-off. Long presses retain this original source and press
  * position, including grips without a child click handler. */
-internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier = pointerInput(dock) {
+@Composable internal fun Modifier.workspaceGestures(dock: DockInteraction): Modifier {
+    val focused = LocalWindowInfo.current.isWindowFocused
+    SideEffect { dock.focused = focused }
+    return workspaceGestureCapture(dock, focused)
+}
+
+private fun Modifier.workspaceGestureCapture(dock: DockInteraction, focused: Boolean): Modifier = pointerInput(dock, focused) {
+    if (!focused) return@pointerInput
     var chromeTap: Triple<String, Long, Offset>? = null
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        val previousTap = chromeTap
-        chromeTap = null
-        if (dock.chromeRegions.values.any { it.contains(down.position) }) {
-            val tab = dock.tabs.values.firstOrNull { it.getJSONObject("bounds").let { b ->
-                Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
-            } }?.optString("panel")
-            dock.host.chrome(obj("kind" to "contact", "canvas" to false,
-                "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density))), dock.facts().put("contact_tab", tab))
-        }
-        val source = dock.hit(down.position)
-        if (source != null) {
-            // Invisible resize strips have no child button to consume their
-            // press. Do not let the underlying SurfaceView begin a stroke/pan.
-            if (source.action.getString("type") !in listOf("drag_workspace", "tile_drag")) down.consume()
-            if (currentEvent.buttons.isSecondaryPressed) {
-                source.context?.let(dock::context)
-                down.consume()
-                return@awaitEachGesture
+        dock.contactType = down.type
+        try {
+            val previousTap = chromeTap
+            chromeTap = null
+            if (dock.chromeRegions.values.any { it.contains(down.position) }) {
+                val tab = dock.tabs.values.firstOrNull { it.getJSONObject("bounds").let { b ->
+                    Rect(b.number("x"), b.number("y"), b.number("x") + b.number("width"), b.number("y") + b.number("height")).contains(down.position / dock.density)
+                } }?.optString("panel")
+                dock.host.chrome(obj("kind" to "contact", "canvas" to false,
+                    "position" to JSONArray(listOf(down.position.x / dock.density, down.position.y / dock.density))), dock.facts().put("contact_tab", tab))
             }
-            var started = false
-            var released = false
-            var held = false
-            var remaining = viewConfiguration.longPressTimeoutMillis
-            var eventTime = down.uptimeMillis
-            val divider = source.action.takeIf { it.optString("type") == "drag_divider" }?.getInt("id")
-            val group = source.action.takeIf { it.optString("type") == "drag_workspace" }?.objectOrNull("item")
-                ?.takeIf { it.optString("kind") == "group" }
-            val band = divider != null && dock.host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
-                ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
-            // The registered source distinguishes empty header/grip contacts
-            // from tabs, even inside a scrollable tab strip.
-            val tapTarget = if (band) "divider:$divider" else group?.let { "group:${it.getInt("group")}" }
-            dock.contactHeld = true
-            try {
-                do {
-                    val event = if (!held && !started && source.context != null) {
-                        withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
-                    } else awaitPointerEvent(PointerEventPass.Initial)
-                    if (event == null) {
-                        held = true
-                        source.context?.let(dock::context)
-                        continue
-                    }
-                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                    remaining = (remaining - (change.uptimeMillis - eventTime)).coerceAtLeast(1)
-                    eventTime = change.uptimeMillis
-                    // Compose represents ACTION_CANCEL as an already-consumed
-                    // release. Preserve the shared transaction before consuming it.
-                    if (!change.pressed && change.isConsumed) break
-                    if (held) change.consume()
-                    if (dock.popupOpen || !dock.enabled) break
-                    if (!started && change.pressed && (change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
-                        dock.start(source.action, down.position / dock.density, source.cursor); started = true
-                    }
-                    if (started) {
-                        change.consume()
-                        dock.move(change.position / dock.density)
-                    }
-                    if (!change.pressed) {
-                        if (started) dock.finish(false)
-                        else if (tapTarget != null && !held && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
-                            val gap = down.uptimeMillis - (previousTap?.second ?: 0)
-                            if (previousTap?.first == tapTarget &&
-                                gap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
-                                (down.position - previousTap.third).getDistance() <= viewConfiguration.touchSlop * 2) {
-                                change.consume()
-                                if (band) dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
-                                else group?.let(dock::doubleClickHandle)
-                            } else chromeTap = Triple(tapTarget, change.uptimeMillis, change.position)
+            val source = dock.hit(down.position)
+            if (source != null) {
+                // Invisible resize strips have no child button to consume their
+                // press. Do not let the underlying SurfaceView begin a stroke/pan.
+                if (source.action.getString("type") !in listOf("drag_workspace", "tile_drag")) down.consume()
+                if (currentEvent.buttons.isSecondaryPressed) {
+                    source.context?.let(dock::context)
+                    down.consume()
+                    return@awaitEachGesture
+                }
+                var started = false
+                var released = false
+                var held = false
+                var retired = false
+                var remaining = viewConfiguration.longPressTimeoutMillis
+                var eventTime = down.uptimeMillis
+                val divider = source.action.takeIf { it.optString("type") == "drag_divider" }?.getInt("id")
+                val group = source.action.takeIf { it.optString("type") == "drag_workspace" }?.objectOrNull("item")
+                    ?.takeIf { it.optString("kind") == "group" }
+                val band = divider != null && dock.host.snapshot?.getJSONObject("layout")?.array("dividers")?.objects()
+                    ?.any { it.getInt("id") == divider && it.optBoolean("band") && it.optString("axis") == "horizontal" } == true
+                // The registered source distinguishes empty header/grip contacts
+                // from tabs, even inside a scrollable tab strip.
+                val tapTarget = if (band) "divider:$divider" else group?.let { "group:${it.getInt("group")}" }
+                dock.contactHeld = true
+                dock.contactSource = source.token
+                dock.retiredContext = null
+                fun sourceExists() = dock.regions[source.token]?.action?.toString() == source.action.toString()
+                fun retire() {
+                    retired = true
+                    dock.retiredContext = source.context?.let(dock::anchorKey)
+                    dock.closeContext()
+                }
+                try {
+                    do {
+                        val event = if (!retired && !held && !started && (source.holdToDrag || source.context != null)) {
+                            withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
+                        } else awaitPointerEvent(PointerEventPass.Initial)
+                        if (event == null) {
+                            if (!sourceExists() || dock.popupOpen || !dock.enabled) { retire(); continue }
+                            held = true
+                            source.context?.let(dock::holdContext)
+                            continue
                         }
-                        released = true; break
-                    }
-                } while (true)
-            } finally {
-                if (started && !released) dock.finish(true)
-                dock.contactHeld = false
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        remaining = (remaining - (change.uptimeMillis - eventTime)).coerceAtLeast(1)
+                        eventTime = change.uptimeMillis
+                        // Compose represents ACTION_CANCEL as an already-consumed
+                        // release. Preserve the shared transaction before consuming it.
+                        if (!change.pressed && change.isConsumed) break
+                        if (held) change.consume()
+                        if (dock.popupOpen || !dock.enabled) break
+                        if (!started && !retired && !sourceExists()) retire()
+                        val moved = (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                        // A tile hold must be stationary. Retiring it leaves motion
+                        // unconsumed for its scroll container, even after a pause.
+                        if (!started && !retired && source.holdToDrag && !held && moved) retire()
+                        if (!started && !retired && change.pressed && moved && (!source.holdToDrag || held)) {
+                            dock.start(source.action, down.position / dock.density, source.cursor); started = true
+                        }
+                        if (started) {
+                            change.consume()
+                            dock.move(change.position / dock.density)
+                        }
+                        if (!change.pressed) {
+                            if (retired) change.consume()
+                            if (started) dock.finish(false)
+                            else if (tapTarget != null && !held && !retired && change.uptimeMillis - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
+                                val gap = down.uptimeMillis - (previousTap?.second ?: 0)
+                                if (previousTap?.first == tapTarget &&
+                                    gap in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis &&
+                                    (down.position - previousTap.third).getDistance() <= viewConfiguration.touchSlop * 2) {
+                                    change.consume()
+                                    if (band) dock.host.dispatch(obj("type" to "reset_column_width", "id" to divider, "viewport" to dock.viewport))
+                                    else group?.let(dock::doubleClickHandle)
+                                } else chromeTap = Triple(tapTarget, change.uptimeMillis, change.position)
+                            }
+                            released = true; break
+                        }
+                    } while (true)
+                } finally {
+                    if (started && !released) dock.finish(true)
+                    if (!released) dock.closeContext()
+                    dock.contactHeld = false
+                    dock.contactSource = null
+                    dock.retiredContext = null
+                }
             }
-        }
+            // Non-draggable chrome (including Zen projections) still needs the
+            // original device when a child delivers its native long-click callback.
+            while (currentEvent.changes.any { it.pressed }) awaitPointerEvent(PointerEventPass.Final)
+        } finally { dock.contactType = null }
     }
 }
 

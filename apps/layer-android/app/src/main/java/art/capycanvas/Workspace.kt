@@ -375,7 +375,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     if (currentEvent.buttons.isSecondaryPressed) { down.consume(); dock.context(target) }
                 }
             },
-        onLongClick = { dock.context(target) }, iconSize = host.catalog.getInt("zen_icon_size").dp,
+        onLongClick = { dock.holdContext(target) }, iconSize = host.catalog.getInt("zen_icon_size").dp,
         selectedColor = colors.text.copy(alpha = .08f)) { host.invoke("zen_mode") }
 }
 
@@ -437,7 +437,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             if (tabsVisible) PanelHeaderFeedback {
                 Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                        onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
+                        onLongClick = { dock.holdContext(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f).onGloballyPositioned { dock.tabClips[group.getInt("id")] = it.boundsInRoot().translate(-dock.origin) }
                         .horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
                         group.array("panels").values().forEachIndexed { index, id ->
@@ -457,7 +457,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                     }
                     Box(Modifier.width(20.dp).height(36.dp).testTag("group-grip-${group.getInt("id")}")
                         .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
-                            onLongClick = { dock.context(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
+                            onLongClick = { dock.holdContext(obj("kind" to "group", "group" to group.getInt("id"))) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group") }
                 }
             }
             Box(Modifier.weight(1f).testTag("panel-body-$active")) {
@@ -467,7 +467,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
             group.objectOrNull("footer_grip")?.let { grip ->
                 Box(Modifier.fillMaxWidth().height(grip.number("height").dp).testTag("group-grip-${group.getInt("id")}").dragSource(dock, groupItem)
                     .combinedClickable(onClick = {},
-                        onLongClick = { dock.context(groupItem) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group", vertical = true) }
+                        onLongClick = { dock.holdContext(groupItem) }), contentAlignment = Alignment.Center) { PanelGrip("Move panel group", vertical = true) }
             }
         }
     }

@@ -32,11 +32,13 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -183,6 +185,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
                     LayerRow(host,layer,view.optLong("rename_layer"),images,Modifier.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
                         context={mask,point -> contextMenu(layer,mask,point)},
                         held={contactHeld=it},
+                        cancelContext={menuGeneration++; menu=null},
                         drag={point,finished,cancelled ->
                             val origin=bounds[id] ?: return@LayerRow
                             if (finished) {
@@ -208,7 +211,7 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             }
         }
         drag?.let { d -> layers.find { it.getLong("id")==d.id }?.let { layer ->
-            LayerRow(host,layer,-1,images,Modifier.offset { IntOffset(0,(d.pointer.y-panelOrigin.y-20*density.density).roundToInt()) }
+            LayerRow(host,layer,-1,images,Modifier.testTag("layer-drag-preview").offset { IntOffset(0,(d.pointer.y-panelOrigin.y-20*density.density).roundToInt()) }
                 .alpha(.7f).background(colors.panel),preview=true)
         } }
         if (menu!=null) Box(Modifier.offset { IntOffset(menuPoint.x.roundToInt(),menuPoint.y.roundToInt()) }.size(1.dp)) {
@@ -229,16 +232,24 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
 }
 
 @Composable private fun LayerRow(host:CanvasHost,layer:JSONObject,rename:Long,images:Map<String,ImageBitmap>,modifier:Modifier=Modifier,highlight:Int=0,
-    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},held:(Boolean)->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
+    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
     val colors=LocalPalette.current
     val id=layer.getLong("id")
     val latest by rememberUpdatedState(layer)
     var origin by remember { mutableStateOf(Offset.Zero) }
     var press by remember { mutableStateOf(Offset.Zero) }
     var longPressed by remember { mutableStateOf(false) }
+    var contactActive by remember { mutableStateOf(false) }
+    var contactMenus by remember { mutableStateOf(true) }
+    var holdEligible by remember { mutableStateOf(false) }
+    var maskBounds by remember { mutableStateOf(Rect.Zero) }
+    val focused=LocalWindowInfo.current.isWindowFocused
     val density=LocalDensity.current.density
     fun select(mask:Boolean=false) = host.layer(obj("op" to "select","id" to id,"mask" to mask))
-    fun openContext(mask:Boolean) { longPressed=true; context(mask,origin+press) }
+    fun openContext(mask:Boolean) {
+        if (!focused || (contactActive && !contactMenus)) return
+        if (!contactActive || (holdEligible && !longPressed)) { longPressed=true; context(mask,origin+press) }
+    }
     Row(modifier.fillMaxWidth().heightIn(min=40.dp).then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned { origin=it.boundsInRoot().topLeft }
         .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
         .drawWithContent {
@@ -246,25 +257,50 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             when(highlight) { 1 -> drawLine(colors.accent,Offset.Zero,Offset(size.width,0f),2*density)
                 2 -> drawLine(colors.accent,Offset(0f,size.height),Offset(size.width,size.height),2*density)
                 3 -> drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density)) }
-        }.then(if(preview) Modifier else Modifier.pointerInput(id) {
+        }.then(if(preview || rename==id) Modifier else Modifier.pointerInput(id,focused) {
+            if (!focused) return@pointerInput
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
                 longPressed=false
+                contactActive=true
+                holdEligible=true
                 val row=latest
-                val directDrag=down.type!=PointerType.Touch || down.position.x>=size.width-20*density
+                val directDrag=down.type==PointerType.Mouse || down.position.x>=size.width-20*density
+                val secondary=currentEvent.buttons.isSecondaryPressed
+                contactMenus=down.type!=PointerType.Mouse || secondary
                 var dragging=false
+                var released=false
+                var remaining=viewConfiguration.longPressTimeoutMillis
+                var eventTime=down.uptimeMillis
                 held(true)
+                if (secondary) { openContext(row.getBoolean("has_mask") && maskBounds.contains(origin+press)); down.consume() }
                 try { do {
-                    val event=awaitPointerEvent(PointerEventPass.Initial); val change=event.changes.find { it.id==down.id } ?: break
+                    val event=if (holdEligible && !longPressed && !dragging) {
+                        withTimeoutOrNull(remaining) { awaitPointerEvent(PointerEventPass.Initial) }
+                    } else awaitPointerEvent(PointerEventPass.Initial)
+                    if (event==null) {
+                        if (contactMenus) openContext(row.getBoolean("has_mask") && maskBounds.contains(origin+press))
+                        else longPressed=true // Mouse holds suppress clicks without opening menus.
+                        continue
+                    }
+                    val change=event.changes.find { it.id==down.id } ?: break
+                    remaining=(remaining-(change.uptimeMillis-eventTime)).coerceAtLeast(1)
+                    eventTime=change.uptimeMillis
                     if (!change.pressed && change.isConsumed) break
-                    // Ordinary finger movement scrolls the list. Once a row's
-                    // context menu opens, the same contact can reorder it.
-                    if (row.getBoolean("can_drop_below") && (directDrag || longPressed) && !dragging && change.pressed &&
-                        (change.position-down.position).getDistance()>6*density) dragging=true
+                    val moved=(change.position-down.position).getDistance()>viewConfiguration.touchSlop
+                    // Touch and pen keep native scrolling until a stationary
+                    // hold wins. Explicit grips and mouse bodies are immediate.
+                    if (!directDrag && !longPressed && moved) holdEligible=false
+                    if (!secondary && row.getBoolean("can_drop_below") && (directDrag || longPressed) && !dragging && change.pressed &&
+                        moved) { dragging=true; holdEligible=false }
                     if (dragging) { change.consume(); drag(origin+change.position,!change.pressed,false); if(!change.pressed)dragging=false }
                     if (longPressed) change.consume()
-                    if (!change.pressed) break
-                } while(true) } finally { if(dragging)drag(origin+down.position,true,true); longPressed=false; held(false) }
+                    if (!change.pressed) { released=true; break }
+                } while(true) } finally {
+                    if(dragging)drag(origin+down.position,true,true)
+                    if(!released)cancelContext()
+                    longPressed=false; holdEligible=false; contactActive=false; contactMenus=true; held(false)
+                }
             }
         }.combinedClickable(onClick={select()},onLongClick={openContext(false)}))
         .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
@@ -280,7 +316,8 @@ private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
             val label=if(group) "Expand or collapse group" else if(mask) "Edit layer mask" else "Edit layer content"
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp)) {
-            Box(Modifier.fillMaxSize().then(if(group)Modifier else Modifier.background(colors.input,RoundedCornerShape(3.dp)))
+            Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
+                .then(if(group)Modifier else Modifier.background(colors.input,RoundedCornerShape(3.dp)))
                 .combinedClickable(onClick={host.layer(operation)},onLongClick={openContext(mask)})
                 .drawWithContent {
                     drawContent()

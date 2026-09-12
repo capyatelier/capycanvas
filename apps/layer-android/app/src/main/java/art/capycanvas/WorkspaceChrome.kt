@@ -131,9 +131,9 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                 } }
                                 val shape = drawerButtonShape(if (selected) dock.drawerSources[id.toString()]?.direction else null)
                                 Box(Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
-                                    .testTag("column-icon-$panel").contextAnchor(dock, target)
+                                    .testTag("column-icon-$panel").dragSource(dock, target, holdToDrag = true)
                                     .clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
-                                    .combinedClickable(onLongClick = { dock.context(target) }, onClick = {
+                                    .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
                                         host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
                                     }), contentAlignment = Alignment.Center) {
                                     SharedIcon(view.getString("icon"), view.getString("title"))
