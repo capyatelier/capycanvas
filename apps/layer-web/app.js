@@ -897,6 +897,14 @@ workspace.addEventListener("workspace-context-claimed", e => {
   } else endWorkspaceGesture(null, true);
 });
 workspace.addEventListener("dblclick", e => {
+  const column = e.target.closest(".collapsed-column");
+  if (column && !e.target.closest("button")) {
+    e.preventDefault(); e.stopPropagation();
+    dispatch({ type: "customize", action: {
+      type: "set_column_collapsed", group: Number(column.dataset.column), collapsed: false,
+    } });
+    return;
+  }
   if (e.target.closest(".dock-tab")) return;
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
