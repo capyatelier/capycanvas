@@ -20,6 +20,14 @@ pub(crate) struct ManagerUi {
     split: gtk::Paned,
     sidebar: gtk::Box,
     details_view: gtk::ScrolledWindow,
+    apply: gtk::Button,
+    footer: gtk::Box,
+    create: gtk::Button,
+    create_action: RefCell<Option<ManagerAction>>,
+    primary: RefCell<Option<ManagerAction>>,
+    preview: RefCell<Option<history::Preview>>,
+    preview_epoch: Cell<u64>,
+    action_pending: Cell<bool>,
 }
 impl ManagerUi {
     pub fn new() -> Self {
@@ -31,6 +39,9 @@ impl ManagerUi {
         dialog.set_widget_name("workspace-manager");
         let view = adw::ToolbarView::new();
         let header = adw::HeaderBar::new();
+        let create = gtk::Button::from_icon_name("list-add-symbolic");
+        create.set_widget_name("workspace-manager-new");
+        header.pack_end(&create);
         view.add_top_bar(&header);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
         margins(&body, 18);
@@ -79,6 +90,23 @@ impl ManagerUi {
             .build();
         split.set_end_child(Some(&details_view));
         body.append(&split);
+        let apply = gtk::Button::with_label("Switch to Workspace");
+        apply.set_widget_name("workspace-manager-apply");
+        apply.add_css_class("suggested-action");
+        apply.set_sensitive(false);
+        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        footer.set_homogeneous(true);
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.connect_clicked(glib::clone!(
+            #[weak]
+            dialog,
+            move |_| {
+                dialog.close();
+            }
+        ));
+        footer.append(&cancel);
+        footer.append(&apply);
+        body.append(&footer);
         view.set_content(Some(&body));
         dialog.set_child(Some(&view));
         Self {
@@ -99,13 +127,44 @@ impl ManagerUi {
             split,
             sidebar,
             details_view,
+            apply,
+            footer,
+            create,
+            create_action: RefCell::new(None),
+            primary: RefCell::new(None),
+            preview: RefCell::new(None),
+            preview_epoch: Cell::new(0),
+            action_pending: Cell::new(false),
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
         self.dialog.connect_closed(glib::clone!(
             #[weak]
             w,
-            move |_| w.workspaces.ui.presented.set(false)
+            move |_| {
+                w.workspaces.ui.presented.set(false);
+                w.workspaces.ui.stop_preview();
+            }
+        ));
+        self.apply.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                let action = w.workspaces.ui.primary.borrow().clone();
+                if let Some(action) = action {
+                    w.workspaces.ui.run(&w, action);
+                }
+            }
+        ));
+        self.create.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            move |_| {
+                let action = w.workspaces.ui.create_action.borrow().clone();
+                if let Some(action) = action {
+                    w.workspaces.ui.run(&w, action);
+                }
+            }
         ));
         self.search.connect_search_changed(glib::clone!(
             #[weak]
@@ -133,16 +192,7 @@ impl ManagerUi {
                     w.workspaces.ui.page.get(),
                     ManagerPage::Workspaces | ManagerPage::Templates
                 ) {
-                    if let Some(id) = w.workspaces.ui.rows.borrow().get(row.index() as usize) {
-                        w.workspaces.ui.run(
-                            &w,
-                            if w.workspaces.ui.page.get() == ManagerPage::Templates {
-                                ManagerAction::UseTemplate(id.clone())
-                            } else {
-                                workspace_primary(&w, id)
-                            },
-                        );
-                    }
+                    w.workspaces.ui.list.select_row(Some(row));
                     return;
                 }
                 // Enter selects a row; the explicitly labeled primary button applies it.
@@ -154,6 +204,9 @@ impl ManagerUi {
         ));
     }
     pub fn show(&self, w: &Rc<Workspace>, page: ManagerPage) {
+        self.stop_preview();
+        self.presented.set(true);
+        *self.selected.borrow_mut() = None;
         self.page.set(page);
         self.search.set_text("");
         self.note.set_visible(false);
@@ -170,15 +223,18 @@ impl ManagerUi {
         }));
         margins(&empty, 18);
         self.list.set_placeholder(Some(&empty));
-        self.list.set_selection_mode(if compact {
-            gtk::SelectionMode::None
+        self.list.set_selection_mode(gtk::SelectionMode::Single);
+        self.footer.set_visible(compact);
+        self.create.set_visible(compact);
+        self.apply.set_label(if page == ManagerPage::Templates {
+            "Load Layout"
         } else {
-            gtk::SelectionMode::Single
+            "Switch to Workspace"
         });
         self.dialog
-            .set_content_width(if compact { 520 } else { 780 });
+            .set_content_width(if compact { 460 } else { 780 });
         self.dialog
-            .set_content_height(if compact { 540 } else { 600 });
+            .set_content_height(if compact { 500 } else { 600 });
         self.split.set_start_child(Some(&self.sidebar));
         self.split.set_end_child(if compact {
             None
@@ -186,10 +242,14 @@ impl ManagerUi {
             Some(&self.details_view)
         });
         self.intro.set_text(match page {
-            ManagerPage::Workspaces=>"Switch between layouts you use for different tasks. Your changes to the layout are saved automatically as you move tools and panels around.",
-            ManagerPage::Templates=>"Workspace Templates save the exact layout of your tools and panels so you can load it again whenever you want. Use Layout applies a saved layout to your current workspace.",
-            ManagerPage::ThisWorkspace=>"Show, hide, or customize the toolbars in this workspace.",
-            ManagerPage::ToolbarLibrary=>"Save your favorite toolbar setups here, then add them to any workspace.",
+            ManagerPage::Workspaces => {
+                "Workspaces save your tool and panel layouts for different tasks."
+            }
+            ManagerPage::Templates => {
+                "Workspace Templates save tool and panel layouts to reuse in any workspace."
+            }
+            ManagerPage::ThisWorkspace => "Arrange the toolbars in this workspace.",
+            ManagerPage::ToolbarLibrary => "Save toolbars to reuse in any workspace.",
         });
         self.intro.set_visible(true);
         self.dialog.set_title(if toolbar {
@@ -224,13 +284,15 @@ impl ManagerUi {
                 .map(ManagerAction::SaveAsTemplate),
             _ => None,
         };
-        if let Some(action) = action {
-            let button = action_button(w, action, false, true);
-            if page == ManagerPage::Templates {
-                button.set_label("Save Current Layout…");
-            }
-            self.actions.append(&button);
-        }
+        *self.create_action.borrow_mut() = action;
+        let create_label = if page == ManagerPage::Templates {
+            "Save Current Layout as Workspace Template"
+        } else {
+            "New Workspace"
+        };
+        self.create.set_tooltip_text(Some(create_label));
+        self.create
+            .update_property(&[gtk::accessible::Property::Label(create_label)]);
         if page == ManagerPage::ThisWorkspace {
             let button = gtk::Button::with_label("New Toolbar…");
             button.connect_clicked(glib::clone!(
@@ -243,14 +305,20 @@ impl ManagerUi {
             self.actions.append(&button);
         }
         self.rows(w);
-        self.presented.set(true);
         self.dialog.present(Some(&w.window));
+        self.start_preview(w);
+        let epoch = self.preview_epoch.get();
         let manager = w.workspaces.manager.as_ref().unwrap().clone();
         glib::spawn_future_local(glib::clone!(
             #[weak]
             w,
             async move {
-                match manager.refresh().await {
+                let result = manager.refresh().await;
+                if !w.workspaces.ui.presented.get() || w.workspaces.ui.preview_epoch.get() != epoch
+                {
+                    return;
+                }
+                match result {
                     Ok(()) => {
                         w.workspaces.sync_binding(&w);
                         w.workspaces.ui.rows(&w);
@@ -271,14 +339,18 @@ impl ManagerUi {
         );
         self.search
             .set_visible(!compact || rows.len() > 7 || !self.search.text().is_empty());
-        let selected = self.selected.borrow().clone();
+        let selected = self.selected.borrow().clone().or_else(|| {
+            (self.page.get() == ManagerPage::Workspaces)
+                .then(|| manager.active_id())
+                .flatten()
+        });
         self.rebuilding.set(true);
         self.list.remove_all();
         self.rows.borrow_mut().clear();
-        let mut selected_index = 0;
+        let mut selected_index = if compact { None } else { Some(0) };
         for (index, item) in rows.into_iter().enumerate() {
             if selected.as_ref() == Some(&item.id) {
-                selected_index = index;
+                selected_index = Some(index);
             }
             let row = adw::ActionRow::builder()
                 .title(&item.title)
@@ -291,15 +363,6 @@ impl ManagerUi {
                 let active = !templates && manager.active_id().as_deref() == Some(&item.id);
                 if active {
                     row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
-                } else {
-                    let action = if templates {
-                        ManagerAction::UseTemplate(item.id.clone())
-                    } else {
-                        workspace_primary(w, &item.id)
-                    };
-                    let switch = action_button(w, action, false, true);
-                    switch.set_valign(gtk::Align::Center);
-                    row.add_suffix(&switch);
                 }
                 let elsewhere = manager.items().iter().any(|i| {
                     i.id == item.id
@@ -333,9 +396,12 @@ impl ManagerUi {
             self.rows.borrow_mut().push(item.id);
             self.list.append(&row);
         }
+        let row = selected_index.and_then(|index| self.list.row_at_index(index as i32));
+        self.list.select_row(row.as_ref());
+        *self.selected.borrow_mut() =
+            row.and_then(|row| self.rows.borrow().get(row.index() as usize).cloned());
         self.rebuilding.set(false);
-        self.list
-            .select_row(self.list.row_at_index(selected_index as i32).as_ref());
+        self.selection(w);
         if self.rows.borrow().is_empty() {
             clear(&self.details);
             self.details
@@ -347,6 +413,7 @@ impl ManagerUi {
             self.page.get(),
             ManagerPage::Workspaces | ManagerPage::Templates
         ) {
+            self.preview_selection(w);
             return;
         }
         let generation = self.generation.get().wrapping_add(1);
@@ -371,10 +438,7 @@ impl ManagerUi {
             let visible = capture.history.layout().panel_group(panel).is_some();
             let details = ManagerDetails {
                 title: config.title().into(),
-                description: format!(
-                    "Toolbar in {}. Changes are saved with this workspace and can be recovered in Layout History.",
-                    current.metadata.name
-                ),
+                description: format!("Toolbar in {}.", current.metadata.name),
                 preview: None,
                 actions: [
                     ManagerAction::ShowToolbar(panel, !visible),
@@ -430,6 +494,129 @@ impl ManagerUi {
             }
         ));
     }
+    fn stop_preview(&self) {
+        self.preview_epoch
+            .set(self.preview_epoch.get().wrapping_add(1));
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.apply.set_sensitive(false);
+        *self.primary.borrow_mut() = None;
+        let preview = self.preview.borrow_mut().take();
+        drop(preview);
+    }
+    fn start_preview(&self, w: &Rc<Workspace>) {
+        if !self.presented.get()
+            || self.action_pending.get()
+            || !matches!(
+                self.page.get(),
+                ManagerPage::Workspaces | ManagerPage::Templates
+            )
+        {
+            return;
+        }
+        self.stop_preview();
+        self.sidebar.set_sensitive(false);
+        self.create.set_sensitive(false);
+        let epoch = self.preview_epoch.get();
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                let ui = &w.workspaces.ui;
+                while w.workspaces.busy.get() {
+                    if ui.preview_epoch.get() != epoch || !ui.presented.get() {
+                        return;
+                    }
+                    glib::timeout_future(Duration::from_millis(10)).await;
+                }
+                if ui.preview_epoch.get() != epoch || !ui.presented.get() {
+                    return;
+                }
+                let preview = history::Preview::begin(&w).await;
+                if ui.preview_epoch.get() != epoch || !ui.presented.get() {
+                    return;
+                }
+                ui.sidebar.set_sensitive(true);
+                ui.create.set_sensitive(true);
+                match preview {
+                    Ok(preview) => {
+                        *ui.preview.borrow_mut() = Some(preview);
+                        ui.preview_selection(&w);
+                    }
+                    Err(error) => ui.error(&error.to_string()),
+                }
+            }
+        ));
+    }
+    fn preview_selection(&self, w: &Rc<Workspace>) {
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        self.apply.set_sensitive(false);
+        *self.primary.borrow_mut() = None;
+        if !self.presented.get() || self.action_pending.get() {
+            return;
+        }
+        let preview = self.preview.borrow();
+        let Some(preview) = preview.as_ref() else {
+            return;
+        };
+        preview.reset();
+        let Some(id) = self.selected.borrow().clone() else {
+            return;
+        };
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                let stored = w.workspaces.selected(&id).await;
+                let ui = &w.workspaces.ui;
+                if ui.generation.get() != generation
+                    || !ui.presented.get()
+                    || ui.preview.borrow().is_none()
+                {
+                    return;
+                }
+                let result = stored.and_then(|stored| {
+                    if stored.entity.metadata.deleted_at_ms.is_some() {
+                        return Err(StoreError::invalid(
+                            "This item was deleted. Choose another layout.",
+                        ));
+                    }
+                    let details =
+                        w.workspaces
+                            .manager
+                            .as_ref()
+                            .unwrap()
+                            .details(&stored, true, now_ms());
+                    let layout = details.preview.ok_or_else(|| {
+                        StoreError::invalid("This item has no layout to preview.")
+                    })?;
+                    let change = w
+                        .gpu
+                        .borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .session
+                        .preview_workspace_layout(&layout)
+                        .map_err(StoreError::invalid)?;
+                    w.changed(Ok(change));
+                    Ok(details.actions.into_iter().find(|action| action.primary))
+                });
+                match result {
+                    Ok(Some(primary)) => {
+                        ui.apply.set_label(match &primary.action {
+                            ManagerAction::UseTemplate(_) => "Load Layout",
+                            ManagerAction::SwitchToWindow(_) => "Switch to Window",
+                            _ => "Switch to Workspace",
+                        });
+                        ui.apply.set_sensitive(primary.enabled);
+                        *ui.primary.borrow_mut() = primary.enabled.then_some(primary.action);
+                    }
+                    Ok(None) => (),
+                    Err(error) => ui.error(&error.to_string()),
+                }
+            }
+        ));
+    }
     fn render(&self, w: &Rc<Workspace>, details: ManagerDetails) {
         clear(&self.details);
         let title = gtk::Label::new(Some(&details.title));
@@ -466,21 +653,38 @@ impl ManagerUi {
         self.note.set_visible(true);
     }
     pub fn close(&self) {
+        self.stop_preview();
         if self.presented.replace(false) {
             self.dialog.close();
         }
     }
     pub fn run(&self, w: &Rc<Workspace>, action: ManagerAction) {
+        if self.action_pending.replace(true) {
+            return;
+        }
+        self.stop_preview();
+        self.sidebar.set_sensitive(false);
+        self.create.set_sensitive(false);
         self.note.set_visible(false);
         glib::spawn_future_local(glib::clone!(
             #[weak]
             w,
             async move {
+                // A cancelled preview may still be waiting for an earlier save.
+                while w.workspaces.busy.get() {
+                    glib::timeout_future(Duration::from_millis(10)).await;
+                }
                 if let Err(error) = w.workspaces.perform(&w, action).await {
                     w.workspaces.ui.error(&error.to_string());
                 }
+                w.workspaces.ui.action_pending.set(false);
+                w.workspaces.ui.sidebar.set_sensitive(true);
+                w.workspaces.ui.create.set_sensitive(true);
                 w.workspaces.sync_binding(&w);
-                w.workspaces.ui.rows(&w);
+                if w.workspaces.ui.presented.get() {
+                    w.workspaces.ui.rows(&w);
+                    w.workspaces.ui.start_preview(&w);
+                }
             }
         ));
     }
@@ -490,19 +694,6 @@ fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
     widget.set_margin_bottom(value);
     widget.set_margin_start(value);
     widget.set_margin_end(value);
-}
-fn workspace_primary(w: &Workspace, id: &str) -> ManagerAction {
-    let manager = w.workspaces.manager.as_ref().unwrap();
-    if manager.items().iter().any(|i| {
-        i.id == id
-            && i.claim
-                .as_ref()
-                .is_some_and(|c| c.owner != manager.owner && c.expires_at_ms > now_ms())
-    }) {
-        ManagerAction::SwitchToWindow(id.into())
-    } else {
-        ManagerAction::Switch(id.into())
-    }
 }
 fn actions_menu(w: &Rc<Workspace>, label: &str, actions: Vec<ManagerButton>) -> gtk::MenuButton {
     let menu = gtk::MenuButton::builder()

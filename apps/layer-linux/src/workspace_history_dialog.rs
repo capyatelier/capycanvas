@@ -1,24 +1,93 @@
 //! A temporary layout preview, committed only by Restore This Version.
 use super::*;
 
-struct Preview<'a> {
-    workspace: &'a Rc<Workspace>,
+/// Owns the transient layout and its lease until a dialog closes or applies it.
+/// Weak ownership lets a window disappear without keeping its widgets alive.
+pub(super) struct Preview {
+    workspace: std::rc::Weak<Workspace>,
     renewal: Option<glib::SourceId>,
+    operation: Option<actions::OperationGuard>,
 }
-impl Drop for Preview<'_> {
+impl Preview {
+    pub async fn begin(w: &Rc<Workspace>) -> Result<Self, StoreError> {
+        let operation = w.workspaces.begin_operation(w).await?;
+        w.workspaces.manager.as_ref().unwrap().flush().await?;
+        w.gpu
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .session
+            .begin_workspace_layout_preview()
+            .map_err(StoreError::invalid)?;
+        let renewal = glib::timeout_add_local(
+            Duration::from_millis(layer_workspace::OWNER_RENEW_MS),
+            glib::clone!(
+                #[weak]
+                w,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || {
+                    glib::spawn_future_local(glib::clone!(
+                        #[weak]
+                        w,
+                        async move {
+                            if let Some(manager) = &w.workspaces.manager
+                                && let Err(error) = manager.renew().await
+                            {
+                                w.workspaces.show_error(error);
+                                w.workspaces.update_status();
+                            }
+                        }
+                    ));
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
+        Ok(Self {
+            workspace: Rc::downgrade(w),
+            renewal: Some(renewal),
+            operation: Some(operation),
+        })
+    }
+    fn restore(&self) {
+        if let Some(w) = self.workspace.upgrade() {
+            let change = w
+                .gpu
+                .borrow_mut()
+                .as_mut()
+                .map(|g| g.session.cancel_workspace_layout_preview());
+            if let Some(change) = change {
+                w.changed(Ok(change));
+            }
+        }
+    }
+    pub fn reset(&self) {
+        self.restore();
+        if let Some(w) = self.workspace.upgrade() {
+            let result = w
+                .gpu
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .session
+                .begin_workspace_layout_preview();
+            if let Err(error) = result {
+                w.workspaces.ui.error(&error);
+            }
+        }
+    }
+    /// Restore presentation while retaining the operation lock for a commit.
+    fn finish(mut self) -> actions::OperationGuard {
+        self.restore();
+        self.operation.take().unwrap()
+    }
+}
+impl Drop for Preview {
     fn drop(&mut self) {
         if let Some(source) = self.renewal.take() {
             source.remove();
         }
-        let change = self
-            .workspace
-            .gpu
-            .borrow_mut()
-            .as_mut()
-            .map(|g| g.session.cancel_workspace_layout_preview());
-        if let Some(change) = change {
-            self.workspace.changed(Ok(change));
-        }
+        self.restore();
     }
 }
 pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> {
@@ -28,8 +97,7 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
             "Switch to this workspace to view its layout history.",
         ));
     }
-    let _operation = w.workspaces.begin_operation(w).await?;
-    manager.flush().await?;
+    let preview = Preview::begin(w).await?;
     let capture = manager
         .current()
         .ok_or_else(|| StoreError::invalid("Open a workspace first."))?
@@ -76,41 +144,6 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
     let current = capture.history.current;
     let selected = Rc::new(RefCell::new(current.clone()));
     let versions = Rc::new(versions);
-    w.gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
-        .begin_workspace_layout_preview()
-        .map_err(StoreError::invalid)?;
-    let renewal = glib::timeout_add_local(
-        Duration::from_millis(layer_workspace::OWNER_RENEW_MS),
-        glib::clone!(
-            #[weak]
-            w,
-            #[upgrade_or]
-            glib::ControlFlow::Break,
-            move || {
-                glib::spawn_future_local(glib::clone!(
-                    #[weak]
-                    w,
-                    async move {
-                        if let Some(manager) = &w.workspaces.manager
-                            && let Err(error) = manager.renew().await
-                        {
-                            w.workspaces.show_error(error);
-                            w.workspaces.update_status();
-                        }
-                    }
-                ));
-                glib::ControlFlow::Continue
-            }
-        ),
-    );
-    let preview = Preview {
-        workspace: w,
-        renewal: Some(renewal),
-    };
     let dialog = adw::AlertDialog::builder()
         .heading("Layout History")
         .build();
@@ -205,7 +238,7 @@ pub(super) async fn show(w: &Rc<Workspace>, id: &str) -> Result<(), StoreError> 
     );
     w.workspaces.ui.close();
     let response = dialog.choose_future(Some(&w.window)).await;
-    drop(preview);
+    let _operation = preview.finish();
     if response == "restore" {
         let selected = selected.borrow().clone();
         match manager.change_layout(id, Some(&selected), now_ms()).await {

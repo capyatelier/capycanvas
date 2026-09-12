@@ -229,7 +229,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_history.generation()
     }
 
-    /// History browsing changes only the presented layout. Every durable
+    /// Layout browsing changes only the presented layout. Every durable
     /// capture still sees the layout from before the preview was opened.
     pub fn begin_workspace_layout_preview(&mut self) -> Result<(), String> {
         self.require_workspace_idle()?;
@@ -241,7 +241,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn preview_workspace_layout(&mut self, layout: &DockLayout) -> Result<UiChange, String> {
         if self.workspace_preview.is_none() {
-            return Err("Open Layout History first".into());
+            return Err("Open a layout preview first".into());
         }
         layout.validate()?;
         let insets = self.state.workspace.layout.titlebar_insets;

@@ -2,15 +2,16 @@ use super::*;
 use layer_workspace::{ItemContent, ItemKind, ManagerAction as A, ManagerPage, ReusableContent};
 
 type Result<T> = std::result::Result<T, StoreError>;
-pub(super) struct OperationGuard<'a> {
-    manager: &'a NativeWorkspaces,
-    workspace: &'a Rc<Workspace>,
+pub(super) struct OperationGuard {
+    workspace: std::rc::Weak<Workspace>,
     generation: u64,
 }
-impl Drop for OperationGuard<'_> {
+impl Drop for OperationGuard {
     fn drop(&mut self) {
-        if self.manager.operation_generation.get() == self.generation {
-            self.manager.finish_operation(self.workspace);
+        if let Some(w) = self.workspace.upgrade()
+            && w.workspaces.operation_generation.get() == self.generation
+        {
+            w.workspaces.finish_operation(&w);
         }
     }
 }
@@ -62,10 +63,7 @@ impl NativeWorkspaces {
         };
         self.perform(w, action).await.map_err(|e| e.to_string())
     }
-    pub(super) async fn begin_operation<'a>(
-        &'a self,
-        w: &'a Rc<Workspace>,
-    ) -> Result<OperationGuard<'a>> {
+    pub(super) async fn begin_operation(&self, w: &Rc<Workspace>) -> Result<OperationGuard> {
         if self.busy.get() {
             return Err(StoreError::invalid(
                 "A workspace change is already in progress.",
@@ -100,12 +98,13 @@ impl NativeWorkspaces {
             glib::timeout_future(Duration::from_millis(10)).await;
         }
         Ok(OperationGuard {
-            manager: self,
-            workspace: w,
+            workspace: Rc::downgrade(w),
             generation: self.operation_generation.get(),
         })
     }
     pub(super) fn finish_operation(&self, w: &Rc<Workspace>) {
+        self.operation_generation
+            .set(self.operation_generation.get().wrapping_add(1));
         if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
             gpu.session.end_workspace_transition();
         }
@@ -115,6 +114,13 @@ impl NativeWorkspaces {
         self.busy.set(false);
         w.surface.set_sensitive(!self.validating_owner.get());
         self.update_status();
+        if self.close_requested.get() {
+            glib::idle_add_local_once(glib::clone!(
+                #[weak]
+                w,
+                move || w.window.close()
+            ));
+        }
     }
     pub(super) async fn selected(&self, id: &str) -> Result<StoredEntity> {
         let manager = self
@@ -321,7 +327,7 @@ impl NativeWorkspaces {
                 } else {
                     return Err(StoreError::new(
                         layer_workspace::ErrorKind::OwnedElsewhere,
-                        "This workspace is open in another application window. Switch to that window to use it.",
+                        "This workspace is open in another window. Switch to that window to use it.",
                     ));
                 }
             }
@@ -333,8 +339,16 @@ impl NativeWorkspaces {
                 if choices.is_empty() {
                     return Err(StoreError::invalid("Save a toolbar to the Library first."));
                 }
-                if let Some(id) = dialog::choice_dialog(w,"Replace from Library","Choose the saved toolbar you want to use here. It will replace the tools in this toolbar. You can undo this change.","Replace Toolbar",&choices).await {
-                    self.add_toolbar(w,&id,Some(panel),None,None).await?;
+                if let Some(id) = dialog::choice_dialog(
+                    w,
+                    "Replace from Library",
+                    "Choose a saved toolbar to replace this one.",
+                    "Replace Toolbar",
+                    &choices,
+                )
+                .await
+                {
+                    self.add_toolbar(w, &id, Some(panel), None, None).await?;
                 }
             }
             A::UpdateToolbar(id) => {
@@ -351,13 +365,34 @@ impl NativeWorkspaces {
                     .map(|p| (serde_json::to_string(&p.id).unwrap(), p.title().to_string()))
                     .collect();
                 let target = self.selected(&id).await?;
-                if let Some(panel) = dialog::choice_dialog(w,"Update Saved Toolbar",&format!("Which toolbar from “{}” should replace the saved “{}”? Future additions will use this version.",source.metadata.name,target.entity.metadata.name),"Update",&choices).await {
-                    let panel: Panel = serde_json::from_str(&panel).map_err(|e|StoreError::invalid(e.to_string()))?;
+                if let Some(panel) = dialog::choice_dialog(
+                    w,
+                    "Update Saved Toolbar",
+                    &format!(
+                        "Which toolbar from “{}” should replace the saved “{}”?",
+                        source.metadata.name, target.entity.metadata.name
+                    ),
+                    "Update",
+                    &choices,
+                )
+                .await
+                {
+                    let panel: Panel = serde_json::from_str(&panel)
+                        .map_err(|e| StoreError::invalid(e.to_string()))?;
                     let _operation = self.begin_operation(w).await?;
                     let current = manager.current().unwrap().capture()?;
-                    let definition = layer_workspace::ToolbarDefinition::capture(current.history.layout().panel(panel).map_err(StoreError::invalid)?)?;
-                    let result = manager.update_reusable(&id,ReusableContent::Toolbar { definition },now_ms()).await;
-                    self.finish_operation(w); result?;
+                    let definition = layer_workspace::ToolbarDefinition::capture(
+                        current
+                            .history
+                            .layout()
+                            .panel(panel)
+                            .map_err(StoreError::invalid)?,
+                    )?;
+                    let result = manager
+                        .update_reusable(&id, ReusableContent::Toolbar { definition }, now_ms())
+                        .await;
+                    self.finish_operation(w);
+                    result?;
                 }
             }
             A::SaveAsNew | A::RetryStorage | A::RecoverInterrupted => {
@@ -419,36 +454,32 @@ impl NativeWorkspaces {
             String::new()
         };
         let (title, message, confirm) = match &action {
-            A::Rename(_) => ("Rename", "Choose a name you’ll recognize.", "Rename"),
+            A::Rename(_) => ("Rename", "", "Rename"),
             A::Duplicate(_)
                 if source
                     .as_ref()
                     .is_some_and(|s| s.entity.metadata.kind != ItemKind::Workspace) =>
             {
-                (
-                    "Duplicate",
-                    "Make a copy you can change and use separately.",
-                    "Duplicate",
-                )
+                ("Duplicate", "Make a separate copy.", "Duplicate")
             }
             A::Duplicate(_) => (
                 "Duplicate Workspace",
-                "Start with a copy of this workspace. Give it a name for the task you’ll use it for.",
+                "Copy this workspace for another task.",
                 "Duplicate and Switch",
             ),
             A::SaveAsTemplate(_) => (
                 "Save Workspace Template",
-                "A Workspace Template saves the exact layout of your tools and panels so you can load it again whenever you want. Give this layout a name, such as “Inking”.",
+                "Save this layout to reuse in any workspace.",
                 "Save Workspace Template",
             ),
             A::SaveToolbar(_) => (
                 "Save to Toolbar Library",
-                "Save these tools together so you can add the same toolbar to another workspace.",
+                "Save this toolbar to reuse in any workspace.",
                 "Save to Library",
             ),
             _ => (
                 "New Workspace",
-                "Keep a separate layout for a task, such as sketching or painting. Name your workspace and choose its starting layout. Changes are saved automatically.",
+                "Create a layout for a task, such as sketching or painting.",
                 "Create and Switch",
             ),
         };

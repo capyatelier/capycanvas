@@ -357,15 +357,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => (),
                 }
             }
-            let mut workspaces = workspace.menu(
+            let workspaces = workspace.menu(
                 self.require_workspace_idle().is_ok(),
                 durable_layout(&self.state.workspace.layout) != workspace.baseline,
             );
-            workspaces.sections.push(vec![ContextMenuItem::submenu(
+            let toolbars = ContextMenuItem::submenu(
                 "Quick Access Toolbars",
                 vec![toolbars, toolbar_actions],
-            )]);
-            menu.sections = vec![undo, vec![workspaces], panels];
+            );
+            menu.sections = vec![undo, vec![workspaces, toolbars], panels];
         }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
@@ -3923,14 +3923,10 @@ mod tests {
                 .sections
                 .iter()
                 .flatten()
-                .any(|item| item.label == "Manage workspace templates…")
+                .any(|item| item.label == "Manage Workspace Templates…")
         );
-        let toolbars = workspaces
-            .sections
-            .iter()
-            .flatten()
-            .find(|item| item.label == "Quick Access Toolbars")
-            .unwrap();
+        assert_eq!(menu.sections[1].len(), 2);
+        let toolbars = &menu.sections[1][1];
         assert_eq!(toolbars.label, "Quick Access Toolbars");
         assert!(
             toolbars.sections[0]

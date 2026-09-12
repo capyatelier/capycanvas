@@ -291,10 +291,7 @@ pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
     );
     Ok(WorkspacePrompt {
         title: "Reset Layout".into(),
-        message: format!(
-            "Return {} to its {target}? You can undo this if you change your mind.",
-            entity.metadata.name
-        ),
+        message: format!("Return {} to its {target}?", entity.metadata.name),
         confirm: "Reset Layout",
     })
 }
@@ -302,7 +299,7 @@ pub fn update_prompt(target: &Entity, source: &Entity) -> WorkspacePrompt {
     WorkspacePrompt {
         title: "Replace Saved Layout".into(),
         message: format!(
-            "Replace the layout saved in “{}” with the layout you’re using in “{}”? Choose this Workspace Template next time to start with the updated layout.",
+            "Replace the saved layout in “{}” with the layout from “{}”?",
             target.metadata.name, source.metadata.name
         ),
         confirm: "Replace Layout",

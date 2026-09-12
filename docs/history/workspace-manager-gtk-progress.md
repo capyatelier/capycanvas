@@ -344,3 +344,42 @@ its click, matching normal interaction more closely. The complete native
 manager/templates/history/lease-renewal scenario then passed three consecutive
 runs (15.84s, 15.53s, 15.39s; `/tmp/capy-workspace-review.4sfY3w`). This changes
 test interaction only; no production input-method workaround was introduced.
+
+## GTK row previews and compact managers
+
+Both workspace managers now use a compact list with Cancel and a single explicit
+Switch to Workspace / Load Layout button below it. Clicking, double-clicking,
+or pressing Enter on a row only selects and previews the layout behind the dialog.
+A square icon-only + button in the header creates a workspace or saves the current
+layout as a Workspace Template. Row options retain Rename and Delete.
+
+The managers share the history dialog's transient preview and lease renewal.
+Opening a preview flushes preceding edits; browsing adds no history or saved layout
+changes. Cancel, modal dismissal, and starting another manager action restore the
+original layout before proceeding. Selection generations discard late load results.
+Filtering away the selected row restores the original layout and disables apply.
+Window-close follows GTK's modal behavior: the first request dismisses the dialog;
+the subsequent window close saves the original layout.
+
+The workspaces introduction uses the user's exact sentence: “Workspaces save your
+tool and panel layouts for different tasks.” Workspace Template, creation, saving,
+renaming, reset, and toolbar text were shortened to remove repeated instructions.
+Quick Access Toolbars now sits directly below Workspaces in the Window menu, and
+Manage Workspace Templates uses the requested capitalization.
+
+Integrated concurrent main through `93221ce`, including retained GTK controls.
+Validation on the combined tree:
+
+- 264 shared UI tests and 32 native store/coordinator tests pass; release build
+  and diff checks pass (`/tmp/workspace-selection-shared-final.log`,
+  `/tmp/workspace-selection-build-final.log`).
+- Native manager/preview/history/lease checks pass (18.55s), including rapid row
+  selection, cancelled asynchronous loads, filtering, explicit switch/load,
+  unchanged stored layouts/history, undo/redo, and modal/window dismissal.
+- Restart/independent windows (4.13s), ownership takeover (1.48s), and failed-close
+  recovery (1.12s) pass. Logs: `/tmp/capy-workspace-review.SJaugJ`.
+- Actual pointer input opens both + dialogs, selects a row without applying it,
+  and opens Window/File/panel menus (9.95s; `/tmp/capy-workspace-menus.yuhCVY`).
+
+Fresh manager screenshots were inspected and added to the review guide. Ready
+for the next GTK review; other-host work continues to await user approval.

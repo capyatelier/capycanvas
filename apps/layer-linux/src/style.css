@@ -166,5 +166,6 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 
 .system-battery.full .battery-percent { font-size: 10px; }
 
-/* Keep the editor legible while browsing actual layouts behind the history dialog. */
-#workspace-layout-history dimming { background-color: rgb(0 0 0 / 12%); }
+/* Keep the editor legible while previewing layouts behind the workspace dialogs. */
+#workspace-layout-history dimming,
+#workspace-manager dimming { background-color: rgb(0 0 0 / 12%); }

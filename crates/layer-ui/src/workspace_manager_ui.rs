@@ -81,7 +81,7 @@ impl ManagedWorkspace {
                     command("Layout History…", WorkspaceCommand::LayoutHistory, idle),
                     command("Manage Workspaces…", WorkspaceCommand::Manage, true),
                     command(
-                        "Manage workspace templates…",
+                        "Manage Workspace Templates…",
                         WorkspaceCommand::ManageTemplates,
                         true,
                     ),

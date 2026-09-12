@@ -5,9 +5,10 @@ before adapting other hosts.
 
 ## Menus
 
-Window starts with Undo/Redo, followed by Workspaces and the direct panel rows.
-Quick Access Toolbars is inside Workspaces. Its entries keep their short names.
-Workspaces also has a separate **Manage workspace templates…** entry.
+Window starts with Undo/Redo, followed by Workspaces, Quick Access Toolbars,
+and the direct panel rows. Quick Access Toolbars sits directly below Workspaces
+in the main Window menu. Its entries keep their short names.
+Workspaces also has a separate **Manage Workspace Templates…** entry.
 
 ![Window menu](workspace-manager-gtk/window-menu.png)
 ![Workspaces submenu](workspace-manager-gtk/workspaces-menu.png)
@@ -15,28 +16,36 @@ Workspaces also has a separate **Manage workspace templates…** entry.
 
 ## Manage Workspaces
 
-The main page keeps the simple New, Switch, and Rename/Delete list. Its explanation
-now says:
+The compact dialog has a selectable list, a square **+** button at the top right,
+and Cancel / Switch to Workspace buttons below the list. Rename and Delete remain
+in each row's options menu. Its explanation is:
 
-> Switch between layouts you use for different tasks. Your changes to the layout
-> are saved automatically as you move tools and panels around.
+> Workspaces save your tool and panel layouts for different tasks.
 
-Recently Deleted, backups, import/export, storage administration, and the header
-More options menu have been removed from these workspace flows.
+Selecting or double-clicking a row previews its layout in the editor behind the
+dialog. Only Switch to Workspace finalizes the selection. Cancel or closing the
+dialog restores the original layout. Browsing does not switch the active workspace
+or change either workspace's saved layout/history.
 
-![Workspace list](workspace-manager-gtk/workspaces.png)
+![Workspace list with preview](workspace-manager-gtk/workspaces.png)
 
 ## Manage Workspace Templates
 
-This manager uses the same compact list design. Save Current Layout saves a named
-Workspace Template. Each row has Use Layout; saved entries also offer Rename and
-Delete. The included Default layout can be used directly.
+The same compact design has a **+** button to save the current layout and Cancel /
+Load Layout buttons below the list. Saved rows retain Rename and Delete. Its
+introduction is:
 
-Use Layout applies the saved layout to the **current workspace** and closes the
-manager. It is one undoable layout change. It does not open a workspace-creation
-dialog. Import, export, and version-management controls are absent.
+> Workspace Templates save tool and panel layouts to reuse in any workspace.
 
-![Workspace Template list](workspace-manager-gtk/templates.png)
+Selecting a row previews the layout without applying it. Load Layout applies the
+selection to the **current workspace** and closes the dialog, creating one undoable
+layout change. Cancel or closing restores the original layout. The included
+Default layout can also be selected and loaded.
+
+Recently Deleted, backups, import/export, and version-management controls remain
+absent from these managers.
+
+![Workspace Template list with preview](workspace-manager-gtk/templates.png)
 
 ## Layout History
 
@@ -55,4 +64,6 @@ cargo run --locked --release -p layer-linux
 ```
 
 Review Window → Workspaces, both managers, and Layout History. Save a Workspace
-Template, move a panel, then use that Workspace Template and undo the change.
+Template using **+**, move a panel, preview that Workspace Template, then load it
+and undo the change. Also preview another workspace and cancel before trying
+Switch to Workspace.

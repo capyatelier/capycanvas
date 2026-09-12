@@ -594,6 +594,7 @@ impl NativeWorkspaces {
         if self.close_ready.get() {
             return false;
         }
+        self.ui.close();
         if self.busy.get() {
             self.close_requested.set(true);
             return true;
@@ -606,7 +607,7 @@ impl NativeWorkspaces {
                 .and_then(|g| g.session.capture_workspace().ok());
             if capture.as_ref() != self.failed_snapshot.borrow().as_ref() {
                 self.show_error(StoreError::new(layer_workspace::ErrorKind::Unavailable,
-                    "Workspace storage is unavailable. Keep this window open to recover your changes with Retry or export."));
+                    "Your workspace couldn’t be saved. Keep this window open and try again."));
                 self.recover_close(w);
                 return true;
             }
@@ -638,6 +639,8 @@ impl NativeWorkspaces {
             return true;
         }
         self.busy.set(true);
+        self.operation_generation
+            .set(self.operation_generation.get().wrapping_add(1));
         w.surface.set_sensitive(false);
         glib::spawn_future_local(glib::clone!(
             #[weak]
