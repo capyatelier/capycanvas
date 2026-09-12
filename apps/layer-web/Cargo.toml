@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 layer-core = { path = "../../crates/layer-core" }
 layer-engine = { path = "../../crates/layer-engine" }
 layer-ui = { path = "../../crates/layer-ui" }
+layer-workspace = { path = "../../crates/layer-workspace" }
 layer-render = { path = "../../crates/layer-render", features = ["png"] }
 layer-render-wgpu = { path = "../../crates/layer-render-wgpu" }
 wgpu = "30.0.1"

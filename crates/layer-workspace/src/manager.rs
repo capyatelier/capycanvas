@@ -426,6 +426,91 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         Ok(())
     }
+    /// The original host preference remains untouched. The import mapping and
+    /// item are published atomically, so simultaneous or interrupted starts can
+    /// never create a second copy of the same legacy workspace.
+    pub async fn migrate_legacy_capture(
+        &self,
+        source: &str,
+        capture: WorkspaceCapture,
+        now: u64,
+    ) -> Result<()> {
+        if matches!(
+            self.store
+                .execute(StoreRequest::LegacyImport {
+                    source: source.into()
+                })
+                .await?,
+            StoreResponse::Binding(Some(_))
+        ) {
+            return Ok(());
+        }
+        let remembered = self
+            .state
+            .borrow()
+            .failed_operation
+            .clone()
+            .filter(|b| b.legacy_imports.iter().any(|(s, _)| s == source));
+        let pending = match self.store.execute(StoreRequest::Pending).await? {
+            StoreResponse::Pending(pending) => pending
+                .into_iter()
+                .find(|b| b.legacy_imports.iter().any(|(s, _)| s == source)),
+            _ => return Err(StoreError::invalid("Unexpected migration recovery reply.")),
+        };
+        let batch = if let Some(batch) = remembered.or(pending) {
+            batch
+        } else {
+            capture.validate().map_err(StoreError::invalid)?;
+            let baseline = capture.history.layout().clone();
+            let mut entity = Entity::workspace("My Workspace", capture, baseline, None, now);
+            entity.id = format!("legacy:{}", content_id(source.as_bytes()));
+            let id = entity.id.clone();
+            let mut batch = CommitBatch::prepare(
+                self.owner.clone(),
+                vec![Mutation::Create {
+                    entity,
+                    claim: false,
+                    name_policy: NamePolicy::Unique,
+                }],
+            )?;
+            batch.legacy_imports.push((source.into(), id));
+            batch
+        };
+        let operation = batch.operation_id.clone();
+        if let Err(error) = self.publish(batch).await {
+            if !matches!(
+                self.store
+                    .execute(StoreRequest::LegacyImport {
+                        source: source.into()
+                    })
+                    .await?,
+                StoreResponse::Binding(Some(_))
+            ) {
+                return Err(error);
+            }
+            // A simultaneous first start committed the same source. Retire our
+            // redundant delivery so later recovery cannot duplicate the import.
+            let mut cleanup = CommitBatch::prepare(self.owner.clone(), Vec::new())?;
+            cleanup.abandon_operations.push(operation.clone());
+            self.publish(cleanup).await?;
+            let mut state = self.state.borrow_mut();
+            if state
+                .failed_operation
+                .as_ref()
+                .is_some_and(|b| b.operation_id == operation)
+            {
+                state.failed_operation = None;
+            }
+            state
+                .older_failed_operations
+                .retain(|b| b.operation_id != operation);
+            if state.error_operation.as_ref() == Some(&operation) {
+                state.error = None;
+                state.error_operation = None;
+            }
+        }
+        Ok(())
+    }
     fn workspace_from_template(&self, template: &Entity, name: &str, now: u64) -> Result<Entity> {
         let ItemContent::Reusable { current, .. } = &template.content else {
             return Err(StoreError::invalid("Choose a saved layout."));

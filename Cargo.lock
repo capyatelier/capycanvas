@@ -956,6 +956,7 @@ dependencies = [
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
+ "layer-workspace",
  "ndk-sys",
  "pollster",
  "raw-window-handle",
@@ -1104,6 +1105,7 @@ dependencies = [
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
+ "layer-workspace",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -1138,6 +1140,8 @@ name = "layer-workspace"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "layer-host",
+ "layer-render",
  "layer-ui",
  "pollster",
  "rusqlite",
