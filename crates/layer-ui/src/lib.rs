@@ -488,8 +488,7 @@ impl CommandId {
                         | Platform::Windows
                 )
             }
-            // Windows currently replaces documents in its single native window.
-            Self::NewWindow => platform.native_windows() && platform != Platform::Windows,
+            Self::NewWindow => platform.native_windows(),
             _ => true,
         }
     }

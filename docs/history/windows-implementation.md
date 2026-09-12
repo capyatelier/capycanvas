@@ -1359,6 +1359,54 @@ and occasional shader-worker shutdown delay remain open. Final 120 Hz painting
 and physical input-to-present benchmarks remain deferred. Private profiles,
 databases, captures, traces, logs and binaries remain ignored/local.
 
+## Native New Window milestone — 2026-09-12
+
+File > New Window and the shared Ctrl+Shift+N shortcut now create native windows
+within one process. App retains each CanvasWindow by WindowId until its input
+dispatcher, renderer, storage and XAML views have completed teardown. Every
+window keeps its own independently presented canvas beneath the custom titlebar,
+document, dialogs and workspace ownership. Window creation acknowledges its source
+request once, including failure. The first window can close without terminating
+the others, and the last window still follows normal process/shader teardown.
+
+The pinned WinUI runtime passes simultaneous ContentDialogs in separate XamlRoots.
+A same-process ownership test found that ContentDialog focus restoration could
+undo Switch to Window activation. Owner activation now waits until the source
+dialog has fully unwound. Both same-process and two-process activation fixtures
+pass, including retaining the source workspace.
+
+Preferences now share a profile-scoped in-memory authority across render owners.
+New windows inherit accepted values before disk completion. Field/key differences
+against each owner's last adopted state preserve unrelated concurrent edits,
+including shortcut override removal. The shared Settings schema still validates
+the merged result. Writes remain on bounded workers and serialize replacement
+across windows; stale jobs cannot overwrite the latest state. Host callbacks
+disconnect under a fence that waits for any in-flight callback.
+
+Per-process window manifests and per-window snapshots make tests identify the
+exact HWND and model instead of relying on MainWindowHandle. The initial window
+retains legacy snapshot paths for existing single-window fixtures. Reused native
+window IDs invalidate their earlier diagnostic model before registration.
+All diagnostics, profiles, documents, captures and binaries remain opt-in/ignored/local.
+
+The combined tree passes 424 unit tests (273 UI, 24 host, 78 Windows, 49 workspace;
+three explicit GPU tests ignored), strict Windows-crate Clippy, native queue tests
+and Rust/C++ builds. New bridge tests cover concurrent unrelated settings changes,
+inheritance before persistence, stale writes, profile isolation, removed shortcuts
+and callback disconnection. The three-window native fixture passes menu/OS shortcut
+creation, simultaneous dialogs, shared preferences, independent drawing while
+another window is modal, cancel-close, closing the original first, and five-second
+zero process exit. The two-process owner-activation fixture and all five isolated
+preferences restart/failure/recovery launches also pass.
+
+Full visual/gesture/scroll/overlap parity, runtime filter-package import, toolbar
+library round-trip verification, physical pen/touch input, mixed-DPI/device/suspend
+lifecycle and distribution packaging remain open. Earlier strict GPU filter
+reference disagreement and intermittent final shader-worker shutdown delays
+remain unresolved. These passing close samples do not erase the earlier failures.
+Final sustained 120 Hz painting and input-to-present benchmarks remain deferred
+until the rest of the app is ready. This milestone does not complete the goal.
+
 ## Native task workspace manager milestone — 2026-09-12
 
 Integrated main through e21850a, including the approved workspaces-only product,

@@ -664,6 +664,33 @@ Shared and bridge tests cover pending saves, ownership takeover, failed-operatio
 identity, backup contents and worker teardown. This does not establish full manager,
 physical-device or presentation/input-latency acceptance.
 
+## Native multiple windows
+
+File > New Window and Ctrl+Shift+N create another native window in the same
+process. Each window owns its document, GPU canvas, input dispatcher, dialogs and
+workspace claim. Closing the original window leaves the others usable; process
+shutdown follows the last window. The canvas continues behind each custom titlebar.
+
+Preferences are shared between windows using the same private profile. New windows
+inherit current values, including pending saves. Independent edits merge by field
+and shortcut key, and background file replacement is serialized across windows.
+A stopped window disconnects its callbacks before its host is released.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+The fixture owns an isolated profile and checks native menu/shortcut creation,
+workspace-owner activation, simultaneous Preferences dialogs, shared values,
+independent documents, drawing while another window is modal, cancelled close,
+closing the original first, and zero process exit within five seconds. Drawing
+uses controlled replay; this is not physical input or performance acceptance.
+
+With CAPY_TRACE_UI enabled, windows-<process>.json records live window IDs/HWNDs
+and ui-state-<process>-<window>.json identifies each window's model. These local
+files can contain private state and stay ignored. The initial window also keeps
+the legacy ui-state.json path for existing single-window fixtures.
+
 ## Native task workspace management
 
 The WinUI workspace manager follows the current

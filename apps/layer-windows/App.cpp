@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "CanvasWindow.h"
 #include <fstream>
+#include <map>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 
@@ -11,7 +12,34 @@ using namespace Microsoft::UI::Xaml;
 // Workspace controls are composed directly from the shared Rust models.
 struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider metadata{nullptr};
-    std::shared_ptr<CanvasWindow> window;
+    std::map<uint64_t,std::shared_ptr<CanvasWindow>> windows;
+    bool launchedWindow=false;
+    void TraceWindows()const {
+        if(!GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))return;
+        auto name=L"windows-"+std::to_wstring(GetCurrentProcessId())+L".json",pending=name+L".pending";
+        {
+            std::ofstream stream(pending);
+            stream<<"{\"process_id\":"<<GetCurrentProcessId()<<",\"windows\":[";
+            bool comma=false;
+            for(auto const& [id,window]:windows){
+                if(comma)stream<<",";comma=true;
+                stream<<"{\"id\":"<<id<<",\"hwnd\":"<<uintptr_t(window->Handle())<<"}";
+            }
+            stream<<"]}";
+            if(!stream)return;
+        }
+        MoveFileExW(pending.c_str(),name.c_str(),MOVEFILE_REPLACE_EXISTING);
+    }
+    void AddWindow() {
+        auto next=std::make_shared<CanvasWindow>(
+            [weak=get_weak()]{if(auto self=weak.get())self->AddWindow();},
+            [weak=get_weak()](uint64_t id){if(auto self=weak.get()){self->windows.erase(id);self->TraceWindows();}},
+            !launchedWindow);
+        windows.emplace(next->Id(),next);
+        launchedWindow=true;
+        TraceWindows();
+        next->Open();
+    }
     App() {
         UnhandledException([](auto&&, UnhandledExceptionEventArgs const& event) {
             if(!GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0))return;
@@ -28,8 +56,7 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions() { return metadata.GetXmlnsDefinitions(); }
     void OnLaunched(LaunchActivatedEventArgs const&) {
         Resources().MergedDictionaries().Append(Controls::XamlControlsResources());
-        window=std::make_shared<CanvasWindow>();
-        window->Open();
+        AddWindow();
     }
 };
 }

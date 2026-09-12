@@ -41,6 +41,26 @@ void CapyLifecycle(char const* event) {
     std::ofstream("lifecycle.log",std::ios::app)
         << GetCurrentProcessId() << " " << Now() << " " << event << "\n";
 }
+CanvasWindow::CanvasWindow(std::function<void()> create,std::function<void(uint64_t)> close,bool primary)
+    :windowId(window.AppWindow().Id().Value),primaryWindow(primary),
+     createWindow(std::move(create)),onClosed(std::move(close)) {
+    // HWND/WindowId can be reused after an earlier window closes. Invalidate
+    // its old diagnostic model before publishing the new live-window manifest.
+    if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))TraceState("ui-state","{}");
+}
+HWND CanvasWindow::Handle()const {
+    HWND handle=nullptr;
+    check_hresult(window.as<IWindowNative>()->get_WindowHandle(&handle));
+    return handle;
+}
+void CanvasWindow::TraceState(char const* kind,std::string const& value)const {
+    auto name=std::string(kind)+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(windowId)+".json";
+    auto pending=name+".pending";
+    {std::ofstream stream(pending);stream<<value;if(!stream)return;}
+    MoveFileExW(to_hstring(pending).c_str(),to_hstring(name).c_str(),MOVEFILE_REPLACE_EXISTING);
+    // Preserve the initial window's paths for existing single-window fixtures.
+    if(primaryWindow)std::ofstream(std::string(kind)+".json")<<value;
+}
 CanvasWindow::~CanvasWindow() {
     { std::lock_guard lock(mutex); closing=true; paused=false; }
     wake.notify_all();space.notify_all();
@@ -48,6 +68,7 @@ CanvasWindow::~CanvasWindow() {
     if (host) capy_destroy(host);
 }
 void CanvasWindow::Open() {
+    try {
     dispatcher=Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread();
     window.Title(L"Capy Canvas");
     window.ExtendsContentIntoTitleBar(true);
@@ -129,6 +150,7 @@ void CanvasWindow::Open() {
         if(position.x!=LONG_MIN) window.AppWindow().Move({position.x,position.y});
     }
     window.Activate();
+    } catch(...) {Stop();throw;}
 }
 void CanvasWindow::Resize() {
     if(closing||closed)return;
@@ -194,6 +216,11 @@ void CanvasWindow::Start() {
         [weak=weak_from_this()](bool open){if(auto self=weak.lock())self->Popup(open);},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->Resize();},
         [weak=weak_from_this()]{if(auto self=weak.lock())self->Fullscreen();},
+        [weak=weak_from_this()]{
+            auto self=weak.lock();
+            if(!self||self->closing||!self->createWindow)throw hresult_error(E_ABORT,L"The source window is closing.");
+            self->createWindow();
+        },
         [weak=weak_from_this()](CanvasQueryKind kind,std::string json,PreviewReply reply){
             if(auto self=weak.lock())return self->RequestPreviews(kind,std::move(json),std::move(reply));return false;
         });
@@ -552,7 +579,7 @@ void CanvasWindow::Run() {
                     brushReady=ready;
                 }
                 if(!captured && !dirty && GetEnvironmentVariableW(L"CAPY_TEST_DISPLAY",nullptr,0)) {
-                    std::ofstream("canvas-state.json") << snapshot;
+                    TraceState("canvas-state",snapshot);
                     captured=true;
                 }
             }
@@ -563,7 +590,8 @@ void CanvasWindow::Run() {
                 auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(info));
                 model.Insert(L"process_id",Windows::Data::Json::JsonValue::CreateNumberValue(GetCurrentProcessId()));
                 model.Insert(L"ready_qpc_ns",Windows::Data::Json::JsonValue::CreateStringValue(to_hstring(std::to_string(Now()))));
-                std::ofstream("presentation-probe.json") << to_string(model.Stringify());
+                model.Insert(L"window_id",Windows::Data::Json::JsonValue::CreateNumberValue(double(windowId)));
+                TraceState("presentation-probe",to_string(model.Stringify()));
                 probeReady=true;
             }
             // Optional readbacks run after painting and yield to newly queued input.
@@ -661,6 +689,7 @@ void CanvasWindow::Stop() {
 void CanvasWindow::Finish() {
     if(closed||finishing||!inputDone||(renderer.joinable()&&!rendererDone.load()))return;
     if((settings&&settings->IsOpen())||(documents&&documents->IsOpen())||(workspaceDialogs&&workspaceDialogs->IsOpen())||(workspaceStorage&&workspaceStorage->IsOpen())||(workspaceManager&&workspaceManager->IsOpen()))return;
+    auto lifetime=shared_from_this(); // App may release its last reference below.
     finishing=true;
     CapyLifecycle("join_renderer");
     if(renderer.joinable()) renderer.join();
@@ -681,6 +710,7 @@ void CanvasWindow::Finish() {
     CapyLifecycle("views_released");
     closed=true;window.Close();
     CapyLifecycle("window_closed");
+    if(onClosed)onClosed(windowId);
 }
 
 void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject const& model) {
@@ -690,7 +720,8 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
     // Explicit local test evidence. This can include user state and is never
     // enabled by ordinary or presentation-probe launches.
     if(full&&GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))
-        std::ofstream("ui-state.json") << "{\"process_id\":" << GetCurrentProcessId() << ",\"model\":" << snapshot << "}";
+        TraceState("ui-state","{\"process_id\":"+std::to_string(GetCurrentProcessId())+
+            ",\"window_id\":"+std::to_string(windowId)+",\"model\":"+snapshot+"}");
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;

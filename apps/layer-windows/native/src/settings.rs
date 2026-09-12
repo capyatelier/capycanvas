@@ -267,7 +267,10 @@ impl Drop for Worker {
     }
 }
 
+mod shared;
+
 pub(crate) struct SettingsService {
+    subscription: Option<shared::Subscription>,
     worker: Result<Worker, String>,
     submitted: Option<u32>,
     load_error: Option<String>,
@@ -283,19 +286,17 @@ impl SettingsService {
         wake: impl Fn() + Send + 'static,
     ) -> Self {
         let mut load_error = None;
-        let worker = file.and_then(|mut file| {
-            match file.load() {
-                Ok(Some(settings)) => {
-                    if let Err(error) = native.dispatch(UiAction::RestoreSettings { settings }) {
-                        load_error = Some(error);
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    load_error = Some(format!("{error} Defaults are in use; the saved file will be preserved on the next change."));
-                }
+        let mut subscription = None;
+        let worker = file.and_then(|file| {
+            let hub = shared::Hub::open(file, native.session.state().settings.clone())?;
+            load_error = hub.load_error();
+            let mut client = shared::Subscription::new(hub.clone(), wake);
+            if let Some(settings) = client.adopt(&native.session.state().settings) {
+                native.dispatch(UiAction::RestoreSettings { settings })?;
             }
-            Worker::start(move |bytes| file.write(bytes), wake)
+            let result = Worker::start(move |bytes| hub.write(bytes), client.notifier());
+            subscription = Some(client);
+            result
         });
         if let Err(error) = &worker {
             load_error = Some(error.clone());
@@ -305,9 +306,18 @@ impl SettingsService {
         }
         Self {
             worker,
+            subscription,
             submitted: None,
             load_error,
         }
+    }
+    fn sync(&mut self, native: &mut NativeHost) -> Result<(), String> {
+        if let Some(client) = &mut self.subscription
+            && let Some(settings) = client.adopt(&native.session.state().settings)
+        {
+            native.dispatch(UiAction::RestoreSettings { settings })?;
+        }
+        Ok(())
     }
     fn complete(&mut self, native: &mut NativeHost, completion: Completion) -> Result<(), String> {
         // Superseded requests have already been retired; their late results
@@ -345,7 +355,7 @@ impl SettingsService {
             })
             .collect();
         let Some(&latest) = saves.last() else {
-            return Ok(());
+            return self.sync(native);
         };
         if self.submitted != Some(latest) {
             let request = native
@@ -358,7 +368,11 @@ impl SettingsService {
             let HostRequestKind::SaveSettings { settings } = &request.kind else {
                 unreachable!()
             };
-            let result = encode(settings).and_then(|bytes| {
+            let encoded = match &mut self.subscription {
+                Some(client) => client.edit(settings),
+                None => encode(settings),
+            };
+            let result = encoded.and_then(|bytes| {
                 self.worker
                     .as_ref()
                     .map_err(Clone::clone)?
@@ -375,6 +389,7 @@ impl SettingsService {
                 )?;
             }
         }
+        self.sync(native)?;
         // An older desired state no longer needs its own write. Keep the latest
         // request pending until durable completion, and retain any prior error.
         for &id in &saves[..saves.len() - 1] {
@@ -396,10 +411,14 @@ impl SettingsService {
         Ok(())
     }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
-        match &mut self.worker {
+        let result = match &mut self.worker {
             Ok(worker) => worker.finish(),
             Err(_) => Ok(()),
+        };
+        if let Some(client) = &self.subscription {
+            client.stop();
         }
+        result
     }
 }
 

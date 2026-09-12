@@ -28,6 +28,7 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
     std::vector<std::wstring> order;
     J snapshot,model;
     hstring promptKey,choicesKey,focusSent;
+    uint64_t focusedRequest=0;
     std::optional<hstring> nameDraft,searchDraft;
     uint64_t active=0;
     bool showing=false,updating=false,programmatic=false,stopping=false,blocked=false,cancelPending=false;
@@ -244,8 +245,11 @@ struct WorkspaceManagerView::Impl:std::enable_shared_from_this<Impl> {
         auto desired=uint64_t(num(model,L"id"));
         auto owner=str(model,L"focus_owner");
         if(!owner.empty()){
-            if(owner!=focusSent){
-                focusSent=owner;auto focusError=focusOwner(owner);
+            // ContentDialog restores focus to its source while closing. Activate
+            // another window only after ShowAsync has fully released the dialog.
+            if(showing){programmatic=true;if(dialog)dialog.Hide();return;}
+            if(owner!=focusSent||desired!=focusedRequest){
+                focusSent=owner;focusedRequest=desired;auto focusError=focusOwner(owner);
                 V result=focusError.empty()?JsonValue::CreateNullValue():S(focusError);
                 dispatch(desired,O({{L"type",S(L"focus_result")},{L"error",result}}));
             }

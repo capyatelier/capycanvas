@@ -46,6 +46,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             auto options=object(model,L"document_options");
             if(type==L"new"||type==L"confirm_close") {
                 dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());
+                AutomationProperties::SetAutomationId(dialog,L"document-dialog");
                 dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
                 dialog.CloseButtonText(str(options,L"cancel_label"));
                 dialog.DefaultButton(ContentDialogButton::Primary);

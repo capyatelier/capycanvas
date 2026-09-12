@@ -36,7 +36,7 @@ void style(Button const& item,std::shared_ptr<WorkspaceData> const& data) {
 struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     std::shared_ptr<PopupState> popups=std::make_shared<PopupState>();
-    std::function<void()> changed,fullscreen;
+    std::function<void()> changed,fullscreen,newWindow;
     Grid root;
     StackPanel start,end;
     Border document,switcher;
@@ -78,6 +78,12 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
                 handledRequests.insert(id);
                 try{if(flag(kind,L"fullscreen")!=fullscreenActive)fullscreen();complete(id);}
                 catch(hresult_error const& failure){complete(id,S(L"Windows could not change full screen ("+to_hstring(failure.code().value)+L")."));}
+            }else if(type==L"new_window"){
+                // Opening/activating a window can re-enter the UI dispatcher.
+                handledRequests.insert(id);
+                try{newWindow();complete(id);}
+                catch(hresult_error const& failure){complete(id,S(L"Windows could not create a window ("+to_hstring(failure.code().value)+L")."));}
+                catch(std::exception const&){complete(id,S(L"Windows could not create a window."));}
             }else if(type==L"open_link"&&!resolvingLink){
                 resolvingLink=true;
                 bool queued=QueryWorkspace(data->query,O({{L"type",S(L"application_link")},{L"link",S(str(kind,L"link"))}}),
@@ -277,10 +283,10 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     }
 };
 HeaderView::HeaderView(Dispatch send,Json catalog,std::function<void(bool)> popup,
-    std::function<void()> layout,std::function<void()> fullscreen,PreviewTransport queries):impl(std::make_shared<Impl>()){
+    std::function<void()> layout,std::function<void()> fullscreen,std::function<void()> newWindow,PreviewTransport queries):impl(std::make_shared<Impl>()){
     impl->data->query=std::move(queries);
     impl->data->send=std::move(send);impl->data->catalog=catalog;impl->popups->changed=std::move(popup);
-    impl->changed=std::move(layout);impl->fullscreen=std::move(fullscreen);impl->init();
+    impl->changed=std::move(layout);impl->fullscreen=std::move(fullscreen);impl->newWindow=std::move(newWindow);impl->init();
 }
 HeaderView::~HeaderView()=default;
 Grid HeaderView::Root()const{return impl->root;}

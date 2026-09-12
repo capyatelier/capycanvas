@@ -201,6 +201,7 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
     )
     .unwrap();
     let mut service = SettingsService {
+        subscription: None,
         worker: Ok(worker),
         submitted: None,
         load_error: None,
@@ -246,6 +247,149 @@ fn shared_requests_stay_bounded_and_latest_save_is_acknowledged_after_flush() {
 }
 
 #[test]
+fn windows_merge_unrelated_edits_and_share_current_preferences() {
+    let directory = Directory::new();
+    let mut first = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut second = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let wakes = Arc::new(AtomicU64::new(0));
+    let count = wakes.clone();
+    let mut a = SettingsService::at(&mut first, Ok(directory.file()), || {});
+    let mut b = SettingsService::at(&mut second, Ok(directory.file()), move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    });
+    for host in [&mut first, &mut second] {
+        host.dispatch(UiAction::OpenSettings {
+            page: layer_ui::SettingsPage::Appearance,
+        })
+        .unwrap();
+    }
+    first
+        .dispatch(UiAction::EditSettings {
+            settings: edited(1.25),
+        })
+        .unwrap();
+    a.poll(&mut first).unwrap();
+    assert!(wakes.load(Ordering::Relaxed) > 0);
+    // This owner has not consumed the notification yet: its edit is based on
+    // the original settings and must not undo the first owner's pressure edit.
+    let mut local = second.session.state().settings.clone();
+    local.pan_speed = 1.5;
+    second
+        .dispatch(UiAction::EditSettings { settings: local })
+        .unwrap();
+    b.poll(&mut second).unwrap();
+    a.poll(&mut first).unwrap();
+    assert_eq!(
+        first.session.state().settings,
+        second.session.state().settings
+    );
+    assert_eq!(first.session.state().settings.pressure_gamma, 1.25);
+    assert_eq!(first.session.state().settings.pan_speed, 1.5);
+    let expected = first.session.state().settings.clone();
+    a.finish(&mut first).unwrap();
+    b.finish(&mut second).unwrap();
+    assert_eq!(directory.file().load().unwrap(), Some(expected));
+    assert!(first.session.state().requests.is_empty());
+    assert!(second.session.state().requests.is_empty());
+}
+
+#[test]
+fn new_window_inherits_pending_settings_and_stale_writes_cannot_replace_them() {
+    let directory = Directory::new();
+    let hub = shared::Hub::open(directory.file(), Settings::default()).unwrap();
+    let mut first = shared::Subscription::new(hub.clone(), || {});
+    let old = first.edit(&edited(1.25)).unwrap();
+    let latest = first.edit(&edited(1.75)).unwrap();
+    // There is no disk checkpoint yet. A new owner still sees the live value.
+    assert!(!directory.path.join("settings.json").exists());
+    let again = shared::Hub::open(directory.file(), Settings::default()).unwrap();
+    assert!(Arc::ptr_eq(&hub, &again));
+    let mut second = shared::Subscription::new(again, || {});
+    assert_eq!(
+        second.adopt(&Settings::default()).unwrap().pressure_gamma,
+        1.75
+    );
+    hub.write(&latest).unwrap();
+    hub.write(&old).unwrap();
+    assert_eq!(
+        directory.file().load().unwrap().unwrap().pressure_gamma,
+        1.75
+    );
+}
+
+#[test]
+fn settings_profiles_are_isolated_and_closed_callbacks_are_disarmed() {
+    let first = Directory::new();
+    let other = Directory::new();
+    let a = shared::Hub::open(first.file(), Settings::default()).unwrap();
+    let b = shared::Hub::open(other.file(), Settings::default()).unwrap();
+    assert!(!Arc::ptr_eq(&a, &b));
+    let wakes = Arc::new(AtomicU64::new(0));
+    let count = wakes.clone();
+    let closed = shared::Subscription::new(a.clone(), move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    });
+    let delayed = closed.notifier();
+    closed.stop();
+    let mut live = shared::Subscription::new(a, || {});
+    live.edit(&edited(1.5)).unwrap();
+    delayed();
+    assert_eq!(wakes.load(Ordering::Relaxed), 0);
+    let mut isolated = shared::Subscription::new(b, || {});
+    assert!(isolated.adopt(&Settings::default()).is_none());
+}
+
+#[test]
+fn disconnect_waits_for_an_inflight_settings_callback() {
+    let directory = Directory::new();
+    let hub = shared::Hub::open(directory.file(), Settings::default()).unwrap();
+    let (entered, started) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let client = Arc::new(shared::Subscription::new(hub, move || {
+        entered.send(()).unwrap();
+        held.recv_timeout(Duration::from_secs(5)).unwrap();
+    }));
+    let notify = client.notifier();
+    let running = std::thread::spawn(notify);
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (done, stopped) = mpsc::channel();
+    let closing = client.clone();
+    let disconnect = std::thread::spawn(move || {
+        closing.stop();
+        done.send(()).unwrap();
+    });
+    assert!(stopped.recv_timeout(Duration::from_millis(20)).is_err());
+    release.send(()).unwrap();
+    stopped.recv_timeout(Duration::from_secs(5)).unwrap();
+    running.join().unwrap();
+    disconnect.join().unwrap();
+    client.notifier()();
+    assert!(
+        started.try_recv().is_err(),
+        "a retained notifier called a closed host"
+    );
+}
+
+#[test]
+fn concurrent_shortcut_edits_do_not_resurrect_a_removed_override() {
+    let directory = Directory::new();
+    let mut baseline = Settings::default();
+    baseline.shortcuts.insert("command.Undo".into(), vec![]);
+    let hub = shared::Hub::open(directory.file(), baseline.clone()).unwrap();
+    let mut first = shared::Subscription::new(hub.clone(), || {});
+    let mut second = shared::Subscription::new(hub, || {});
+    let mut removed = baseline.clone();
+    removed.shortcuts.remove("command.Undo");
+    first.edit(&removed).unwrap();
+    let mut other = baseline.clone();
+    other.shortcuts.insert("command.Redo".into(), vec![]);
+    second.edit(&other).unwrap();
+    let merged = second.adopt(&baseline).unwrap();
+    assert!(!merged.shortcuts.contains_key("command.Undo"));
+    assert_eq!(merged.shortcuts.get("command.Redo"), Some(&vec![]));
+}
+
+#[test]
 fn restoring_settings_does_not_echo_a_save_request() {
     let directory = Directory::new();
     directory
@@ -277,6 +421,7 @@ fn failed_save_is_reported_and_a_later_success_clears_the_error() {
     )
     .unwrap();
     let mut service = SettingsService {
+        subscription: None,
         worker: Ok(worker),
         submitted: None,
         load_error: None,
