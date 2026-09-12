@@ -50,7 +50,8 @@ char *capy_apple_numeric(const char *json);
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t space);
 /* request: 0 action, 1 UI input, 2 query, 3 compatibility snapshot, 4 numeric control,
  * 5 incremental update (full models or workspace/camera presentation),
- * 6 workspace session capture/transition/adoption (no database I/O).
+ * 6 workspace session capture/transition/adoption (no database I/O),
+ * 7 layout-aware incremental update (retains controls across live resizing).
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);

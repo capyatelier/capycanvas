@@ -16,6 +16,7 @@ private final class Changes: @unchecked Sendable {
     }
     @MainActor static func main() throws {
         checkWorkspaceMotion()
+        checkWorkspaceReflow()
         let model = SnapshotProjection()
         func update(_ raw: Any) { model.stage(JSON(raw)).forEach { $0.publish() } }
         let initial = watch { _ = model.isNull }
@@ -204,5 +205,63 @@ private final class Changes: @unchecked Sendable {
         precondition(editor.receive(full(update(13, model: 13, dragging: false))) == .full)
         precondition(coherent.value == 1 && identity.value == 1 && otherGroup.value == 0)
         print("Workspace observation checks passed: retained models, per-group placement, tab visibility, optional camera, rejected revisions and coherent completion")
+    }
+
+    @MainActor private static func checkWorkspaceReflow() {
+        let editor = EditorSnapshotState()
+        func update(_ revision: Int, model: Int, content: Int) -> JSON {
+            JSON(["revision": revision, "model_revision": model, "content_revision": content, "drag": NSNull()])
+        }
+        func packet(_ revision: Int = 11, model: Int = 11, content: Int = 10, width: Int = 350) -> JSON {
+            let bounds = ["x": 0, "y": 48, "width": width, "height": 400]
+            return JSON(["workspace_update": update(revision, model: model, content: content).raw,
+                "layout": ["viewport": [1200, 900], "tab_bar_height": 36, "reveal_edges": ["left"],
+                    "work_area": bounds, "status": bounds, "groups": [["id": 7, "bounds": bounds]], "collapsed": [], "dividers": []],
+                "workspace_layout": ["bands": [["id": 1, "extent": width]], "floating": [], "collapsed": [], "fit_tab_groups": [7]],
+                "camera": ["zoom": 2, "revision": 1], "panel_measurements": [["panel": "brushes", "tab_width": 90, "content_height": 300]]])
+        }
+        func full(_ revision: Int, width: Int) -> JSON {
+            let reflow = packet(revision, model: revision, content: revision, width: width)
+            let dimensions = reflow["workspace_layout"].replacing("panels", with: JSON([["id": "brushes", "name": "Original definition"]]))
+            return JSON(["state": ["revision": revision, "camera": ["zoom": 1, "revision": 1],
+                "workspace": ["layout": dimensions.raw, "zen_mode": false],
+                "commands": [["id": "undo", "enabled": true]]],
+                "panels": [["id": "brushes", "title": "Brushes"]], "application_menus": [["id": "edit", "enabled": true]],
+                "layout": reflow["layout"].raw, "panel_measurements": [], "workspace_update": reflow["workspace_update"].raw])
+        }
+        precondition(editor.receive(packet()) == .ignored)
+        precondition(editor.receive(full(10, width: 200)) == .full)
+        let original = editor.snapshot.json
+        let content = watch {
+            _ = editor.state["revision"].raw; _ = editor.command("undo").raw
+            _ = editor.panel("brushes").raw; _ = editor.applicationMenu("edit").raw
+        }
+        let coherent = Changes()
+        withObservationTracking({ _ = editor.snapshot["layout"].raw }, onChange: {
+            MainActor.assumeIsolated {
+                if editor.workspace.modelRevision == 11 && editor.workspace.contentRevision == 10
+                    && editor.state["revision"].uint == 10 && editor.state["camera"]["zoom"].uint == 2
+                    && editor.state["workspace"]["layout"]["bands"][0]["extent"].uint == 350
+                    && editor.snapshot["panel_measurements"][0]["content_height"].uint == 300 { coherent.record() }
+            }
+        })
+        precondition(editor.receive(packet()) == .reflow)
+        precondition(coherent.value == 1 && content.value == 0)
+        precondition(editor.snapshot["state"]["workspace"]["layout"]["panels"][0]["name"].string == "Original definition")
+        precondition(original["state"]["workspace"]["layout"]["bands"][0]["extent"].uint == 200)
+        let accepted = editor.snapshot.json.stableKey
+        let malformed = [packet(12, model: 12, content: 9), packet(12, model: 9), packet(9, model: 9),
+            packet(12, model: 12).replacing("camera", with: JSON()),
+            packet(12, model: 12).replacing("panel_measurements", with: JSON()),
+            packet(12, model: 12).replacing("layout", with: JSON(["groups": []])),
+            packet(12, model: 12).replacing("workspace_layout", with: JSON(["bands": []]))]
+        for value in malformed { precondition(editor.receive(value) == .ignored && editor.snapshot.json.stableKey == accepted) }
+        precondition(editor.receive(JSON(["workspace_update": update(12, model: 11, content: 9).raw])) == .ignored)
+        precondition(editor.receive(JSON(["workspace_update": update(12, model: 11, content: 10).raw])) == .workspace)
+        precondition(editor.workspace.modelRevision == 11 && editor.workspace.contentRevision == 10 && content.value == 0)
+        precondition(editor.receive(full(13, width: 200)) == .full)
+        precondition(editor.state["revision"].uint == 13 && editor.workspace.contentRevision == 13 && content.value == 1)
+        precondition(editor.state["workspace"]["layout"]["bands"][0]["extent"].uint == 200)
+        print("Workspace reflow checks passed: retained content, atomic geometry/camera, incomplete/stale packet rejection and full completion")
     }
 }

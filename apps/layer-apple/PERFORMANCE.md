@@ -376,6 +376,37 @@ not close the 90 Hz Mac / 120 Hz iPad performance gates. Further investigation
 must include drawable waiting and presentation scheduling as well as the
 remaining ten-minute workload matrix.
 
+## Retained live panel resizing
+
+Apple request 7 opts into the shared host's layout-aware incremental transport.
+Divider motion, floating-panel resizing and transient native measurements send
+resolved geometry, workspace dimensions, camera and measurements together. Swift
+stages them before notifying observers and preserves the current control indexes
+and content revision. Ordinary floating translation retains its smaller position
+packet. Release, cancellation, changed controls, collapsed columns and viewport
+changes still use full snapshots. Existing requests 3 and 5 retain their schemas.
+
+The native ABI check compares two independent sessions after identical actions
+on both Apple presets. Sixteen divider moves transmit 135,108 bytes instead of
+1,330,874–1,334,090 bytes; sixteen floating resize moves transmit 151,110 bytes
+instead of 1,346,875–1,350,091 bytes. Geometry, camera and measurements match the
+compatibility path exactly. Intermediate updates carry no persistence request;
+release, cancellation, Undo and Redo preserve the full workspace state.
+
+```sh
+cargo test -p layer-apple layout_apple_abi -- --nocapture
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel-measurements.swift
+```
+
+The invisible AppKit view check covers each Apple preset with 64 live resize
+moves and 24 floating translations. Navigator identity, resize hit areas and tab
+clips remain coherent through motion, cancellation, completion and history.
+Projection checks reject partial, stale and mismatched-content geometry packets
+before mutation. These establish payload and native view behavior, not UIKit
+pixel parity or a sustained hardware resize frame rate. The complete drawing
+performance and presentation gates remain open.
+
 ## Native UI lookup investigation
 
 The shared Swift transport now reads Foundation-decoded dictionaries and arrays

@@ -23,7 +23,10 @@ isolated storage; ordinary launches do not start synthetic input or recording.
 Apple snapshot publication serializes the shared host models directly to UTF-8,
 avoiding the intermediate JSON tree on the render owner. Incremental workspace
 updates retain the panel models while native placement follows floating motion;
-tab previews and drop hints use the same shared publication. The compatibility
+divider and floating-panel resizing update layout dimensions and camera together
+while retaining control models and view identities. Tab previews and drop hints
+use the same shared publication. Release, cancellation and content changes still
+publish complete models, preserving history and persistence. The compatibility
 value/byte APIs keep their existing schema and exact numeric values.
 The [snapshot transport checks](PERFORMANCE.md#snapshot-transport) include
 reproducible payload fixtures and a CPU benchmark.
@@ -106,6 +109,7 @@ validation:
 
 ```sh
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/panel-measurements.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
 ```
 
 Tool Set projects the shared groups and subtools for painting, figures, regions,

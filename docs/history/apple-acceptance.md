@@ -76,6 +76,40 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Retained live panel resizing — 2026-09-12
+
+Both Apple apps now consume the shared layout-aware incremental publication.
+Divider and floating-panel resizing stage resolved layout, workspace dimensions,
+camera and measurements together while retaining control models and content
+revision. Ordinary translation keeps its smaller placement packet. Complete
+models still publish at release, cancellation, content changes and unsupported
+reflow boundaries, preserving workspace persistence and history. Legacy bridge
+requests retain their existing schemas.
+
+The ABI compares independent compatibility and incremental sessions on both
+Apple presets, including 16 intermediate moves for each resize/cancel case.
+Geometry, camera and measurements match exactly; wire traffic drops by roughly
+89–90%. Direct SwiftUI checks retain the Navigator identity through 64 resize
+moves and 24 translations per preset, with coherent hit regions and tab clips,
+final-position completion, cancellation and single-step Undo/Redo. Intrinsic
+panel measurements, natural sizing, width reflow and settled publication also
+pass. Projection checks reject incomplete and stale packets without mutation.
+The view checks use invisible AppKit hosts for both presets, so UIKit pixels and
+physical resize cadence remain separate acceptance work.
+
+Shared changes through `21a786f` are integrated. Both signed Release builds and
+385 Rust checks pass, with one existing hardware-only host check ignored.
+The direct view and hardware smoke checks precede that additive shared workspace
+controller integration; this checkpoint retains Apple's existing coordinator.
+Short synthetic drawing smoke checks complete on the physical Mac and iPad,
+with no renderer errors, rejected input or missing presentation callbacks.
+Their configured one-second measurements follow ten seconds of warm-up; the
+Mac report retains a 0.10 ms duration shortfall and both retain unmeasured GPU
+work and startup zero-time callbacks. These are startup/drawing checks, not
+sustained performance acceptance. Validation apps are closed. Raw evidence stays
+in ignored `artifacts/apple-retained-reflow-*`; complete visual, physical input,
+lifecycle and performance gates remain open.
+
 ## Task workspaces and native panel measurements — 2026-09-12
 
 The Apple apps follow the revised shared design through `761b26b`: no Save/Load
