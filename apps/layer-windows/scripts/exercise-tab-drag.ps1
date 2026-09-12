@@ -246,7 +246,7 @@ function Undo-Workspace {
  Wait-Until {$null -eq (Find-Preview)} 'Tab overlay survived release'
  Wait-Until {@((Model).state.commands|Where-Object {$_.id -eq 'undo_workspace' -and $_.enabled}).Count -eq 1} 'Released drag did not become undoable'
  Start-Sleep -Milliseconds 200
- Invoke 'application-menu-window';Invoke 'undo_workspace'
+ & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'undo_workspace'
  Wait-Until {((Current-Group).panels -join ',') -eq 'tool_settings,sizes' -and !(Current-Group).floating} 'Workspace Undo did not restore the source group'
 }
 try{

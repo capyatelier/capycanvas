@@ -67,7 +67,7 @@ function Closed {
 }
 function Menu([string]$Name){
     Closed
-    Invoke 'application-menu-window'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     (Control 'Quick Access Toolbars' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     Invoke $Name -Name
     Wait-Until {$null -ne (Find 'workspace-manager')} 'Native manager did not open'

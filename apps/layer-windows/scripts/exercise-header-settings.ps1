@@ -64,7 +64,7 @@ Wait-Until {Read-Model} 'Launch this review instance with CAPY_TRACE_UI=1 and pa
 Wait-Until {(Read-Model).brush_ready} 'Shared brush startup did not finish before interaction checks' 45
 if(!(Read-Model).windows_isolated_settings){throw 'Launch this fixture with CAPY_SETTINGS_DIRECTORY pointing to a disposable profile.'}
 if(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)){throw 'Close Preferences before running this fixture.'}
-Invoke-Control 'View'
+& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
 if(Find-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)){throw 'View must not include Dark Mode'}
 Open-Preferences
 $originalTheme=(Read-Model).state.settings.theme
@@ -139,10 +139,53 @@ Invoke-Control 'Close'
 Wait-Until {!(Read-Model).preferences.shortcut_editor} 'Close did not dismiss the nested shortcut editor'
 Close-Preferences
 
+function Status-Control([string]$Id){
+    $entry=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
+    if($entry -and !$entry.Current.IsOffscreen){$entry}
+}
+function Set-ClockPreference([string]$Policy){
+    Open-Preferences
+    Invoke-Control 'Appearance'
+    $picker=Control 'Show battery and clock' ([System.Windows.Automation.ControlType]::ComboBox)
+    $picker.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $script:scope=$root
+    $choice=@{always='Always';never='Never';fullscreen='In fullscreen mode'}[$Policy]
+    (Control $choice ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Read-Model).state.settings.show_clock -eq $Policy} 'Shared status preference did not change'
+    $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+    Close-Preferences
+}
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CapyHeaderPower {
+    [StructLayout(LayoutKind.Sequential)] public struct Status {public byte ac,flags,percent,saver; public uint remaining,full;}
+    [DllImport("kernel32.dll")] public static extern bool GetSystemPowerStatus(out Status status);
+}
+'@
+$originalClock=(Read-Model).state.settings.show_clock
+Set-ClockPreference 'always'
+Wait-Until {(Status-Control 'system-clock').Current.Name -match '\d.*\d'} 'Always-visible clock did not appear'
+Wait-Until {
+    $power=[CapyHeaderPower+Status]::new()
+    $known=[CapyHeaderPower]::GetSystemPowerStatus([ref]$power) -and !($power.flags -band 128) -and $power.percent -le 100
+    $battery=Status-Control 'system-battery'
+    if(!$known){return !$battery}
+    $expected='Battery '+$power.percent+'%'+$(if($power.flags -band 8){', charging'}elseif($power.percent -le 15){', low'}else{''})
+    $battery -and $battery.Current.Name -eq $expected
+} 'Native battery observation does not match Windows power status' 20
+Set-ClockPreference 'never'
+Wait-Until {!(Status-Control 'system-clock') -and !(Status-Control 'system-battery')} 'Never preference left status visible'
+Set-ClockPreference 'fullscreen'
+Wait-Until {!(Status-Control 'system-clock')} 'Fullscreen-only clock appeared in a normal window'
 Invoke-Control 'Full screen'
 Wait-Until {Find-Control 'Exit full screen' ([System.Windows.Automation.ControlType]::Button)} 'Fullscreen presenter did not update header'
+Wait-Until {Status-Control 'system-clock'} 'Fullscreen clock did not appear'
 Invoke-Control 'Exit full screen'
 Wait-Until {Find-Control 'Full screen' ([System.Windows.Automation.ControlType]::Button)} 'Windowed presenter did not restore header'
+Wait-Until {!(Status-Control 'system-clock')} 'Fullscreen clock remained after returning to a normal window'
+if($originalClock -ne 'fullscreen'){Set-ClockPreference $originalClock}
 [pscustomobject]@{
     view_menu_without_theme='passed'
     preferences_theme_roundtrip='passed'
@@ -154,5 +197,7 @@ Wait-Until {Find-Control 'Full screen' ([System.Windows.Automation.ControlType]:
     dialog_reopen_roundtrip='passed'
     shortcut_editor_cancel='passed'
     fullscreen_roundtrip='passed'
+    clock_and_battery_visibility_policy='passed'
+    native_power_observation='passed'
     input_method='native UI Automation; not OS pointer or keyboard delivery'
 } | ConvertTo-Json

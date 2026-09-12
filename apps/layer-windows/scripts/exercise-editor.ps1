@@ -70,7 +70,7 @@ function WindowCommand([string]$Id){
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
-    Invoke 'application-menu-window';Invoke $Id
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke $Id
 }
 function Toolbar([string]$Id){(Model).panels|Where-Object id -eq $Id}
 function ToolbarContext([string]$Id){
@@ -192,7 +192,7 @@ function Check-Zen {
 }
 function Check-Header {
     $scale=[CapyEditorKeys]::GetDpiForWindow($review.MainWindowHandle)/96.
-    $menu=(Control 'application-menu-help').Current.BoundingRectangle
+    $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
     $settings=(Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Button)).Current.BoundingRectangle
     $points=@(
         @{x=$menu.Left+$menu.Width/2;y=$menu.Top+$menu.Height/2;expected=1;name='Help menu'},
@@ -237,7 +237,7 @@ try{
     if(Find 'Drawing tool' -Name){throw 'Temporary tool chooser survived the full toolbar'}
     Check-Editor
     Check-Header
-    Invoke 'application-menu-view';Invoke 'fit_canvas'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'view';Invoke 'fit_canvas'
     Wait-Until {
         foreach($layer in (Model).state.layers){
             $thumbnail=Find "layer-$($layer.id)-thumbnail"

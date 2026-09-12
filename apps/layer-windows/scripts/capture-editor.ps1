@@ -29,10 +29,10 @@ $startup=[Diagnostics.Stopwatch]::StartNew()
 do{
     $review.Refresh();if($review.HasExited){throw 'The native editor exited before creating its window'}
     $handle=$review.MainWindowHandle
-    if($handle){break}
+    if($handle -ne [IntPtr]::Zero){break}
     Start-Sleep -Milliseconds 100
 }while($startup.Elapsed.TotalSeconds -lt 45)
-if(!$handle){throw 'The native editor did not create a window'}
+if($handle -eq [IntPtr]::Zero){throw 'The native editor did not create a window'}
 $root=[System.Windows.Automation.AutomationElement]::FromHandle($handle)
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($OutputDirectory)|Out-Null
@@ -66,7 +66,7 @@ function Invoke([string]$Name,$Type=[System.Windows.Automation.ControlType]::But
     (Find $Name $Type $Scope).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function Fit-Canvas {
-    Invoke 'View'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'View'
     Invoke 'Fit canvas' ([System.Windows.Automation.ControlType]::MenuItem)
 }
 function Set-Theme([string]$Theme) {
@@ -101,6 +101,7 @@ function Settle {
 }
 Wait-Until {(Model).windows_workspace.ready -and (Model).brush_ready} 'Native editor did not become ready'
 if(!(Model).windows_isolated_settings){throw 'Capture requires an isolated profile and CAPY_TRACE_UI=1'}
+if(Find 'Test stroke'){throw 'Capture the production UI: remove CAPY_SMOKE_TEST before launching the editor'}
 if((Model).state.document_file.modified){throw 'Capture starts from an unmodified isolated document'}
 $scale=[CapyEditorCapture]::GetDpiForWindow($handle)/96.0
 $pixelWidth=$Width*$scale;$pixelHeight=$Height*$scale
@@ -173,7 +174,8 @@ foreach($theme in @('dark','light')){
             native="native-$name.png";full_client="client-$name.png";surface_offset_pixels=$offset;client_pixels=@($client.right,$client.bottom);
             workspace=$model.windows_workspace.id;titlebar_insets=$model.titlebar_insets;
             document=$model.state.tabs[0];camera=$model.state.camera;layout=$model.layout;
-            tool_set=@($elements|Where-Object{$_.id -match '^tool-(group|subtool)-'})}
+            tool_set=@($elements|Where-Object{$_.id -match '^tool-(group|subtool)-'});
+            header=@($elements|Where-Object{$_.id -match '^(application-menu[s-]|workspace-switch|document-title$|zen-button$|fullscreen$|settings-button$)'})}
         Write-Output "Captured $name at $Width x $Height logical, scale $scale"
     }
 }

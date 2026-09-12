@@ -89,9 +89,9 @@ try{
     Wait-Until {@((Model).state.customization.column_drawers).Count -eq 0} 'Repeating column icon did not close'
     Invoke "expand-column-$($column.id)"
     Wait-Until {@((Model).layout.collapsed).Count -eq 0 -and $null -ne (Find 'panel-tab-sizes')} 'Expand did not restore docked panels'
-    Invoke 'application-menu-window';Invoke 'undo_workspace'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'undo_workspace'
     Wait-Until {@((Model).layout.collapsed).Count -gt 0} 'Workspace Undo did not restore collapse'
-    Invoke 'application-menu-window';Invoke 'redo_workspace'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke 'redo_workspace'
     Wait-Until {@((Model).layout.collapsed).Count -eq 0} 'Workspace Redo did not restore expansion'
     # The full editor groups Properties with Filters; Layers is independent.
     ContextMenu 'panel-tab-properties'

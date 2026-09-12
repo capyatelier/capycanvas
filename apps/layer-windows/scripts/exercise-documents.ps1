@@ -85,9 +85,9 @@ function Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Bu
 function Invoke-Control([string]$Name) {(Control $Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function File-Command([string]$Id) {
     $script:scope=$root
-    Wait-Until {(Find-Name 'File').Current.IsEnabled} 'File menu stayed disabled'
-    Invoke-Control 'File'
-    Wait-Until {Find-Id $Id} "File command not found: $Id"
+    Wait-Until {((Model).state.commands|Where-Object id -eq $Id).enabled} "Document command stayed disabled: $Id" 45
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File'
+    Wait-Until {$item=Find-Id $Id;$item -and $item.Current.IsEnabled} "Enabled file command not found: $Id"
     (Find-Id $Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
 }
 function New-Dialog {

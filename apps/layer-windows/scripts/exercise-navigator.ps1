@@ -41,7 +41,7 @@ function Control([string]$Value,[switch]$Id,$Type){
 }
 function Invoke([string]$Value,[switch]$Id){(Control $Value -Id:$Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
 function Navigator {
-    Invoke ((Model).workspace_menu.title)
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     $menuCondition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Navigator panel'),
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::MenuItem))
@@ -143,7 +143,7 @@ try {
         $undo=Capture 'undo'
         try {if((Different $blank $undo $area) -ne 0){throw 'Undo did not restore the GPU overview pixels'}}finally{$undo.Dispose()}
     }finally{$blank.Dispose()}
-    Invoke 'File';Invoke 'new_document' -Id
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document' -Id
     (Control 'document-width' -Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('128')
     (Control 'document-height' -Id).GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('64')
     Invoke 'Create'

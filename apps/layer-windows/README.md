@@ -155,10 +155,18 @@ without a valid capture and workload review; this probe measures no mouse/pen la
 
 ## Native header and Preferences checks
 
-Edit/View/Workspace menus bind to shared command state. The same GPU canvas
-continues behind the header; native caption buttons and measured drag regions
-remain above it. Preferences uses native controls with the shared settings model,
-including image tiles, numeric policy, search, validation and shortcut editing.
+All eight application menus bind to shared command state. When the header lacks
+room, the menus move into a compact Menus flyout; workspace labels retain the
+shared sizing and truncation policy. Keyboard focus follows the visible menu
+entry when the window crosses that boundary. The same GPU canvas continues behind
+the header; native caption buttons and measured drag regions remain above it.
+Preferences uses native controls with shared settings, including image tiles,
+numeric policy, search, validation and shortcut editing.
+
+The shared battery/clock preference is available on Windows: Always, Never, or
+In fullscreen mode. The header observes the local Windows clock and battery,
+including charging/low state, and hides battery output when unavailable. Its
+UI dispatcher timer stops when the status is hidden; it does no work in painting.
 
 For a controlled review instance, set CAPY_TRACE_UI=1 and an absolute disposable CAPY_SETTINGS_DIRECTORY before launch, then run:
 
@@ -166,7 +174,8 @@ For a controlled review instance, set CAPY_TRACE_UI=1 and an absolute disposable
 ./apps/layer-windows/scripts/exercise-header-settings.ps1 -ProcessId <app-process-id> -StateFile <app-output-directory>/ui-state.json
 ~~~
 
-The fixture checks shared acknowledgments and native control state. Run it only
+The fixture checks shared acknowledgments, native control state, all three
+clock visibility policies and the battery observation against Windows. Run it only
 against a disposable review instance; it edits settings and toggles fullscreen.
 It does not verify physical keyboard or pointer delivery. CAPY_TEST_PRIMARY=1
 with CAPY_TEST_DISPLAY=1 places review windows on the primary display, allowing
@@ -174,8 +183,8 @@ a separate 120 Hz probe to remain visible.
 
 The opt-in ui-state.json contains app state and may include private settings.
 It stays ignored alongside captures and traces, and must be off for performance
-runs. Settings persistence, OS theme changes, remaining workspace features and
-the full acceptance gates are still open.
+runs. OS theme changes, complete visual/interaction parity and the full physical
+input, lifecycle, packaging and performance acceptance gates remain separate.
 
 Analyze a captured directory locally with:
 
@@ -872,6 +881,7 @@ include incremental updates and must agree with the native zoom readout.
 ~~~powershell
 $env:CAPY_SETTINGS_DIRECTORY=Join-Path (Get-Location) ('artifacts/windows/parity-profile/'+[Guid]::NewGuid().ToString('N'))
 $env:CAPY_TRACE_UI='1'
+Remove-Item Env:CAPY_SMOKE_TEST -ErrorAction SilentlyContinue
 $review=Start-Process ./artifacts/windows/Review/CapyCanvas.exe -WorkingDirectory ./artifacts/windows/Review -WindowStyle Hidden -PassThru
 ./apps/layer-windows/scripts/capture-editor.ps1 -ProcessId $review.Id -OutputDirectory artifacts/windows/parity/native
 $env:CAPY_CHROME='C:/Program Files/Google/Chrome/Application/chrome.exe'
@@ -879,6 +889,10 @@ node tools/visual/chrome-capture.mjs 960 660 1.5 artifacts/windows/parity/web li
 python tools/visual/compare.py artifacts/windows/parity/web/web-light-initial.png artifacts/windows/parity/native/native-light-initial.png --output artifacts/windows/parity/diff-light-initial
 ./apps/layer-windows/scripts/exercise-window.ps1 -ProcessId $review.Id -Action Close
 ~~~
+
+Repeat captures with -Width 744, -Width 960 and -Width 1200 to cover compact and
+expanded headers, including the narrow workspace-label limit. The fixture rejects
+smoke-test controls so every capture contains the production editor UI.
 
 Repeat the full-image comparator for all four pairs. A nonzero comparison result
 means raster differences remain; generating a capture does not pass visual parity.
@@ -901,7 +915,20 @@ the tested 960 x 660 logical viewport at 1.5 scale, all four captures match Tool
 position/size/edge geometry within half a physical pixel. Native tool/subtool,
 numeric expression, retained control/scrolling, stale draft, target replacement,
 figure/gradient/ruler and transform-cancel checks pass. Full-image comparisons
-still differ, including responsive header layout, panel shadows, number controls,
-and layer-row details. Full editor visual/gesture parity, physical input, DPI/device
-recovery, packaging, strict GPU reference agreement and final 120 Hz acceptance
-remain open.
+still differ, including panel shadows, number controls and layer-row details.
+The header comparator checks the complete set of visible controls and their
+position/size/edges at 744, 960 and 1200 logical pixels, in both themes and camera
+states. Its two-physical-pixel bound accounts for UI Automation's separate origin
+and size quantization; this is geometry evidence, not glyph/raster acceptance.
+Resolved Chrome font names are retained with the local measurements.
+
+The responsive-header milestone passes all twelve production captures at 1.5
+scale: header geometry differs by at most 1.90 physical pixels, Tool Set geometry
+by at most 0.50, and camera viewport/zoom/translation/work area agree. Native
+Preferences/status, compact/expanded menus and keyboard focus, titlebar hit
+regions, editor/Zen, workspace manager, multiwindow and document/picker regressions
+pass. The shared test run passes 440 tests (four GPU tests remain excluded), with
+native and Wasm builds and strict Windows Clippy passing. Full-image differences
+remain, including panel shadows, numeric controls, layer rows and system glyphs.
+Full editor visual/gesture parity, physical input, DPI/device recovery, packaging,
+strict GPU reference agreement and final 120 Hz acceptance remain open.

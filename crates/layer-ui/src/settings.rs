@@ -825,17 +825,6 @@ impl Settings {
                 ],
             }],
         ];
-        if !matches!(
-            platform,
-            Platform::Generic
-                | Platform::Gtk
-                | Platform::Web
-                | Platform::Android
-                | Platform::Ios
-                | Platform::Mac
-        ) {
-            groups[0][0].rows.retain(|r| r.id != ShowClock);
-        }
         groups[0].push(PreferenceGroup {
             title: CommandId::ZenMode.label().into(),
             rows: vec![
@@ -1326,11 +1315,13 @@ mod copy_tests {
         let original: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(original.show_clock, ClockVisibility::Fullscreen);
         for platform in [
+            Platform::Generic,
             Platform::Gtk,
             Platform::Web,
             Platform::Android,
             Platform::Ios,
             Platform::Mac,
+            Platform::Windows,
         ] {
             let mut settings = original.clone();
             let row = settings.field(PreferenceId::ShowClock, platform).unwrap();

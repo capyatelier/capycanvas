@@ -9,6 +9,8 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
   assert.equal(manifest.platform,'windows');
   assert.ok(manifest.fixtures.length);
   const reports=[];
+  await call('DOM.enable');
+  await call('CSS.enable');
   for (const fixture of manifest.fixtures) {
     const [width,height]=fixture.viewport,scale=fixture.scale;
     assert.match(fixture.name,/^[a-z0-9-]+$/);
@@ -56,9 +58,16 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
       const adapter=await navigator.gpu.requestAdapter();
       const rect=node=>{const b=node.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height}};
       const layout=layerApp.app.layout(innerWidth,innerHeight);
-      const elements=[...document.querySelectorAll('button,summary,.panel,.panel-group,.group-tabs,.tool-choice-button,.brush-preview,#header')]
-        .filter(n=>{const b=n.getBoundingClientRect();return b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight})
-        .map(n=>({id:n.matches('.tool-choice-button')?'tool-'+(n.parentElement.classList.contains('tool-groups')?'group':'subtool')+'-'+[...n.parentElement.children].indexOf(n):n.id,classes:n.className,name:n.getAttribute('aria-label')||n.textContent.trim(),command:n.dataset.command,
+      const elementId=n=>{
+        if(n.matches('.workspace-switcher'))return 'workspace-switcher';
+        if(n.matches('.workspace-switcher button'))return 'workspace-switch-'+n.dataset.workspaceId.split(':').pop();
+        if(n.matches('.header-menu > summary'))return n.parentElement.dataset.menu==='all'?'application-menus':'application-menu-'+n.parentElement.dataset.menu;
+        if(n.dataset.command==='settings')return 'settings-button';
+        return n.id;
+      };
+      const elements=[...document.querySelectorAll('button,summary,.panel,.panel-group,.group-tabs,.tool-choice-button,.brush-preview,#header,#document-title,.workspace-switcher')]
+        .filter(n=>{const b=n.getBoundingClientRect();return getComputedStyle(n).visibility==='visible'&&b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight})
+        .map(n=>({id:n.matches('.tool-choice-button')?'tool-'+(n.parentElement.classList.contains('tool-groups')?'group':'subtool')+'-'+[...n.parentElement.children].indexOf(n):elementId(n),classes:n.className,name:n.getAttribute('aria-label')||n.textContent.trim(),command:n.dataset.command,
           bounds:rect(n),style:Object.fromEntries(['fontFamily','fontSize','fontWeight','lineHeight','padding','gap'].map(k=>[k,getComputedStyle(n)[k]]))}));
       return JSON.parse(JSON.stringify({viewport:[innerWidth,innerHeight],scale:devicePixelRatio,canvas:[layerApp.canvas.width,layerApp.canvas.height],
         adapter:{vendor:adapter.info.vendor,architecture:adapter.info.architecture,isFallbackAdapter:adapter.info.isFallbackAdapter},
@@ -84,16 +93,34 @@ export async function captureWindowsEditor({manifest,output,evaluate,call}) {
     // Native layout rounds to physical pixels. This bounds geometry only;
     // retain the complete raster differences for fonts, colors and shadows.
     assert.ok(toolSetMaximum<=1.01,`Tool Set geometry differs by ${toolSetMaximum} physical pixels`);
+    const dom=await call('DOM.getDocument');
+    const workspaceNode=await call('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'.workspace-switcher button'});
+    const headerFonts=await call('CSS.getPlatformFontsForNode',{nodeId:workspaceNode.nodeId});
+    assert.ok(fixture.header?.length,'Native header measurements are required');
+    const isHeader=id=>/^(application-menu[s-]|workspace-switch|document-title$|zen-button$|fullscreen$|settings-button$)/.test(id);
+    assert.deepEqual(fixture.header.map(e=>e.id).sort(),metrics.elements.filter(e=>isHeader(e.id)).map(e=>e.id).sort(),
+      'Native and reference headers expose different controls');
+    const header=fixture.header.map(native=>{
+      const web=metrics.elements.find(e=>e.id===native.id);
+      assert.ok(web,`Missing visible reference header control: ${native.id}`);
+      const a=native.bounds,b=web.bounds;
+      return {id:native.id,native:a,web:b,maximum_error_pixels:scale*Math.max(...['x','y','width','height'].map(k=>Math.abs(a[k]-b[k])),
+        Math.abs(a.x+a.width-b.x-b.width),Math.abs(a.y+a.height-b.y-b.height))};
+    });
+    const headerMaximum=Math.max(0,...header.map(e=>e.maximum_error_pixels));
+    // UI Automation quantizes both origin and size to physical pixels. Bound
+    // their accumulated edge error; this does not accept glyph/raster parity.
+    assert.ok(headerMaximum<=2.01,`Header geometry differs by ${headerMaximum} physical pixels`);
     const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:true});
     const png=Buffer.from(shot.data,'base64');
     assert.equal(png.readUInt32BE(16),Math.round(width*scale));
     assert.equal(png.readUInt32BE(20),Math.round(height*scale));
     await writeFile(`${output}/web-${fixture.name}.png`,png);
-    const report={name:fixture.name,metrics,tool_set:toolSet,tool_set_maximum_error_pixels:toolSetMaximum,native:{camera:fixture.camera,layout:fixture.layout},
+    const report={name:fixture.name,metrics,tool_set:toolSet,tool_set_maximum_error_pixels:toolSetMaximum,header,header_fonts:headerFonts.fonts,header_maximum_error_pixels:headerMaximum,native:{camera:fixture.camera,layout:fixture.layout},
       adaptations:{native_surface_offset_pixels:fixture.surface_offset_pixels,native_full_client:fixture.full_client,native_caption_button_reservation:fixture.titlebar_insets,system_caption_buttons:'Windows owns these; Chrome leaves the reserved pixels visible'},
       scope:'Full editor; differences remain unaccepted until reviewed. No masks, cropping, resampling or native-measurement substitution.'};
     await writeFile(`${output}/geometry-${fixture.name}.json`,JSON.stringify(report,null,2));
-    reports.push({name:fixture.name,viewport:metrics.viewport,scale,adapter:metrics.adapter,tool_set_maximum_error_pixels:toolSetMaximum});
+    reports.push({name:fixture.name,viewport:metrics.viewport,scale,adapter:metrics.adapter,tool_set_maximum_error_pixels:toolSetMaximum,header_maximum_error_pixels:headerMaximum});
   }
   await writeFile(`${output}/windows-editor.json`,JSON.stringify({captures:reports},null,2));
   console.log(JSON.stringify({captures:reports},null,2));

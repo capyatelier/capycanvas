@@ -201,7 +201,7 @@ try {
     Wait-Until {(Model).state.filter_picker.search -eq 'Curves'} 'Rapid search edits were lost'
     Wait-Until {(Control 'filter-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq 'Curves'} 'Search text differs from its acknowledged query'
     Wait-Until {(Find 'filter-preview-curves').Current.ItemStatus -eq 'Ready'} 'Preview after filter edits and theme not ready' 20
-    Invoke 'File' -Name;Invoke 'new_document';Invoke 'Discard Changes' -Name
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'new_document';Invoke 'Discard Changes' -Name
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name
     Wait-Until {(Model).state.tabs[0].width -eq 128 -and (Model).state.tabs[0].height -eq 64 -and !(Model).state.document_file.busy} 'Document replacement failed' 45
     Wait-Until {(Control 'Drawing canvas' -Name).Current.IsEnabled} 'Document dialog gate did not clear'

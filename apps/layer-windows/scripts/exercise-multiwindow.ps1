@@ -99,14 +99,14 @@ try {
     Write-Output "Owned multiwindow review $($review.Id)"
     Wait-Until {@(Windows).Count -eq 1} 'Initial window was not registered' 30
     $first=@(Windows)[0];Ready $first;Use-Window $first
-    Invoke 'application-menu-file'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'file'
     Invoke 'New Window' -Name
     Wait-Until {@(Windows).Count -eq 2} 'New Window did not create a second native window'
     $second=@(Windows|Where-Object id -ne $first.id)[0];Ready $second
     if((Model $first).windows_workspace.id -eq (Model $second).windows_workspace.id){throw 'Windows share active workspace ownership'}
     Use-Window $second
     $secondWorkspace=(Model).windows_workspace.id
-    Invoke 'application-menu-window'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     (Control 'Workspaces' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     Invoke 'Manage Workspaces…' -Name
     Wait-Until {$null -ne (Find 'workspace-manager') -and !(Model).windows_workspace_manager.loading} 'Workspace manager did not open'

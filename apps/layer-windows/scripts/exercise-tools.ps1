@@ -75,7 +75,7 @@ function Check-Projection {
     }
 }
 if(!@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count){
-    Invoke-Control ((Model).workspace_menu.title)
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Window'
     (Control 'Tool panel' ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {@((Model).layout.groups|Where-Object {$_.panels -contains 'tool_settings'}).Count -gt 0} 'Tool panel did not open'
 }

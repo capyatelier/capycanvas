@@ -61,7 +61,7 @@ function WindowCommand([string]$Id){
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
-    Invoke 'application-menu-window';Invoke $Id
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window';Invoke $Id
 }
 function Toolbar([string]$Id){(Model).panels|Where-Object id -eq $Id}
 function ToolbarContext([string]$Id){

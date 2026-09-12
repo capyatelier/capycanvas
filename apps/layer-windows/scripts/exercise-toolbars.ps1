@@ -48,7 +48,7 @@ function WindowCommand([string]$Id){
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
-    Invoke 'application-menu-window'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     if($Id -in @('new_toolbar','manage_toolbars')){
         (Control 'Quick Access Toolbars' -Name).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     }

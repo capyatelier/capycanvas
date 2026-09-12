@@ -63,7 +63,7 @@ function Closed {
 }
 function Menu([string]$Name){
     Closed
-    Invoke 'application-menu-window'
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'window'
     (Control 'Workspaces' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
     Invoke $Name -Name
     Wait-Until {$null -ne (Find 'workspace-manager')} 'Native manager did not open'
@@ -165,7 +165,7 @@ try {
     Choose 'Cancel';Closed
     if((Control 'workspace-switch-illustrator').Current.Name -ne 'My Illustration'){throw 'Header did not follow the renamed workspace identity'}
     Wait-Until {
-        $menu=(Control 'application-menu-help').Current.BoundingRectangle
+        $menu=(& (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Help' -Inspect).Current.BoundingRectangle
         $firstChoice=(Control 'workspace-switch-painter').Current.BoundingRectangle
         $menu.Right -le $firstChoice.Left
     } 'Renamed workspace header overlaps the application menus'

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "HeaderView.h"
+#include "HeaderStatus.h"
 #include "UiControls.h"
 #include "NativeMenus.h"
 #include "WorkspaceQuery.h"
@@ -28,7 +29,7 @@ Windows::UI::Color blend(Windows::UI::Color bg,Windows::UI::Color ink,float amou
 void style(Button const& item,std::shared_ptr<WorkspaceData> const& data) {
     auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
     auto text=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
-    item.Background(fill(bg));item.Height(36);item.Padding({6,0,6,0});
+    item.Background(fill(bg));item.Height(36);item.Padding({6,0,6,0});item.UseLayoutRounding(false);
     item.Resources().Insert(box_value(L"ButtonBackgroundPointerOver"),fill(blend(bg,text,.08f)));
     item.Resources().Insert(box_value(L"ButtonBackgroundPressed"),fill(blend(bg,text,.16f)));
 }
@@ -38,7 +39,12 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<PopupState> popups=std::make_shared<PopupState>();
     std::function<void()> changed,fullscreen,newWindow;
     Grid root;
-    StackPanel start,end;
+    StackPanel start,end,menuLabels;
+    std::vector<Button> menus;
+    Button menuOverflow;
+    std::unique_ptr<HeaderStatus> systemStatus;
+    bool reflowing=false,menusCollapsed=false;
+    double menuNaturalWidth=0,measuredMenuFont=-1,measuredMenuGap=-1;
     Border document,switcher;
     StackPanel switches;
     std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
@@ -100,7 +106,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         if(retry)requestTimer.Start();else requestTimer.Stop();
     }
     void init() {
-        root.Height(48);root.VerticalAlignment(VerticalAlignment::Top);
+        root.Height(48);root.VerticalAlignment(VerticalAlignment::Top);root.UseLayoutRounding(false);
         AutomationProperties::SetName(root,L"Application header");
         root.SizeChanged([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->reflow();});
         // Rebuilt siblings and margin changes can move controls without a new
@@ -112,7 +118,10 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         root.Unloaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requestTimer.Stop();});
     }
     void build(){
-        root.Children().Clear();commands.clear();workspaces.clear();start=StackPanel();end=StackPanel();
+        root.Children().Clear();commands.clear();workspaces.clear();menus.clear();
+        start=StackPanel();end=StackPanel();menuLabels=StackPanel();measuredMenuFont=-1;
+        start.UseLayoutRounding(false);end.UseLayoutRounding(false);menuLabels.UseLayoutRounding(false);
+        menuLabels.Orientation(Orientation::Horizontal);
         start.Orientation(Orientation::Horizontal);start.Spacing(6);start.HorizontalAlignment(HorizontalAlignment::Left);
         end.Orientation(Orientation::Horizontal);end.Spacing(6);end.HorizontalAlignment(HorizontalAlignment::Right);
         start.VerticalAlignment(VerticalAlignment::Top);end.VerticalAlignment(VerticalAlignment::Top);
@@ -130,31 +139,53 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             });
             flyout.Opened([state=popups](auto&&,auto&&){++state->count;state->changed(true);});
             flyout.Closed([state=popups](auto&&,auto&&){state->count=std::max(0,state->count-1);state->changed(state->count>0);});
-            item.Flyout(flyout);start.Children().Append(item);
+            item.Flyout(flyout);menuLabels.Children().Append(item);menus.push_back(item);
         }
+        start.Children().Append(menuLabels);
+        menuOverflow=button(data,L"Menus",[]{});style(menuOverflow,data);menuOverflow.Width(36);menuOverflow.Padding({0});
+        menuOverflow.Content(icon(L"menu",data->theme()));menuOverflow.Visibility(Visibility::Collapsed);
+        AutomationProperties::SetAutomationId(menuOverflow,L"application-menus");
+        MenuFlyout all;
+        all.Opening([data=data](Windows::Foundation::IInspectable const& sender,auto&&){
+            auto flyout=sender.as<MenuFlyout>();flyout.Items().Clear();
+            for(auto value:array(data->model,L"application_menus")){
+                auto spec=value.GetObject();MenuFlyoutSubItem item;item.Text(str(spec,L"label"));item.FontSize(data->textSize());
+                AutomationProperties::SetAutomationId(item,L"application-menu-"+str(spec,L"id"));
+                menuItems(item.Items(),array(object(spec,L"model"),L"sections"),data);flyout.Items().Append(item);
+            }
+        });
+        all.Opened([state=popups](auto&&,auto&&){++state->count;state->changed(true);});
+        all.Closed([state=popups](auto&&,auto&&){state->count=std::max(0,state->count-1);state->changed(state->count>0);});
+        menuOverflow.Flyout(all);start.Children().Append(menuOverflow);
         zen=command(L"zen_mode",num(data->catalog,L"zen_icon_size",28));
+        AutomationProperties::SetAutomationId(zen,L"zen-button");
         zen.HorizontalAlignment(HorizontalAlignment::Left);zen.VerticalAlignment(VerticalAlignment::Top);
         settings=command(L"settings",16);
+        AutomationProperties::SetAutomationId(settings,L"settings-button");
         screen=button(data,L"Full screen",fullscreen);style(screen,data);screen.Width(36);screen.Padding({0});
+        AutomationProperties::SetAutomationId(screen,L"fullscreen");
         screen.Content(icon(fullscreenActive?L"fullscreen-exit":L"fullscreen-enter",data->theme()));
         auto screenLabel=fullscreenActive?L"Exit full screen":L"Full screen";
         AutomationProperties::SetName(screen,screenLabel);ToolTipService::SetToolTip(screen,box_value(screenLabel));
-        switcher=Border();switches=StackPanel();switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
-        switcher.Child(switches);switcher.Height(36);switcher.Padding({3,3,3,3});switcher.CornerRadius({18,18,18,18});
+        switcher=Border();switches=StackPanel();switcher.UseLayoutRounding(false);switches.UseLayoutRounding(false);switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
+        switcher.Child(switches);switcher.Height(34);switcher.Padding({3,3,3,3});switcher.CornerRadius({18,18,18,18});
         auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
         auto ink=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
         switcher.Background(fill(blend(bg,ink,.06f)));switcher.BorderBrush(fill(blend(bg,ink,.10f)));switcher.BorderThickness({1});
         AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");
         AutomationProperties::SetName(switcher,L"Task workspaces");
-        end.Children().Append(switcher);end.Children().Append(screen);end.Children().Append(settings);
+        switcher.HorizontalAlignment(HorizontalAlignment::Left);switcher.VerticalAlignment(VerticalAlignment::Top);
+        systemStatus=std::make_unique<HeaderStatus>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->reflow();});
+        end.Children().Append(systemStatus->Root());end.Children().Append(screen);end.Children().Append(settings);
         title=label(data,L"");title.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
         title.VerticalAlignment(VerticalAlignment::Center);title.IsTextSelectionEnabled(true);
         title.TextAlignment(TextAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);
-        document=Border();document.Child(title);document.Background(data->brush(L"bg"));
+        document=Border();document.UseLayoutRounding(false);document.Child(title);document.Background(data->brush(L"bg"));
         document.Padding({6,0,6,0});document.CornerRadius({6,6,6,6});document.Height(36);
         document.HorizontalAlignment(HorizontalAlignment::Stretch);document.VerticalAlignment(VerticalAlignment::Top);
         AutomationProperties::SetAutomationId(document,L"document-title");
-        root.Children().Append(document);root.Children().Append(start);root.Children().Append(end);root.Children().Append(zen);
+        AutomationProperties::SetName(document,L"Document title");
+        root.Children().Append(document);root.Children().Append(start);root.Children().Append(switcher);root.Children().Append(end);root.Children().Append(zen);
         built=true;
     }
     Button command(hstring const& id,double size) {
@@ -171,15 +202,18 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             auto choice=value.GetObject();auto id=str(choice,L"id");
             auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
             if(found==workspaces.end()){
-                Primitives::ToggleButton item;item.MinWidth(0);item.Height(28);item.Padding({10,0,10,0});
-                item.BorderThickness({0});item.CornerRadius({15,15,15,15});item.FontSize(12);
+                Primitives::ToggleButton item;item.UseLayoutRounding(false);item.MinWidth(0);item.MinHeight(0);item.Height(26);item.Padding({10,0,10,0});
+                item.BorderThickness({0});item.CornerRadius({15,15,15,15});item.FontSize(data->textSize());
+                // Chrome resolves the shared CSS medium weight to Segoe UI Semibold.
+                item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
                 item.Foreground(data->brush(L"text"));item.Background(fill({0,0,0,0}));
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundChecked"),chosen);
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPointerOver"),hover);
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPressed"),hover);
                 item.Resources().Insert(box_value(L"ToggleButtonForegroundChecked"),data->brush(L"text"));
                 AutomationProperties::SetAutomationId(item,L"workspace-switch-"+str(choice,L"key"));
-                TextBlock label;label.TextTrimming(TextTrimming::CharacterEllipsis);label.MaxWidth(110);item.Content(label);
+                auto label=CapyUi::label(data,L"");label.UseLayoutRounding(false);label.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+                label.TextTrimming(TextTrimming::CharacterEllipsis);label.MaxWidth(110);item.Content(label);
                 item.Click([weak=weak_from_this(),id](auto&&,auto&&){
                     if(auto self=weak.lock()){
                         // Toggle state always reflects adoption, including focus-only and failed switches.
@@ -191,7 +225,14 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
                 switches.Children().Append(item);workspaces.emplace_back(item,id);found=std::prev(workspaces.end());
             }
             auto const& item=found->first;auto name=str(choice,L"name");
-            item.Content().as<TextBlock>().Text(name);item.IsChecked(id==active);item.IsEnabled(flag(storage,L"can_switch"));
+            auto content=item.Content().as<TextBlock>();
+            if(content.Text()!=name){
+                content.Text(name);
+                auto measure=CapyUi::label(data,name);measure.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+                measure.UseLayoutRounding(false);measure.Measure({std::numeric_limits<float>::infinity(),36});
+                item.Tag(box_value(double(measure.DesiredSize().Width)));
+            }
+            content.Foreground(data->brush(L"text"));item.IsChecked(id==active);item.IsEnabled(flag(storage,L"can_switch"));
             item.Background(id==active?chosen:clear());
             item.Foreground(data->brush(L"text"));
             AutomationProperties::SetName(item,name);ToolTipService::SetToolTip(item,box_value(L"Switch to "+name+L" workspace"));
@@ -199,27 +240,75 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         switcher.Visibility(values.Size()?Visibility::Visible:Visibility::Collapsed);
     }
     void reflow() {
-        if(!built)return;
+        if(!built||reflowing)return;
+        reflowing=true;struct Reset{bool& value;~Reset(){value=false;}}reset{reflowing};
         start.Margin({6+leftInset,6,0,0});end.Margin({0,6,6+rightInset,0});zen.Margin({6+leftInset,6,0,0});
         start.Visibility(hidden?Visibility::Collapsed:Visibility::Visible);
         end.Visibility(hidden?Visibility::Collapsed:Visibility::Visible);
         zen.Visibility(!hidden||keepZen?Visibility::Visible:Visibility::Collapsed);
-        // The document occupies the space between the menu and end controls,
-        // like the shared desktop header. Caption controls reserve their inset.
-        double width=root.ActualWidth();
-        // Reserve menu and caption hit regions before sizing the optional pill.
-        // Long workspace names ellipsize without covering adjacent controls.
-        double room=width-leftInset-rightInset-start.ActualWidth()-108.;
-        bool showSwitches=!workspaces.empty()&&room>=130.;
-        switcher.Visibility(showSwitches?Visibility::Visible:Visibility::Collapsed);
-        double labelWidth=std::clamp((room-72.)/3.,16.,110.);
-        for(auto const& [item,id]:workspaces){
-            auto label=item.Content().as<TextBlock>();
-            if(std::abs(label.MaxWidth()-labelWidth)>.1)label.MaxWidth(labelWidth);
+        double width=root.ActualWidth(),gap=width<=850?0.:6.;
+        start.Spacing(gap);end.Spacing(gap);menuLabels.Spacing(gap);
+        systemStatus->Apply(fullscreenActive,hidden,gap);
+        double menuFont=width<=850?12.:data->textSize();
+        if(menuFont!=measuredMenuFont||gap!=measuredMenuGap){
+            measuredMenuFont=menuFont;measuredMenuGap=gap;menuNaturalWidth=0;
+            for(auto const& item:menus){
+                item.FontSize(menuFont);
+                auto measure=label(data,AutomationProperties::GetName(item),true);measure.FontSize(menuFont);measure.UseLayoutRounding(false);
+                measure.Measure({std::numeric_limits<float>::infinity(),36});
+                item.Width(measure.DesiredSize().Width+12);menuNaturalWidth+=item.Width();
+            }
+            if(!menus.empty())menuNaturalWidth+=gap*(menus.size()-1);
+            menuLabels.Width(menuNaturalWidth);
         }
-        double left=leftInset+start.ActualWidth()+12,right=rightInset+end.ActualWidth()+12;
-        document.Margin({left,6,right,0});
-        document.Visibility(!hidden&&width>850&&width-left-right>24?Visibility::Visible:Visibility::Collapsed);
+        double switchWidth=8+2*std::max(0,int(workspaces.size())-1);
+        for(auto const& [item,id]:workspaces){
+            double padding=width<=760?5.:10.,limit=width<=760?90.:130.;
+            item.Padding({padding,0,padding,0});item.MaxWidth(limit);
+            item.Content().as<TextBlock>().MaxWidth(limit-2*padding);
+            // Measure text separately so template rounding cannot accumulate
+            // across each button's fractional text width and horizontal padding.
+            item.Width(std::min(limit,unbox_value<double>(item.Tag())+2*padding));switchWidth+=item.Width();
+        }
+        double endWidth=0;int endCount=0;
+        for(auto child:end.Children())if(auto item=child.try_as<FrameworkElement>();item&&item.Visibility()==Visibility::Visible){
+            item.Measure({std::numeric_limits<float>::infinity(),36});endWidth+=item.DesiredSize().Width;++endCount;
+        }
+        endWidth+=gap*std::max(0,endCount-1);
+        double inner=std::max(0.,width-leftInset-rightInset-12);
+        bool showSwitches=!workspaces.empty()&&inner>=72+gap+switchWidth+endWidth+2*gap;
+        if(!showSwitches)switchWidth=0;
+        switcher.Width(switchWidth);switcher.Visibility(!hidden&&showSwitches?Visibility::Visible:Visibility::Collapsed);
+        bool titleVisible=width>850;
+        double natural=36+gap+menuNaturalWidth;
+        double gaps=gap*((showSwitches?2:1)+int(titleVisible));
+        bool collapse=natural+switchWidth+endWidth+gaps>inner+.01;
+        bool moveMenuFocus=false;
+        if(collapse!=menusCollapsed){
+            moveMenuFocus=popups->count>0;
+            if(auto xaml=root.XamlRoot())for(auto focused=FocusManager::GetFocusedElement(xaml).try_as<DependencyObject>();focused;focused=VisualTreeHelper::GetParent(focused)){
+                if(focused==menuLabels||focused==menuOverflow){moveMenuFocus=true;break;}
+            }
+            for(auto const& item:menus)if(item.Flyout())item.Flyout().Hide();
+            menuOverflow.Flyout().Hide();menusCollapsed=collapse;
+        }
+        menuLabels.Visibility(collapse?Visibility::Collapsed:Visibility::Visible);
+        menuOverflow.Visibility(collapse?Visibility::Visible:Visibility::Collapsed);
+        if(moveMenuFocus&&!hidden){
+            if(collapse)menuOverflow.Focus(FocusState::Programmatic);
+            else if(!menus.empty())menus.front().Focus(FocusState::Programmatic);
+        }
+        double startWidth=collapse?72+gap:natural;start.Width(startWidth);
+        double free=inner-startWidth-switchWidth-endWidth;
+        double titleSpace=std::max(0.,free-gaps);
+        document.Margin({leftInset+6+startWidth+gap,6,rightInset+6+endWidth+switchWidth+gap*(showSwitches?2:1),0});
+        document.Visibility(!hidden&&titleVisible&&titleSpace>0?Visibility::Visible:Visibility::Collapsed);
+        title.TextAlignment(fullscreenActive?TextAlignment::Right:TextAlignment::Center);
+        // With no title, the shared header distributes spare space between its
+        // start, workspace pill and end controls. With a title, that text flexes.
+        double between=titleVisible?gap:std::max(gap,free/(showSwitches?2:1));
+        double switchX=leftInset+6+startWidth+between+(titleVisible?titleSpace+gap:0);
+        switcher.Margin({switchX,7,0,0});
         if(changed)changed();
     }
     void apply(J const& snapshot) {
@@ -251,7 +340,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     }
     std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const {
         std::vector<std::pair<float,float>> controls;
-        for(FrameworkElement item:std::array<FrameworkElement,4>{start,end,document,zen}){
+        for(FrameworkElement item:std::array<FrameworkElement,5>{start,switcher,end,document,zen}){
             if(item.Visibility()!=Visibility::Visible||item.ActualWidth()<=0)continue;
             auto position=item.TransformToVisual(root).TransformPoint({0,0});
             float controlWidth=float(item.ActualWidth());
@@ -259,7 +348,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
                 // Keep unused title space draggable; only the selectable
                 // document text needs client hit testing.
                 float textWidth=std::min(controlWidth,titleWidth+12.f);
-                position.X+=(controlWidth-textWidth)/2;controlWidth=textWidth;
+                position.X+=(controlWidth-textWidth)/(fullscreenActive?1:2);controlWidth=textWidth;
             }
             controls.emplace_back(position.X,position.X+controlWidth);
         }
@@ -304,5 +393,6 @@ void HeaderView::SetFullscreen(bool active){
         impl->screen.Content(icon(active?L"fullscreen-exit":L"fullscreen-enter",impl->data->theme()));
         AutomationProperties::SetName(impl->screen,active?L"Exit full screen":L"Full screen");
         ToolTipService::SetToolTip(impl->screen,box_value(active?L"Exit full screen":L"Full screen"));
+        impl->reflow();
     }
 }
