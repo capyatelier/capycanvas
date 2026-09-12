@@ -357,18 +357,15 @@ impl<R: CanvasRenderer> UiSession<R> {
                     _ => (),
                 }
             }
-            menu.sections = vec![
-                undo,
-                vec![workspace.menu(
-                    self.require_workspace_idle().is_ok(),
-                    durable_layout(&self.state.workspace.layout) != workspace.baseline,
-                )],
-                panels,
-                vec![ContextMenuItem::submenu(
-                    "Quick Access Toolbars",
-                    vec![toolbars, toolbar_actions],
-                )],
-            ];
+            let mut workspaces = workspace.menu(
+                self.require_workspace_idle().is_ok(),
+                durable_layout(&self.state.workspace.layout) != workspace.baseline,
+            );
+            workspaces.sections.push(vec![ContextMenuItem::submenu(
+                "Quick Access Toolbars",
+                vec![toolbars, toolbar_actions],
+            )]);
+            menu.sections = vec![undo, vec![workspaces], panels];
         }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
@@ -3919,7 +3916,21 @@ mod tests {
                 .iter()
                 .all(|i| !i.label.ends_with(" panel"))
         );
-        let toolbars = &menu.sections[3][0];
+        assert_eq!(menu.sections.len(), 3);
+        let workspaces = &menu.sections[1][0];
+        assert!(
+            workspaces
+                .sections
+                .iter()
+                .flatten()
+                .any(|item| item.label == "Manage workspace templates…")
+        );
+        let toolbars = workspaces
+            .sections
+            .iter()
+            .flatten()
+            .find(|item| item.label == "Quick Access Toolbars")
+            .unwrap();
         assert_eq!(toolbars.label, "Quick Access Toolbars");
         assert!(
             toolbars.sections[0]
