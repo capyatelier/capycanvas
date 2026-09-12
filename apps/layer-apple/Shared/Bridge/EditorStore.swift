@@ -85,6 +85,10 @@ import SwiftUI
                 workspace.refresh()
                 workspaceLibrary?.observe()
                 if workspaceLibrary != nil { workspaceManager.receive(state.json) }
+            case .reflow:
+                if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
+                contentDrawers.refresh()
+                workspace.refresh()
             case .workspace, .camera:
                 // Camera patches update the readout alone; dragging the canvas
                 // must not rebuild every panel and brush preview at input rate.

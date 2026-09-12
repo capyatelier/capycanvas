@@ -1629,6 +1629,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 UiAction::DragDivider {
                     phase: ContactPhase::Move,
                     ..
+                } | UiAction::ResizeFloating {
+                    phase: ContactPhase::Move,
+                    ..
                 } | UiAction::MeasurePanels { .. }
             );
         let collapsed_before = layout_only.then(|| self.state.workspace.layout.collapsed.clone());

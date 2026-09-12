@@ -12,6 +12,14 @@ mod package;
 mod protocol;
 pub use package::*;
 mod retention;
+mod browser;
+pub use browser::BrowserDatabase;
+mod controller;
+pub use controller::*;
+#[cfg(all(test, feature = "native"))]
+mod browser_tests;
+#[cfg(all(test, feature = "native"))]
+mod controller_tests;
 pub use manager::*;
 pub use model::*;
 pub use protocol::*;

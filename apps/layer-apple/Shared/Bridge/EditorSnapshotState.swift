@@ -9,7 +9,7 @@ import Foundation
     private let panels = SnapshotProjection()
     private let menus = SnapshotProjection()
     let workspace = WorkspaceMotion()
-    enum Update { case full, workspace, camera, ignored }
+    enum Update { case full, reflow, workspace, camera, ignored }
     var state: SnapshotProjection { stateFields }
     var snapshot: SnapshotProjection { snapshotFields }
     func command(_ id: String) -> JSON { commands[id] }
@@ -30,18 +30,30 @@ import Foundation
             changes += workspace.stage(motion)
             kind = .full
         } else if !motion.isNull {
-            guard workspace.accepts(motion, full: false) else { return .ignored }
-            changes = workspace.stage(motion)
-            var patch = ["workspace_update": motion]
-            if !next["camera"].isNull {
-                changes += stateFields.stagePatch(["camera": next["camera"]])
-                patch["state"] = stateFields.unobserved
+            if !next["layout"].isNull || !next["workspace_layout"].isNull {
+                guard workspace.accepts(motion, full: false, reflow: true),
+                    let updatedWorkspace = reflowWorkspace(next) else { return .ignored }
+                // Preserve the content revision and all control indexes. The
+                // live workspace dimensions and camera become visible together.
+                changes = stateFields.stagePatch(["workspace": updatedWorkspace, "camera": next["camera"]])
+                changes += snapshotFields.stagePatch(["state": stateFields.unobserved, "layout": next["layout"],
+                    "panel_measurements": next["panel_measurements"], "workspace_update": motion])
+                changes += workspace.stage(motion)
+                kind = .reflow
+            } else {
+                guard workspace.accepts(motion, full: false) else { return .ignored }
+                changes = workspace.stage(motion)
+                var patch = ["workspace_update": motion]
+                if !next["camera"].isNull {
+                    changes += stateFields.stagePatch(["camera": next["camera"]])
+                    patch["state"] = stateFields.unobserved
+                }
+                // Ordinary placement retains the complete layout model. Neither
+                // kind of geometry patch promotes state.revision or wakes its
+                // content readers, such as layer thumbnails.
+                changes += snapshotFields.stagePatch(patch)
+                kind = .workspace
             }
-            // State/layout remain the retained models at model_revision. The
-            // presentation has its own revision; changing state.revision here
-            // would wake content consumers such as layer-thumbnail readers.
-            changes += snapshotFields.stagePatch(patch)
-            kind = .workspace
         } else if !next["camera"].isNull {
             // A camera patch must remain cheap and cannot acknowledge or alter
             // any unrelated command, panel, menu or persistent workspace value.
@@ -55,5 +67,19 @@ import Foundation
         // see coherent retained models and their matching presentation.
         changes.forEach { $0.publish() }
         return kind
+    }
+    private func reflowWorkspace(_ next: JSON) -> JSON? {
+        let current = stateFields.unobserved["workspace"], layout = next["layout"]
+        guard current["layout"].raw is NSDictionary, layout.raw is NSDictionary,
+            next["camera"].raw is NSDictionary, next["panel_measurements"].raw is NSArray,
+            ["groups", "dividers", "collapsed", "reveal_edges", "viewport"].allSatisfy({ layout[$0].raw is NSArray }),
+            layout["work_area"].raw is NSDictionary, layout["status"].raw is NSDictionary,
+            layout["tab_bar_height"].raw is NSNumber else { return nil }
+        var dimensions = current["layout"].object
+        for key in ["bands", "floating", "collapsed", "fit_tab_groups"] {
+            guard next["workspace_layout"][key].raw is NSArray else { return nil }
+            dimensions[key] = next["workspace_layout"][key].raw
+        }
+        return current.replacing("layout", with: JSON(dimensions))
     }
 }
