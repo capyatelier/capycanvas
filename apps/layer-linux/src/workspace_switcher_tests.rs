@@ -39,6 +39,27 @@ fn click(w: &Workspace, dir: &std::path::Path, step: &mut usize, widget: &gtk::W
         serde_json::json!([{ "point": at(w, widget, 0.5, 0.5) }, { "down": true }, { "down": false }]),
     );
 }
+fn switcher_buttons(w: &Workspace) -> Vec<gtk::ToggleButton> {
+    fn collect(widget: &gtk::Widget, buttons: &mut Vec<gtk::ToggleButton>) {
+        if let Some(button) = widget.downcast_ref::<gtk::ToggleButton>() {
+            buttons.push(button.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(node) = child {
+            collect(&node, buttons);
+            child = node.next_sibling();
+        }
+    }
+    let mut buttons = Vec::new();
+    collect(w.workspaces.switcher.upcast_ref(), &mut buttons);
+    buttons
+}
+fn switcher_names(w: &Workspace) -> Vec<String> {
+    switcher_buttons(w)
+        .iter()
+        .map(|button| button.widget_name().to_string())
+        .collect()
+}
 fn menu_button(widget: &gtk::Widget) -> Option<gtk::MenuButton> {
     if let Some(menu) = widget.downcast_ref::<gtk::MenuButton>() {
         return Some(menu.clone());
@@ -184,11 +205,14 @@ fn native_workspace_switcher_input() {
         events.extend((0..10).map(|_| serde_json::json!({})));
         send(&dir, &mut step, serde_json::Value::Array(events));
         assert_eq!(
-            popup.is_visible(), touch,
+            popup.is_visible(),
+            touch,
             "only touch holds open the row menu"
         );
         assert_eq!(durable_layout(&state(&w).workspace.layout), preview);
-        if touch { assert!(!popup.is_autohide(), "hold retains the contact"); }
+        if touch {
+            assert!(!popup.is_autohide(), "hold retains the contact");
+        }
         send(
             &dir,
             &mut step,
@@ -199,7 +223,8 @@ fn native_workspace_switcher_input() {
             }]),
         );
         assert_eq!(
-            popup.is_visible(), touch,
+            popup.is_visible(),
+            touch,
             "only touch release retains a menu"
         );
         if !touch {
@@ -374,7 +399,9 @@ fn native_workspace_switcher_input() {
         toggle_pin(&id, &mut step);
     }
     assert!(manager.switcher_ids().is_empty());
-    assert!(!w.workspaces.switcher.is_visible());
+    assert!(w.workspaces.switcher.is_visible());
+    assert_eq!(switcher_names(&w), ["workspace-switch-illustrator"]);
+    assert!(switcher_buttons(&w)[0].is_active());
     // All hidden rows still have grips and can move before being shown again.
     drag(&w, &dir, &mut step, &custom, &p, false, false, true, false);
     assert_eq!(manager.workspace_ids()[0], custom);
@@ -401,6 +428,14 @@ fn native_workspace_switcher_input() {
     toggle_pin(&p, &mut step);
     assert_eq!(manager.switcher_ids(), [custom.clone(), p.clone()]);
     assert!(w.workspaces.switcher.is_visible());
+    assert_eq!(
+        switcher_names(&w),
+        [
+            "workspace-switch-illustrator".to_string(),
+            format!("workspace-switch-{custom}"),
+            "workspace-switch-painter".into()
+        ]
+    );
     // Row-menu ordering is available through keyboard activation, too.
     let menu = menu_button(&row(&w, &p)).unwrap();
     click(&w, &dir, &mut step, menu.upcast_ref());
@@ -480,6 +515,23 @@ fn native_workspace_switcher_input() {
             .upcast_ref(),
     );
     let saved_order = manager.workspace_ids();
+    let custom_button =
+        find_named(w.header.upcast_ref(), &format!("workspace-switch-{custom}")).unwrap();
+    click(&w, &dir, &mut step, &custom_button);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while manager.active_id().as_ref() != Some(&custom) {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    assert_eq!(
+        switcher_names(&w),
+        [
+            "workspace-switch-painter".to_string(),
+            format!("workspace-switch-{custom}")
+        ],
+        "switching away removes the temporary Illustrator entry"
+    );
+    assert_eq!(manager.switcher_ids(), [p.clone(), custom.clone()]);
     w.window.close();
     pump(400);
     assert!(!w.window.is_visible());

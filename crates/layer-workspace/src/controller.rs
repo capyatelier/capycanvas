@@ -79,7 +79,10 @@ pub struct WorkspaceView {
     pub error: Option<String>,
     pub focus_window: Option<String>,
     pub defaults: Vec<WorkspaceRow>,
+    /// Persistently pinned choices, used by the manager's visibility controls.
     pub switcher: Vec<WorkspaceRow>,
+    /// Header choices, including the current workspace when it is unpinned.
+    pub switcher_display: Vec<WorkspaceRow>,
     pub order: Vec<String>,
     pub switcher_busy: bool,
     pub switcher_error: Option<String>,
@@ -316,21 +319,22 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             .collect();
         self.view.order = self.manager.workspace_ids();
         let items = self.manager.items();
-        self.view.switcher = self
-            .manager
-            .switcher_ids()
-            .into_iter()
-            .filter_map(|id| {
-                let item = items.iter().find(|item| item.id == id)?;
-                Some(WorkspaceRow {
-                    id,
-                    title: item.metadata.name.clone(),
-                    subtitle: String::new(),
-                    options: false,
-                    delete: false,
+        let switcher_rows = |ids: Vec<String>| {
+            ids.into_iter()
+                .filter_map(|id| {
+                    let item = items.iter().find(|item| item.id == id)?;
+                    Some(WorkspaceRow {
+                        id,
+                        title: item.metadata.name.clone(),
+                        subtitle: String::new(),
+                        options: false,
+                        delete: false,
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
+        self.view.switcher = switcher_rows(self.manager.switcher_ids());
+        self.view.switcher_display = switcher_rows(self.manager.switcher_display_ids());
         let page = self.view.page.as_deref();
         self.view.title = match page {
             Some("history") => format!("Layout History — {}", self.view.name),

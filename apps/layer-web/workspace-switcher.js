@@ -154,9 +154,10 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
     if (e.key === "Tab") closeMenu();
   });
   function render(view) {
-    const ids = new Set(view.switcher.map(row => row.id));
+    const previousFirst = root.firstElementChild?.dataset.workspaceId;
+    const ids = new Set(view.switcher_display.map(row => row.id));
     for (const [id, node] of buttons) if (!ids.has(id)) { node.remove(); buttons.delete(id); }
-    for (const [index, item] of view.switcher.entries()) {
+    for (const [index, item] of view.switcher_display.entries()) {
       let node = buttons.get(item.id);
       if (!node) { node = button("", () => send({type:"switch",id:item.id})); node.append(element("span")); node.dataset.workspaceId = item.id; buttons.set(item.id,node); }
       if (root.children[index] !== node) root.insertBefore(node, root.children[index] ?? null);
@@ -164,6 +165,7 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
       node.setAttribute("aria-pressed", String(item.id === view.id)); node.disabled = unavailable() || !!view.page || !!view.form;
     }
     root.hidden = !ids.size;
+    if (view.id !== previousFirst && view.switcher_display[0]?.id === view.id) root.scrollLeft = 0;
     if (!view.page || view.form || (contact && !view.order.includes(contact.row.dataset.id))) { finish(); closeMenu(); }
     for (const more of list.querySelectorAll(".workspace-options")) more.disabled = unavailable();
   }

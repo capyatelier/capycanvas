@@ -104,15 +104,17 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     const custom=[];
     for(let n=0;n<9;n++) {
       await send({type:"form",kind:"new"}); await send({type:"submit",name:n?`Study ${n}`:"Sketching",source:null}); custom.push((await view()).id);
+      assert.deepEqual(await shown(),[custom[n],...await pins()],"new unpinned workspace is temporarily first");
     }
     await send({type:"switch",id:initial.id}); await send({type:"open",page:"workspaces"}); await click(`${row(f)} .workspace-choice`);
     await options(custom[0],"pin"); assert.deepEqual(await pins(),[i,f,custom[0]]);
     for(const id of [i,f,custom[0]])await options(id,"pin");
-    assert.equal(await evaluate("document.querySelector('.workspace-switcher').hidden"),true);
+    assert.equal(await evaluate("document.querySelector('.workspace-switcher').hidden"),false);
+    assert.deepEqual(await shown(),[initial.id],"current workspace stays visible, not the dialog preview");
     await evaluate("document.querySelector('.workspace-list').scrollTop=0"); await settle();
     await drag(custom[0],i,false,"mouse",true); assert.equal((await order())[0],custom[0]); assert.deepEqual(await pins(),[]);
     await options(custom[0],"pin"); await options(p,"pin");
-    assert.deepEqual(await shown(),await pins());
+    assert.deepEqual(await shown(),[initial.id,...await pins()]);
     // Native touch and pen body motion scrolls rather than publishing a reorder.
     const savedOrder=await order();
     for(const kind of ["touch","pen"]) {
@@ -153,11 +155,16 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     assert.ok(await evaluate("document.querySelector('.workspace-switcher').getBoundingClientRect().width <= 420"));
     const beforeRestart={pins:await pins(),order:await order()};
     await click(".workspace-manager footer button"); await reload(); await wait(ready); await idle();
-    assert.deepEqual(await pins(),beforeRestart.pins); assert.deepEqual(await order(),beforeRestart.order); assert.deepEqual(await shown(),beforeRestart.pins);
+    assert.deepEqual(await pins(),beforeRestart.pins); assert.deepEqual(await order(),beforeRestart.order); assert.deepEqual(await shown(),[initial.id,...beforeRestart.pins]);
     assert.deepEqual(await durable(),original,"restart preserves original workspace and history");
     await click(`.workspace-switcher button[data-workspace-id=${JSON.stringify(custom[0])}]`);
     assert.equal((await view()).id,custom[0]);
     assert.equal(await evaluate(`document.querySelector('.workspace-switcher button[data-workspace-id=${JSON.stringify(custom[0])}]').getAttribute('aria-pressed')`),"true");
+    assert.deepEqual(await shown(),await pins(),"temporary entry disappears when switching to a pinned workspace");
+    await send({type:"edit_switcher",edit:{type:"show",id:custom[0],visible:false}});
+    assert.deepEqual(await shown(),[custom[0],...await pins()]);
+    await click(`.workspace-switcher button[data-workspace-id=${JSON.stringify(p)}]`);
+    assert.deepEqual(await shown(),await pins());
     console.log("PASS: configurable Web pill, narrow grips on every row, mouse/touch/pen pickup and menus, same-contact drag, hidden-row order, keyboard, scrolling, cancel/blur, preview preservation, cross-tab refresh and restart");
   } catch(error) {await shot("failure");console.error("Workspace switcher failure",await view());await writeFile(`${artifacts}/events.json`,JSON.stringify(await evaluate("workspaceEvents"),null,2));throw error;}
   finally {if(pressed)await pointer(device==="touch"?"cancel":"up");}

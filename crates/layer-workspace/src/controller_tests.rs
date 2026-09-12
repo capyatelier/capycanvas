@@ -490,3 +490,67 @@ fn switcher_edits_preserve_pending_preview_and_workspace_contents() {
         *original.entity.capture().unwrap().history.layout()
     );
 }
+
+#[test]
+fn unpinned_current_workspace_is_temporary_and_previews_do_not_replace_it() {
+    let mut f = Fixture::new();
+    let [p, i, h] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
+    let shown = |f: &Fixture| {
+        f.controller
+            .view
+            .switcher_display
+            .iter()
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>()
+    };
+    f.input(serde_json::json!({"type":"switch","id":i}));
+    let original = f.controller.manager.current_record().unwrap();
+    let order = f.controller.view.order.clone();
+    f.input(
+        serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":i,"visible":false}}),
+    );
+    assert_eq!(shown(&f), [i.clone(), p.clone(), h.clone()]);
+    assert_eq!(f.controller.manager.switcher_ids(), [p.clone(), h.clone()]);
+    assert_eq!(f.controller.view.order, order);
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+
+    f.input(serde_json::json!({"type":"open","page":"workspaces"}));
+    f.input(serde_json::json!({"type":"select","id":p}));
+    assert_eq!(shown(&f), [i.clone(), p.clone(), h.clone()]);
+    f.input(serde_json::json!({"type":"cancel"}));
+    assert_eq!(f.controller.manager.current_record().unwrap(), original);
+
+    // Pinning returns it to the saved order without duplicating it.
+    f.input(
+        serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":i,"visible":true}}),
+    );
+    assert_eq!(shown(&f), [p.clone(), i.clone(), h.clone()]);
+    f.input(
+        serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":i,"visible":false}}),
+    );
+    f.input(serde_json::json!({"type":"switch","id":p}));
+    assert_eq!(shown(&f), [p.clone(), h.clone()]);
+    f.input(serde_json::json!({"type":"switch","id":i}));
+    assert_eq!(shown(&f), [i.clone(), p.clone(), h.clone()]);
+
+    for id in [&p, &h] {
+        f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":id,"visible":false}}));
+    }
+    assert_eq!(shown(&f), [i.clone()]);
+    assert!(f.controller.view.switcher.is_empty());
+    f.input(serde_json::json!({"type":"switch","id":"missing-workspace"}));
+    assert!(f.controller.view.error.is_some());
+    assert_eq!(shown(&f), [i]);
+    f.input(serde_json::json!({"type":"switch","id":p}));
+    assert_eq!(shown(&f), [p]);
+    assert!(f.controller.view.switcher.is_empty());
+    assert_eq!(f.controller.view.order, order);
+
+    // A window without an adopted workspace sees only the saved pins.
+    let other = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    pollster::block_on(async {
+        other.refresh().await.unwrap();
+        other.refresh_switcher().await.unwrap();
+    });
+    assert!(other.switcher_display_ids().is_empty());
+}

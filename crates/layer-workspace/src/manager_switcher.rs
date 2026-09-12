@@ -52,7 +52,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         items.into_iter().map(|i| i.id.clone()).collect()
     }
 
-    /// None in storage is the original three defaults; an empty list hides it.
+    /// Persistently pinned choices. None in storage is the original three defaults.
     /// Visibility never changes the dialog order.
     pub fn switcher_ids(&self) -> Vec<String> {
         let state = self.state.borrow();
@@ -65,6 +65,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .into_iter()
             .filter(|id| pinned.contains(id))
             .collect()
+    }
+
+    /// Header choices include the current workspace while it is unpinned.
+    /// This does not change saved visibility or order; previews do not change it.
+    pub fn switcher_display_ids(&self) -> Vec<String> {
+        let mut ids = self.switcher_ids();
+        if let Some(active) = self.active_id()
+            && !ids.contains(&active)
+        {
+            ids.insert(0, active);
+        }
+        ids
     }
 
     /// Hosts with a switcher call this at startup and when refreshing the list.

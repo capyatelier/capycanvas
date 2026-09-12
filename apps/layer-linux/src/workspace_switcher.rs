@@ -31,7 +31,7 @@ impl NativeWorkspaces {
         let ids = self
             .manager
             .as_ref()
-            .map(|m| m.switcher_ids())
+            .map(|m| m.switcher_display_ids())
             .unwrap_or_default();
         let active = self.manager.as_ref().and_then(|m| m.active_id());
         let items = self.manager.as_ref().map(|m| m.items()).unwrap_or_default();
@@ -58,6 +58,15 @@ impl NativeWorkspaces {
                 bind_button(&w, &button, id.clone());
                 body.append(&button);
                 buttons.push((id.clone(), button));
+            }
+            if active.is_some()
+                && ids.first() == active.as_ref()
+                && let Some(scroll) = self
+                    .switcher
+                    .first_child()
+                    .and_downcast::<gtk::ScrolledWindow>()
+            {
+                scroll.hadjustment().set_value(0.);
             }
         }
         for (id, button) in buttons.iter() {
