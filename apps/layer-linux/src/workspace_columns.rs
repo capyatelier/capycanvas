@@ -5,7 +5,7 @@ use super::*;
 struct Strip {
     id: u32,
     root: gtk::Box,
-    expand_icon: gtk::Image,
+    expand_glyph: gtk::Label,
     key: Vec<(u32, Vec<Panel>)>,
     buttons: Vec<(Panel, gtk::Button)>,
     scroll: gtk::Adjustment,
@@ -84,10 +84,12 @@ impl Columns {
                 expand.set_widget_name(&format!("expand-column-{}", c.id));
                 expand.add_css_class("flat");
                 expand.add_css_class("column-expand");
-                let expand_icon = gtk::Image::new();
-                // The bundled resource is the canonical Web SVG, at Web's 16px size.
-                expand_icon.set_pixel_size(16);
-                expand.set_child(Some(&expand_icon));
+                // Match Web's original compact text guillemet, including its weight.
+                let expand_glyph = gtk::Label::new(None);
+                expand_glyph.set_halign(gtk::Align::Center);
+                expand_glyph.set_valign(gtk::Align::Center);
+                expand.set_child(Some(&expand_glyph));
+                expand.update_property(&[gtk::accessible::Property::Label(c.expand_label())]);
                 expand.set_height_request(c.expand.height as i32);
                 root.append(&expand);
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -189,7 +191,7 @@ impl Columns {
                 strips.push(Strip {
                     id: c.id,
                     root,
-                    expand_icon,
+                    expand_glyph,
                     key,
                     buttons,
                     scroll: scroll.vadjustment(),
@@ -197,15 +199,15 @@ impl Columns {
                 });
             }
             let strip = strips.iter().find(|s| s.id == c.id).unwrap();
-            let expand_icon = if c.bounds.x + c.bounds.width * 0.5
+            let expand_glyph = if c.bounds.x + c.bounds.width * 0.5
                 < resolved.work_area.x + resolved.work_area.width * 0.5
             {
-                "layer-chevron-double-right-symbolic"
+                "»"
             } else {
-                "layer-chevron-double-left-symbolic"
+                "«"
             };
-            if strip.expand_icon.icon_name().as_deref() != Some(expand_icon) {
-                strip.expand_icon.set_icon_name(Some(expand_icon));
+            if strip.expand_glyph.text() != expand_glyph {
+                strip.expand_glyph.set_text(expand_glyph);
             }
             let offset = layout
                 .column_scroll
