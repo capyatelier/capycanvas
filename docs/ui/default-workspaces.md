@@ -52,12 +52,12 @@ the existing default arrangement and tool selection.
 - The pill sits to the right of the document title and left of the clock. It uses
   normal workspace switching, including outgoing saves and ownership checks.
   Selecting a workspace restores its latest settings and arrangement. It never
-  reapplies the shipped preset. If the active workspace is not shown in the
-  switcher, none of its segments is selected.
+  reapplies the shipped preset. An unpinned active workspace is temporarily
+  prepended and selected until the user switches away.
 - If another window owns a default workspace, focus that window through the normal
   ownership path. Do not take it over or reset its contents just to switch modes.
-- New Workspace copies the current settings and arrangement and asks only for a
-  name. Manage Workspaces retains selection preview, explicit Switch to Workspace,
+- New Workspace copies the current settings and arrangement, asks only for a
+  name, and pins the new workspace. Manage Workspaces retains selection preview, explicit Switch to Workspace,
   and Cancel. Layout History remains a history of arrangements within a workspace.
 - Restore Starting Layout returns to that workspace's original arrangement.
   Reset All Brushes resets all brush-setting overrides in the current workspace,
@@ -80,7 +80,9 @@ Each row's **⋮** menu includes **Show in top bar**. Checking it shows that
 workspace in its list position; unchecking removes its pin without moving the row.
 The switcher has no border and a darker, recessed background like a slider track
 (80% theme background, 20% black), with a subtle blue active choice.
-New workspaces start unchecked. The top bar follows the list order, skipping
+New workspaces start pinned. Creation and pinning are saved together, so the
+workspace stays in the top bar after switching away or restarting. Existing
+hidden workspaces keep their preferences. The top bar follows the list order, skipping
 unchecked entries. If the current workspace is unchecked, temporarily prepend it
 until the user switches away. This keeps the current workspace visible even when
 all entries are unchecked, without changing saved pins or order. Dialog previews
@@ -194,7 +196,7 @@ Web now uses the same persisted visibility and row order as GTK. The shared
 status; `EditSwitcher` acknowledgements preserve pending and visible previews.
 Web refreshes on focus and uses BroadcastChannel to update other tabs after a
 successful preference edit. The fixed `defaults` field remains for compatibility;
-new host switchers should render `switcher`.
+new host switchers should render `switcher_display`; `switcher` is the saved pin selection.
 
 `node apps/layer-web/test.mjs --workspace-switcher` passes in desktop Chrome on an
 isolated Wayland display. It covers native mouse/touch and CDP pen input: every-row

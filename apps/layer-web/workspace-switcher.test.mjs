@@ -104,10 +104,13 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     const custom=[];
     for(let n=0;n<9;n++) {
       await send({type:"form",kind:"new"}); await send({type:"submit",name:n?`Study ${n}`:"Sketching",source:null}); custom.push((await view()).id);
-      assert.deepEqual(await shown(),[custom[n],...await pins()],"new unpinned workspace is temporarily first");
+      assert.ok((await pins()).includes(custom[n]),"new workspace is pinned by default");
+      assert.deepEqual(await shown(),await pins());
     }
     await send({type:"switch",id:initial.id}); await send({type:"open",page:"workspaces"}); await click(`${row(f)} .workspace-choice`);
-    await options(custom[0],"pin"); assert.deepEqual(await pins(),[i,f,custom[0]]);
+    assert.deepEqual(await pins(),[i,f,...custom],"new pins survive switching away");
+    for(const id of custom.slice(1))await options(id,"pin");
+    assert.deepEqual(await pins(),[i,f,custom[0]]);
     for(const id of [i,f,custom[0]])await options(id,"pin");
     assert.equal(await evaluate("document.querySelector('.workspace-switcher').hidden"),false);
     assert.deepEqual(await shown(),[initial.id],"current workspace stays visible, not the dialog preview");
@@ -143,6 +146,8 @@ export async function checkWorkspaceSwitcher({call, evaluate, settle, reload}) {
     try {
       await call("Runtime.enable",{},sessionId);await call("Page.enable",{},sessionId);await call("Page.navigate",{url:await evaluate("location.href")},sessionId);
       for(let n=0;n<180;n++){if(await other(ready))break;await pause(100);if(n===179)throw Error("Second tab startup");}
+      const otherPins=await other("JSON.parse(layerApp.app.workspace_view()).switcher.map(r=>r.id)");
+      await wait(`JSON.stringify(JSON.parse(layerApp.app.workspace_view()).switcher.map(r=>r.id))===${JSON.stringify(JSON.stringify(otherPins))}`);
       assert.deepEqual(await other("JSON.parse(layerApp.app.workspace_view()).switcher.map(r=>r.id)"),await pins());
       await other(`layerApp.app.workspace_input(${JSON.stringify(JSON.stringify({type:"edit_switcher",edit:{type:"show",id:f,visible:true}}))});null`);
       await wait(`JSON.parse(layerApp.app.workspace_view()).switcher.some(row=>row.id===${JSON.stringify(f)})`);

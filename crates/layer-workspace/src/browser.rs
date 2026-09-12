@@ -511,6 +511,12 @@ impl BrowserDatabase {
             receipt.items.push((w.id.clone(), s.generations));
             self.items.insert(w.id.clone(), s);
         }
+        if !batch.pin_workspaces.is_empty() {
+            self.switcher = Some(with_created_pins(
+                self.switcher.clone(),
+                &batch.pin_workspaces,
+            )?);
+        }
         for (key, id) in &batch.bindings {
             if let Some(id) = id {
                 let s = self.item(id)?;

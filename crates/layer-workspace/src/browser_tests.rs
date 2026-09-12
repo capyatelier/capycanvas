@@ -44,6 +44,7 @@ fn browser_transactions_match_sqlite_contract() {
         };
         assert_eq!(normalize(result), expected, "{request:?}");
         fixture.push(serde_json::json!({"request":request,"now":now,"expected":expected}));
+        expected
     };
     let owner = Owner::fresh();
     let other = Owner::fresh();
@@ -326,6 +327,65 @@ fn browser_transactions_match_sqlite_contract() {
         },
         32001,
     );
+    // Pinning shares creation's transaction, rollback and idempotent receipt.
+    let third = Entity::workspace(
+        "Sketching",
+        capture.clone(),
+        capture.history.layout().clone(),
+        None,
+        32002,
+    );
+    let mut pinned =
+        CommitBatch::prepare(other.clone(), vec![create(third.clone(), true)]).unwrap();
+    pinned.pin_workspaces.push(third.id.clone());
+    let mut failed =
+        CommitBatch::prepare(other.clone(), vec![create(third.clone(), true)]).unwrap();
+    failed.pin_workspaces.push(third.id.clone());
+    failed
+        .bindings
+        .push(("last_workspace".into(), Some("missing".into())));
+    execute(StoreRequest::Commit { batch: failed }, 32002);
+    execute(
+        StoreRequest::Load {
+            id: third.id.clone(),
+        },
+        32002,
+    );
+    assert_eq!(
+        execute(StoreRequest::Switcher, 32002),
+        normalize(Ok(StoreResponse::Switcher(Some(vec![]))))
+    );
+    execute(
+        StoreRequest::Commit {
+            batch: pinned.clone(),
+        },
+        32003,
+    );
+    execute(
+        StoreRequest::Commit {
+            batch: pinned.clone(),
+        },
+        32004,
+    );
+    assert_eq!(
+        execute(StoreRequest::Switcher, 32004),
+        normalize(Ok(StoreResponse::Switcher(Some(vec![third.id.clone()]))))
+    );
+    execute(
+        StoreRequest::UpdateSwitcher {
+            expected: Some(vec![third.id.clone()]),
+            ids: vec![],
+        },
+        32005,
+    );
+    execute(StoreRequest::Commit { batch: pinned }, 32006);
+    assert_eq!(
+        execute(StoreRequest::Switcher, 32006),
+        normalize(Ok(StoreResponse::Switcher(Some(vec![]))))
+    );
+    let mut invalid = CommitBatch::prepare(other, vec![]).unwrap();
+    invalid.pin_workspaces.push(first.id.clone());
+    execute(StoreRequest::Commit { batch: invalid }, 32007);
     drop(execute);
     if let Ok(path) = std::env::var("CAPY_STORE_CONTRACT_FIXTURE") {
         std::fs::write(path, serde_json::to_string(&fixture).unwrap()).unwrap();

@@ -854,6 +854,16 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Ok(outcome) => {
                     let adopting = matches!(outcome, Outcome::Adopt(_));
                     if let Outcome::Adopt(incoming) = outcome {
+                        if self
+                            .view
+                            .switcher
+                            .iter()
+                            .map(|row| &row.id)
+                            .ne(self.manager.switcher_ids().iter())
+                        {
+                            self.view.switcher_revision =
+                                self.view.switcher_revision.wrapping_add(1);
+                        }
                         self.incoming = Some(incoming);
                     } else if let Outcome::Focus(id) = outcome {
                         self.view.focus_window = Some(id);

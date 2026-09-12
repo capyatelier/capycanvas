@@ -14025,6 +14025,8 @@ fn native_named_workspace_manager_library_and_history() {
     run(A::New, Some("Painting"), Some("Create and Switch"));
     assert_eq!(manager.active_name().as_deref(), Some("Painting"));
     let painting = manager.active_id().unwrap();
+    assert!(manager.switcher_ids().contains(&painting));
+    assert!(find_named(w.header.upcast_ref(), &format!("workspace-switch-{painting}")).is_some());
     let baseline = durable_layout(&state(&w).workspace.layout);
     w.dispatch(UiAction::SetBrushSize { value: 73. });
     w.dispatch(UiAction::MovePanel {
@@ -14081,6 +14083,8 @@ fn native_named_workspace_manager_library_and_history() {
     assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
     assert_eq!(state(&w).brush.diameter, 73.);
     let inking = manager.active_id().unwrap();
+    assert!(manager.switcher_ids().contains(&inking));
+    assert!(manager.switcher_ids().contains(&painting), "new workspace stays pinned after switching away");
     w.dispatch(UiAction::SetBrushSize { value: 31. });
     w.customize(CustomizationAction::SetPanelVisible {
         panel: Panel::Color,

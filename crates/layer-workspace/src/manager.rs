@@ -256,6 +256,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .or_else(|| self.active_id());
         self.publish(batch).await?;
         self.refresh().await?;
+        self.refresh_switcher().await?;
         match incoming {
             Some(id) => self.claim(&id).await.map(Some),
             None => Ok(None),
@@ -553,8 +554,10 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         batch
             .bindings
             .push((format!("window:{}", self.owner.id), Some(id.clone())));
+        batch.pin_workspaces.push(id.clone());
         self.publish(batch).await?;
         self.refresh().await?;
+        self.refresh_switcher().await?;
         self.load(&id).await
     }
     pub async fn prepare_switch(&self, id: &str, now: u64) -> Result<StoredEntity> {
@@ -979,4 +982,4 @@ mod migration;
 #[path = "manager_switcher.rs"]
 mod switcher;
 pub use switcher::SwitcherEdit;
-pub(crate) use switcher::validate_ids as validate_switcher_ids;
+pub(crate) use switcher::{validate_ids as validate_switcher_ids, with_created_pins};

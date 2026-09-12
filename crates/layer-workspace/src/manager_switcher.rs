@@ -21,6 +21,20 @@ pub(crate) fn validate_ids(ids: &[String]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn with_created_pins(
+    pins: Option<Vec<String>>,
+    created: &[String],
+) -> Result<Vec<String>> {
+    let mut ids = pins.unwrap_or_else(|| DEFAULT_WORKSPACES.map(|(id, _)| id.to_string()).to_vec());
+    for id in created {
+        if !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    validate_ids(&ids)?;
+    Ok(ids)
+}
+
 impl<S: WorkspaceStore> WorkspaceManager<S> {
     /// Complete dialog order. New workspaces follow saved entries alphabetically.
     /// Existing switcher-only preferences seed the order on upgrade.

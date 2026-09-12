@@ -547,6 +547,18 @@ impl SqliteStore {
             let generations = apply_write(&tx, write, &batch.owner, now)?;
             result.items.push((write.id.clone(), generations));
         }
+        if !batch.pin_workspaces.is_empty() {
+            let pins: Option<String> = tx
+                .query_row(
+                    "SELECT workspace_ids FROM workspace_switcher WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let pins = pins.map(|s| serde_json::from_str(&s)).transpose()?;
+            let pins = with_created_pins(pins, &batch.pin_workspaces)?;
+            tx.execute("INSERT INTO workspace_switcher(id,workspace_ids) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET workspace_ids=excluded.workspace_ids", [serde_json::to_string(&pins)?])?;
+        }
         for (key, id) in &batch.bindings {
             if let Some(id) = id {
                 let row = header(&tx, id)?;

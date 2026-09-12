@@ -4,7 +4,8 @@ Implement the configurable workspace switcher on your platform, matching GTK/Web
 In Manage Workspaces, add Show in top bar, a pin indicator, narrow left grips on
 all rows, and Move Up / Move Down. Style the switcher without a border, using the
 theme background mixed with 20% black for a recessed slider-track look, and a
-subtle blue active choice. All rows reorder; the top bar follows that order and
+subtle blue active choice. Newly created workspaces are pinned by default through
+the shared manager's creation operation. All rows reorder; the top bar follows that order and
 skips hidden entries. Temporarily prepend the current workspace if it is hidden,
 until the user switches away; keep saved pins/order and dialog previews unchanged.
 Right-click or touch/pen hold opens the row menu;

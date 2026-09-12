@@ -83,6 +83,9 @@ pub struct CommitBatch {
     pub legacy_imports: Vec<(String, String)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub abandon_operations: Vec<String>,
+    /// Pin these newly created workspaces in the same transaction as their content.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) pin_workspaces: Vec<String>,
 }
 impl CommitBatch {
     pub fn prepare(owner: Owner, mutations: Vec<Mutation>) -> Result<Self, StoreError> {
@@ -94,6 +97,7 @@ impl CommitBatch {
             bindings: Vec::new(),
             legacy_imports: Vec::new(),
             abandon_operations: Vec::new(),
+            pin_workspaces: Vec::new(),
         };
         for mutation in mutations {
             let (id, create, claim, expected, fence, metadata, content, working, name_policy) =
@@ -178,6 +182,20 @@ impl CommitBatch {
         Ok(batch)
     }
     pub fn encoded(&self) -> Result<String, StoreError> {
+        validate_switcher_ids(&self.pin_workspaces)?;
+        for id in &self.pin_workspaces {
+            if !self.writes.iter().any(|w| {
+                w.id == *id
+                    && w.create
+                    && w.metadata
+                        .as_ref()
+                        .is_some_and(|m| m.kind == ItemKind::Workspace && m.deleted_at_ms.is_none())
+            }) {
+                return Err(StoreError::invalid(
+                    "Only newly created workspaces can be pinned with creation.",
+                ));
+            }
+        }
         let text = serde_json::to_string(self)?;
         if text.len() > MAX_PACKAGE_BYTES {
             return Err(StoreError::invalid(

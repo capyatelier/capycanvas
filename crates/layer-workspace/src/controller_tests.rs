@@ -279,12 +279,14 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
 fn failed_creation_keeps_recovery_visible_and_retries_immutable_delivery() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone();
+    let pins = f.controller.manager.switcher_ids();
     f.input(serde_json::json!({"type":"form","kind":"new"}));
     f.backend.fail.set(true);
     f.input(serde_json::json!({"type":"submit","name":"Painting"}));
     assert!(f.controller.view.error.is_some());
     assert!(f.controller.view.retry);
     assert_eq!(f.controller.view.id, original);
+    assert_eq!(f.controller.manager.switcher_ids(), pins);
     let failed = f.backend.deliveries.borrow().last().unwrap().clone();
     f.input(serde_json::json!({"type":"cancel"}));
     assert!(
@@ -297,6 +299,12 @@ fn failed_creation_keeps_recovery_visible_and_retries_immutable_delivery() {
     assert!(f.controller.view.error.is_none());
     assert_ne!(f.controller.view.id, original);
     assert_eq!(f.controller.view.name, "Painting");
+    assert!(
+        f.controller
+            .manager
+            .switcher_ids()
+            .contains(f.controller.view.id.as_ref().unwrap())
+    );
     assert_eq!(
         f.backend
             .deliveries
@@ -314,6 +322,42 @@ fn failed_creation_keeps_recovery_visible_and_retries_immutable_delivery() {
             .filter(|i| i.metadata.name == "Painting")
             .count(),
         1
+    );
+}
+
+#[test]
+fn new_workspaces_are_pinned_without_repinning_hidden_workspaces() {
+    let mut f = Fixture::new();
+    let original = f.controller.view.id.clone().unwrap();
+    let painter = DEFAULT_WORKSPACES[0].0;
+    f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":painter,"visible":false}}));
+    let pins = f.controller.manager.switcher_ids();
+    let revision = f.controller.view.switcher_revision;
+    f.input(serde_json::json!({"type":"form","kind":"new"}));
+    f.input(serde_json::json!({"type":"cancel"}));
+    assert_eq!(f.controller.manager.switcher_ids(), pins);
+    f.input(serde_json::json!({"type":"form","kind":"new"}));
+    f.input(serde_json::json!({"type":"submit","name":"Sketching"}));
+    let created = f.controller.view.id.clone().unwrap();
+    let expected: Vec<_> = pins.into_iter().chain([created.clone()]).collect();
+    assert_eq!(f.controller.manager.switcher_ids(), expected);
+    assert!(
+        f.controller.view.switcher_revision > revision,
+        "creation notifies other windows of the new pin"
+    );
+    f.input(serde_json::json!({"type":"switch","id":original}));
+    assert_eq!(f.controller.manager.switcher_ids(), expected);
+    let reopened = WorkspaceManager::new(Store(f.backend.clone()), Platform::Web);
+    pollster::block_on(async {
+        reopened.refresh().await.unwrap();
+        reopened.refresh_switcher().await.unwrap();
+    });
+    assert_eq!(reopened.switcher_ids(), expected);
+    f.input(serde_json::json!({"type":"edit_switcher","edit":{"type":"show","id":created,"visible":false}}));
+    f.input(serde_json::json!({"type":"switch","id":created}));
+    assert!(
+        !f.controller.manager.switcher_ids().contains(&created),
+        "switching back does not repin an explicitly hidden workspace"
     );
 }
 
@@ -428,6 +472,7 @@ fn closing_before_adoption_drains_claims_and_unreadable_legacy_stays_intact() {
 #[test]
 fn switcher_edits_preserve_pending_preview_and_workspace_contents() {
     let mut f = Fixture::new();
+    let revision = f.controller.view.switcher_revision;
     let original = f.controller.manager.current_record().unwrap();
     let [painter, illustrator, photographer] = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string());
     assert_eq!(
@@ -453,7 +498,7 @@ fn switcher_edits_preserve_pending_preview_and_workspace_contents() {
     );
     assert_eq!(f.controller.view.order[0], photographer);
     assert_eq!(f.controller.view.switcher.len(), 2);
-    assert_eq!(f.controller.view.switcher_revision, 2);
+    assert_eq!(f.controller.view.switcher_revision, revision + 2);
     assert_eq!(f.controller.manager.current_record().unwrap(), original);
     release.try_send(()).unwrap();
     f.pump();
@@ -469,7 +514,8 @@ fn switcher_edits_preserve_pending_preview_and_workspace_contents() {
     f.input(serde_json::json!({"type":"refresh_switcher"}));
     assert_eq!(f.controller.view.switcher[0].id, illustrator);
     assert_eq!(
-        f.controller.view.switcher_revision, 2,
+        f.controller.view.switcher_revision,
+        revision + 2,
         "refresh must not broadcast another edit"
     );
     assert_eq!(f.controller.view.selected.as_ref(), Some(&painter));

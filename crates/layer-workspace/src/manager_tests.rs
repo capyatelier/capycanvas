@@ -653,6 +653,13 @@ fn failed_named_creation_retries_its_identity_and_keeps_later_outgoing_edits() {
         let incoming = m.retry_failed_operation().await.unwrap().unwrap();
         m.activate(incoming);
         assert_eq!(m.active_name().as_deref(), Some("Pending Creation"));
+        assert_eq!(
+            m.switcher_ids()
+                .iter()
+                .filter(|id| Some(*id) == m.active_id().as_ref())
+                .count(),
+            1
+        );
         assert_eq!(m.items().len(), before + 1);
         assert!(!m.has_failed_operation());
         assert!(m.error().is_none());
@@ -1275,7 +1282,7 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
             .await
             .unwrap();
         m.release(&custom).await;
-        assert!(!m.switcher_ids().contains(&custom.entity.id));
+        assert!(m.switcher_ids().contains(&custom.entity.id));
         m.edit_switcher(SwitcherEdit::Show {
             id: custom.entity.id.clone(),
             visible: true,
