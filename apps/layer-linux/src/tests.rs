@@ -7,6 +7,8 @@ mod layer_hold;
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
 mod workspace_resize;
+#[path = "workspace_drawer_style_tests.rs"]
+mod workspace_drawer_style;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -11582,7 +11584,11 @@ fn native_column_drawer_drag_input() {
     w.window.present();
     pump(1200);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-    let original = state(&w).workspace;
+    // The asynchronously loaded shipped preset can replace the realized fixture.
+    // This regression addresses the fixed fixture's group and tab IDs.
+    let original = layer_ui::WorkspaceState::default();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: original.clone() });
+    pump(250);
     let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
     let mut step = 0;

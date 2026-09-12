@@ -618,6 +618,9 @@ impl Drawer {
             .or_else(|| self.closing.get().then(|| self.placement()).flatten())
         else {
             // A scrolled-out origin has no visible child or chrome hit region.
+            if self.state.borrow().is_some() {
+                self.mark_origin(w, None);
+            }
             self.presented.borrow_mut().take();
             return None;
         };
@@ -646,21 +649,26 @@ impl Drawer {
                 }
             }
         }
+        self.mark_origin(w, Some(&result));
+        *self.presented.borrow_mut() = Some(result.clone());
+        Some(result)
+    }
+    fn mark_origin(&self, w: &Workspace, placement: Option<&DrawerPlacement>) {
+        if self.id != 0 {
+            return;
+        }
         let origin = self
             .state
             .borrow()
             .as_ref()
-            .and_then(|s| s.anchor.tile().map(|a| (a, result.direction)));
-        if self.id == 0 {
-            w.customization.mark_drawer_origin(origin);
-            for parent in w.columns.drawers.borrow().iter() {
-                parent.mark_tile_origin(origin);
-            }
-            w.zen
-                .mark_drawer_origin(origin.map(|(anchor, _)| (anchor, &result)));
+            .and_then(|s| s.anchor.tile())
+            .zip(placement);
+        w.customization
+            .mark_drawer_origin(origin.map(|(a, p)| (a, p.direction)));
+        for parent in w.columns.drawers.borrow().iter() {
+            parent.mark_tile_origin(origin.map(|(a, p)| (a, p.direction)));
         }
-        *self.presented.borrow_mut() = Some(result.clone());
-        Some(result)
+        w.zen.mark_drawer_origin(origin);
     }
     fn animate(self: &Rc<Self>, w: &Rc<Workspace>, closing: bool) {
         if let Some(animation) = self.animation.take() {
@@ -694,11 +702,7 @@ impl Drawer {
                     w.surface
                         .remove_slots(|slot| matches!(slot, Slot::Drawer(id) | Slot::DrawerConnection(id) if id == drawer.id));
                     if drawer.id == 0 {
-                        w.customization.mark_drawer_origin(None);
-                        w.zen.mark_drawer_origin(None);
-                        for parent in w.columns.drawers.borrow().iter() {
-                            parent.mark_tile_origin(None);
-                        }
+                        drawer.mark_origin(&w, None);
                     }
                     drawer.view.borrow_mut().take();
                     drawer.state.borrow_mut().take();
@@ -747,6 +751,12 @@ impl Drawer {
         }
         if !changed && !refreshed && regions & regions::LAYOUT == 0 {
             return;
+        }
+        // Change opener styles before GTK allocates/snapshots the toolbar.
+        // Different tiles can share one retained drawer body, so body rebuilds
+        // and size changes cannot be used as a proxy for opener changes.
+        if changed {
+            self.mark_origin(w, self.target(w).as_ref());
         }
         let resized = self.progress.get() >= 1.0
             && self

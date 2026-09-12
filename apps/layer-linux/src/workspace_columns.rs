@@ -17,9 +17,9 @@ pub(super) struct Columns {
 }
 impl Columns {
     pub fn background_at(&self, w: &Workspace, point: [f32; 2]) -> Option<u32> {
-        let mut picked =
-            w.surface
-                .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
+        let mut picked = w
+            .surface
+            .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
         let strips = self.strips.borrow();
         while let Some(widget) = picked {
             // Buttons (including their image/label children) keep their own
@@ -63,7 +63,7 @@ impl Columns {
                     strips.remove(i);
                 }
                 w.surface.remove_slots(|slot| slot == Slot::Column(c.id));
-                let root = gtk::Box::new(gtk::Orientation::Vertical, WORKSPACE_SPACING as i32);
+                let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 root.add_css_class("dock-panel");
                 root.add_css_class("collapsed-column");
                 root.set_widget_name(&format!("collapsed-column-{}", c.id));
@@ -76,9 +76,10 @@ impl Columns {
                 )));
                 expand.set_height_request(c.expand.height as i32);
                 root.append(&expand);
-                let content = gtk::Box::new(gtk::Orientation::Vertical, WORKSPACE_SPACING as i32);
+                let content = gtk::Box::new(gtk::Orientation::Vertical, 2);
                 let mut buttons = Vec::new();
                 for group in &c.groups {
+                    content.append(&column_separator());
                     let mini = gtk::Box::new(gtk::Orientation::Vertical, 2);
                     mini.set_valign(gtk::Align::Start);
                     mini.add_css_class("collapsed-group");
@@ -117,6 +118,8 @@ impl Columns {
                     .child(&content)
                     .build();
                 scroll.set_widget_name(&format!("column-scroll-{}", c.id));
+                scroll.set_margin_top(2);
+                scroll.set_margin_bottom(WORKSPACE_SPACING as i32);
                 // A fresh GtkAdjustment initially has an empty range. Seed it
                 // before restoring the offset, otherwise GTK clamps it to zero
                 // while this new projection is waiting for its first allocation.
@@ -186,12 +189,24 @@ impl Columns {
             strip.scroll.set_value(f64::from(offset));
             strip.updating_scroll.set(false);
             for (panel, button) in &strip.buttons {
-                selected(button, c.groups.iter().any(|g| g.active == *panel));
                 button.set_tooltip_text(Some(layout.panel(*panel).unwrap().title()));
             }
         }
     }
     pub fn refresh_drawers(&self, w: &Rc<Workspace>, state: &UiState, regions: u32) {
+        // The remembered active tab is not an open drawer. Only its current
+        // opener is selected; idle collapsed strips keep the neutral theme.
+        for strip in self.strips.borrow().iter() {
+            for (panel, button) in &strip.buttons {
+                selected(
+                    button,
+                    state.customization.column_drawers.iter().any(|d| {
+                        matches!(d.anchor, DrawerAnchor::Column { column, origin, .. }
+                        if column == strip.id && origin == *panel)
+                    }),
+                );
+            }
+        }
         {
             let mut views = self.drawers.borrow_mut();
             views.retain(|v| !v.is_closed() || state.customization.column_drawers.iter().any(|d| matches!(d.anchor, DrawerAnchor::Column { column, .. } if column == v.id)));
@@ -213,4 +228,20 @@ impl Columns {
             view.refresh(w, state, regions, next);
         }
     }
+}
+
+fn column_separator() -> gtk::Box {
+    // The shared column layout uses the toolbar's 8px divider slot, with a 2px
+    // tile gap on each side. Include the leading divider in native scrolling.
+    let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    slot.add_css_class("toolbar-divider");
+    slot.add_css_class("column-divider");
+    slot.set_height_request(8);
+    slot.set_vexpand(false);
+    let line = gtk::Separator::new(gtk::Orientation::Horizontal);
+    line.set_halign(gtk::Align::Center);
+    line.set_valign(gtk::Align::Center);
+    line.set_vexpand(true);
+    slot.append(&line);
+    slot
 }

@@ -477,14 +477,16 @@ impl<R: CanvasRenderer> UiSession<R> {
         true
     }
     fn switches_toolbar_drawer(&self, anchor: TileAnchor) -> bool {
-        matches!(self.state.platform, Platform::Android | Platform::Web)
-            && self
-                .state
-                .customization
-                .drawer
-                .as_ref()
-                .and_then(|d| d.anchor.tile())
-                .is_some_and(|old| old.panel == anchor.panel && old != anchor)
+        matches!(
+            self.state.platform,
+            Platform::Gtk | Platform::Android | Platform::Web
+        ) && self
+            .state
+            .customization
+            .drawer
+            .as_ref()
+            .and_then(|d| d.anchor.tile())
+            .is_some_and(|old| old.panel == anchor.panel && old != anchor)
             && self
                 .state
                 .workspace
@@ -12139,8 +12141,8 @@ mod tests {
         assert!(app.state.customization.expanded.is_none());
     }
     #[test]
-    fn android_and_web_switch_eligible_toolbar_drawers_on_the_first_click() {
-        for platform in [Platform::Android, Platform::Web] {
+    fn gtk_android_and_web_switch_eligible_toolbar_drawers_on_the_first_click() {
+        for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
             for zen in [false, true] {
                 let mut s = session();
                 s.set_platform(platform);
@@ -12348,7 +12350,7 @@ mod tests {
         activate(&mut s, 0);
         assert!(s.state.customization.drawer.is_none());
         activate(&mut s, 0);
-        // Another tool selects and closes; it does not open its drawer yet.
+        // Another eligible tool in this toolbar selects and switches its drawer.
         let other = ContentDrawer::for_tile(
             &s.state.workspace.layout,
             TileAnchor {
@@ -12371,7 +12373,13 @@ mod tests {
             .handled
         );
         activate(&mut s, 1);
-        assert!(s.state.customization.drawer.is_none());
+        assert_eq!(
+            s.state.customization.drawer.as_ref().unwrap().anchor.tile(),
+            Some(TileAnchor {
+                panel: Panel::Toolbar,
+                tile: tiles[1].id
+            })
+        );
         assert_eq!(s.state.brush.tool, Tool::Eraser);
         let tool = s.state.brush.tool;
         activate(&mut s, 6); // Color is a direct-open, non-selectable tile.
