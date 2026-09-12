@@ -641,6 +641,7 @@ struct NativeWorkspaceDrag {
     origin: [f32; 2],
     point: [f32; 2],
     started: bool,
+    context: bool,
     sequence: Option<gdk::EventSequence>,
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
@@ -1396,6 +1397,12 @@ impl Workspace {
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
         if matches!(input, UiInput::Blur) {
             if let Some(mut drag) = self.workspace_drag.borrow_mut().take() {
+                if drag.context {
+                    self.dismiss_context();
+                }
+                if matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+                    self.dragging.set(false);
+                }
                 self.clear_tab_slide(&mut drag);
                 self.restore_drag_cursor(&drag);
             }
@@ -2471,8 +2478,7 @@ impl Workspace {
                 .rev()
                 .find_map(|(w, target)| (w.upgrade().as_ref() == Some(&widget)).then_some(*target))
             {
-                return (!matches!(target, DragTarget::Dock(DockItem::Tile { .. })))
-                    .then_some(target);
+                return Some(target);
             }
             picked = widget.parent();
         }
@@ -2545,11 +2551,15 @@ impl Workspace {
             if self.workspace_drag.borrow().is_none()
                 && let Some(target) = self.drag_target_at(point)
             {
+                if sequence.is_none() && matches!(target, DragTarget::Dock(DockItem::Tile { .. })) {
+                    return false;
+                }
                 let mut drag = NativeWorkspaceDrag {
                     target,
                     origin: point,
                     point,
                     started: false,
+                    context: false,
                     sequence,
                     cursor: None,
                     tab: None,
@@ -2572,13 +2582,31 @@ impl Workspace {
             self.workspace_drag.borrow_mut().take();
             self.clear_tab_slide(&mut drag);
             if drag.started {
-                self.dispatch_drag(drag.target, phase, point);
+                if let DragTarget::Dock(item @ DockItem::Tile { .. }) = drag.target {
+                    self.dragging.set(false);
+                    if phase == ContactPhase::Up
+                        && let Some(hint) = self.drop_at(point[0], point[1], item)
+                    {
+                        self.dispatch(item.move_action(
+                            hint.target,
+                            [self.surface.width() as f32, self.surface.height() as f32],
+                        ));
+                    }
+                } else {
+                    self.dispatch_drag(drag.target, phase, point);
+                }
+            } else if drag.context {
+                if phase == ContactPhase::Cancel {
+                    self.dismiss_context();
+                } else {
+                    self.finish_context_hold();
+                }
             }
             drag.point = point;
             self.restore_drag_cursor(&drag);
             self.clear_drop();
             self.update_zen();
-            return drag.started;
+            return drag.started || drag.context;
         }
         if !drag.started {
             let recognized = if matches!(drag.target, DragTarget::Dock(_)) {
@@ -2594,6 +2622,7 @@ impl Workspace {
             if !recognized {
                 return false;
             }
+            self.dismiss_context();
             // Reset click/hold recognizers once this is a drag. Merely denying
             // them leaves stale sequence state: this stable controller consumes
             // the release, so their next click would only clear that old drag.
@@ -2615,6 +2644,9 @@ impl Workspace {
                 picked = widget.parent();
             }
             drag.started = true;
+            if matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+                self.dragging.set(true);
+            }
             self.start_tab_slide(&mut drag);
             if matches!(drag.target, DragTarget::Dock(_)) {
                 drag.cursor = self
@@ -2631,7 +2663,9 @@ impl Workspace {
                 self.set_drag_cursor(&drag, "grabbing");
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
-            self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
+            if !matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+                self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
+            }
             if let Some(tab) = &drag.tab
                 && let Some(gpu) = self.gpu.borrow_mut().as_mut()
             {
@@ -2640,7 +2674,9 @@ impl Workspace {
         }
         drag.point = point;
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
-        self.dispatch_drag(drag.target, ContactPhase::Move, point);
+        if !matches!(drag.target, DragTarget::Dock(DockItem::Tile { .. })) {
+            self.dispatch_drag(drag.target, ContactPhase::Move, point);
+        }
         self.update_tab_slide(&mut drag);
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
         if let DragTarget::Dock(item) = drag.target {

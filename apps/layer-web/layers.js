@@ -1,7 +1,7 @@
 let thumbnailRequest=0n;
 const thumbnailPending=new Map();
 // Layer widgets only. Selection, references, hierarchy and menu policy are Rust.
-export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField }) {
+export function createLayerPanel({ app, catalog, state, panel, element, button, icon, dispatch, applyChange, message, numberField, dismissContext }) {
   const send = action => dispatch({ type: "layer", action });
   const header = element("div", "layer-header"), footer = element("div", "layer-footer");
   header.dataset.control = "layer_opacity"; footer.dataset.control = "layer_actions";
@@ -99,10 +99,14 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if (e.button || e.target.closest("input") || (e.pointerType === "touch" && !grip.contains(e.target)) || !get().can_drop_below) return;
       drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId };
     });
-    row.addEventListener("workspace-context-claimed", () => { drag = null; });
+    row.addEventListener("workspace-context-claimed", e => {
+      if (drag?.ghost) e.preventDefault();
+      else if (drag) row.setPointerCapture(drag.pointer);
+    });
     row.addEventListener("pointermove", e => {
       if (!drag) return;
       if (!drag.ghost && Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 6) {
+        dismissContext();
         row.setPointerCapture(e.pointerId); drag.ghost = row.cloneNode(true); drag.ghost.classList.add("layer-drag-preview");
         drag.ghost.style.width = `${row.clientWidth}px`; drag.ghost.style.left = `${row.getBoundingClientRect().left}px`;
         document.body.append(drag.ghost);
@@ -132,6 +136,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     };
     row.addEventListener("pointerup", finish); row.addEventListener("pointercancel", finish);
+    row.addEventListener("lostpointercapture", finish);
     return record;
   }
   function refresh() {

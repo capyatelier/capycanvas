@@ -164,6 +164,7 @@ fn row_drag(
     name: &gtk::Stack,
     touch: bool,
     owner: &Rc<RefCell<Weak<Workspace>>>,
+    context: &gtk::PopoverMenu,
 ) -> gtk::DragSource {
     let source = gtk::DragSource::new();
     source.set_actions(gdk::DragAction::MOVE);
@@ -177,6 +178,8 @@ fn row_drag(
         name,
         #[strong]
         owner,
+        #[weak]
+        context,
         #[upgrade_or]
         None,
         move |source, x, y| {
@@ -193,6 +196,8 @@ fn row_drag(
                 return None;
             }
             let w = owner.borrow().upgrade()?;
+            context.popdown();
+            context.set_autohide(true);
             let color = w.gpu.borrow().as_ref()?.session.state().palette.panel;
             let preview = drag_preview(root.upcast_ref(), color);
             let hotspot = source
@@ -282,6 +287,30 @@ impl LayerPanel {
         let context = gtk::PopoverMenu::from_model(None::<&gio::Menu>);
         context.set_parent(&root);
         context.set_has_arrow(false);
+        let release = gtk::EventControllerLegacy::new();
+        release.set_propagation_phase(gtk::PropagationPhase::Capture);
+        release.connect_event(glib::clone!(
+            #[weak]
+            context,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, event| {
+                if matches!(
+                    event.event_type(),
+                    gdk::EventType::TouchEnd | gdk::EventType::TouchCancel
+                ) && context.is_visible()
+                    && !context.is_autohide()
+                {
+                    context.popdown();
+                    context.set_autohide(true);
+                    if event.event_type() == gdk::EventType::TouchEnd {
+                        context.popup();
+                    }
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+        root.add_controller(release);
         let header = gtk::Box::new(gtk::Orientation::Vertical, 2);
         header.add_css_class("layer-header");
         root.append(&header);
@@ -565,6 +594,7 @@ impl LayerPanel {
                                 return;
                             };
                             g.set_state(gtk::EventSequenceState::Claimed);
+                            context.set_autohide(true);
                             menu(&w, &context, &g.widget().unwrap(), row.id, is_mask, [x, y]);
                         }
                     ));
@@ -576,6 +606,8 @@ impl LayerPanel {
                         context,
                         #[weak]
                         item,
+                        #[weak]
+                        grip,
                         #[strong]
                         owner,
                         move |g, x, y| {
@@ -583,7 +615,15 @@ impl LayerPanel {
                             let Some(w) = owner.borrow().upgrade() else {
                                 return;
                             };
-                            g.set_state(gtk::EventSequenceState::Claimed);
+                            let on_grip = g.widget()
+                                .and_then(|widget| widget.pick(x, y, gtk::PickFlags::DEFAULT))
+                                .is_some_and(|picked| picked == grip || picked.is_ancestor(&grip));
+                            if !on_grip {
+                                g.set_state(gtk::EventSequenceState::Claimed);
+                            }
+                            // Preserve the grip's pending DragSource and touch
+                            // stream; other layer controls keep their usual menu.
+                            context.set_autohide(!on_grip);
                             menu(&w, &context, &g.widget().unwrap(), row.id, is_mask, [x, y]);
                         }
                     ));
@@ -593,7 +633,9 @@ impl LayerPanel {
                     (root.clone().upcast::<gtk::Widget>(), false),
                     (grip.clone().upcast(), true),
                 ] {
-                    widget.add_controller(row_drag(item, &root, &name_stack, touch, &owner));
+                    widget.add_controller(row_drag(
+                        item, &root, &name_stack, touch, &owner, &context,
+                    ));
                 }
                 let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
                 drop.connect_enter(glib::clone!(

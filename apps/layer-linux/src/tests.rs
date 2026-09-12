@@ -11059,6 +11059,290 @@ fn native_window_drag_input() {
 
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_long_press_drag_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.LongPressDragInput");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let original = state(&w).workspace;
+    let saved = || serde_json::to_value(state(&w).workspace).unwrap();
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native touch timed out"
+        );
+        step += 1;
+        pump(150);
+    };
+    let menu = w
+        .popovers
+        .borrow()
+        .iter()
+        .filter_map(|p| p.upgrade())
+        .find(|p| p.has_css_class("panel-context-menu"))
+        .unwrap();
+    for mode in [
+        "release",
+        "reorder",
+        "detach",
+        "drawer",
+        "grip",
+        "cancel",
+        "floating-tab",
+        "floating-group",
+        "toolbar-grip",
+        "tool",
+        "tool-cancel",
+    ] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: original.clone(),
+        });
+        pump(300);
+        let group = original.layout.panel_group(Panel::Adjustments).unwrap();
+        if mode == "drawer" {
+            w.dispatch(UiAction::DoubleClickPanelHandle {
+                group,
+                viewport: [w.surface.width() as f32, w.surface.height() as f32],
+            });
+            w.dispatch(UiAction::Customize {
+                action: CustomizationAction::ToggleColumnDrawer {
+                    group,
+                    panel: Panel::Layers,
+                },
+            });
+            pump(300);
+        }
+        if mode.starts_with("floating") {
+            w.dispatch(UiAction::MoveGroup {
+                group,
+                target: DockTarget::Float {
+                    position: [600., 250.],
+                },
+                viewport: [w.surface.width() as f32, w.surface.height() as f32],
+            });
+            pump(250);
+        }
+        let tile = mode == "tool" || mode == "tool-cancel";
+        let hits = w.tab_hits();
+        let index = original
+            .layout
+            .group_panels(group)
+            .unwrap()
+            .iter()
+            .position(|p| *p == Panel::Adjustments)
+            .unwrap();
+        let tab = hits
+            .iter()
+            .find(|t| t.group == group && t.index == index)
+            .unwrap()
+            .bounds;
+        let mut start = [tab.x + tab.width * 0.5, tab.y + tab.height * 0.5];
+        if mode == "grip" || mode == "floating-group" {
+            let group_bounds = w
+                .resolved()
+                .groups
+                .into_iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .bounds;
+            start = [group_bounds.x + group_bounds.width - 10., start[1]];
+        }
+        if tile || mode == "toolbar-grip" {
+            let widget = if tile {
+                w.toolbar.first_child().unwrap()
+            } else {
+                find_css(w.toolbar.upcast_ref(), "panel-grip").unwrap()
+            };
+            let bounds = widget.compute_bounds(&w.surface).unwrap();
+            start = [
+                bounds.x() + bounds.width() * 0.5,
+                bounds.y() + bounds.height() * 0.5,
+            ];
+        }
+        let before = saved();
+        perform(serde_json::json!([{"touch":"down", "point":start}]));
+        pump(900);
+        assert!(
+            menu.is_visible(),
+            "{mode}: real touch hold opens the context menu; pending {}",
+            w.workspace_drag.borrow().is_some()
+        );
+        assert_eq!(
+            saved(),
+            before,
+            "{mode}: holding does not select or move a tab"
+        );
+        perform(serde_json::json!([{"touch":"move", "point":[start[0] + 2., start[1]]}]));
+        assert!(menu.is_visible(), "small movement keeps the menu open");
+        if mode == "release" {
+            perform(serde_json::json!([{"touch":"up"}]));
+            assert!(menu.is_visible(), "hold release leaves the menu available");
+            assert_eq!(saved(), before, "hold release does not select a tab");
+            assert!(menu.is_autohide());
+            perform(serde_json::json!([{"touch":"down", "point":[800., 500.]}, {"touch":"up"}]));
+            assert!(
+                !menu.is_visible(),
+                "a subsequent outside tap dismisses the menu"
+            );
+            assert!(w.workspace_drag.borrow().is_none());
+            perform(serde_json::json!([{"touch":"down", "point":start}, {"touch":"up"}]));
+            assert_eq!(
+                state(&w).workspace.layout.panel_group(Panel::Adjustments),
+                Some(group)
+            );
+            assert_eq!(
+                w.resolved()
+                    .groups
+                    .iter()
+                    .find(|g| g.id == group)
+                    .unwrap()
+                    .active,
+                Panel::Adjustments,
+                "the first ordinary tap after a hold still selects its tab"
+            );
+            continue;
+        }
+        let first = hits
+            .iter()
+            .find(|t| t.group == group && t.index == 0)
+            .unwrap()
+            .bounds;
+        let point = if tile {
+            let widget = w
+                .toolbar
+                .first_child()
+                .unwrap()
+                .next_sibling()
+                .unwrap()
+                .next_sibling()
+                .unwrap();
+            let b = widget.compute_bounds(&w.surface).unwrap();
+            [b.x() + b.width() * 0.8, b.y() + b.height() * 0.8]
+        } else if ["reorder", "drawer"].contains(&mode) {
+            [first.x + 2., start[1]]
+        } else {
+            [
+                w.surface.width() as f32 * 0.5,
+                w.surface.height() as f32 * 0.55,
+            ]
+        };
+        perform(serde_json::json!([{"touch":"move", "point":point}]));
+        assert!(
+            !menu.is_visible(),
+            "{mode}: movement dismisses the context menu"
+        );
+        assert!(
+            w.workspace_drag
+                .borrow()
+                .as_ref()
+                .is_some_and(|d| d.started),
+            "{mode}: same touch starts dragging"
+        );
+        if mode == "cancel" || mode == "tool-cancel" {
+            w.interact(UiInput::Blur);
+        }
+        perform(serde_json::json!([{"touch":"up"}]));
+        assert!(w.workspace_drag.borrow().is_none());
+        if mode != "cancel" && mode != "tool-cancel" {
+            let layout = state(&w).workspace.layout;
+            if tile || mode.starts_with("floating") || mode == "toolbar-grip" {
+                assert_ne!(saved(), before, "{mode}: drop moves the element");
+            } else if ["reorder", "drawer"].contains(&mode) {
+                assert_eq!(layout.group_panels(group).unwrap()[0], Panel::Adjustments);
+            } else {
+                assert_eq!(layout.floating.len(), 1);
+                let panels = layout
+                    .group_panels(layout.panel_group(Panel::Adjustments).unwrap())
+                    .unwrap();
+                assert_eq!(
+                    panels.len(),
+                    if mode == "grip" || mode == "floating-group" {
+                        original.layout.group_panels(group).unwrap().len()
+                    } else {
+                        1
+                    }
+                );
+            }
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            pump(200);
+        }
+        assert_eq!(saved(), before, "the continued drag is one undo step");
+    }
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: original.clone(),
+    });
+    for _ in 0..2 {
+        w.dispatch(UiAction::Layer {
+            action: layer_ui::LayerAction::New {
+                group: false,
+                clipped: false,
+            },
+        });
+    }
+    pump(300);
+    let order = || state(&w).layers.iter().map(|l| l.id).collect::<Vec<_>>();
+    let before = order();
+    let source = find_named(
+        w.layer_panel.root.upcast_ref(),
+        &format!("art-layer-{}", before[0]),
+    )
+    .unwrap();
+    let grip = source.last_child().unwrap();
+    let b = grip.compute_bounds(&w.surface).unwrap();
+    let start = [b.x() + b.width() * 0.5, b.y() + b.height() * 0.5];
+    perform(serde_json::json!([{"touch":"down", "point":start}]));
+    pump(900);
+    let layer_menu = w
+        .popovers
+        .borrow()
+        .iter()
+        .filter_map(|p| p.upgrade())
+        .find(|p| p.is_visible())
+        .unwrap();
+    let target = find_named(
+        w.layer_panel.root.upcast_ref(),
+        &format!("art-layer-{}", before[1]),
+    )
+    .unwrap();
+    let b = target.compute_bounds(&w.surface).unwrap();
+    let point = [b.x() + b.width() * 0.5, b.y() + b.height() - 3.];
+    perform(serde_json::json!([{"touch":"move", "point":point}]));
+    assert!(
+        !layer_menu.is_visible(),
+        "layer grip movement dismisses its context menu"
+    );
+    perform(
+        serde_json::json!([{"touch":"move", "point":[point[0] + 1., point[1]]}, {"touch":"up"}]),
+    );
+    assert_ne!(order(), before, "the same held layer grip drops the layer");
+    w.dispatch(UiAction::Invoke {
+        command: CommandId::Undo,
+    });
+    pump(200);
+    assert_eq!(order(), before);
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    w.window.destroy();
+    pump(100);
+}
+
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
 fn native_tab_slide_input() {
     let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
     let app = native_test_app("art.capycanvas.TabSlideInput");

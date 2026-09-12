@@ -1397,6 +1397,18 @@ impl Workspace {
     }
 
     fn show_context(self: &Rc<Self>, widget: &gtk::Widget, target: ContextTarget, x: f64, y: f64) {
+        let held_drag = {
+            let mut pending = self.workspace_drag.borrow_mut();
+            if let Some(drag) = pending.as_mut().filter(|d| d.sequence.is_some()) {
+                if drag.started {
+                    return;
+                }
+                drag.context = true;
+                true
+            } else {
+                false
+            }
+        };
         let Some(menu) = self
             .gpu
             .borrow()
@@ -1413,6 +1425,11 @@ impl Workspace {
         };
         self.customization.anchor.set([point.x(), point.y()]);
         let popover = &self.customization.context;
+        // A native popup grab diverts the rest of the original touch sequence.
+        // Retain that contact until it becomes a drag or is released.
+        if held_drag {
+            popover.set_autohide(false);
+        }
         self.populate_workspace_menu(popover, menu);
         popover.set_pointing_to(Some(&gdk::Rectangle::new(
             point.x() as i32,
@@ -1422,6 +1439,20 @@ impl Workspace {
         )));
         popover.popup();
         popover.present();
+    }
+
+    pub(super) fn dismiss_context(&self) {
+        self.customization.context.popdown();
+        self.customization.context.set_autohide(true);
+    }
+
+    pub(super) fn finish_context_hold(&self) {
+        let popover = &self.customization.context;
+        if popover.is_visible() {
+            popover.popdown();
+            popover.set_autohide(true);
+            popover.popup();
+        }
     }
 
     pub(crate) fn populate_workspace_menu(

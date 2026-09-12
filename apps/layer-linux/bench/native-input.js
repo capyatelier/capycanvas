@@ -16,8 +16,9 @@ const workspaceDrawer = ARGV.includes('--workspace-drawer');
 const workspaceWindow = ARGV.includes('--workspace-window');
 const workspaceColumns = ARGV.includes('--workspace-columns');
 const workspaceTabs = ARGV.includes('--workspace-tabs');
+const workspaceHold = ARGV.includes('--workspace-hold');
 const process = Gio.Subprocess.new([
-    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+    'cargo', 'test', '--release', '-p', 'layer-linux', workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
     '--', '--ignored', '--test-threads=1', '--nocapture',
 ], Gio.SubprocessFlags.NONE);
 let passed = false;
@@ -35,9 +36,27 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     ).deep_unpack();
     const session = call('/org/gnome/Mutter/RemoteDesktop', dest, 'CreateSession', '()', [])[0];
     const send = (method, signature, values) => call(session, iface, method, signature, values);
+    let touchStream;
+    if (workspaceHold) {
+        const id = call(session, 'org.freedesktop.DBus.Properties', 'Get', '(ss)', [iface, 'SessionId'])[0].deep_unpack();
+        const cast = 'org.gnome.Mutter.ScreenCast';
+        const castCall = (path, name, method, signature, values) => Gio.DBus.session.call_sync(
+            cast, path, name, method, new GLib.Variant(signature, values), null,
+            Gio.DBusCallFlags.NONE, 3000, null,
+        ).deep_unpack();
+        const path = castCall('/org/gnome/Mutter/ScreenCast', cast, 'CreateSession', '(a{sv})',
+            [{'remote-desktop-session-id': new GLib.Variant('s', id)}])[0];
+        touchStream = castCall(path, `${cast}.Session`, 'RecordMonitor', '(sa{sv})', ['', {}])[0];
+    }
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
-    if (workspaceClicks || workspaceCursor || workspaceDrawer || workspaceWindow || workspaceColumns || workspaceTabs) {
+    if (workspaceHold) {
+        // Creating Mutter's virtual touchscreen announces a new seat capability.
+        // Let GTK bind wl_touch before the first test contact is delivered.
+        send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
+        send('NotifyTouchUp', '(u)', [0]);
+    }
+    if (workspaceClicks || workspaceCursor || workspaceDrawer || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold) {
         let step = 0, events = null, index = 0, previous = [0, 0];
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => {
             if (Gio.File.new_for_path(`${output}/finished`).query_exists(null)) {
@@ -56,6 +75,12 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
                 events = null;
             } else {
                 const event = events[index++];
+                if (event.touch) {
+                    if (event.touch === 'up') send('NotifyTouchUp', '(u)', [0]);
+                    else send(event.touch === 'down' ? 'NotifyTouchDown' : 'NotifyTouchMotion',
+                        '(sudd)', [touchStream, 0, ...event.point]);
+                    return GLib.SOURCE_CONTINUE;
+                }
                 if (event.point) {
                     send('NotifyPointerMotionRelative', '(dd)',
                         [event.point[0] - previous[0], event.point[1] - previous[1]]);
@@ -125,7 +150,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     });
     return GLib.SOURCE_REMOVE;
 });
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60000, () => {
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold ? 120000 : 60000, () => {
     process.force_exit();
     loop.quit();
     return GLib.SOURCE_REMOVE;

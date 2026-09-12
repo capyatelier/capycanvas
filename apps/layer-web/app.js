@@ -172,22 +172,27 @@ function draggable(node, item) {
   }
   node.draggable = true;
   let pointer;
-  node.addEventListener("workspace-context-claimed", () => { pointer = null; });
+  node.addEventListener("workspace-context-claimed", e => {
+    if (pointer?.dragging) e.preventDefault();
+    else if (pointer) pointer.context = true;
+  });
   node.addEventListener("pointerdown", (e) => {
-    if (e.pointerType !== "touch" || e.button !== 0) return;
+    if (e.pointerType === "mouse" || e.button !== 0) return;
     pointer = { id: e.pointerId, x: e.clientX, y: e.clientY, dragging: false };
     node.setPointerCapture(e.pointerId);
   });
   node.addEventListener("pointermove", (e) => {
     if (pointer?.id !== e.pointerId) return;
     if (!pointer.dragging && Math.hypot(e.clientX - pointer.x, e.clientY - pointer.y) > 8) {
+      customization.dismissContext();
       pointer.dragging = true; dragItem = item; node.classList.add("drag-source"); updateZen();
     }
     if (pointer.dragging) { e.preventDefault(); showDropHint(dropHint(e, item)); }
   });
   const endPointer = (e) => {
     if (pointer?.id !== e.pointerId) return;
-    const moved = pointer.dragging; pointer = null;
+    const moved = pointer.dragging, context = pointer.context; pointer = null;
+    if (context) revealPointer = e.pointerId;
     if (!moved) return;
     revealPointer = e.pointerId;
     if (e.type === "pointerup") dropItem(item, dropHint(e, item));
@@ -195,6 +200,8 @@ function draggable(node, item) {
   };
   for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) node.addEventListener(event, endPointer);
   node.addEventListener("dragstart", (e) => {
+    if (pointer?.dragging) { e.preventDefault(); return; }
+    customization.dismissContext();
     e.dataTransfer.setData("text/layer-dock", JSON.stringify(item));
     e.dataTransfer.effectAllowed = "move";
     dragItem = item;
@@ -585,14 +592,14 @@ function buildPanels() {
     sizeButtons.set(value, choice);
   }
   panels.get("sizes").append(controls, grid);
-  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField });
+  layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, dismissContext: () => customization.dismissContext() });
   effectPanels = createEffectPanels({app,catalog,state:()=>state,panels,element,button,icon,dispatch,numberField,
     contentChanged:id=>{panelMeasurements.delete(id);queuePanelMeasurements();}});
 }
 function contentPanel(id) {
   const panel=element("div",`panel ${id}-panel`);
   if(id==="layers") {
-    const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField});
+    const view=createLayerPanel({app,catalog,state:()=>state,panel,element,button,icon,dispatch,applyChange,message,numberField,dismissContext:()=>customization.dismissContext()});
     panel.refreshPanel=view.refresh; panel.disposePanel=view.dispose;
   } else if(["adjustments","properties","stats"].includes(id)) {
     const copies=new Map(["adjustments","properties","stats"].map(name=>[name,name===id?panel:element("div","panel")]));

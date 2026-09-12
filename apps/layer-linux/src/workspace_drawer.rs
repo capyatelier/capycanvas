@@ -282,6 +282,7 @@ impl View {
                 header.set_height_request(TAB_BAR_HEIGHT as i32);
                 let labels = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                 w.install_panel_drag(&header, DockItem::Group { group: tabs.group });
+                w.install_context(&header, layer_ui::ContextTarget::Group { group: tabs.group });
                 let layout = w.surface.imp().layout.borrow();
                 for panel in &tabs.panels {
                     let config = layout.panel(*panel).unwrap();
@@ -312,6 +313,7 @@ impl View {
                     button.set_child(Some(&content));
                     selected(&button, tabs.active == *panel);
                     w.install_panel_drag(&button, DockItem::Panel { panel: *panel });
+                    w.install_context(&button, layer_ui::ContextTarget::Panel { panel: *panel });
                     labels.append(&button);
                     tab_buttons.push(button);
                 }
