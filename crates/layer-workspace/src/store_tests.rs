@@ -341,7 +341,7 @@ fn schema_one_upgrade_keeps_entities_and_existing_delivery_hashes() {
         .unwrap();
     f.store
         .connection
-        .execute_batch("DROP TABLE cancelled_operations; PRAGMA user_version=1;")
+        .execute_batch("DROP TABLE cancelled_operations; DROP TABLE workspace_switcher; PRAGMA user_version=1;")
         .unwrap();
     let mut upgraded = f.connection();
     assert_eq!(
@@ -353,7 +353,7 @@ fn schema_one_upgrade_keeps_entities_and_existing_delivery_hashes() {
             .connection
             .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        2
+        SCHEMA_VERSION
     );
     for (id, hash) in hashes {
         assert_eq!(

@@ -291,6 +291,11 @@ pub struct CommitReceipt {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoreRequest {
     List,
+    Switcher,
+    UpdateSwitcher {
+        expected: Option<Vec<String>>,
+        ids: Vec<String>,
+    },
     Load {
         id: String,
     },
@@ -342,6 +347,7 @@ pub enum StoreRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoreResponse {
+    Switcher(Option<Vec<String>>),
     List(Vec<ItemSummary>),
     Entity(StoredEntity),
     Claim(Claim),

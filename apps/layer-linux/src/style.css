@@ -29,6 +29,9 @@ button.workspace-zen:active { background: mix(var(--window-bg-color), var(--wind
 .workspace-switcher button:hover { background: mix(var(--window-bg-color), var(--window-fg-color), .08); }
 .workspace-switcher button:checked { background: mix(var(--window-bg-color), var(--accent-bg-color), .28); color: var(--window-fg-color); }
 .workspace-switcher button:checked:hover { background: mix(var(--window-bg-color), var(--accent-bg-color), .36); }
+.workspace-row-dragging { opacity: .45; }
+.workspace-drop-before { box-shadow: inset 0 2px var(--accent-bg-color); }
+.workspace-drop-after { box-shadow: inset 0 -2px var(--accent-bg-color); }
 .workspace-status { background: transparent; padding: 0 4px; font-size: var(--ui-text-size); color: var(--window-fg-color); }
 .workspace-save-status { background: var(--window-bg-color); padding: 6px 0; color: var(--window-fg-color); }
 .status-bubble { background: var(--window-bg-color); border-radius: 20px; padding: 3px 10px; }

@@ -122,11 +122,50 @@ impl SqliteStore {
             tx.execute_batch("CREATE TABLE cancelled_operations(id TEXT PRIMARY KEY)")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        if version < 3 {
+            tx.execute_batch("CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL)")?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
         tx.commit()?;
         Ok(Self { connection, clock })
     }
     pub fn handle(&mut self, request: StoreRequest) -> Result<StoreResponse> {
         match request {
+            StoreRequest::Switcher => self.switcher().map(StoreResponse::Switcher),
+            StoreRequest::UpdateSwitcher { expected, ids } => {
+                validate_switcher_ids(&ids)?;
+                let tx = self
+                    .connection
+                    .transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let current: Option<String> = tx
+                    .query_row(
+                        "SELECT workspace_ids FROM workspace_switcher WHERE id=1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let current: Option<Vec<String>> =
+                    current.map(|s| serde_json::from_str(&s)).transpose()?;
+                if current.as_ref() != Some(&ids) {
+                    if current != expected {
+                        return Err(StoreError::new(
+                            ErrorKind::Conflict,
+                            "The workspace switcher changed in another window. Try again.",
+                        ));
+                    }
+                    for id in &ids {
+                        let row = header(&tx, id)?;
+                        if row.kind != "workspace" || row.deleted {
+                            return Err(StoreError::invalid(
+                                "This workspace is no longer available.",
+                            ));
+                        }
+                    }
+                    tx.execute("INSERT INTO workspace_switcher(id,workspace_ids) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET workspace_ids=excluded.workspace_ids", [serde_json::to_string(&ids)?])?;
+                }
+                tx.commit()?;
+                Ok(StoreResponse::Switcher(Some(ids)))
+            }
             StoreRequest::List => self.list().map(StoreResponse::List),
             StoreRequest::Maintenance {
                 owner,
@@ -232,6 +271,21 @@ impl SqliteStore {
         let result = load(&tx, id)?;
         tx.commit()?;
         Ok(result)
+    }
+    fn switcher(&self) -> Result<Option<Vec<String>>> {
+        let json: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT workspace_ids FROM workspace_switcher WHERE id=1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let ids: Option<Vec<String>> = json.map(|s| serde_json::from_str(&s)).transpose()?;
+        if let Some(ids) = &ids {
+            validate_switcher_ids(ids)?;
+        }
+        Ok(ids)
     }
     pub fn list(&mut self) -> Result<Vec<ItemSummary>> {
         let tx = self.connection.transaction()?;

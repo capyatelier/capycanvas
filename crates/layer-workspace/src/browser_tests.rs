@@ -95,6 +95,45 @@ fn browser_transactions_match_sqlite_contract() {
         1001,
     );
     execute(StoreRequest::List, 1001);
+    execute(StoreRequest::Switcher, 1001);
+    let pins = vec![second.id.clone(), first.id.clone()];
+    execute(
+        StoreRequest::UpdateSwitcher {
+            expected: None,
+            ids: pins.clone(),
+        },
+        1001,
+    );
+    // Same delivery is idempotent; stale and invalid replacements cannot win.
+    execute(
+        StoreRequest::UpdateSwitcher {
+            expected: None,
+            ids: pins.clone(),
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateSwitcher {
+            expected: None,
+            ids: vec![],
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateSwitcher {
+            expected: Some(pins.clone()),
+            ids: vec![first.id.clone(), first.id.clone()],
+        },
+        1001,
+    );
+    execute(
+        StoreRequest::UpdateSwitcher {
+            expected: Some(pins),
+            ids: vec![],
+        },
+        1001,
+    );
+    execute(StoreRequest::Switcher, 1001);
     execute(
         StoreRequest::Load {
             id: first.id.clone(),
@@ -301,4 +340,43 @@ fn browser_preserves_newer_schemas_and_exact_large_counters() {
         panic!()
     };
     assert_eq!(s.claim.unwrap().fence, 9007199254740994);
+}
+
+#[test]
+fn browser_schema_two_upgrade_preserves_existing_records_and_defaults_switcher() {
+    let mut old = BrowserDatabase::default();
+    let layout = layer_ui::DockLayout::for_platform(layer_ui::Platform::Web);
+    let entity = Entity::workspace(
+        "Existing workspace",
+        layer_ui::WorkspaceCapture::from_template(&layout).unwrap(),
+        layout,
+        None,
+        1000,
+    );
+    let batch = CommitBatch::prepare(
+        Owner::fresh(),
+        vec![Mutation::Create {
+            entity: entity.clone(),
+            claim: false,
+            name_policy: NamePolicy::Exact,
+        }],
+    )
+    .unwrap();
+    old.prepare_delivery(&batch).unwrap();
+    old.execute(StoreRequest::Commit { batch }, 1000).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&old.encoded().unwrap()).unwrap();
+    value["schema"] = serde_json::json!(2);
+    value.as_object_mut().unwrap().remove("switcher");
+    let mut upgraded = BrowserDatabase::decode(&value.to_string()).unwrap();
+    assert!(
+        matches!(upgraded.execute(StoreRequest::Load { id: entity.id.clone() }, 1000).unwrap(), StoreResponse::Entity(stored) if stored.entity == entity)
+    );
+    assert!(matches!(
+        upgraded.execute(StoreRequest::Switcher, 1000).unwrap(),
+        StoreResponse::Switcher(None)
+    ));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&upgraded.encoded().unwrap()).unwrap()["schema"],
+        SCHEMA_VERSION
+    );
 }

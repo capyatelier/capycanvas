@@ -13452,6 +13452,9 @@ fn assert_stroke_positions(w: &Workspace, texture: &gdk::Texture) {
     }
 }
 
+#[path = "workspace_switcher_tests.rs"]
+mod workspace_switcher_tests;
+
 fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
     if let Some(b) = root.downcast_ref::<gtk::Button>()
         && b.label().as_deref() == Some(label)

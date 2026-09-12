@@ -22,7 +22,7 @@ Legacy `ManageTemplates`, `SaveAsTemplate`, and layout manager actions have no U
 routes and should not be exposed in other hosts.
 
 See [default workspaces](default-workspaces.md) for Painter, Illustrator,
-Photographer, their fixed header switcher, and the research behind their controls.
+Photographer, their configurable header switcher, and the research behind their controls.
 
 ## Approved UI and behavior
 
@@ -43,6 +43,10 @@ selection and explicit confirmation instead:
 - **Workspaces:** compact selectable list, top-right square + for New Workspace,
   per-row Rename/Delete options, Cancel and Switch to Workspace below the list.
   Included workspaces can be renamed and edited but cannot be deleted.
+  **Show in top bar** in each row's menu controls its switcher entry. Shown rows
+  appear first with a pin indicator and left drag handle; remaining rows are
+  alphabetical. Reordering and pinning preserve the active selection/preview and
+  save immediately. See [switcher details and storage contract](default-workspaces.md#configurable-switcher).
   Initially select the current workspace and disable its Switch button. An item
   already owned by another window offers Switch to Window through the existing
   ownership policy.
@@ -148,7 +152,10 @@ refactor is a prerequisite to starting the host work.
    selections, filtering away a selection, Cancel/Escape/back, and dismissal while
    a load is pending. Verify name-only workspace creation and explicit button apply.
 3. Switch to Workspace restores that workspace's latest settings. The pill uses
-   the three stable default IDs and preserves edits between switches. Layout
+   the configured workspace IDs and preserves edits between switches. It initially
+   shows the three defaults. Pinning and ordering apply across workspaces; the
+   manager offers immediate handle dragging on touch, held dragging elsewhere,
+   and keyboard Move Up / Move Down. Layout
    History and Restore Starting Layout preserve tool settings. Reset All Brushes
    resets all brush presets only in the current workspace; Cancel changes nothing.
    Default workspaces reject deletion through both UI and storage.

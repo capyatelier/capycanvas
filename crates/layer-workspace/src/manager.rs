@@ -16,6 +16,7 @@ struct State {
     failed_operation: Option<CommitBatch>,
     older_failed_operations: Vec<CommitBatch>,
     items: Vec<ItemSummary>,
+    switcher: Option<Vec<String>>,
     error: Option<StoreError>,
     error_operation: Option<String>,
 }
@@ -973,3 +974,8 @@ mod recovery;
 
 #[path = "manager_migration.rs"]
 mod migration;
+
+#[path = "manager_switcher.rs"]
+mod switcher;
+pub use switcher::SwitcherEdit;
+pub(crate) use switcher::validate_ids as validate_switcher_ids;

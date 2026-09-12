@@ -30,7 +30,9 @@ pub(crate) struct NativeWorkspaces {
     pub root: gtk::Box,
     pub label: gtk::Label,
     pub switcher: gtk::Box,
-    switch_buttons: Vec<gtk::ToggleButton>,
+    switch_body: gtk::Box,
+    switch_buttons: RefCell<Vec<(String, gtk::ToggleButton)>>,
+    switch_owner: RefCell<std::rc::Weak<Workspace>>,
     switch_pending: Cell<bool>,
     retry: gtk::Button,
     recovery: gtk::Button,
@@ -84,7 +86,7 @@ impl NativeWorkspaces {
         recovery.set_visible(false);
         root.append(&recovery);
         root.set_visible(manager.is_some());
-        let (switcher, switch_buttons) = switcher::build();
+        let (switcher, switch_body) = switcher::build();
         switcher.set_sensitive(false);
         let now = Instant::now();
         Self {
@@ -94,7 +96,9 @@ impl NativeWorkspaces {
             root,
             label,
             switcher,
-            switch_buttons,
+            switch_body,
+            switch_buttons: RefCell::new(Vec::new()),
+            switch_owner: RefCell::new(std::rc::Weak::new()),
             switch_pending: Cell::new(false),
             retry,
             recovery,
@@ -253,6 +257,9 @@ impl NativeWorkspaces {
                     .request(layer_workspace::StoreRequest::Reopen)
                     .await;
                 let mut result = manager.initialize(now_ms()).await;
+                if let Err(error) = manager.refresh_switcher().await {
+                    w.workspaces.ui.error(&error.to_string());
+                }
                 if let (Ok(incoming), Some(capture)) = (&result, recovery) {
                     manager.release(incoming).await;
                     result = manager
@@ -483,6 +490,7 @@ impl NativeWorkspaces {
                     glib::timeout_future(Duration::from_millis(10)).await;
                 }
                 let result = manager.revalidate_owner(now_ms()).await;
+                let _ = manager.refresh_switcher().await;
                 if manager.active_id() == id {
                     w.workspaces.owner_lost.set(result.is_err());
                     if let Some(gpu) = w.gpu.borrow_mut().as_mut() {

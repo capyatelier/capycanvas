@@ -186,7 +186,20 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
         let active = self.active_id();
         let mut items = self.items();
-        items.sort_by_key(|i| (!i.metadata.builtin, name_key(&i.metadata.name)));
+        let pinned = self.switcher_ids();
+        items.sort_by_key(|i| {
+            let rank = if page == ManagerPage::Workspaces {
+                pinned
+                    .iter()
+                    .position(|id| id == &i.id)
+                    .unwrap_or(usize::MAX)
+            } else if i.metadata.builtin {
+                0
+            } else {
+                1
+            };
+            (rank, name_key(&i.metadata.name))
+        });
         items
             .into_iter()
             .filter(|i| {

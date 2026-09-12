@@ -19,7 +19,8 @@ const workspaceColumns = ARGV.includes('--workspace-columns');
 const workspaceTabs = ARGV.includes('--workspace-tabs');
 const layerHold = ARGV.includes('--layer-hold');
 const workspaceHold = ARGV.includes('--workspace-hold') || layerHold;
-const workspaceMenus = ARGV.includes('--workspace-menus');
+const workspaceSwitcher = ARGV.includes('--workspace-switcher');
+const workspaceMenus = ARGV.includes('--workspace-menus') || workspaceSwitcher;
 const workspaceResize = ARGV.includes('--workspace-resize') || ARGV.includes('--web-workspace-resize');
 const workspaceWeb = ARGV.includes('--web-workspace-motion') || ARGV.includes('--web-workspace-resize');
 const workspaceMotion = ARGV.includes('--workspace-motion') || workspaceWeb || workspaceResize;
@@ -30,7 +31,7 @@ const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
 if (drawerStyle || workspaceMotion) launcher.unsetenv('CAPY_WORKSPACE_DIR');
 const process = launcher.spawnv([
     ...(workspaceWeb ? ['node', 'apps/layer-web/test.mjs', workspaceResize ? '--workspace-resize' : '--workspace-motion', '--native-input'] : [
-        'cargo', 'test', '--release', '-p', 'layer-linux', drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
+        'cargo', 'test', '--release', '-p', 'layer-linux', workspaceSwitcher ? 'native_workspace_switcher_input' : drawerStyle ? 'native_drawer_style_input' : workspaceResize ? 'native_workspace_resize_input' : layerHold ? 'native_layer_hold_input' : workspaceMenus ? 'native_workspace_menu_input' : workspaceMotion ? 'native_workspace_motion_input' : workspaceHold ? 'native_long_press_drag_input' : workspaceTabs ? 'native_tab_slide_input' : workspaceColumns ? 'native_collapsed_column_input' : workspaceWindow ? 'native_window_drag_input' : workspaceDrawer ? 'native_column_drawer_drag_input' : workspaceCursor ? 'native_divider_cursor_input' : workspaceClicks ? 'native_floating_click_input' : workspaceDrag ? 'native_toolbar_drag_input' : 'native_compositor_input',
         '--', '--ignored', '--test-threads=1', '--nocapture',
     ]),
 ]);
@@ -50,7 +51,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     const session = call('/org/gnome/Mutter/RemoteDesktop', dest, 'CreateSession', '()', [])[0];
     const send = (method, signature, values) => call(session, iface, method, signature, values);
     let touchStream;
-    if (workspaceHold || workspaceMotion) {
+    if (workspaceHold || workspaceMotion || workspaceSwitcher) {
         const id = call(session, 'org.freedesktop.DBus.Properties', 'Get', '(ss)', [iface, 'SessionId'])[0].deep_unpack();
         const cast = 'org.gnome.Mutter.ScreenCast';
         const castCall = (path, name, method, signature, values) => Gio.DBus.session.call_sync(
@@ -63,11 +64,17 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     }
     send('Start', '()', []);
     send('NotifyPointerMotionRelative', '(dd)', [-10000, -10000]);
-    if (workspaceHold || workspaceMotion) {
+    if (workspaceHold || workspaceMotion || workspaceSwitcher) {
         // Creating Mutter's virtual touchscreen announces a new seat capability.
         // Let GTK bind wl_touch before the first test contact is delivered.
         send('NotifyTouchDown', '(sudd)', [touchStream, 0, 0, 0]);
         send('NotifyTouchUp', '(u)', [0]);
+    }
+    if (workspaceSwitcher) {
+        // Announce the virtual keyboard before testing activation. Otherwise
+        // the first key can arrive before GTK binds the new wl_keyboard.
+        send('NotifyKeyboardKeysym', '(ub)', [0xffe1, true]);
+        send('NotifyKeyboardKeysym', '(ub)', [0xffe1, false]);
     }
     if (workspaceClicks || workspaceCursor || workspaceDrawer || drawerStyle || workspaceWindow || workspaceColumns || workspaceTabs || workspaceHold || workspaceMotion || workspaceMenus) {
         let step = 0, events = null, index = 0, previous = [0, 0];
@@ -167,7 +174,7 @@ GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
     });
     return GLib.SOURCE_REMOVE;
 });
-GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold || workspaceMotion || drawerStyle ? 120000 : 60000, () => {
+GLib.timeout_add(GLib.PRIORITY_DEFAULT, workspaceHold || workspaceMotion || drawerStyle || workspaceSwitcher ? 120000 : 60000, () => {
     process.force_exit();
     loop.quit();
     return GLib.SOURCE_REMOVE;

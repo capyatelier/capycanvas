@@ -303,6 +303,7 @@ pub fn ui_catalog() -> UiCatalog {
             "swap",
             "opacity",
             "grip",
+            "pin",
             "check",
             "fit",
             "navigator",

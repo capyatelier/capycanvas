@@ -1109,7 +1109,9 @@ impl Workspace {
             glib::Propagation::Proceed,
             move |_, key, _, modifiers| {
                 this.update_zen();
-                if this.preferences.recording() {
+                // Native dialogs own their keys. Workspace previews block canvas
+                // input, but must not swallow button activation or navigation.
+                if this.window.visible_dialog().is_some() || this.preferences.recording() {
                     return glib::Propagation::Proceed;
                 }
                 let editing = gtk::prelude::GtkWindowExt::focus(&this.window).is_some_and(|w| {
@@ -1133,6 +1135,9 @@ impl Workspace {
             #[weak(rename_to = this)]
             self,
             move |_, key, _, modifiers| {
+                if this.window.visible_dialog().is_some() {
+                    return;
+                }
                 this.interact(crate::input::key_input(key, false, modifiers, false, None));
             }
         ));

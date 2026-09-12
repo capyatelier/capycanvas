@@ -21,6 +21,8 @@ pub struct BrowserDatabase {
     legacy_imports: BTreeMap<String, String>,
     tombstones: BTreeSet<String>,
     cancelled: BTreeSet<String>,
+    #[serde(default)]
+    switcher: Option<Vec<String>>,
 }
 impl Default for BrowserDatabase {
     fn default() -> Self {
@@ -36,6 +38,7 @@ impl Default for BrowserDatabase {
             legacy_imports: Default::default(),
             tombstones: Default::default(),
             cancelled: Default::default(),
+            switcher: None,
         }
     }
 }
@@ -55,13 +58,15 @@ fn check_owner(item: &StoredEntity, owner: &Owner, fence: u64, now: u64) -> Resu
 }
 impl BrowserDatabase {
     pub fn decode(text: &str) -> Result<Self> {
-        let value: serde_json::Value = serde_json::from_str(text)?;
-        if value.get("schema").and_then(|v| v.as_u64()) != Some(SCHEMA_VERSION as u64) {
+        let mut value: serde_json::Value = serde_json::from_str(text)?;
+        let version = value.get("schema").and_then(|v| v.as_u64());
+        if version != Some(2) && version != Some(SCHEMA_VERSION as u64) {
             return Err(StoreError::new(
                 ErrorKind::UnsupportedSchema,
                 "This workspace database uses an unsupported version. Its data has been preserved.",
             ));
         }
+        value["schema"] = serde_json::json!(SCHEMA_VERSION);
         Ok(serde_json::from_value(value)?)
     }
     pub fn encoded(&self) -> Result<String> {
@@ -155,6 +160,30 @@ impl BrowserDatabase {
     fn apply(&mut self, request: StoreRequest, now: u64) -> Result<StoreResponse> {
         use StoreRequest::*;
         Ok(match request {
+            Switcher => StoreResponse::Switcher(self.switcher.clone()),
+            UpdateSwitcher { expected, ids } => {
+                validate_switcher_ids(&ids)?;
+                if self.switcher.as_ref() != Some(&ids) {
+                    if self.switcher != expected {
+                        return Err(StoreError::new(
+                            ErrorKind::Conflict,
+                            "The workspace switcher changed in another window. Try again.",
+                        ));
+                    }
+                    for id in &ids {
+                        let item = self.item(id)?;
+                        if item.entity.metadata.kind != ItemKind::Workspace
+                            || item.entity.metadata.deleted_at_ms.is_some()
+                        {
+                            return Err(StoreError::invalid(
+                                "This workspace is no longer available.",
+                            ));
+                        }
+                    }
+                    self.switcher = Some(ids);
+                }
+                StoreResponse::Switcher(self.switcher.clone())
+            }
             List => StoreResponse::List(
                 self.items
                     .values()

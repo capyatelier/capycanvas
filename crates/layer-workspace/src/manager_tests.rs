@@ -1225,3 +1225,118 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     );
     pollster::block_on(m.close()).unwrap();
 }
+
+#[test]
+fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        m.refresh_switcher().await.unwrap();
+        let defaults = DEFAULT_WORKSPACES.map(|(id, _)| id.to_string()).to_vec();
+        assert_eq!(m.switcher_ids(), defaults);
+        let initial = m.current_record().unwrap();
+        let other =
+            WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+        other.refresh().await.unwrap();
+        other.refresh_switcher().await.unwrap();
+        // Reordering a workspace held by another window needs no workspace lease.
+        other
+            .edit_switcher(SwitcherEdit::Move {
+                id: defaults[1].clone(),
+                before: Some(defaults[0].clone()),
+            })
+            .await
+            .unwrap();
+        m.edit_switcher(SwitcherEdit::Show {
+            id: defaults[2].clone(),
+            visible: false,
+        })
+        .await
+        .unwrap();
+        assert_eq!(m.switcher_ids(), [defaults[1].clone(), defaults[0].clone()]);
+        assert_eq!(m.load(&initial.entity.id).await.unwrap(), initial);
+        assert!(!m.dirty());
+        assert!(other.active_id().is_none());
+        let row_ids = m
+            .rows(ManagerPage::Workspaces, "", 10_000)
+            .into_iter()
+            .map(|r| r.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_ids,
+            [
+                defaults[1].clone(),
+                defaults[0].clone(),
+                defaults[2].clone()
+            ]
+        );
+        let custom = m
+            .create_from_snapshot(initial.entity.clone(), "Sketching", false, 11_000)
+            .await
+            .unwrap();
+        m.release(&custom).await;
+        assert!(!m.switcher_ids().contains(&custom.entity.id));
+        m.edit_switcher(SwitcherEdit::Show {
+            id: custom.entity.id.clone(),
+            visible: true,
+        })
+        .await
+        .unwrap();
+        m.edit_switcher(SwitcherEdit::Show {
+            id: custom.entity.id.clone(),
+            visible: true,
+        })
+        .await
+        .unwrap();
+        assert_eq!(m.switcher_ids().last(), Some(&custom.entity.id));
+        assert_eq!(m.switcher_ids().len(), 3);
+        let reopened =
+            WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+        reopened.refresh().await.unwrap();
+        reopened.refresh_switcher().await.unwrap();
+        assert_eq!(reopened.switcher_ids(), m.switcher_ids());
+        for id in reopened.switcher_ids() {
+            reopened
+                .edit_switcher(SwitcherEdit::Show { id, visible: false })
+                .await
+                .unwrap();
+        }
+        m.refresh_switcher().await.unwrap();
+        assert!(m.switcher_ids().is_empty());
+        assert!(
+            matches!(m.store.execute(StoreRequest::Switcher).await.unwrap(), StoreResponse::Switcher(Some(ids)) if ids.is_empty())
+        );
+        // Failed publication keeps the acknowledged configuration available.
+        assert!(
+            m.store
+                .execute(StoreRequest::UpdateSwitcher {
+                    expected: None,
+                    ids: defaults.clone()
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            m.store
+                .execute(StoreRequest::UpdateSwitcher {
+                    expected: Some(vec![]),
+                    ids: vec![defaults[0].clone(), defaults[0].clone()]
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            m.store
+                .execute(StoreRequest::UpdateSwitcher {
+                    expected: Some(vec![]),
+                    ids: vec!["missing".into()]
+                })
+                .await
+                .is_err()
+        );
+        assert!(
+            matches!(m.store.execute(StoreRequest::Switcher).await.unwrap(), StoreResponse::Switcher(Some(ids)) if ids.is_empty())
+        );
+        m.close().await.unwrap();
+    });
+}

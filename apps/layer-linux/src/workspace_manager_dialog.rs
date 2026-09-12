@@ -2,6 +2,9 @@
 use super::*;
 use layer_workspace::{ManagerAction, ManagerButton, ManagerDetails, ManagerPage};
 
+#[path = "workspace_switcher_dialog.rs"]
+mod switcher_controls;
+
 pub(crate) struct ManagerUi {
     pub dialog: adw::Dialog,
     presented: Cell<bool>,
@@ -28,6 +31,9 @@ pub(crate) struct ManagerUi {
     preview: RefCell<Option<history::Preview>>,
     preview_epoch: Cell<u64>,
     action_pending: Cell<bool>,
+    switcher_pending: Cell<bool>,
+    preserve_preview: Cell<bool>,
+    dragged: RefCell<Option<String>>,
 }
 impl ManagerUi {
     pub fn new() -> Self {
@@ -135,9 +141,13 @@ impl ManagerUi {
             preview: RefCell::new(None),
             preview_epoch: Cell::new(0),
             action_pending: Cell::new(false),
+            switcher_pending: Cell::new(false),
+            preserve_preview: Cell::new(false),
+            dragged: RefCell::new(None),
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
+        self.bind_reorder_drop(w);
         self.dialog.connect_closed(glib::clone!(
             #[weak]
             w,
@@ -298,6 +308,10 @@ impl ManagerUi {
             w,
             async move {
                 let result = manager.refresh().await;
+                let result = match result {
+                    Ok(()) => manager.refresh_switcher().await,
+                    Err(error) => Err(error),
+                };
                 if !w.workspaces.ui.presented.get() || w.workspaces.ui.preview_epoch.get() != epoch
                 {
                     return;
@@ -305,6 +319,7 @@ impl ManagerUi {
                 match result {
                     Ok(()) => {
                         w.workspaces.sync_binding(&w);
+                        w.workspaces.update_switcher();
                         w.workspaces.ui.rows(&w);
                     }
                     Err(error) => w.workspaces.ui.error(&error.to_string()),
@@ -317,6 +332,7 @@ impl ManagerUi {
             return;
         };
         let rows = manager.rows(self.page.get(), &self.search.text(), now_ms());
+        let pinned = manager.switcher_ids();
         let compact = self.page.get() == ManagerPage::Workspaces;
         self.search
             .set_visible(!compact || rows.len() > 7 || !self.search.text().is_empty());
@@ -338,8 +354,24 @@ impl ManagerUi {
                 .subtitle(&item.subtitle)
                 .build();
             row.set_use_markup(false);
+            row.set_widget_name(&format!("workspace-row-{}", item.id));
             row.set_activatable(true);
             if compact {
+                if pinned.contains(&item.id) {
+                    let handle = gtk::Image::from_icon_name("layer-grip-symbolic");
+                    handle.set_widget_name(&format!("workspace-reorder-handle-{}", item.id));
+                    handle.add_css_class("workspace-reorder-handle");
+                    handle.set_size_request(28, 44);
+                    handle.set_cursor_from_name(Some("grab"));
+                    handle.set_tooltip_text(Some("Drag to reorder in top bar"));
+                    row.add_prefix(&handle);
+                    let pin = gtk::Image::from_icon_name("layer-pin-symbolic");
+                    pin.add_css_class("dim-label");
+                    pin.set_tooltip_text(Some("Shown in top bar"));
+                    pin.update_property(&[gtk::accessible::Property::Label("Shown in top bar")]);
+                    row.add_suffix(&pin);
+                    self.bind_reorder_row(w, &row, &item.id);
+                }
                 let active = manager.active_id().as_deref() == Some(&item.id);
                 if active {
                     row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
@@ -366,6 +398,7 @@ impl ManagerUi {
                         });
                     }
                     let more = actions_menu(w, &format!("Options for {}", item.title), actions);
+                    self.add_switcher_actions(w, &more, &item.id, &pinned);
                     more.set_valign(gtk::Align::Center);
                     row.add_suffix(&more);
                 }
@@ -378,7 +411,9 @@ impl ManagerUi {
         *self.selected.borrow_mut() =
             row.and_then(|row| self.rows.borrow().get(row.index() as usize).cloned());
         self.rebuilding.set(false);
-        self.selection(w);
+        if !self.preserve_preview.get() {
+            self.selection(w);
+        }
         if self.rows.borrow().is_empty() {
             clear(&self.details);
             self.details
