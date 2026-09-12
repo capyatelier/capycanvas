@@ -40,8 +40,9 @@ import QuartzCore
         guard let native = store?.native else { return }
         let now = UInt64(CACurrentMediaTime() * 1_000_000_000)
         let target = UInt64(max(0, target) * 1_000_000_000)
-        native.observeTick(now: now, target: target, admitted: active && !pending)
-        guard active, !pending else { return }
+        let denial: UInt64 = !active ? 1 : pending ? 2 : native.canAdmitPresentation ? 0 : 3
+        native.observeTick(now: now, target: target, admitted: denial == 0, denial: denial)
+        guard denial == 0 else { return }
         pending = true
         let submittedGeneration = generation
         let submittedSurface = surfaceGeneration

@@ -8,13 +8,142 @@ presentation. A display-link tick or completed Rust call is not a presentation.
 The iOS Simulator SDK does not expose drawable IDs or presentation callbacks;
 simulator runs omit these events and cannot establish presentation acceptance.
 
-One ten-minute 4K watercolor session is recorded on each physical platform below.
+Baseline and current ten-minute 4K watercolor sessions are recorded on each
+physical platform below.
 Complete workload-matrix results, physical input-to-pixel evidence and calibrated
 instrumentation overhead remain required on both platforms. Following the user's
 2026-09-11 clarification, current Mac validation targets **90 Hz (11.11 ms)**;
 Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
+
+## Owner lifetime and presentation admission — 2026-09-12
+
+Both native targets now drain autoreleased objects after every asynchronous
+render-owner task, including the last task before idle. The prior queue inherited
+its worker's pool policy. A direct test using 64 real owner requests fails against
+that prior implementation because temporary native objects survive their task;
+it passes on both platform presets with `autoreleaseFrequency: .workItem`.
+Apple recommends an autorelease pool around drawable rendering in its
+[CAMetalLayer guidance](https://developer.apple.com/documentation/quartzcore/cametallayer).
+The pool change fixes resource lifetime; the short hardware pairs below do not
+show that it alone resolves presentation stalls.
+
+The shared frame driver also defers rendering when every drawable in the layer's
+configured pool is still awaiting a presentation callback. Input and editor
+requests continue through the serial owner, and the display link remains awake
+to retry. A completed CPU submission does not retire a drawable ticket. Callback
+retirement is idempotent; unsuccessful submissions release their ticket. Attach,
+resize, detach and platform resume invalidate old tickets, whose late callbacks
+cannot release replacement tickets. Core Animation can still delay drawable
+recycling after presentation, so this is a capacity check, not a guarantee that
+the next acquisition will be immediate. Display-link preferences and idle policy
+are unchanged. Simulator builds omit physical presentation callbacks and gating.
+
+The direct gate/driver checks cover capacity, retry, cancellation, duplicate and
+concurrent callbacks, wake, detach and surface replacement. A real owner/Metal
+fixture injects pending tickets and exercises resize, resume invalidation, detach
+and reattachment on both presets. It verifies those code paths, not the complete
+physical OS interruption matrix or real discarded callbacks. Signed Release
+builds for both physical targets pass, as do the 28 trace-analysis tests.
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/owner-autorelease.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/presentation-owner.swift
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/ObservedMetalLayer.swift \
+  apps/layer-apple/Shared/Bridge/FrameTrace.swift \
+  apps/layer-apple/tests/presentation-gate.swift -o /tmp/capy-presentation-gate
+/tmp/capy-presentation-gate
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -parse-as-library \
+  apps/layer-apple/Shared/Bridge/CanvasFrameDriver.swift \
+  apps/layer-apple/tests/frame-driver.swift -o /tmp/capy-frame-driver
+/tmp/capy-frame-driver
+python3 -m unittest discover -s tools/performance -p 'test_*.py'
+```
+
+### Short ink comparisons
+
+Separate 30-second measured `ink` runs compare published `dab000d`, that source
+with only the owner pool change, and then the pool plus presentation gate. The
+gate runs precede the final resume hooks and denial-reason telemetry. Optional
+GPU timestamps are off in all six runs. No compiler, GPU profiler or UI automation
+ran during measurement. Each process identity was verified against its exported
+trace and each owned benchmark app was closed afterward.
+
+| Host / change | CPU p99 / max, ms | CPU frames over host budget | Long continuous presentation intervals |
+| --- | ---: | ---: | ---: |
+| Mac baseline | 12.275 / 15.770 | 54 | 91 |
+| Mac pool only | 12.301 / 12.527 | 71 | 110 |
+| Mac pool + gate | 3.355 / 6.377 | 0 | 81 |
+| iPad baseline | 4.506 / 13.723 | 20 | 20 |
+| iPad pool only | 4.576 / 13.661 | 20 | 22 |
+| iPad pool + gate | 3.285 / 9.336 | 1 | 28 |
+
+Long intervals exceed the host period plus 5% tolerance, excluding intentional
+idle boundaries. Presentation records show that all 54 baseline Mac CPU stalls
+start with three acquired drawables still awaiting presentation; all 20 baseline
+iPad stalls start with two. The pool-only runs retain the same association.
+The gate reduces the short Mac CPU tail, but these samples do not establish a
+sustained cadence benefit, and the iPad interval count does not improve.
+Frame-admission latency excludes time spent waiting for admission; neither that
+metric nor the recorder's latest-input receipt association proves physical
+input-to-pixel latency.
+
+### Ten-minute 4K watercolor on the final runtime
+
+Both physical Release targets completed `wet-watercolor-4k` on shared source
+through `990b515` plus this milestone's runtime changes. The profile uses a
+4096 × 4096 document, eight paint layers, diameter-320 watercolor, 240 Hz
+synthetic samples and visual prediction. Ten seconds of warm-up precede the
+600-second measured interval and a ten-second postlude. GPU queue timestamps
+are disabled. Builds, Chrome, GPU profiling and UI automation remained idle
+during measurement; lightweight artifact analysis and process monitoring ran.
+
+| Measured result | Mac, 90 Hz | Physical iPad, 120 Hz |
+| --- | ---: | ---: |
+| Duration, seconds | 600.000 | 600.008 |
+| Delivered nonpredicted samples | 135,001 | 135,003 |
+| Actual presentations | 46,920 | 65,953 |
+| CPU owner p50 / p95 / p99 / max, ms | 3.395 / 5.138 / 6.025 / 9.402 | 2.067 / 3.492 / 9.122 / 17.711 |
+| CPU frames over host budget | 0 | 1,176 |
+| Drawable acquisition p99 / max, ms | 0.046 / 1.047 | 5.850 / 16.295 |
+| Continuous presentation p50 / p95 / p99 / max, ms | 11.111 / 22.222 / 22.222 / 55.556 | 8.333 / 8.334 / 16.667 / 37.499 |
+| Long continuous intervals / all continuous intervals | 3,651 / 46,544 | 1,126 / 65,577 |
+| Ticks deferred for drawable capacity / pending owner | 3,107 / 1 | 0 / 1,283 |
+| Admission-to-presentation p50 / p95 / p99 / max, ms | 32.829 / 33.032 / 33.207 / 44.166 | 17.620 / 17.654 / 25.972 / 34.306 |
+| Measured peak footprint, MiB | 1,791.11 | 1,627.17 |
+| Measured first-to-last footprint growth, MiB | 172.81 | 19.78 |
+| Thermal states | nominal | nominal |
+
+Both runs complete without rejected input, renderer errors, recorder overflow,
+missing callbacks or zero-time presentations **during measurement**. Each full
+trace retains two zero-time presentations outside that interval. Full-run peak
+footprints, including setup and postlude, are 2,993.38 MiB on Mac and 3,312.47 MiB
+on iPad. The recorder reserves 74.52 MiB; footprint growth includes workload and
+recording effects and is not an isolated leak measurement. Exported PIDs match
+the launched apps, and both owned benchmark processes close after export.
+
+The Mac CPU budget passes in this run, but 7.84% of continuous presentation
+intervals exceed its tolerance. The iPad exceeds both its CPU budget and its
+presentation target, with 1.72% long continuous intervals. Acquisition accounts
+for at least half of owner time in 808 of its 1,176 over-budget CPU frames.
+The capacity check alone cannot resolve those iPad stalls: none of its measured
+ticks were deferred for a full pool. These are failing sustained performance
+results, not final acceptance. Remaining work includes presentation scheduling,
+the full workload matrix, complete GPU observations, calibrated recorder overhead,
+physical input latency and lifecycle/visual/feature acceptance on both platforms.
+Raw traces, installation data and signing information stay in ignored artifacts.
+
+After measurement, Android pickup, default workspace pinning and shared collapsed
+divider changes through `dc2e651` were integrated. The 377 Apple bridge, shared UI
+and native workspace checks pass. Both integrated signed Release builds verify
+and complete separate five-second ink smoke intervals: 406 actual Mac
+presentations and 563 iPad presentations, with no rejected input, renderer errors,
+overflow or missing/zero-time presentations during measurement. A Mac window-only
+capture after export shows the painted canvas. Both owned apps close afterward.
+These launch/drawing checks do not extend the ten-minute evidence to the newly
+integrated shared changes or constitute a new full visual comparison.
 
 ## Short GPU execution captures
 
@@ -890,7 +1019,7 @@ queue's timestamp period, not compared as absolute CPU clock values.
 
 | Kind | Fields in order, excluding trailing zeros |
 | --- | --- |
-| 0 tick | admission time, target time, admitted flag |
+| 0 tick | admission time, target time, admitted flag, denial reason (0 unspecified, 1 inactive, 2 owner pending, 3 drawable capacity) |
 | 1 frame | ID, target, owner start, owner end, five CPU stage durations, latest nonpredicted receipt ID |
 | 2 input | enqueue ID/time, owner start/end, oldest/newest sample time, count, kind (0 real, 1 predicted, 2 correction), original last phase, tool, accepted flag |
 | 3 drawable | frame ID, acquire start/end, drawable ID, acquired flag |

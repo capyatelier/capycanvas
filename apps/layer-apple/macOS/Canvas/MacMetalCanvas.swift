@@ -56,7 +56,13 @@ final class MacCanvasView: NSView {
                 })
             }
             windowObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.wake() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if self.window?.occlusionState.contains(.visible) == true {
+                        self.store.native?.invalidatePresentations()
+                    }
+                    self.wake()
+                }
             })
             if displayLink == nil {
                 let link = displayLink(target: self, selector: #selector(tick(_:)))

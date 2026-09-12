@@ -20,6 +20,14 @@ CPU spikes, missing GPU observations and the remaining workload matrix leave
 performance acceptance open. Benchmark sessions use
 isolated storage; ordinary launches do not start synthetic input or recording.
 
+The shared render owner drains temporary native resources after each task. Frame
+admission defers work while the native drawable pool awaits presentation, with
+ticket invalidation across resize, surface replacement and platform resume.
+[Direct checks and ten-minute results](PERFORMANCE.md#owner-lifetime-and-presentation-admission--2026-09-12)
+cover both hosts. The measured Mac CPU budget passes, but both hosts still miss
+presentation deadlines and iPad retains acquisition stalls; full performance
+acceptance remains open.
+
 Apple snapshot publication serializes the shared host models directly to UTF-8,
 avoiding the intermediate JSON tree on the render owner. Incremental workspace
 updates retain the panel models while native placement follows floating motion;

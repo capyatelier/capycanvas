@@ -26,6 +26,12 @@ def distribution(values, divisor=NS_PER_MS):
             "p99": percentile(.99), "max": values[-1] / divisor}
 
 
+def admission_denials(records):
+    reasons = {1: "inactive", 2: "owner_pending", 3: "drawable_capacity"}
+    counts = collections.Counter(reasons.get(r[3], "unclassified") for r in records if not r[2])
+    return {name: counts[name] for name in [*reasons.values(), "unclassified"]}
+
+
 def analyze(header, events, target_hz=120):
     if header.get("schema") != 1:
         raise ValueError("Unsupported trace schema")
@@ -141,6 +147,7 @@ def analyze(header, events, target_hz=120):
                    "predicted_input_batches": sum(r[6] == 1 for r in inputs.values()),
                    "correction_input_batches": sum(r[6] == 2 for r in inputs.values()),
                    "ticks": len(ticks), "ticks_denied_admission": sum(not r[2] for r in ticks),
+                   "ticks_denied_by_reason": admission_denials(ticks),
                    "frames": len(frames), "viewport_submissions": len(submitted), "acquired_drawables": len(drawables),
                    "presented_drawables": len(visible), "zero_time_presentations": sum(not r[1] for r in presented.values()),
                    "missing_presentation_callbacks": len(drawables - presented.keys()),
@@ -202,6 +209,7 @@ def analyze(header, events, target_hz=120):
                 "rejected_input_batches": sum(not r[9] for r in inputs.values() if begin[0] <= r[0] <= end[0]),
                 "ticks": len(measured_ticks),
                 "ticks_denied_admission": sum(not r[2] for r in measured_ticks),
+                "ticks_denied_by_reason": admission_denials(measured_ticks),
                 "admitted_frames_without_viewport": len(admitted) - len(rows),
                 "missing_presentation_callbacks": len(acquired - presented.keys()),
                 "zero_time_presentations": sum(key in acquired and not r[1] for key, r in presented.items()),

@@ -85,6 +85,48 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
+## Owner resource lifetime and drawable admission — 2026-09-12
+
+Both Apple targets now drain temporary native objects after every serial owner
+task and defer frame admission while all configured drawables await presentation.
+Callbacks retire tickets independently of CPU submission. Resize, resume and
+surface replacement invalidate old tickets without allowing late callbacks to
+retire new work. Display-link preferences and idle policy remain unchanged.
+A direct 64-request lifetime regression fails against the prior owner and passes
+on both presets. Gate/driver checks cover retries and callback races; a real
+Metal owner fixture verifies explicit resize/resume/detach/reattach paths using
+injected pending tickets. Full physical interruption coverage remains open.
+
+Both signed physical Release apps complete ten measured minutes of predicted
+4K multilayer watercolor on shared source through `990b515` plus these runtime
+changes, with optional GPU timestamps disabled. No rejected input, renderer
+errors, overflow or missing/zero-time presentations occur during measurement.
+Mac records 46,920 presentations with CPU p99/max 6.025/9.402 ms; iPad records
+65,953 with 9.122/17.711 ms. The Mac CPU budget passes in this sample, but 3,651
+of 46,544 continuous intervals exceed its 90 Hz tolerance. iPad has 1,126 long
+intervals out of 65,577 and 1,176 CPU frames above 8.33 ms. Both sustained
+presentation gates still fail. Measured footprint growth is 172.81 MiB on Mac
+and 19.78 MiB on iPad, with nominal thermal states; recording/workload allocation
+has not been isolated from memory growth. Both owned apps are closed.
+
+The [performance report](../../apps/layer-apple/PERFORMANCE.md#owner-lifetime-and-presentation-admission--2026-09-12)
+retains the short baseline/pool/gate comparisons, complete sustained metrics,
+full-run anomalies and reproduction commands. The analyzer distinguishes
+drawable-capacity deferrals from pending owner work and retains legacy unknown
+reasons; all 28 analysis checks pass. The iPad Simulator build also passes its
+separate Metal API path. New workspace switcher controls and Apple device-specific
+drag pickup remain implementation work. Full UI/visual, physical input/lifecycle,
+GPU, latency and sustained workload acceptance remain open on both platforms.
+Save/Load Layout remain excluded, Mac 120 Hz remains deferred, and raw artifacts
+and signing/device information remain private.
+
+Android pickup, default workspace pinning and shared divider changes through
+`dc2e651` are integrated. The 377 Apple/shared UI/native workspace tests pass.
+Both integrated signed Release apps verify and complete separate five-second
+ink smoke checks with no measured input rejection, renderer errors or missing
+presentations. The Mac capture shows visible strokes. These checks preserve
+the separate source attribution of the ten-minute measurements above.
+
 ## Native GPU correlation and resumed hardware measurements — 2026-09-12
 
 Both physical hosts now have actual Instruments GPU captures correlated to

@@ -17,6 +17,18 @@ def header(**changes):
 
 
 class ReportChecks(unittest.TestCase):
+    def test_admission_backpressure_remains_visible_and_separate_from_cpu_work(self):
+        events = [record(0, 1, 2, 0, 1), record(11, 10, 2, 1),
+                  record(0, 11, 12, 0, 2), record(0, 13, 14, 0, 3),
+                  record(0, 15, 16, 0), record(0, 17, 18, 1), record(11, 20, 3, 1)]
+        result = analyze(header(workload={"name": "ink", "measurement_seconds": .00000001}), events)
+        self.assertEqual(result["counts"]["ticks_denied_admission"], 4)
+        self.assertEqual(result["counts"]["ticks_denied_by_reason"],
+                         {"inactive": 1, "owner_pending": 1, "drawable_capacity": 1, "unclassified": 1})
+        self.assertEqual(result["workload"]["ticks_denied_by_reason"],
+                         {"inactive": 0, "owner_pending": 1, "drawable_capacity": 1, "unclassified": 1})
+        self.assertEqual(result["workload"]["frames"]["owner_service_ms"]["count"], 0)
+
     def test_90hz_evaluation_retains_real_misses_and_120hz_diagnostics(self):
         events = [record(6, 0, 2400, 1740, 2000, 90), record(10, 0, 1),
                   record(11, 1, 2, 1)]

@@ -20,6 +20,11 @@ final class NativeOwner: @unchecked Sendable {
     private let queue: DispatchQueue
     private let handle: OpaquePointer
     private var layer: CAMetalLayer?
+    private let presentationGate = FramePresentationGate()
+    var canAdmitPresentation: Bool { presentationGate.hasCapacity }
+    /// Resizing or returning from occlusion/suspension can discard previously
+    /// submitted drawables. Late callbacks cannot retire replacement tickets.
+    func invalidatePresentations() { presentationGate.reset() }
     private var lastSnapshotTime: UInt64 = 0
     private var bundledFiltersLoaded = false
     private var canvasReady = false
@@ -63,7 +68,10 @@ final class NativeOwner: @unchecked Sendable {
         #if DEBUG
         let fixtureActions = try ProcessInfo.processInfo.environment["CAPY_INITIAL_ACTIONS"].map { try JSON.decode($0).array } ?? []
         #endif
-        let queue = DispatchQueue(label: "art.capycanvas.render", qos: .userInteractive)
+        // Drain temporary native/Metal objects after each owner task, including
+        // the last frame before idle, rather than inheriting a worker pool.
+        let queue = DispatchQueue(label: "art.capycanvas.render", qos: .userInteractive,
+            autoreleaseFrequency: .workItem)
         guard let handle = queue.sync(execute: { capy_apple_create(platform) }) else {
             throw HostFailure(message: "Could not create the native canvas session")
         }
@@ -359,7 +367,10 @@ final class NativeOwner: @unchecked Sendable {
             try cache.path.withCString {
                 try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale, $0))
             }
+            (self.layer as? ObservedMetalLayer)?.presentationGate = nil
             self.layer = layer
+            presentationGate.reset(capacity: layer.maximumDrawableCount)
+            (layer as? ObservedMetalLayer)?.presentationGate = presentationGate
             #if DEBUG
             surfaceSized = true
             #endif
@@ -386,6 +397,7 @@ final class NativeOwner: @unchecked Sendable {
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
             try check(capy_apple_resize(handle, width, height, scale))
+            presentationGate.reset(capacity: layer?.maximumDrawableCount)
             #if DEBUG
             surfaceSized = true
             #endif
@@ -433,7 +445,11 @@ final class NativeOwner: @unchecked Sendable {
         }
     }
     func detach() {
-        perform { [self] in try check(capy_apple_detach(handle)); layer = nil }
+        perform { [self] in
+            try check(capy_apple_detach(handle))
+            (layer as? ObservedMetalLayer)?.presentationGate = nil
+            presentationGate.reset(); layer = nil
+        }
     }
     func pointer(id: UInt64, tool: UInt32, button: UInt32, records: [Double], predicted: Bool, revision: UInt64,
                  updates: [UInt64] = [], correction: Bool = false) {
@@ -466,8 +482,10 @@ final class NativeOwner: @unchecked Sendable {
             succeeded = true
         }
     }
-    func observeTick(now: UInt64, target: UInt64, admitted: Bool) {
-        if let trace, trace.isRecording { trace.record(FrameTraceEvent(kind: .tick, a: now, b: target, c: admitted ? 1 : 0)) }
+    func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64 = 0) {
+        if let trace, trace.isRecording {
+            trace.record(FrameTraceEvent(kind: .tick, a: now, b: target, c: admitted ? 1 : 0, d: denial))
+        }
     }
     func observeWorkload(_ event: FrameTraceEvent) {
         if let trace, trace.isRecording { trace.record(event) }
@@ -520,9 +538,11 @@ final class NativeOwner: @unchecked Sendable {
         let observation = trace.flatMap { $0.isRecording ? $0 : nil }
         queue.async { [self] in
             var costs = [UInt64](repeating: 0, count: 5)
+            var submitted = false
             let start = observation == nil ? 0 : FrameTrace.now()
             (layer as? ObservedMetalLayer)?.observation = observation.map { ($0, now) }
             defer {
+                (layer as? ObservedMetalLayer)?.finishFrame(submitted: submitted)
                 (layer as? ObservedMetalLayer)?.observation = nil
                 observation?.record(FrameTraceEvent(kind: .frame, a: now, b: target, c: start, d: FrameTrace.now(),
                     e: costs[0], f: costs[1], g: costs[2], h: costs[3], i: costs[4], j: latestTracedInput))
@@ -535,6 +555,7 @@ final class NativeOwner: @unchecked Sendable {
                     gpuTimingEnabled = wantsGpuTiming
                 }
                 let result = capy_apple_frame(handle, now, max(now, target), &costs)
+                submitted = result >= 0 && costs[2] > 0
                 try check(result)
                 // Always flush the final state before the display link sleeps.
                 // Throttling the pen-up frame can otherwise leave Undo/layers

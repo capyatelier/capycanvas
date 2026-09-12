@@ -7,7 +7,12 @@ import Foundation
     var canvasSubmitted = false
 }
 @MainActor final class NativeOwner {
-    func observeTick(now: UInt64, target: UInt64, admitted: Bool) {}
+    var canAdmitPresentation = true
+    var admissions: [Bool] = []
+    var denials: [UInt64] = []
+    func observeTick(now: UInt64, target: UInt64, admitted: Bool, denial: UInt64) {
+        admissions.append(admitted); denials.append(denial)
+    }
     func observeActivity(active: Bool) {}
     var completions: [@Sendable (Bool, UInt64, [UInt64]) -> Void] = []
     func frame(now: UInt64, target: UInt64,
@@ -35,8 +40,16 @@ import Foundation
         frames.setPaused = { paused = $0 }
         frames.submittedViewport = { submissions += 1 }
         frames.activate()
+        store.native!.canAdmitPresentation = false
+        frames.tick(target: 0.5)
+        assert(store.native!.completions.isEmpty && store.native!.admissions == [false])
+        assert(store.native!.denials == [3])
+        assert(!paused, "A full drawable pool must keep the link awake for retry")
+        frames.wake()
+        store.native!.canAdmitPresentation = true
         frames.tick(target: 1); frames.tick(target: 2)
         assert(store.native!.completions.count == 1, "Only one frame may be queued")
+        assert(store.native!.denials.suffix(2) == [0, 2])
         frames.wake()
         store.native!.complete()
         await drainMainQueue()
@@ -66,6 +79,6 @@ import Foundation
         await drainMainQueue()
         assert(paused && store.canvasSubmitted && submissions == 2)
         assert(store.cameraRevision == 4)
-        print("Shared frame-driver checks passed: admission, wake, detach and replacement")
+        print("Shared frame-driver checks passed: drawable backpressure, admission, wake, detach and replacement")
     }
 }
