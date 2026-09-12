@@ -7,6 +7,7 @@ members = [
     "crates/layer-ffi",
     "crates/layer-bench",
     "crates/layer-ui",
+    "crates/layer-workspace",
     "crates/layer-host",
     "apps/layer-linux",
     "apps/layer-web",

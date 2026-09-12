@@ -46,3 +46,26 @@ Validation on 2026-09-11:
 
 Web IndexedDB and other native host adaptation follow GTK approval. Their contract
 requirements remain in the proposal; they are not claimed as implemented here.
+
+## Milestone 2: native store foundation
+
+Added `layer-workspace` for shared entity records, validation, prepared commit
+batches and request/reply transport. The native feature supplies one SQLite worker
+per private directory shared by window clients. Immutable layout and panel/toolbar
+components are stored once; working values, layout navigation and metadata have
+independent write generations. The database uses bundled SQLite, WAL and FULL
+synchronization. Creation, binding changes, deletion and migration mappings commit
+atomically. Leased ownership, fencing, pending deliveries and immutable operation
+receipts protect against stale writers and retries after lost acknowledgements.
+
+Fourteen real SQLite tests pass, including rollback after earlier SQL statements
+succeed, repeated delivery, lost acknowledgements, concurrent claims, coherent
+reads during writes, suspended-owner takeover, deletion/restore and replacement,
+migration mapping, newer-schema preservation, corrupt metadata isolation,
+lossless large generations, and reopening unavailable storage through the worker.
+GTK autosave and manager integration, resource packages and retention are still
+pending; these store tests do not constitute native application acceptance.
+After integrating the concurrent GTK/Web tab-drag changes, combined validation
+passed 255 shared UI tests and 14 native store tests, plus doc tests:
+`cargo test --locked -p layer-ui -p layer-workspace --features layer-workspace/native`.
+`cargo check --locked -p layer-linux` also passed on that combined tree.
