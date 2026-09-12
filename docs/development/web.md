@@ -113,6 +113,24 @@ with headed Chrome inside an isolated Mutter compositor using
 `bash tools/performance/workspace-motion.sh web --workspace-manager`; see the
 [Linux guide](linux.md#focused-ui-debugging) for that runner's dependencies.
 
+For workspace-dialog pixel comparisons, capture the same default workspaces at
+1440 × 1000 and scale 1 on both hosts:
+
+```bash
+LAYER_MOTION_VIEWPORT=1440x1000 LAYER_TEST_ARTIFACTS="$PWD/artifacts/ui/workspace-modal/gtk" \
+  bash tools/performance/workspace-motion.sh gtk --workspace-manager-visual
+LAYER_TEST_ARTIFACTS="$PWD/artifacts/ui/workspace-modal/web" \
+  bash tools/performance/workspace-motion.sh web --workspace-manager-visual
+```
+
+These fixtures use fresh storage and retain full-window PNGs plus widget/DOM
+bounds for dark/light themes and real pointer hover states. The Web scenario also
+checks GTK's dialog/row allocations, hover targets and keyboard focus. Convert
+each PNG's embedded color profile to sRGB before comparing pixels; Chrome can
+encode a different transfer curve despite forcing the sRGB color gamut. Compare
+the dialog at its recorded bounds without scaling or shifting it; surrounding
+editor controls are separate from this comparison.
+
 ## Test and debug Web on Android
 
 Use the device selection and USB debugging setup in the [Android guide](android.md).

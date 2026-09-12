@@ -27,7 +27,7 @@ mkdir "$LAYER_NATIVE_INPUT_DIR" "$CAPY_WORKSPACE_DIR"
 unset DISPLAY
 printf 'Workspace test logs: %s\n' "$motion_run_dir"
 env -u G_DEBUG mutter --headless --wayland --no-x11 \
-    --virtual-monitor="1600x1000@${LAYER_MOTION_REFRESH:-120}" \
+    --virtual-monitor="${LAYER_MOTION_VIEWPORT:-1600x1000}@${LAYER_MOTION_REFRESH:-120}" \
     --wayland-display="$WAYLAND_DISPLAY" >"$motion_run_dir/mutter.log" 2>&1 &
 motion_compositor_pid=$!
 pipewire >"$motion_run_dir/pipewire.log" 2>&1 &

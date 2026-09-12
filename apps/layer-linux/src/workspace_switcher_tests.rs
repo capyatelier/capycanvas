@@ -3,6 +3,86 @@ use crate::workspace::manager::now_ms;
 use layer_workspace::{DEFAULT_WORKSPACES, ManagerPage};
 
 #[test]
+#[ignore = "GTK reference with real pointer input; --workspace-manager-visual"]
+fn native_workspace_manager_visual() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let output =
+        std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or(dir.to_string_lossy().into_owned());
+    std::fs::create_dir_all(&output).unwrap();
+    let app = native_test_app("art.capycanvas.WorkspaceManagerVisual");
+    gtk::Settings::default()
+        .unwrap()
+        .set_gtk_enable_animations(false);
+    let w = Workspace::new(&app);
+    w.window.maximize();
+    w.window.present();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !w.workspaces.ready.get() || w.workspaces.busy.get() {
+        pump(20);
+        assert!(Instant::now() < deadline);
+    }
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    fn record(widget: &gtk::Widget, root: &gtk::Widget) -> serde_json::Value {
+        let b = widget.compute_bounds(root).unwrap();
+        let mut children = Vec::new();
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            if c.is_visible() && c.is_child_visible() {
+                children.push(record(&c, root));
+            }
+        }
+        serde_json::json!({"type":widget.type_().name(), "name":widget.widget_name().to_string(),
+            "css":widget.css_classes().iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "bounds":[b.x(),b.y(),b.width(),b.height()], "state":format!("{:?}",widget.state_flags()),
+            "font":widget.pango_context().font_description().map(|f|f.to_string()),
+            "text":widget.downcast_ref::<gtk::Label>().map(|l|l.text().to_string()), "children":children})
+    }
+    for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.workspaces.ui.show(&w, ManagerPage::Workspaces);
+        pump(500);
+        let painter = row(&w, DEFAULT_WORKSPACES[0].0);
+        let current = row(&w, DEFAULT_WORKSPACES[1].0);
+        let grip = find_named(
+            &painter,
+            &format!("workspace-reorder-handle-{}", DEFAULT_WORKSPACES[0].0),
+        )
+        .unwrap();
+        let more = menu_button(&painter).unwrap();
+        let add = find_named(w.window.upcast_ref(), "workspace-manager-new").unwrap();
+        let cancel = find_button(w.window.upcast_ref(), "Cancel").unwrap();
+        for (state, point) in [
+            ("normal", [10., 10.]),
+            ("row", at(&w, &painter, 0.4, 0.5)),
+            ("grip", at(&w, &grip, 0.5, 0.5)),
+            ("options", at(&w, more.upcast_ref(), 0.5, 0.5)),
+            ("current", at(&w, &current, 0.4, 0.5)),
+            ("new", at(&w, &add, 0.5, 0.5)),
+            ("cancel", at(&w, cancel.upcast_ref(), 0.5, 0.5)),
+        ] {
+            send(&dir, &mut step, serde_json::json!([{"point":point}]));
+            capture_reference(&w, &format!("{output}/gtk-{name}-{state}.png"), 1.0);
+            std::fs::write(
+                format!("{output}/gtk-{name}-{state}.json"),
+                serde_json::to_vec_pretty(&record(
+                    w.workspaces.ui.dialog.upcast_ref(),
+                    w.window.upcast_ref(),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        w.workspaces.ui.close();
+        pump(250);
+    }
+    std::fs::write(dir.join("finished"), "finished").unwrap();
+    w.window.close();
+    pump(300);
+}
+
+#[test]
 #[ignore = "requires isolated workspace storage and a native GTK display"]
 fn native_active_workspace_delete() {
     check_active_workspace_delete(false);

@@ -44,6 +44,8 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
   }
   function decorate(row, choice, item, view) {
     row.dataset.id = item.id;
+    // Keep a button hit target: Chrome can redirect touches on a narrow passive
+    // icon to the neighboring row button, which would require a hold to drag.
     const handle = button("", e => e.preventDefault(), "workspace-grip"); handle.append(icon("grip")); handle.tabIndex = -1;
     handle.title = "Drag to reorder"; handle.setAttribute("aria-label", handle.title);
     row.prepend(handle);
@@ -54,12 +56,16 @@ export function createWorkspaceSwitcher({dialog, list, element, button, icon, se
       const mark = element("span", `workspace-row-mark workspace-${glyph}`); mark.append(icon(glyph));
       mark.title = label; mark.setAttribute("aria-label", label); mark.setAttribute("role", "img"); row.append(mark);
     }
-    const more = button("⋮", () => {
+    const more = button("", () => {
       if (menuOpen() && menuOwner === row) { closeMenu(true); return; }
       const r = more.getBoundingClientRect(); showMenu(row, {x:r.left, y:r.bottom}, true);
     }, "workspace-options");
+    more.append(icon("more"));
     more.setAttribute("aria-label", `Options for ${item.title}`); more.setAttribute("aria-haspopup", "menu"); more.setAttribute("aria-expanded", "false");
     row.append(more);
+    row.addEventListener("click", e => {
+      if (!e.target.closest(".workspace-choice,.workspace-options") && !unavailable()) choice.click();
+    });
     choice.addEventListener("keydown", e => {
       if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
         e.preventDefault(); const r = row.getBoundingClientRect(); showMenu(row, {x:r.left+28, y:r.bottom}, true);

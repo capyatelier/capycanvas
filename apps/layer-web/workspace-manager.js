@@ -3,8 +3,10 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
   const dialog = element("dialog", "workspace-manager"), formDialog = element("dialog", "workspace-form");
   const heading = element("h2"), header = element("header", "dialog-header");
   heading.id = "workspace-manager-title"; dialog.setAttribute("aria-labelledby", heading.id);
-  const add = button("+", () => send({ type: "form", kind: "new" }), "workspace-add");
-  const close = button("×", cancel, "dialog-close"); close.setAttribute("aria-label", "Close");
+  const add = button("", () => send({ type: "form", kind: "new" }), "workspace-add");
+  const close = button("", cancel, "dialog-close"); close.setAttribute("aria-label", "Close");
+  close.append(element("span"));
+  dialog.tabIndex = -1;
   header.append(heading, add, close);
   const intro = element("p", "workspace-intro");
   const list = element("div", "workspace-list"); list.setAttribute("role", "listbox");
@@ -40,7 +42,7 @@ export function createWorkspaceManager({ app, store, applyChange, element, butto
     node.addEventListener("click", e => { if (e.target === node) { const r = node.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) cancel(); } });
   }
   function show(node, open) {
-    if (open && !node.open) { if (!dialog.open && !formDialog.open) previousFocus = document.activeElement; node.showModal(); }
+    if (open && !node.open) { if (!dialog.open && !formDialog.open) previousFocus = document.activeElement; node.showModal(); if (node === dialog) node.focus({preventScroll:true}); }
     if (!open && node.open) { expectedCloses.set(node,(expectedCloses.get(node)||0)+1); node.close(); if (!dialog.open && !formDialog.open) previousFocus?.focus?.(); }
   }
   function render() {
