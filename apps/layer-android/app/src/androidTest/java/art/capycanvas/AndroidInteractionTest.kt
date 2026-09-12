@@ -714,11 +714,17 @@ class AndroidInteractionTest {
         try {
             for (theme in listOf("light", "dark")) for (pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
                 action(obj("type" to "set_theme", "theme" to theme))
-                for (placement in listOf("below", "above", "left", "right")) {
+                for (placement in listOf("below", "above", "left", "right", "column-left", "column-right")) {
                     toolbarBand.put("edge", when (placement) { "above" -> "bottom"; "left" -> "left"; else -> "top" })
                     layout.put("bands", JSONArray(if (placement == "left") listOf(toolbarBand) else bands))
                     restore()
-                    val tag = if (placement == "right") "header-settings" else "tile-toolbar-$tile"
+                    if (placement.startsWith("column-")) customize(obj("type" to "set_column_collapsed", "group" to if (placement == "column-left") 41 else 43, "collapsed" to true))
+                    val tag = when (placement) {
+                        "right" -> "header-settings"
+                        "column-left" -> "column-icon-brushes"
+                        "column-right" -> "column-icon-navigator"
+                        else -> "tile-toolbar-$tile"
+                    }
                     val anchor = bounds(tag)
                     hover(anchor.center, pointer)
                     waitFor("$theme/$pointer/$placement tooltip") { tooltip() != null }

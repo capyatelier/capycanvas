@@ -131,13 +131,14 @@ internal fun DockInteraction.drawerContainerShape(bounds: JSONObject, radius: Fl
                                     anchor.getInt("column") == id && anchor.getString("origin") == panel
                                 } }
                                 val shape = drawerButtonShape(if (selected) dock.drawerSources[id.toString()]?.direction else null)
-                                Box(Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
-                                    .testTag("column-icon-$panel").dragSource(dock, target, holdToDrag = true)
-                                    .clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
-                                    .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
-                                        host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
-                                    }), contentAlignment = Alignment.Center) {
-                                    SharedIcon(view.getString("icon"), view.getString("title"))
+                                HoverTip(view.getString("title"), Modifier.placed(icon.getJSONObject("bounds").relativeTo(content), dock.density)
+                                    .testTag("column-icon-$panel").dragSource(dock, target, holdToDrag = true)) {
+                                    Box(Modifier.fillMaxSize().clip(shape).background(if (selected) LocalPalette.current.active else Color.Transparent)
+                                        .combinedClickable(onLongClick = { dock.holdContext(target) }, onClick = {
+                                            host.customize(obj("type" to "toggle_column_drawer", "group" to group.getInt("group"), "panel" to panel))
+                                        }), contentAlignment = Alignment.Center) {
+                                        SharedIcon(view.getString("icon"), view.getString("title"))
+                                    }
                                 }
                             }
                         }
