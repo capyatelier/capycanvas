@@ -66,7 +66,7 @@ import SwiftUI
         guard let store, !store.snapshot["partial_zen"].bool else { return nil }
         // Blank drawer regions still occlude dock grips underneath them.
         let drawerLayer = store.contentDrawers.items.values.filter {
-            $0.geometry["placement"]["bounds"].rect.contains(point) || $0.geometry["connection"]["bounds"].rect.contains(point)
+            $0.interactive && ($0.geometry["placement"]["bounds"].rect.contains(point) || $0.geometry["connection"]["bounds"].rect.contains(point))
         }.map { $0.id == "tool" ? 220 : 200 }.max() ?? 0
         let columnLayer = store.snapshot["layout"]["collapsed"].array.contains { $0["bounds"].rect.contains(point) } ? 160 : 0
         return sources.filter { $0.value.layer >= max(drawerLayer, columnLayer) && $0.value.bounds.contains(point) }
@@ -114,6 +114,7 @@ import SwiftUI
     }
     func start(_ item: JSON, point: CGPoint) {
         if let drag { cancel(drag.item) }
+        store?.contentDrawers.prepareDrag()
         let operation = Drag(item: item, point: point); drag = operation
         if item["kind"].string != "tile" {
             animation?.cancel(); animation = nil; expansion = JSON(); shownPanel = nil; geometryKey = ""

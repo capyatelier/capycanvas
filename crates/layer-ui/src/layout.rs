@@ -2809,11 +2809,9 @@ impl DockLayout {
                     count.div_ceil(columns) as f32 * (tile_height + 2.0) + 20.0
                 }
             } else if active.kind() == PanelKind::Tiles {
-                let [w, h] = config.tile_style.size();
-                let columns = ((width - 8.0 + 2.0) / (w + 2.0)).floor().max(1.0) as usize;
-                config.tiles().len().max(1).div_ceil(columns) as f32 * (h + 2.0) - 2.0
-                    + 8.0
-                    + TAB_BAR_HEIGHT
+                // Divider extents and balanced wrapping can require more room
+                // than a uniform tile-count grid. Use the same body allocator.
+                toolbar_content_height(width, config.tiles(), config.tile_style) + TAB_BAR_HEIGHT
             } else {
                 (self
                     .measurements
@@ -3260,16 +3258,18 @@ impl ResolvedLayout {
                 continue;
             }
             if group.tabs_visible && y < b.y + TAB_BAR_HEIGHT {
-                let mut index = group.panels.len();
-                for tab in tabs
+                // Native geometry preferences may arrive in dictionary order.
+                // Resolve the first logical slot independently of that order.
+                let index = tabs
                     .iter()
-                    .filter(|t| t.group == group.id && x < b.x + b.width - 20.0)
-                {
-                    if x < tab.bounds.x + tab.bounds.width * 0.5 {
-                        index = tab.index;
-                        break;
-                    }
-                }
+                    .filter(|t| {
+                        t.group == group.id
+                            && x < b.x + b.width - 20.0
+                            && x < t.bounds.x + t.bounds.width * 0.5
+                    })
+                    .map(|t| t.index)
+                    .min()
+                    .unwrap_or(group.panels.len());
                 return Some(DropHint {
                     target: DockTarget::Tab {
                         group: group.id,
@@ -6398,6 +6398,108 @@ mod tests {
             DockTarget::Tab { .. }
         ));
     }
+    #[test]
+    fn floating_tabbed_toolbar_fits_dividers_and_every_tile_style() {
+        let viewport = [1200., 1000.];
+        for style in [
+            TileStyle::Small,
+            TileStyle::Medium,
+            TileStyle::Large,
+            TileStyle::MediumLabeled,
+            TileStyle::Labeled,
+        ] {
+            let mut layout = crate::WorkspaceState::for_platform(crate::Platform::Mac).layout;
+            layout.panel_mut(Panel::Toolbar).unwrap().tile_style = style;
+            let group = layout.panel_group(Panel::Brushes).unwrap();
+            layout
+                .move_panel(
+                    viewport,
+                    Panel::Toolbar,
+                    DockTarget::Tab { group, index: None },
+                )
+                .unwrap();
+            layout.set_column_collapsed(group, true, viewport).unwrap();
+            layout
+                .move_item(
+                    viewport,
+                    DockItem::Group { group },
+                    DockTarget::Float {
+                        position: [500., 300.],
+                    },
+                )
+                .unwrap();
+            let resolved = layout.workspace(
+                viewport[0],
+                viewport[1],
+                crate::HEADER_HEIGHT,
+                crate::STATUS_HEIGHT,
+            );
+            let floating = resolved.groups.iter().find(|g| g.id == group).unwrap();
+            assert!(floating.floating && floating.tabs_visible);
+            for tile in &floating.tiles.as_ref().unwrap().tiles {
+                assert!(tile.x >= 0. && tile.y >= 0.);
+                assert!(
+                    tile.x + tile.width <= floating.bounds.width + 0.01,
+                    "{style:?}: {tile:?} overflows {:?}",
+                    floating.bounds
+                );
+                assert!(
+                    tile.y + tile.height <= floating.bounds.height - TAB_BAR_HEIGHT + 0.01,
+                    "{style:?}: {tile:?} overflows {:?}",
+                    floating.bounds
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tab_drop_is_independent_of_host_measurement_order() {
+        let layout = DockLayout::default().workspace(1200., 900., 48., 28.);
+        let group = layout.groups.iter().find(|g| g.id == 8).unwrap();
+        let b = group.bounds;
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let tabs: Vec<_> = order
+                .into_iter()
+                .map(|index| TabHit {
+                    group: group.id,
+                    index,
+                    bounds: Bounds {
+                        x: b.x + index as f32 * 60.,
+                        y: b.y,
+                        width: 60.,
+                        height: TAB_BAR_HEIGHT,
+                    },
+                })
+                .collect();
+            for (x, index) in [
+                (10., 0),
+                (65., 1),
+                (130., 2),
+                (b.width - 10., group.panels.len()),
+            ] {
+                let hint = layout.drop_hint(b.x + x, b.y + 18., &tabs, true).unwrap();
+                assert_eq!(
+                    hint.target,
+                    DockTarget::Tab {
+                        group: group.id,
+                        index: Some(index)
+                    },
+                    "measurement order {order:?}, x={x}"
+                );
+                let marker =
+                    (b.x + index as f32 * 60. - 1.5).clamp(b.x, b.x + (b.width - 23.).max(0.));
+                assert_eq!(hint.bounds.x, marker);
+            }
+        }
+    }
+
     #[test]
     fn append_preview_is_vertical_and_clamped_before_the_grip() {
         let layout = DockLayout::default().workspace(1200.0, 900.0, 48.0, 28.0);

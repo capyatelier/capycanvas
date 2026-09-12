@@ -48,18 +48,27 @@ final class NativeOwner: @unchecked Sendable {
     private var appliedSettingsRevision: UInt64 = 0
     private var storageErrors: [String: String] = [:]
     private var lastStorageStatus: Data?
+    #if DEBUG
+    private var initialActions: [JSON] = []
+    #endif
     let receive: @Sendable (JSON?, String?) -> Void
     var persistenceRoot: URL? { persistence.root }
 
     init(platform: UInt32, scene: String, persistence: EditorPersistence = .shared,
         traceDuration: TimeInterval? = nil, workload: [String: Any]? = nil,
         receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
+        #if DEBUG
+        let fixtureActions = try ProcessInfo.processInfo.environment["CAPY_INITIAL_ACTIONS"].map { try JSON.decode($0).array } ?? []
+        #endif
         let queue = DispatchQueue(label: "art.capycanvas.render", qos: .userInteractive)
         guard let handle = queue.sync(execute: { capy_apple_create(platform) }) else {
             throw HostFailure(message: "Could not create the native canvas session")
         }
         self.queue = queue; self.handle = handle; self.receive = receive
         self.persistence = persistence; self.scene = scene
+        #if DEBUG
+        initialActions = fixtureActions
+        #endif
         trace = FrameTrace.configured(platform: platform, defaultDuration: traceDuration, workload: workload)
         // Reserve the first owner operation before exposing this instance.
         // Disk reads run on the I/O queue; no input or surface task can overtake
@@ -334,6 +343,7 @@ final class NativeOwner: @unchecked Sendable {
                 try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale, $0))
             }
             self.layer = layer
+            try applyInitialActions()
             try publish()
         }
     }
@@ -355,8 +365,17 @@ final class NativeOwner: @unchecked Sendable {
     }
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
-            try check(capy_apple_resize(handle, width, height, scale)); try publish()
+            try check(capy_apple_resize(handle, width, height, scale))
+            try applyInitialActions(); try publish()
         }
+    }
+    private func applyInitialActions() throws {
+        #if DEBUG
+        // Fixture actions can collapse or resize columns. Apply them once,
+        // after restoration and the first real surface size, not at 1×1 startup.
+        let actions = initialActions; initialActions = []
+        for action in actions { _ = try request(0, action) }
+        #endif
     }
     func importLayer(_ url: URL) {
         // File I/O and decode must not stall the UI or the render/input owner.

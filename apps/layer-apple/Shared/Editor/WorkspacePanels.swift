@@ -47,6 +47,7 @@ struct WorkspacePanels: View {
                 RoundedRectangle(cornerRadius: 5).fill(Color.accentColor.opacity(0.2))
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.accentColor, lineWidth: 2))
                     .placed(workspace.dropHint["bounds"]).allowsHitTesting(false).accessibilityHidden(true)
+                    .zIndex(300)
             }
             if store.snapshot["partial_zen"].bool { WorkspaceZenToolbars(store: store) }
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
@@ -61,6 +62,8 @@ struct WorkspacePanels: View {
             .onDisappear { store.native?.navigatorPlacements(JSON([])) }
             .onPreferenceChange(WorkspaceSources.self) { workspace.sources = $0 }
             .onPreferenceChange(DrawerTileMeasurements.self) { store.contentDrawers.measureTiles($0) }
+            .onPreferenceChange(ColumnDrawerMeasurements.self) { store.contentDrawers.measureColumns($0) }
+            .onDisappear { store.contentDrawers.measureColumns([:]); store.contentDrawers.measureTiles([:]) }
     }
 }
 
@@ -101,7 +104,7 @@ private struct WorkspacePanelGroup: View {
     }
     private func preview(tiles: JSON) -> some View {
         VStack(spacing: 0) {
-            if group["tabs_visible"].bool { header }
+            if group["tabs_visible"].bool { WorkspacePanelHeader(store: store, group: group) }
             if !tiles.isNull { WorkspaceToolbar(store: store, panel: active, geometry: tiles, vertical: group["axis"].string == "vertical") }
             else {
                 PanelControls(store: store, panel: active)
@@ -111,36 +114,8 @@ private struct WorkspacePanelGroup: View {
             }
         }.accessibilityElement(children: .contain).accessibilityIdentifier("panel-preview-" + active["id"].string)
     }
-    private var header: some View {
-        HStack(spacing: 0) {
-            ForEach(group["panels"].array.indices, id: \.self) { index in
-                let tab = panel(group["panels"][index])
-                Button { store.dispatch(["type": "select_panel_tab", "group": group["id"].raw, "panel": tab["id"].raw]) } label: {
-                    HStack(spacing: 6) {
-                        if tab["tab"]["show_icon"].bool { SharedIcon(name: tab["icon"].string) }
-                        if tab["tab"]["show_name"].bool { Text(tab["title"].string).fontWeight(.bold).lineLimit(1) }
-                    }.padding(.horizontal, 8).frame(height: 36)
-                        .background(tab["id"].string == active["id"].string ? palette["panel"] : Color.clear)
-                }.buttonStyle(.plain).accessibilityLabel(tab["title"].string)
-                    .accessibilityIdentifier("panel-tab-" + tab["id"].string)
-                    .modifier(WorkspaceContext(store: store, target: JSON(["kind": "panel", "panel": tab["id"].raw])))
-                    .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": tab["id"].raw])))
-                    .background(GeometryReader { allocation in
-                        Color.clear.preference(key: WorkspaceTabs.self,
-                            value: ["\(group["id"].uint):\(index)": allocation.frame(in: .named("editor-workspace"))])
-                    })
-            }
-            Spacer(minLength: 0)
-            grip.frame(width: 20, height: 36)
-        }.background(palette["tabbar"])
-    }
     private var grip: some View {
-        SharedIcon(name: "grip").opacity(0.65).frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle()).accessibilityElement().accessibilityLabel("Panel group options")
-            .accessibilityIdentifier("group-options-\(group["id"].uint)")
-            .accessibilityHidden(false)
-            .modifier(WorkspaceContext(store: store, target: JSON(["kind": "group", "group": group["id"].raw]), openOnTap: true,
-                doubleClick: { store.doubleClickHandle(JSON(["kind": "group", "group": group["id"].raw])) }))
+        WorkspaceGroupGrip(store: store, group: group["id"])
             .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "group", "group": group["id"].raw])))
     }
 }

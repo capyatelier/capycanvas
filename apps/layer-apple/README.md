@@ -381,6 +381,30 @@ query per projection. Canvas contact admission runs on the Rust owner: an outsid
 contact that dismisses a drawer cannot leak a later move or prediction into paint.
 Mode changes refresh chrome visibility even when native measurements are equal.
 
+Drawer headers share their tab buttons, context menus and group grip with docked
+and floating panels. Native preferences report the visible drawer and clipped
+tab bounds to Rust, enabling tab reordering, individual tear-off, whole-group
+dragging and drops into open column drawers. Closing projections stop accepting
+input while their exit animation finishes. Unused header space drags the group,
+and the drop indicator stays above the drawers. New drags restore cached bounds
+after workspace changes clear Rust's transient measurements. Shared docking accepts unordered tab
+measurements, and collapsing a column with no measurable width fails without
+changing the workspace. Floating tabbed toolbars use the same natural-height
+allocator as their body, including divider extents and all five tile styles.
+
+`testDrawerDragAndDock` exercises these native gestures on each Apple target.
+The faster `tests/workspace-drawers.swift` check uses an invisible AppKit hosting
+window to exercise actual shared SwiftUI geometry, tab/header sources, serial drag
+dispatch, reordered presentation, restored drop targets and closing input retirement:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-drawers.swift
+```
+
+Debug-only `CAPY_INITIAL_ACTIONS` fixtures run once after restoration and the first
+native surface size, so layout actions use the editor's viewport instead of the
+owner's 1×1 placeholder. Release builds have no fixture override.
+
 `testCollapsedColumnsDrawersAndZen` exercises column tabs, a child drawer,
 outside dismissal and restoring the column; `testPartialZenToolbar` checks the
 default standalone toolbar projection and exiting Zen. These shared checks use

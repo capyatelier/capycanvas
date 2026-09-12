@@ -8,7 +8,7 @@ extension XCTestCase {
         return app
         #endif
     }
-    @MainActor private func workspaceActivate(_ element: XCUIElement) {
+    @MainActor func workspaceActivate(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 10))
         #if os(macOS)
         if element.isHittable {

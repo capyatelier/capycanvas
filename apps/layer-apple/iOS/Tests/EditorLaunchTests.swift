@@ -3,6 +3,11 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testDrawerDragAndDock() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        checkDrawerDragAndDock(in: editorTestApplication())
+    }
+
     @MainActor func testToolbarStylesAndActions() {
         XCUIDevice.shared.orientation = .landscapeLeft
         checkToolbarStylesAndActions(in: editorTestApplication())

@@ -70,6 +70,64 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Apple drawer docking and shared layout geometry — 2026-09-11
+
+Both Apple editors now use one tab/header/grip implementation for docked panels,
+floating groups and collapsed-column drawers. Drawer tabs support reordering,
+individual tear-off and docking into another open drawer; the grip and unused
+header space move the complete group. The same panel/group context actions and
+configured tab styles apply in every presentation. SwiftUI reports clipped tab
+rectangles and actual drawer bounds to Rust. New drags restore cached measurements
+after transient invalidation; closing projections retire their input targets
+before the exit animation ends. Drop indicators draw above the open drawers.
+
+Two shared geometry bugs were reproduced and fixed. Dictionary-order tab
+measurements could select the wrong insertion slot; the resolver now selects
+the first logical slot independently of measurement order. A floating tabbed
+toolbar's uniform-grid height estimate could clip the last tool column when
+dividers affected wrapping. Its height now comes from the same allocator as the
+toolbar body, with regression coverage for all five tile styles. Both fixes
+apply to every port. Collapsing a column without a measurable width also rejects
+the action before mutating the layout.
+
+Debug startup actions previously ran against the native owner's 1×1 placeholder,
+allowing collapsed-column fixtures to record an invalid expanded width. The
+serial owner now applies these actions once, after restoration and its first
+surface size. Release builds have no fixture override.
+
+Focused Mac and iPad Simulator workflows pass tab reorder, tear-off, docking back
+into the drawer and floating the complete group. Their final app captures show
+the complete toolbar after the sizing fix. They exercise in-app editor gestures
+without automating system menus. These captures precede the final incoming
+tab-visibility change and are workflow evidence, not paired pixel comparisons.
+The faster invisible AppKit hosting check covers actual shared SwiftUI tab/header
+sources, serialized reordering, restoring an invalidated drop target and closing
+input retirement without XCTest or GPU rendering.
+
+Incoming GTK, web and Android drawer changes, including preservation of panel
+tab-visibility preferences through `e1b1fe0`, are integrated. Shared bridge checks
+exercise both Apple platform projections, drawer bounds, cancel, undo/redo and
+preservation of brush/document state. Validation details for this integrated
+checkpoint include 34 Apple bridge, 15 host and 249 shared UI checks (298 passing;
+one existing hardware-only host check remains ignored), the direct SwiftUI check
+and both Apple Release builds. The command audit retains all 62 commands in 14
+groups for both platforms. The signed app installs and is observed running on
+the physical iPad, then the isolated test process is closed; this establishes
+startup only.
+
+The integrated web build and headless Chrome drawer workflow also pass for mouse
+and touch: active/inactive tabs, group grips and unused header space, reordering,
+insertion, merging, top/bottom splits, clipped tab hits, cancel and undo/redo.
+The browser runner uses the installed macOS Chrome executable and closes its
+temporary browser and server afterward.
+
+Local evidence stays in ignored `artifacts/apple-drawer-*` logs, captures and
+result bundles. The original Mac editor is preserved. This checkpoint adds no
+new physical Pencil, pixel-parity, latency or sustained-performance assertion.
+Full feature/lifecycle coverage, existing visual/filter-reference failures and
+the 90 Hz Mac / 120 Hz iPad hardware targets remain open. Mac 120 Hz testing
+remains explicitly deferred.
+
 ## Apple toolbar rendering and Zen accessibility — 2026-09-11
 
 Both Apple editors use one SwiftUI toolbar button/content implementation for

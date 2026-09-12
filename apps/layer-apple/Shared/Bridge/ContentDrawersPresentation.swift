@@ -6,6 +6,7 @@ import SwiftUI
     let id: String
     @Published private(set) var model = JSON()
     @Published private(set) var geometry = JSON()
+    @Published private(set) var interactive = false
     private weak var store: EditorStore?
     private var current = JSON()
     private var key = ""
@@ -29,6 +30,7 @@ import SwiftUI
         guard let store else { return }
         let changed = current.stableKey != next.stableKey
         current = next
+        if interactive != !next.isNull { interactive = !next.isNull }
         if !next.isNull {
             if model.stableKey != next.stableKey { model = next; heights = [:] }
             for panel in store.snapshot["panels"].array { bodies[panel["id"].string] = panel }
@@ -76,6 +78,8 @@ import SwiftUI
     @Published private(set) var items: [String: ContentDrawerPresentation] = [:]
     private weak var store: EditorStore?
     private var tilesKey = ""
+    private var columnsKey = ""
+    private var columns: [UInt64: CGRect] = [:]
     private(set) var tileRevision = 0
     init(store: EditorStore) { self.store = store }
     func refresh() {
@@ -103,6 +107,29 @@ import SwiftUI
         store?.dispatch(["type": "measure_drawer_tiles", "measurements": values])
         tileRevision &+= 1
         refresh()
+    }
+    func measureColumns(_ measurements: [UInt64: CGRect], force: Bool = false) {
+        columns = measurements
+        let values: [Any] = measurements.keys.sorted().compactMap { group in
+            guard let bounds = measurements[group], !bounds.isEmpty,
+                [bounds.minX, bounds.minY, bounds.width, bounds.height].allSatisfy(\.isFinite) else { return nil }
+            return ["group": group, "bounds": JSON(bounds).raw]
+        }
+        let next = JSON(values).stableKey
+        guard force || next != columnsKey else { return }; columnsKey = next
+        store?.dispatch(["type": "measure_column_drawers", "measurements": values])
+    }
+    func prepareDrag() {
+        // Closing/reopening a drawer or workspace undo can clear Rust's transient
+        // measurements even when SwiftUI coalesces back to identical geometry.
+        measureColumns(columns, force: true)
+    }
+}
+
+struct ColumnDrawerMeasurements: PreferenceKey {
+    static var defaultValue: [UInt64: CGRect] { [:] }
+    static func reduce(value: inout [UInt64: CGRect], nextValue: () -> [UInt64: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }
 

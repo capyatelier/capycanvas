@@ -79,7 +79,8 @@ struct WorkspaceContentDrawers: View {
         ForEach(drawers.items.values.sorted { $0.id < $1.id }) { drawer in
             WorkspaceContentDrawer(store: store, drawer: drawer)
                 .environment(\.workspaceLayer, drawer.id == "tool" ? 220 : 200)
-                .environment(\.workspaceGesturesEnabled, !store.snapshot["partial_zen"].bool)
+                .environment(\.workspaceGesturesEnabled, drawer.interactive && !store.snapshot["partial_zen"].bool)
+                .allowsHitTesting(drawer.interactive)
                 .zIndex(drawer.id == "tool" ? 220 : 200)
         }
     }
@@ -99,19 +100,7 @@ private struct WorkspaceContentDrawer: View {
                         VStack(spacing: 0) {
                             let tabs = drawer.model["tabs"]
                             if !tabs.isNull {
-                                ScrollView(.horizontal) {
-                                    HStack(spacing: 0) {
-                                        ForEach(tabs["panels"].array.indices, id: \.self) { i in
-                                            let panel = drawer.panel(tabs["panels"][i])
-                                            Button { store.dispatch(["type": "select_panel_tab", "group": tabs["group"].raw, "panel": panel["id"].raw]) } label: {
-                                                HStack(spacing: 6) {
-                                                    SharedIcon(name: panel["icon"].string)
-                                                    if panel["id"].string == tabs["active"].string { Text(panel["title"].string).fontWeight(.bold) }
-                                                }.padding(.horizontal, 8).frame(height: 36).background(panel["id"].string == tabs["active"].string ? palette["panel"] : Color.clear)
-                                            }.buttonStyle(.plain).accessibilityIdentifier("drawer-tab-" + panel["id"].string)
-                                        }
-                                    }
-                                }.scrollIndicators(.hidden).frame(height: 36).background(palette["tabbar"])
+                                WorkspacePanelHeader(store: store, group: tabs.replacing("id", with: tabs["group"]), drawer: true)
                             }
                             GeometryReader { clip in
                                 ScrollView(.vertical) {
@@ -133,6 +122,11 @@ private struct WorkspaceContentDrawer: View {
                     .background(palette["panel"]).clipShape(DrawerBodyShape(corners: connection["square_corners"]))
                     .shadow(color: .black.opacity(0.22), radius: 12, y: 2)
                     .modifier(NavigatorReveal())
+                    .background(GeometryReader { body in
+                        Color.clear.preference(key: ColumnDrawerMeasurements.self,
+                            value: drawer.interactive && !drawer.model["tabs"].isNull && !store.snapshot["partial_zen"].bool
+                                ? [drawer.model["tabs"]["group"].uint: body.frame(in: .named("editor-workspace"))] : [:])
+                    })
                     .placed(placement["bounds"])
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier(drawer.id == "tool" ? "tool-drawer" : "column-drawer-" + drawer.id)

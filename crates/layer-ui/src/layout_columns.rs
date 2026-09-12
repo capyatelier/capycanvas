@@ -500,6 +500,9 @@ impl DockLayout {
         let node = self.node(root).ok_or("The column no longer exists")?;
         let bounds = subtree_bounds(node, &before).ok_or("The column is not visible")?;
         let width = if collapsed {
+            if !bounds.width.is_finite() || bounds.width <= 0. {
+                return Err("The column has no measurable width".into());
+            }
             self.collapsed.push(CollapsedColumn {
                 root,
                 expanded_width: bounds.width,
@@ -1357,6 +1360,18 @@ mod tests {
         layout.validate().unwrap();
         assert!(layout.collapsed.is_empty());
     }
+    #[test]
+    fn collapsing_before_a_measurable_viewport_preserves_valid_layout() {
+        let mut layout = DockLayout::default();
+        let before = layout.clone();
+        assert!(layout.set_column_collapsed(5, true, [1., 1.]).is_err());
+        assert_eq!(layout, before);
+        layout.validate().unwrap();
+        layout.set_column_collapsed(5, true, VIEW).unwrap();
+        layout.validate().unwrap();
+        assert!(layout.collapsed_column_for_group(5).is_some());
+    }
+
     #[test]
     fn invalid_columns_and_toolbar_columns_are_rejected() {
         let mut layout = DockLayout::default();

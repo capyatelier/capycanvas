@@ -41,6 +41,167 @@ fn menu_action(menu: &Value, operation: &str) -> Value {
 }
 
 #[test]
+fn apple_column_drawer_drags_preserve_history_and_accept_measured_drop_targets() {
+    for platform in [0, 1] {
+        for whole in [false, true] {
+            let app = App::new(platform);
+            let layout = || {
+                unsafe { &*app.0 }
+                    .host
+                    .session
+                    .state()
+                    .workspace
+                    .layout
+                    .clone()
+            };
+            let group = layout().panel_group(layer_ui::Panel::Brushes).unwrap();
+            app.action(json!({"type":"move_panel","panel":"toolbar","target":{"kind":"tab","group":group},"viewport":[1200,900]}));
+            customize(
+                &app,
+                json!({"type":"set_column_collapsed","group":group,"collapsed":true}),
+            );
+            customize(
+                &app,
+                json!({"type":"toggle_column_drawer","group":group,"panel":"toolbar"}),
+            );
+            let column = layout().collapsed_column_for_group(group).unwrap();
+            let drawer = app.state()["customization"]["column_drawers"][0].clone();
+            let bounds = app
+                .request(
+                    2,
+                    json!({"type":"drawer","column":column,"heights":[450],"progress":1}),
+                )
+                .unwrap()["placement"]["bounds"]
+                .clone();
+            let measure = || {
+                app.action(json!({"type":"measure_column_drawers","measurements":[{"group":group,"bounds":bounds}]}))
+            };
+            measure();
+            // Native tab preferences arrive in dictionary order, including the
+            // destination's later tab before its first tab.
+            let left = bounds["x"].as_f64().unwrap();
+            let top = bounds["y"].as_f64().unwrap();
+            let tabs = json!([
+                {"group":group,"index":1,"bounds":{"x":left+96.,"y":top,"width":76.5,"height":36.}},
+                {"group":group,"index":0,"bounds":{"x":left,"y":top,"width":96.,"height":36.}}
+            ]);
+            for (phase, point) in [
+                ("down", [left + 134.25, top + 18.]),
+                ("move", [left + 12., top + 18.]),
+                ("up", [left + 12., top + 18.]),
+            ] {
+                app.action(json!({"type":"drag_workspace","item":{"kind":"panel","panel":"toolbar"},"phase":phase,"position":point,"viewport":[1200,900],"tabs":tabs}));
+            }
+            assert_eq!(
+                app.state()["customization"]["column_drawers"][0]["tabs"]["panels"],
+                json!(["toolbar", "brushes"])
+            );
+            app.invoke("undo_workspace");
+            customize(
+                &app,
+                json!({"type":"toggle_column_drawer","group":group,"panel":"toolbar"}),
+            );
+            measure();
+            let baseline = app.state();
+            assert!(
+                baseline["customization"]
+                    .get("column_drawer_bounds")
+                    .is_none()
+            );
+            let press = [
+                bounds["x"].as_f64().unwrap() + 20.,
+                bounds["y"].as_f64().unwrap() + 18.,
+            ];
+            let away = [650., 450.];
+            let item = if whole {
+                json!({"kind":"group","group":group})
+            } else {
+                json!({"kind":"panel","panel":"toolbar"})
+            };
+            let drag = |phase, position| {
+                app.action(json!({"type":"drag_workspace","item":item,"phase":phase,"position":position,"viewport":[1200,900],"tabs":[]}))
+            };
+            drag("down", press);
+            drag("move", [press[0] + 12., press[1]]);
+            assert_eq!(app.state()["workspace"], baseline["workspace"]);
+            drag("move", away);
+            assert_eq!(layout().floating.len(), 1);
+            drag("cancel", away);
+            assert_eq!(app.state()["workspace"], baseline["workspace"]);
+            assert_eq!(app.state()["customization"]["column_drawers"][0], drawer);
+            measure();
+            drag("down", press);
+            drag("move", away);
+            drag("up", away);
+            let floated = app.state()["workspace"].clone();
+            assert_eq!(layout().floating.len(), 1);
+            let floating_group = layout().panel_group(layer_ui::Panel::Toolbar).unwrap();
+            assert_eq!(
+                layout()
+                    .group_panels(floating_group)
+                    .unwrap()
+                    .contains(&layer_ui::Panel::Brushes),
+                whole
+            );
+            app.invoke("undo_workspace");
+            assert_eq!(app.state()["workspace"], baseline["workspace"]);
+            app.invoke("redo_workspace");
+            assert_eq!(app.state()["workspace"], floated);
+
+            // Open a second collapsed group and dock the floating source into
+            // its measured tab bar through the same drop preview used by Swift.
+            let target = layout().panel_group(layer_ui::Panel::Layers).unwrap();
+            customize(
+                &app,
+                json!({"type":"set_column_collapsed","group":target,"collapsed":true}),
+            );
+            customize(
+                &app,
+                json!({"type":"toggle_column_drawer","group":target,"panel":"layers"}),
+            );
+            let target_column = layout().collapsed_column_for_group(target).unwrap();
+            let target_bounds = app
+                .request(
+                    2,
+                    json!({"type":"drawer","column":target_column,"heights":[450],"progress":1}),
+                )
+                .unwrap()["placement"]["bounds"]
+                .clone();
+            app.action(json!({"type":"measure_column_drawers","measurements":[{"group":target,"bounds":target_bounds}]}));
+            let destination = [
+                target_bounds["x"].as_f64().unwrap()
+                    + target_bounds["width"].as_f64().unwrap() * 0.5,
+                target_bounds["y"].as_f64().unwrap() + 18.,
+            ];
+            let moving = json!({"kind":"group","group":floating_group});
+            let before_dock = app.state()["workspace"].clone();
+            app.action(json!({"type":"drag_workspace","item":moving,"phase":"down","position":away,"viewport":[1200,900],"tabs":[]}));
+            let hint = app
+                .request(
+                    2,
+                    json!({"type":"drop","item":moving,"position":destination,"tabs":[]}),
+                )
+                .unwrap();
+            assert_eq!(hint["target"]["kind"], "tab");
+            assert_eq!(hint["target"]["group"], target);
+            for phase in ["move", "up"] {
+                app.action(json!({"type":"drag_workspace","item":moving,"phase":phase,"position":destination,"viewport":[1200,900],"tabs":[]}));
+            }
+            assert!(layout().floating.is_empty());
+            assert_eq!(layout().panel_group(layer_ui::Panel::Toolbar), Some(target));
+            let docked = app.state()["workspace"].clone();
+            app.invoke("undo_workspace");
+            assert_eq!(app.state()["workspace"], before_dock);
+            app.invoke("redo_workspace");
+            assert_eq!(app.state()["workspace"], docked);
+            assert_eq!(app.state()["brush"], baseline["brush"]);
+            assert_eq!(app.state()["layers"], baseline["layers"]);
+            layout().validate().unwrap();
+        }
+    }
+}
+
+#[test]
 fn apple_toolbar_styles_reach_ribbons_drawers_and_zen_with_shared_metrics() {
     for platform in [0, 1] {
         let app = App::new(platform);

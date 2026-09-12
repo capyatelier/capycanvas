@@ -48,13 +48,6 @@ import SwiftUI
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
                 DispatchQueue.main.async { self?.catalog = result ?? JSON() }
             }
-            #if DEBUG
-            // Deterministic editor fixtures exercise actions directly, without
-            // driving platform menu bars. Production builds have no override.
-            if let source = ProcessInfo.processInfo.environment["CAPY_INITIAL_ACTIONS"] {
-                for action in try JSON.decode(source).array { native?.submit(0, action) }
-            }
-            #endif
             if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
         } catch { failure = error.localizedDescription }
         Self.instances.add(self)
