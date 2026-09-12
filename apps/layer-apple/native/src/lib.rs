@@ -128,7 +128,7 @@ pub extern "C" fn capy_apple_color_hit(x: f32, y: f32, size: f32, space: u32) ->
     }
 }
 /// # Safety
-/// Valid handle; json must be a NUL-terminated UTF-8 string when request != 3.
+/// Valid handle; json must be a NUL-terminated UTF-8 string except for requests 3 and 5.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_request(
     app: *mut CapyApple,
@@ -139,10 +139,13 @@ pub unsafe extern "C" fn capy_apple_request(
         return std::ptr::null_mut();
     };
     app.perform(|a| {
-        if request == 3 {
-            return a
-                .host
-                .take_snapshot_bytes()
+        if request == 3 || request == 5 {
+            let snapshot = if request == 5 {
+                a.host.take_update_bytes()
+            } else {
+                a.host.take_snapshot_bytes()
+            };
+            return snapshot
                 .map_err(|e| e.to_string())?
                 .map(|bytes| {
                     CString::new(bytes)

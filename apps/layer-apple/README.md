@@ -21,8 +21,10 @@ performance acceptance open. Benchmark sessions use
 isolated storage; ordinary launches do not start synthetic input or recording.
 
 Apple snapshot publication serializes the shared host models directly to UTF-8,
-avoiding the intermediate JSON tree on the render owner. The value and byte
-transports share one schema, camera-update policy and exact numeric values.
+avoiding the intermediate JSON tree on the render owner. Incremental workspace
+updates retain the panel models while native placement follows floating motion;
+tab previews and drop hints use the same shared publication. The compatibility
+value/byte APIs keep their existing schema and exact numeric values.
 The [snapshot transport checks](PERFORMANCE.md#snapshot-transport) include
 reproducible payload fixtures and a CPU benchmark.
 
@@ -288,6 +290,29 @@ Related readers are updated before observation signals are published, so even
 synchronous observers see a coherent revision. Camera patches update the same
 canonical state without rebuilding the command, panel or menu indexes.
 
+Interactive publication uses C request 5 (`NativeHost::take_update_bytes`). A
+full snapshot establishes `workspace_update.model_revision`; later motion must
+match that revision and cannot precede the last accepted presentation revision.
+`WorkspaceMotion` stages group positions, tab previews and drop hints atomically
+with the models. `WorkspacePlacement` moves each native panel and resize handle,
+including its hit areas, tab clipping and live Navigator allocation. Controls
+continue reading the retained layout and panel models. Their `state.revision`
+changes with a full model publication; `workspaceMotion.revision` tracks later
+motion. Optional camera patches update canonical camera state independently.
+Document and lifecycle consumers still receive full immutable model snapshots.
+Request 3 remains available for compatibility checks. Do not alternate the two
+publication APIs on one interactive owner because they acknowledge separately.
+
+The direct floating-workspace check exercises both Apple presets in an invisible
+AppKit host, retaining Navigator identity through tear-off and group movement,
+checking actual hit/clip/resize allocations, completion, history and a camera
+action. It does not measure UIKit pixels or hardware presentation cadence:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-motion.swift
+cargo test -p layer-apple incremental_apple_abi -- --nocapture
+```
+
 Check observation fidelity and actual SwiftUI rendered-value propagation without
 XCTest or a visible editor. The latter uses an invisible AppKit hosting view;
 both checks exercise the code shared with iPad:
@@ -297,6 +322,7 @@ for check in snapshot-projection snapshot-views; do
   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -O -parse-as-library \
     apps/layer-apple/Shared/Bridge/JSON.swift \
     apps/layer-apple/Shared/Bridge/SnapshotProjection.swift \
+    apps/layer-apple/Shared/Bridge/WorkspaceMotion.swift \
     apps/layer-apple/Shared/Bridge/EditorSnapshotState.swift \
     "apps/layer-apple/tests/$check.swift" -o "/tmp/capy-$check-tests" || exit
   "/tmp/capy-$check-tests" || exit

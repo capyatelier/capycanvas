@@ -19,15 +19,15 @@ struct WorkspacePanels: View {
                     let expanded = workspace.expansion["group"].uint == group["id"].uint ? workspace.expansion : JSON()
                     WorkspacePanelGroup(store: store, group: group, expansion: expanded)
                         .environment(\.workspaceGesturesEnabled, workspace.expansion.isNull || !expanded.isNull)
-                        .environment(\.workspaceClip, (expanded.isNull ? group["bounds"] : expanded["bounds"]).rect)
                         .environment(\.workspaceLayer, groups.firstIndex(where: { $0.workspaceGroupID == group.workspaceGroupID }) ?? 0)
-                        .placed(expanded.isNull ? group["bounds"] : expanded["bounds"])
+                        .modifier(WorkspacePlacement(motion: store.workspaceMotion, group: group,
+                            bounds: expanded.isNull ? group["bounds"] : expanded["bounds"], clipsGroup: true))
                         .allowsHitTesting(workspace.expansion.isNull || !expanded.isNull)
                     if workspace.expansion.isNull {
                         ForEach(group["resize_handles"].array.indices, id: \.self) { index in
                             let handle = group["resize_handles"][index]
                             WorkspaceResizeHandle(store: store, action: JSON(["type": "resize_floating", "group": group["id"].raw, "edge": handle["edge"].raw]))
-                                .placed(handle["bounds"])
+                                .modifier(WorkspacePlacement(motion: store.workspaceMotion, group: group, bounds: handle["bounds"]))
                         }
                     }
                 }
@@ -43,12 +43,7 @@ struct WorkspacePanels: View {
                         }
                 }
             }
-            if !workspace.dropHint.isNull {
-                RoundedRectangle(cornerRadius: 2).fill(EditorPalette(source: store.state["palette"]).accent)
-                    .background { RoundedRectangle(cornerRadius: 3).fill(.black.opacity(0.2)).padding(-1) }
-                    .placed(workspace.dropHint["bounds"]).allowsHitTesting(false).accessibilityHidden(true)
-                    .zIndex(300)
-            }
+            WorkspaceDropIndicator(workspace: workspace, palette: EditorPalette(source: store.state["palette"])).zIndex(300)
             if store.snapshot["partial_zen"].bool { WorkspaceZenToolbars(store: store) }
             if !store.snapshot["chrome_hidden"].bool { WorkspaceCollapsedColumns(store: store) }
             WorkspaceContentDrawers(store: store, drawers: store.contentDrawers)

@@ -12,6 +12,8 @@ mod navigator;
 mod recovery;
 #[path = "workspace_tests.rs"]
 mod workspace;
+#[path = "workspace_motion_tests.rs"]
+mod workspace_motion;
 
 #[test]
 fn filter_property_models_edit_reset_and_undo_all_six_kinds_on_both_platforms() {

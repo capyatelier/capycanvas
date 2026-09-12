@@ -31,6 +31,7 @@ import SwiftUI
     lazy var recovery = ArtworkRecovery(store: self)
     var snapshot: SnapshotProjection { ui.snapshot }
     var state: SnapshotProjection { ui.state }
+    var workspaceMotion: WorkspaceMotion { ui.workspace }
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared) {
         do {
@@ -60,8 +61,8 @@ import SwiftUI
                 storageFailure = next["persistence"]["error"].isNull ? nil : next["persistence"]["error"].string
                 return
             }
-            if !next["state"].isNull {
-                ui.receive(next)
+            switch ui.receive(next) {
+            case .full:
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
                 projectFiles.receive(state.json)
@@ -69,12 +70,13 @@ import SwiftUI
                 recovery.observe(state["document_file"])
                 contentDrawers.refresh()
                 workspace.refresh()
-            }
-            else if !next["camera"].isNull {
+            case .workspace, .camera:
                 // Camera patches update the readout alone; dragging the canvas
                 // must not rebuild every panel and brush preview at input rate.
-                ui.receive(next)
-                if !SnapshotProjection.equal(camera.value.raw, next["camera"].raw) { camera.value = next["camera"] }
+                if !next["camera"].isNull && !SnapshotProjection.equal(camera.value.raw, next["camera"].raw) {
+                    camera.value = next["camera"]
+                }
+            case .ignored: break
             }
             cameraRevision = state["camera"]["revision"].uint
         }

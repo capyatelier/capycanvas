@@ -4,8 +4,10 @@ import SwiftUI
 /// interpolation, drop eligibility and the action applied at release.
 @MainActor final class WorkspacePresentation: ObservableObject {
     @Published private(set) var expansion = JSON()
-    @Published private(set) var dropHint = JSON()
-    let tabSlide = WorkspaceTabSlide()
+    private let tileHint = SnapshotProjection()
+    private let motion: WorkspaceMotion
+    var dropHint: JSON { tileHint["hint"].isNull ? motion.dropHint : tileHint["hint"] }
+    let tabSlide: WorkspaceTabSlide
     var tabFrames: [String: WorkspaceTabFrame] = [:]
     private weak var store: EditorStore?
     private var shownPanel: String?
@@ -25,7 +27,13 @@ import SwiftUI
     private var drag: Drag?
     private var tabSlideToken: UUID?
     private var queryingDrop = false
-    init(store: EditorStore) { self.store = store }
+    init(store: EditorStore) {
+        self.store = store; motion = store.workspaceMotion
+        tabSlide = WorkspaceTabSlide(motion: motion)
+    }
+    private func setTileHint(_ hint: JSON = JSON()) {
+        tileHint.stage(JSON(["hint": hint.raw])).forEach { $0.publish() }
+    }
     func refresh() {
         refreshChrome()
         guard let store else { return }
@@ -103,10 +111,6 @@ import SwiftUI
         guard next != chromeKey else { return }; chromeKey = next
         chrome(["kind": "refresh"])
     }
-    // DEPRECATED workspace publication path. Migrate the native snapshot request
-    // to NativeHost::take_update_bytes and consume workspace_update before the
-    // camera-only branch. Retain models by model_revision and apply geometry to
-    // native placement/drawing; keep every DragWorkspace phase and Rust history.
     private func send(_ operation: Drag, phase: String) {
         guard operation.item["kind"].string != "tile", let store else { return }
         var action: [String: Any]
@@ -134,6 +138,7 @@ import SwiftUI
         store?.contentDrawers.prepareDrag()
         let tabGrab = grabTab(item, at: point)
         let operation = Drag(item: item, point: point); drag = operation
+        setTileHint()
         tabSlideToken = operation.token
         if item["kind"].string != "tile" {
             animation?.cancel(); animation = nil; expansion = JSON(); shownPanel = nil; geometryKey = ""
@@ -164,34 +169,34 @@ import SwiftUI
         drag?.point = point; drag?.released = released
         if let current = drag, current.item["kind"].string != "tile" {
             send(current, phase: released ? "up" : "move")
-            if released { drag = nil; dropHint = JSON(); refreshChrome(); return }
+            if released { drag = nil; refreshChrome() }
+            return
         }
-        if item["type"].isNull { queryDrop() }
+        queryDrop()
     }
     func cancel(_ item: JSON) {
         if let current = drag, current.item.stableKey == item.stableKey {
-            send(current, phase: "cancel"); drag = nil; dropHint = JSON()
+            send(current, phase: "cancel"); drag = nil; setTileHint()
             if current.item["kind"].string == "tile" { tabSlideToken = nil; tabSlide.clear() }
             refreshChrome()
         }
     }
     private func queryDrop() {
-        guard let store, let request = drag, request.item["type"].isNull, !queryingDrop else { return }
+        guard let store, let request = drag, request.item["kind"].string == "tile", !queryingDrop else { return }
         queryingDrop = true
-        store.query(["type": "workspace_drag_preview", "item": request.item.raw,
+        store.query(["type": "drop", "item": request.item.raw,
             "position": [request.point.x, request.point.y], "tabs": tabs.map(\.raw), "expansion": expansion.raw]) { [weak self] result in
             guard let self else { return }
             self.queryingDrop = false
             guard let current = self.drag, current.token == request.token else { self.queryDrop(); return }
-            let hint = result["drop"]
+            let hint = result
             if current.released {
                 guard current.point == request.point else { self.queryDrop(); return }
-                self.drag = nil; self.dropHint = JSON(); self.tabSlide.clear()
+                self.drag = nil; self.setTileHint(); self.tabSlide.clear()
                 self.refreshChrome()
                 if !hint["action"].isNull { store.dispatch(hint["action"]) }
             } else {
-                self.tabSlide.receive(result["tab"])
-                self.dropHint = hint
+                self.setTileHint(hint)
                 // Keep the latest completed visual while chasing newer input.
                 // Discarding every in-flight reply can starve a continuous drag.
                 if current.point != request.point { self.queryDrop() }

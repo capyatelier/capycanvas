@@ -40,7 +40,8 @@ char *capy_apple_numeric(const char *json);
 /* Stateless shared wheel hit test in local logical coordinates. Space: 0 HSV,
    1 HLS. Result: 0 miss/invalid, 1 hue ring, 2 field. No session/GPU access. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t space);
-/* request: 0 action, 1 UI input, 2 query, 3 changed snapshot, 4 numeric control.
+/* request: 0 action, 1 UI input, 2 query, 3 compatibility snapshot, 4 numeric control,
+ * 5 incremental update (full models or workspace/camera presentation).
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);

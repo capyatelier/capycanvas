@@ -70,6 +70,57 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Incremental Apple workspace publication — 2026-09-11
+
+Both Apple targets now consume the shared incremental `workspace_update`
+publication. Full snapshots establish retained models; ordinary motion updates
+only absolute group placement, tab previews and drop hints. Native hit areas,
+tab clips, resize handles and live Navigator allocations move with the panel.
+Tab visibility is observed separately from its position. Camera patches preserve
+the retained model revision, and camera-less motion preserves the readout.
+Stale or mismatched presentations are rejected before any related state changes.
+Every input phase still reaches Rust, which owns completion, history and durable
+persistence. The previous C snapshot request remains available for compatibility.
+
+The paired ABI fixture gives separate legacy/incremental owners identical
+actions on both presets. Full snapshots match exactly after removing the new
+field. Across 32 floating moves, serialized output falls from roughly 2.68 MB to
+5.4 KB; each new position matches the legacy layout. Intermediate motion carries
+no durable persistence, and cancellation, a newer release point and workspace
+Undo/Redo retain the same result. This wire-size reduction does not establish a
+CPU/GPU or presentation-cadence improvement.
+
+Direct observation checks cover matching/missing/older revisions, atomic
+completion, camera-bearing and camera-less packets, retained fields and 40
+existing exact wire fixtures. An invisible SwiftUI probe renders ten movements
+without rebuilding unrelated controls/readers. The real shared workspace check
+performs 24 floating moves per Apple preset, preserving Navigator identity and
+checking native hit, tab, clip, resize and overview allocations plus history and
+a camera action. All eight native tab workflows pass. All 16 final before/drag
+tab captures match the preceding native milestone exactly, with no masks,
+resampling or relaxed tolerances. The previously recorded Chrome differences
+therefore remain; no full-editor or UIKit pixel-parity claim is added.
+
+The integrated tree includes shared changes through `c99595a` and subsequent
+Android/GTK-only changes through `5619a3a`. All 316 Rust
+checks pass (36 Apple, 20 host, 260 UI; one existing hardware-only host check is
+ignored). Both Release targets build, the focused iPad Simulator touch drawer
+workflow passes, and direct document checks pass for both Apple presets. The
+signed iPad validation app installs. Both final physical apps complete a brief
+isolated ink smoke check and its postlude with no renderer errors or rejected
+input. Their one-second measured intervals have no missing or zero-time
+presentations; two Mac and four iPad zero-time reports occur outside those
+intervals. These are startup/drawing checks, not sustained performance acceptance.
+Owned validation editors are closed and the artist's original apps are preserved.
+
+The [Apple README](../../apps/layer-apple/README.md) and
+[performance guide](../../apps/layer-apple/PERFORMANCE.md#incremental-workspace-publication)
+document the protocol and reproduction commands. Raw evidence stays in ignored
+artifacts. Full feature and visual parity, automatic panel fitting, incoming
+workspace-management/long-press flows, physical input/lifecycle coverage,
+filter references and sustained 90 Hz Mac / 120 Hz iPad acceptance remain open.
+Mac 120 Hz remains deferred.
+
 ## Shared Apple tab dragging — 2026-09-11
 
 Both Apple editors use the shared frozen tab-drag policy. Native headers capture

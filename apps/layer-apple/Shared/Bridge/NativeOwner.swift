@@ -108,7 +108,7 @@ final class NativeOwner: @unchecked Sendable {
         return try JSON.decode(String(cString: result))
     }
     private func publish() throws {
-        if let snapshot = try request(3) {
+        if let snapshot = try request(5) {
             if !snapshot["canvas_ready"].isNull { canvasReady = snapshot["canvas_ready"].bool }
             if !snapshot["shaders_ready"].isNull { shadersReady = snapshot["shaders_ready"].bool }
             try persist(snapshot)

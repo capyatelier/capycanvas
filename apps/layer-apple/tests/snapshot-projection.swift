@@ -15,6 +15,7 @@ private final class Changes: @unchecked Sendable {
         return changes
     }
     @MainActor static func main() throws {
+        checkWorkspaceMotion()
         let model = SnapshotProjection()
         func update(_ raw: Any) { model.stage(JSON(raw)).forEach { $0.publish() } }
         let initial = watch { _ = model.isNull }
@@ -143,5 +144,65 @@ private final class Changes: @unchecked Sendable {
             }
         }
         print("Snapshot observation checks passed: fields, whole reads, presence, indexes, numeric fidelity and \(fixtureCount) wire fixtures")
+    }
+
+    @MainActor private static func checkWorkspaceMotion() {
+        let editor = EditorSnapshotState()
+        func update(_ revision: Int, model: Int = 10, x: Int = 100, dragging: Bool = true) -> JSON {
+            let bounds: [String: Any] = ["x": x, "y": 50, "width": 200, "height": 300]
+            let drag: Any = dragging ? ["group": ["id": 7, "bounds": bounds],
+                "tab": ["group": 7, "panel": "brushes", "preview": ["bounds": bounds]],
+                "drop_hint": ["bounds": bounds]] : NSNull()
+            return JSON(["revision": revision, "model_revision": model, "drag": drag])
+        }
+        func full(_ motion: JSON) -> JSON {
+            JSON(["state": ["revision": motion["revision"].raw, "camera": ["zoom": 1],
+                            "commands": [["id": "undo", "enabled": true]]],
+                  "panels": [["id": "brushes", "label": "Brushes"]],
+                  "application_menus": [["id": "edit", "enabled": true]],
+                  "layout": ["groups": [["id": 7]]], "workspace_update": motion.raw])
+        }
+        precondition(editor.receive(JSON(["workspace_update": update(11).raw])) == .ignored,
+                     "A presentation cannot establish its own missing models")
+        precondition(editor.receive(full(update(10))) == .full)
+        let retained = editor.snapshot.json
+        let models = watch {
+            _ = editor.state["revision"].raw; _ = editor.snapshot["layout"].raw
+            _ = editor.command("undo").raw; _ = editor.panel("brushes").raw; _ = editor.applicationMenu("edit").raw
+        }
+        let otherGroup = watch { _ = editor.workspace.position(8).raw }
+        let moved = watch { _ = editor.workspace.position(7).raw }
+        let tab = watch { _ = editor.workspace.tab.raw }
+        let identity = watch { _ = editor.workspace.tabIdentity.raw }
+        let camera = watch { _ = editor.state["camera"].raw }
+        precondition(editor.receive(JSON(["workspace_update": update(11, x: 120).raw])) == .workspace)
+        precondition(moved.value == 1 && tab.value == 1 && identity.value == 0 && otherGroup.value == 0)
+        precondition(camera.value == 0 && models.value == 0 && editor.state["revision"].uint == 10)
+        precondition(editor.workspace.position(7)["x"].uint == 120 && retained["workspace_update"]["revision"].uint == 10)
+        precondition(editor.receive(JSON(["workspace_update": update(12, x: 130).raw, "camera": ["zoom": 2]])) == .workspace)
+        precondition(camera.value == 1 && models.value == 0 && editor.state["revision"].uint == 10)
+        precondition(editor.snapshot["state"]["camera"]["zoom"].uint == 2 && editor.workspace.revision == 12)
+        precondition(editor.receive(JSON(["camera": ["zoom": 3], "revision": 12])) == .camera)
+        precondition(editor.state["revision"].uint == 10 && models.value == 0 && editor.workspace.revision == 12,
+                     "A camera-only update after motion must not promote the retained model revision")
+        let beforeRejected = editor.snapshot.json.stableKey
+        let rejected = watch { _ = editor.workspace.position(7).raw; _ = editor.state["camera"].raw }
+        for invalid in [update(11, x: 0), update(13, model: 9), update(13, model: 11)] {
+            precondition(editor.receive(JSON(["workspace_update": invalid.raw, "camera": ["zoom": 99]])) == .ignored)
+        }
+        precondition(editor.receive(full(update(11, model: 9))) == .ignored)
+        precondition(editor.receive(JSON(["workspace_update": ["revision": 13]])) == .ignored)
+        precondition(rejected.value == 0 && editor.snapshot.json.stableKey == beforeRejected)
+        let coherent = Changes()
+        withObservationTracking({ _ = editor.workspace.position(7).raw }, onChange: {
+            MainActor.assumeIsolated {
+                if editor.state["revision"].uint == 13 && editor.workspace.modelRevision == 13
+                    && editor.workspace.tab.isNull && editor.workspace.dropHint.isNull
+                    && editor.workspace.position(7).isNull { coherent.record() }
+            }
+        })
+        precondition(editor.receive(full(update(13, model: 13, dragging: false))) == .full)
+        precondition(coherent.value == 1 && identity.value == 1 && otherGroup.value == 0)
+        print("Workspace observation checks passed: retained models, per-group placement, tab visibility, optional camera, rejected revisions and coherent completion")
     }
 }

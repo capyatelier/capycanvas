@@ -34,6 +34,10 @@ private struct EditorReadouts: View {
                 // The parent only passes a reader. A child invalidated later
                 // must fetch current data without needing its parent to rebuild.
                 Readout(name: "camera", probe: probe) { [fields = model.state] in String(fields["camera"]["zoom"].number) }
+                Readout(name: "group", probe: probe) { String(model.workspace.position(7)["x"].uint) }
+                Readout(name: "other-group", probe: probe) { model.workspace.position(8).stableKey }
+                Readout(name: "tab-visible", probe: probe) { model.workspace.tabIdentity.stableKey }
+                Readout(name: "preview", probe: probe) { model.workspace.tab.stableKey }
             }
         }
     }
@@ -88,6 +92,27 @@ private struct EditorReadouts: View {
         precondition(probe.bodies == beforeNoOp, "An equivalent full snapshot must not rebuild any body")
         model.receive(snapshot(true, color: "Colour"))
         try await wait("color", "Colour")
+        func motion(_ revision: Int, _ x: Int) -> JSON {
+            JSON(["revision": revision, "model_revision": 10,
+                  "drag": ["group": ["id": 7, "bounds": ["x": x]],
+                           "tab": ["group": 7, "panel": "color", "preview": ["x": x]]]])
+        }
+        model.receive(snapshot(true, color: "Colour").replacing("workspace_update", with: motion(10, 100)))
+        try await wait("group", "100")
+        let beforeMotion = probe.bodies
+        for x in 101...110 {
+            model.receive(JSON(["workspace_update": motion(x, x).raw]))
+            try await wait("group", String(x))
+        }
+        precondition(probe.bodies["group"]! >= beforeMotion["group"]! + 10 && probe.bodies["preview"]! >= beforeMotion["preview"]! + 10)
+        for name in ["undo", "color", "menu", "layout", "camera", "other-group", "tab-visible"] {
+            precondition(probe.bodies[name] == beforeMotion[name], "Motion rebuilt unrelated body: \(name)")
+        }
+        let beforeRejected = probe.bodies
+        model.receive(JSON(["workspace_update": motion(109, 999).raw, "camera": ["zoom": 99]]))
+        try await settle()
+        precondition(probe.bodies == beforeRejected, "A stale motion packet must not alter any rendered value")
         print("SwiftUI snapshot views passed: initial publication, command/menu changes, unchanged bodies, camera patches and no-op snapshots")
+        print("SwiftUI workspace motion passed: ten rendered movements without rebuilding controls, other groups or tab visibility")
     }
 }

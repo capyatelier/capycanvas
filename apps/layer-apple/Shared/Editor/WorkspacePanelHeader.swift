@@ -45,7 +45,7 @@ private struct WorkspacePanelTabs: View {
                 .modifier(WorkspaceDrag(workspace: store.workspace, item: JSON(["kind": "panel", "panel": tab["id"].raw])))
                 .modifier(WorkspaceTabMeasurement(group: group["id"].uint, index: index))
                 .zIndex(selected ? 1 : 0)
-                .opacity(slide.grab?.group == group["id"].uint && !slide.preview.isNull ? 0 : 1)
+                .opacity(slide.isVisible(in: group["id"].uint) ? 0 : 1)
         }
     }
 }

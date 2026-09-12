@@ -16,6 +16,46 @@ Mac 120 Hz presentation testing is deferred until suitable hardware is available
 and does not block current Mac milestones. The iPad target remains **120 Hz
 (8.33 ms)**. Keep failing workloads and unsupported measurements visible.
 
+## Incremental workspace publication
+
+Both Apple editors now consume the shared `workspace_update` contract. A full
+model publication establishes the revision used by retained controls. Ordinary
+tab/floating motion publishes absolute geometry, tab previews and drop hints;
+native view placement moves hit areas, clipping and live Navigator allocations
+together. Down, tear-off, release, cancellation and other model changes retain
+their normal full publication. Every input phase still reaches Rust; history
+and durable persistence remain shared behavior.
+
+The paired C-ABI fixture gives separate compatibility/incremental owners the
+same actions on both Apple presets. Complete snapshots match exactly after
+removing the new `workspace_update` field. Across 32 floating moves, actual
+serialized payload totals are:
+
+| Preset | Compatibility bytes | Incremental bytes |
+| --- | ---: | ---: |
+| iPad | 2,675,515–2,675,520 | 5,403–5,440 |
+| Mac | 2,681,947–2,681,952 | 5,403–5,440 |
+
+The ranges cover cancellation and commit cases. This is about a 99.8% wire-size
+reduction for this fixture; it is not a CPU/GPU timing or frame-rate result.
+Geometry matches the compatibility layout on each move, intermediate updates
+carry no durable persistence, and completion plus workspace Undo/Redo match.
+
+The invisible AppKit workflow performs 24 floating moves per Apple preset,
+checking real native drag/resize hit rectangles, tab bounds/clips and the live
+Navigator allocation/image/clip while retaining its SwiftUI identity and the
+panel models. A separate SwiftUI observation probe renders ten movements
+without rebuilding unrelated command, panel, menu, layout, camera, other-group
+or tab-visibility readers. Rejected revisions and camera-bearing or camera-less
+updates have direct coverage. These checks exercise shared Apple code; UIKit
+touch workflows and physical presentation remain separate acceptance evidence.
+
+Reproduction commands are in the [Apple README](README.md). Raw measurements and
+captures remain in ignored artifacts. Sustained 90 Hz Mac / 120 Hz iPad cadence,
+isolated GPU timing, physical input latency and the remaining workload matrix
+are still open. No hardware performance improvement is claimed from this
+transport fixture alone.
+
 ## Repeatable native drawing workloads
 
 Set `CAPY_WORKLOAD` to run a synthetic fixture through the same serial input
