@@ -72,7 +72,7 @@ private struct WorkspaceResizeHandle: View {
     @State private var hovering = false
     var body: some View {
         Color.clear.contentShape(Rectangle())
-            .background(hovering ? Color.accentColor.opacity(0.3) : Color.clear)
+            .background(hovering ? EditorPalette.sharedAccent.opacity(0.3) : Color.clear)
             .onHover { hovering = $0 }.accessibilityElement().accessibilityLabel("Resize panel")
             .modifier(WorkspaceDrag(workspace: store.workspace, item: action))
     }

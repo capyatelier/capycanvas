@@ -78,6 +78,11 @@ The [toolbar component capture](../../tools/visual/README.md#toolbar-components)
 compares all five styles with Chrome using actual SwiftUI controls and shared
 vector assets, without launching an editor or automating window/menu controls.
 Component evidence supplements the full-editor visual and physical input gates.
+Icon, toolbar and tool-choice selections now share the editor accent and one
+disabled-opacity step over the whole button, independent of the Mac system
+accent. The [control-color matrix](../../tools/visual/README.md#editor-control-colors)
+compares enabled/selected combinations in both themes and retains full raw
+pixel differences; UIKit rendering and full-editor acceptance remain separate.
 
 Docked, floating and drawer tab strips use natural label widths, horizontal
 scrolling and the shared 36-point icon-only size. Their moving visual copies use

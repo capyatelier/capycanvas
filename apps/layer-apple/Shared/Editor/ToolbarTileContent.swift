@@ -9,20 +9,10 @@ struct ToolbarTileButton: View {
     var body: some View {
         Button(action: action) {
             ToolbarTileContent(panel: panel, tile: tile, palette: palette, color: color)
-                .foregroundStyle(palette["text"]).contentShape(Rectangle())
-        }.buttonStyle(ToolbarTileButtonStyle(palette: palette))
+                .contentShape(Rectangle())
+        }.buttonStyle(EditorControlButtonStyle(selected: tile["selected"].bool))
+            .foregroundStyle(palette["text"])
             .disabled(!tile["enabled"].bool).opacity(tile["enabled"].bool ? 1 : 0.36)
-            .background(tile["selected"].bool ? palette.active : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-    }
-}
-
-private struct ToolbarTileButtonStyle: ButtonStyle {
-    let palette: EditorPalette
-    func makeBody(configuration: Configuration) -> some View {
-        // PlainButtonStyle adds platform disabled dimming before our shared
-        // opacity. Keep one dimming step and the browser's pressed background.
-        configuration.label.background(configuration.isPressed ? palette["text"].opacity(0.16) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6))
     }
 }
 

@@ -9,12 +9,13 @@ import assert from 'node:assert/strict';
 import {captureToolbarFixture} from './toolbar-fixture.mjs';
 import {captureWorkspaceTabs} from './workspace-tabs.mjs';
 import {captureHeaderControls} from './header-controls.mjs';
+import {captureControlColors} from './control-colors.mjs';
 const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light', scenario='initial', fixturePath] = process.argv.slice(2);
 const width = Number(widthArg), height = Number(heightArg), scale = Number(scaleArg);
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -67,9 +68,11 @@ try {
   await call('Runtime.enable'); await call('Page.enable');
   await call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor:scale, mobile:false});
   await call('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-motion', value:'reduce'}]});
-  await call('Page.navigate', {url:`http://127.0.0.1:${server.address().port}${scenario==='toolbar-tiles'?'/workspace-chrome.js':''}`});
-  if (scenario==='toolbar-tiles') {
-    await captureToolbarFixture({fixture:JSON.parse(await readFile(fixturePath,'utf8')),width,height,scale,output,theme,evaluate,call});
+  const component = ['toolbar-tiles', 'control-colors'].includes(scenario);
+  await call('Page.navigate', {url:`http://127.0.0.1:${server.address().port}${component?'/workspace-chrome.js':''}`});
+  if (component) {
+    const capture = scenario === 'toolbar-tiles' ? captureToolbarFixture : captureControlColors;
+    await capture({fixture:JSON.parse(await readFile(fixturePath,'utf8')),width,height,scale,output,theme,evaluate,call});
     assert.deepEqual(errors,[]);
   } else {
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp&&document.body.dataset.gpu==='ready')resolve(true);else if(performance.now()-start>25000)reject(new Error(document.querySelector('#gpu-notice')?.textContent||'GPU startup timeout'));else setTimeout(check,100);}check();})`);

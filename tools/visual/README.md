@@ -252,3 +252,48 @@ interaction. Mac component output does not prove physical iPad rasterization,
 whole-window parity, drawer transitions, hit testing or performance. Keep exact
 diff failures and validate native editor actions separately with
 `EditorLaunchTests/testToolbarStylesAndActions` on each Apple target.
+
+## Editor control colors
+
+The following fixture captures actual `IconTile` and `ToolbarTileButton` views
+for all enabled/selected combinations, including selected+disabled. Each row
+repeats under the system, red and green accent environments while retaining the
+editor's ordinary tint. This changes no system preference and opens no window.
+Chrome uses its real Navigator-button and toolbar factories, CSS and SVG assets
+with the same state combinations and placement. The fixture does not attach a
+Navigator GPU surface or require a Wasm build.
+
+```sh
+mkdir -p artifacts/ui/control-colors
+cargo run -p layer-host --example toolbar-fixture -- mac light \
+  > artifacts/ui/control-colors/light.json
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  CAPY_COMPONENT_CAPTURE_SOURCE=apps/layer-apple/tests/control-colors.swift \
+  bash apps/layer-apple/scripts/capture-toolbar.sh \
+  artifacts/ui/control-colors/light.json \
+  artifacts/ui/control-colors/native-light.png PATH_TO_BUILT_MAC_APP
+node tools/visual/chrome-capture.mjs 168 258 2 artifacts/ui/control-colors \
+  light control-colors artifacts/ui/control-colors/native-light.json
+artifacts/ui/parity/python-env/bin/python tools/visual/check_control_colors.py \
+  artifacts/ui/control-colors/native-light.json \
+  artifacts/ui/control-colors/web-light-control-colors.png \
+  artifacts/ui/control-colors/native-light.png
+artifacts/ui/parity/python-env/bin/python tools/visual/compare.py \
+  artifacts/ui/control-colors/web-light-control-colors.png \
+  artifacts/ui/control-colors/native-light.png \
+  --output artifacts/ui/control-colors/light-comparison
+```
+
+Repeat with `dark` and matching filenames. The focused checker requires identical
+complete rows across native accent variants and compares flat fill samples with
+Chrome. It permits one RGB level only for those samples, accounting for 8-bit
+alpha composition rounding; it does not accept glyphs, rounded edges or the full
+image. Keep the separate full-pixel comparison at its default zero tolerance.
+
+The corrected light fixture has a one-level red-channel fill difference from
+Chrome; the dark flat fills match exactly. Full raw comparisons still fail:
+35.517% of light pixels and 3.571% of dark pixels differ, with mean absolute
+channel errors of 0.354 and 0.236 levels respectively. The large light fraction
+includes the one-level fill difference. Glyph/edge rasterization differences
+remain. These AppKit component captures do not establish UIKit rendering,
+pointer/keyboard interaction, full-editor parity or hardware performance.

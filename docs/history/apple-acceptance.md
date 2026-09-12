@@ -76,6 +76,36 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Shared editor control colors — 2026-09-12
+
+Shared icon buttons now use the editor accent rather than the Mac system accent.
+Icon, toolbar and tool-choice buttons use one shared style and apply disabled
+opacity to the whole control once, including its selected background. This
+removes extra native glyph dimming and fully opaque selection on disabled tiles.
+Layer drop markers and resize highlights also use the shared accent; the main
+editor tint references the same color definition on both Apple platforms.
+
+Real SwiftUI and browser widget factories are compared in light and dark themes,
+with all four enabled/selected combinations and three native accent environments.
+The old controls fail the focused color check by up to 44/45 RGB levels and
+change with the system accent. Corrected complete native rows are identical
+across accents; flat fill samples match Chrome exactly in dark mode and within
+one RGB level in light mode. Both fixtures contain 24 controls at 2× scale.
+
+Full raw comparisons remain failures and retain every pixel. Light/dark mean
+absolute channel errors fall from 5.028/4.330 to 0.354/0.236 levels. Exact
+differing-pixel fractions are still 35.517%/3.571%; the light result includes
+one-level fill rounding, and glyph/edge rasterization differences remain.
+This is AppKit component evidence for shared code, not physical UIKit capture
+or native interaction acceptance. Full visual, feature, physical input/lifecycle
+and sustained performance gates remain open for both platforms.
+
+Reproduction and the focused check's narrow scope are documented in
+[editor control colors](../../tools/visual/README.md#editor-control-colors).
+Raw fixtures, captures, comparisons and build/signing logs remain local and
+ignored. Both signed Release builds pass, and the updated iPad validation app
+installs on the attached device. Save/Load Layout remains excluded.
+
 ## Expanded feature inventory and workspace menu actions — 2026-09-12
 
 The schema 3 inventory starts from the settled default drawing and task workspace
