@@ -550,10 +550,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 {
                     return match (key.as_str(), value) {
                         ("opacity", EffectValue::Number(opacity)) => {
-                            self.layer_edit(Edit::SetLayerOpacity {
-                                id: LayerId(id),
-                                opacity,
-                            })
+                            self.set_layer_opacity(Some(id), opacity)
                         }
                         ("blend", EffectValue::Choice(value)) => {
                             self.layer_action(LayerAction::Blend { id, value })

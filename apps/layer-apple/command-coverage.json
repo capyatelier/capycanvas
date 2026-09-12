@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "scope": "Command and shared-control catalog coverage only. Check references locate tests or implementation for review; they do not establish execution or prove that every command, native workflow, visual state, or performance requirement has passed.",
   "unavailable": {
     "ios": {"fullscreen": "The installed UIKit SDK offers scene orientation requests, but no native iPad window full-screen toggle. This capability remains open; Mac Catalyst's geometry API does not apply to this UIKit target."},
@@ -140,6 +140,19 @@
     "properties": "Shared/Editor/PropertyControls.swift",
     "navigator": "Shared/Editor/NavigatorPanel.swift",
     "stats": "Shared/Bridge/RendererStats.swift"
+  },
+  "property_kinds": {
+    "number": "Shared/Editor/PropertyControls.swift",
+    "toggle": "Shared/Editor/PropertyControls.swift",
+    "choice": "Shared/Editor/PropertyControls.swift",
+    "color": "Shared/Editor/PropertyControls.swift",
+    "curve": "Shared/Editor/PropertyControls.swift",
+    "gradient": "Shared/Editor/PropertyControls.swift"
+  },
+  "property_workflows": {
+    "checks": ["tests/property-actions.swift", "scripts/test-property-audit.py", "native/src/tests.rs"],
+    "ios": "partial: all shipped filter/paint/paper/group schemas and edit/history/reset routes through the shared Apple owner; UIKit widgets and complete document/physical workflows remain",
+    "mac": "partial: all shipped filter/paint/paper/group schemas and edit/history/reset routes through the shared Apple owner; native widgets and complete document/physical workflows remain"
   },
   "preference_kinds": {
     "switch": "Shared/Settings/SettingsView.swift",

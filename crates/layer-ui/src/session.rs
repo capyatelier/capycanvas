@@ -2177,14 +2177,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             UiAction::SetLayerOpacity { id, opacity } => {
                 self.require_idle()?;
-                NumericControl::percent().validate(opacity, "Opacity")?;
-                let id = id
-                    .map(LayerId)
-                    .unwrap_or(self.engine.document().active_layer);
-                if self.engine.document().is_locked(id) {
-                    return Err("This layer is locked".into());
-                }
-                self.engine.set_layer_opacity(id, opacity).map_err(error)?;
+                self.set_layer_opacity(id, opacity)?;
                 (0, true)
             }
             UiAction::MoveLayer { id, index } => {
@@ -6583,6 +6576,134 @@ mod tests {
                 .unwrap()
                 .selection_icon,
             "layer-reference-symbolic"
+        );
+    }
+
+    #[test]
+    fn property_opacity_uses_layer_lock_and_validation_policy() {
+        let property = |layer, opacity| UiAction::Effect {
+            action: EffectAction::Set {
+                layer,
+                key: "opacity".into(),
+                value: layer_core::EffectValue::Number(opacity),
+            },
+        };
+        for kind in ["paint", "group", "inherited"] {
+            let mut s = session();
+            let paint = s.engine.document().active_layer.0;
+            let mut target = paint;
+            let mut lock = paint;
+            if kind != "paint" {
+                s.dispatch(UiAction::Layer {
+                    action: LayerAction::New {
+                        group: true,
+                        clipped: false,
+                    },
+                })
+                .unwrap();
+                lock = s.engine.document().active_layer.0;
+                target = lock;
+                if kind == "inherited" {
+                    s.dispatch(UiAction::Layer {
+                        action: LayerAction::Drop {
+                            id: paint,
+                            target: lock,
+                            fraction: 0.5,
+                        },
+                    })
+                    .unwrap();
+                    target = paint;
+                }
+            }
+            s.dispatch(property(target, 0.35)).unwrap();
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::Lock {
+                    id: lock,
+                    value: true,
+                },
+            })
+            .unwrap();
+            let revision = s.engine.document().revision;
+            for action in [
+                property(target, 0.55),
+                UiAction::Effect {
+                    action: EffectAction::Reset {
+                        layer: target,
+                        key: "opacity".into(),
+                    },
+                },
+                UiAction::Effect {
+                    action: EffectAction::Number {
+                        layer: target,
+                        key: "opacity".into(),
+                        operation: NumericOperation::Step { steps: 1. },
+                    },
+                },
+                UiAction::SetLayerOpacity {
+                    id: Some(target),
+                    opacity: 0.55,
+                },
+            ] {
+                assert!(
+                    s.dispatch(action).is_err(),
+                    "{kind} must reject a locked opacity edit"
+                );
+                assert_eq!(
+                    s.engine.document().revision,
+                    revision,
+                    "Rejected edits must not add history"
+                );
+                assert_eq!(
+                    s.engine.document().layer(LayerId(target)).unwrap().opacity,
+                    0.35
+                );
+            }
+            s.dispatch(UiAction::Layer {
+                action: LayerAction::Lock {
+                    id: lock,
+                    value: false,
+                },
+            })
+            .unwrap();
+            s.dispatch(property(target, 0.55)).unwrap();
+            assert_eq!(
+                s.engine.document().layer(LayerId(target)).unwrap().opacity,
+                0.55
+            );
+        }
+        let mut s = session();
+        let target = s.engine.document().active_layer.0;
+        let revision = s.engine.document().revision;
+        for opacity in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+            assert!(s.dispatch(property(target, opacity)).is_err());
+            assert_eq!(s.engine.document().revision, revision);
+        }
+        // Paper opacity remains supported despite its protected stack position.
+        let mut s = UiSession::from_project(
+            Recorder::default(),
+            new_drawing(64, 64).unwrap(),
+            None,
+            [128, 128],
+        )
+        .unwrap();
+        let paper = s
+            .engine
+            .document()
+            .layers
+            .iter()
+            .find(|l| l.kind == LayerKind::Background)
+            .unwrap()
+            .id
+            .0;
+        s.dispatch(property(paper, 0.4)).unwrap();
+        assert_eq!(
+            s.engine.document().layer(LayerId(paper)).unwrap().opacity,
+            0.4
+        );
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(
+            s.engine.document().layer(LayerId(paper)).unwrap().opacity,
+            1.
         );
     }
 

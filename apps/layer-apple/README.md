@@ -210,7 +210,7 @@ search uses the shared results. The focused
 and the resulting Zen action without automating the system menu bar. The shared
 inventory command emits the settled default document/workspace, every command
 and panel's availability, all five settings pages, and representative
-menu/layer/shortcut states for **both** Apple policies. Schema 3 stores these
+menu/layer/shortcut states for **both** Apple policies. Schema 4 stores these
 under `platforms.ios` and `platforms.mac`; unavailable commands remain visible.
 It also follows the actual tool-choice graph, including all shipped brushes,
 tool modes, settings and actions, and emits all three task workspace layouts,
@@ -220,13 +220,17 @@ workspace IDs are synthetic; the inventory never opens user storage. The
 controls can be enumerated with a real hardware renderer.
 
 The [command review](command-coverage.json) classifies all 62 commands, nine
-workspace service commands, 14 panel control types and six preference kinds,
+workspace service commands, 14 panel control types, six preference kinds and
+six property kinds,
 with Apple handler/check references. The audit detects catalog and availability
 drift, unvisited or unresolved tool choices, and missing control/service reviews:
 
 ```sh
 cargo run -p layer-host --example inventory -- --gpu > /tmp/capy-inventory.json
 python3 apps/layer-apple/scripts/audit-commands.py /tmp/capy-inventory.json
+python3 apps/layer-apple/scripts/test-property-audit.py /tmp/capy-inventory.json
+CAPY_PROPERTY_INVENTORY=/tmp/capy-inventory.json \
+  bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/property-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-menu-actions.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 ```
@@ -234,7 +238,21 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/works
 The current graph contains 80 tool choices and 28 setting IDs per Apple preset;
 the workspace scenarios include 133 context menus per preset. Without `--gpu`,
 renderer-dependent tool failures remain explicit and fail the expanded audit.
-Older schema 2 artifacts receive command-only checks with a warning.
+Schema 4 also records paint, paper, groups and every shipped filter: currently
+43 property scenarios and 160 editable fields per preset. Each field changes
+through its real action, restores all properties with Undo/Redo, and resets to
+the shared default. Lockable targets retain their disabled schemas and reject
+a sampled stale field edit. Paper's protected stack position has no Lock action;
+its opacity remains editable. Ten corruption probes per preset check that the
+audit rejects missing filters, controls, handlers and contradictory results.
+Older schema 2 artifacts receive command-only checks; schemas 2/3 warn that
+property scenarios are not checked.
+
+The direct Swift property check replays those actions through `EditorStore` and
+the serial `NativeOwner`, comparing the actual published schemas and values.
+Both presets run without visible windows or a renderer, in disposable storage.
+This covers shared Apple routing, decoding, history and lock behavior; it does
+not establish UIKit widget, GPU filter-pixel or physical interaction acceptance.
 
 The direct Swift menu check dispatches actual shared menu payloads through the
 Apple editor and workspace service on both presets. It checks all nine routes,

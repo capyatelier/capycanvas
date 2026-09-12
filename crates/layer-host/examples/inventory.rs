@@ -6,6 +6,8 @@ use layer_ui::{
     UiSession, WorkspaceCapture, WorkspaceChoice, WorkspacePreset,
 };
 use serde_json::{Value, json};
+#[path = "inventory/properties.rs"]
+mod properties;
 #[path = "inventory/tools.rs"]
 mod tools;
 #[path = "inventory/workspaces.rs"]
@@ -204,14 +206,15 @@ fn platform_inventory(platform: Platform) -> Value {
     json!({"initial": initial, "commands": commands, "panels": panels,
         "preferences": preferences, "menu_scenarios": menu_scenarios(platform),
         "layer_scenarios": layer_scenarios(platform), "tool_scenarios": tools::inventory(platform),
-        "workspace_scenarios": workspaces::inventory(platform)})
+        "workspace_scenarios": workspaces::inventory(platform),
+        "property_scenarios": properties::inventory(platform)})
 }
 
 fn main() {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "schema": 3,
+            "schema": 4,
             "scope": "Shared models, not widget or pixel acceptance. Settled default drawing and task workspaces with synthetic managed identities; no user storage. --gpu additionally enumerates tools on a filled disposable drawing with a hardware renderer.",
             "catalog": layer_ui::ui_catalog(),
             "commands": CommandId::ALL.as_slice(),

@@ -348,6 +348,22 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn layer_edit(&mut self, edit: Edit) -> Result<(), String> {
         self.engine.apply_edit(edit).map_err(error)
     }
+    /// Layer headers and generic Properties fields share the same edit policy.
+    /// Paper may change opacity; direct and inherited locks still prevent edits.
+    pub(super) fn set_layer_opacity(
+        &mut self,
+        id: Option<u64>,
+        opacity: f32,
+    ) -> Result<(), String> {
+        NumericControl::percent().validate(opacity, "Opacity")?;
+        let id = id
+            .map(LayerId)
+            .unwrap_or(self.engine.document().active_layer);
+        if self.engine.document().is_locked(id) {
+            return Err("This layer is locked".into());
+        }
+        self.engine.set_layer_opacity(id, opacity).map_err(error)
+    }
     pub(super) fn editable_layer(&self, id: u64) -> Result<Layer, String> {
         let layer = self
             .engine

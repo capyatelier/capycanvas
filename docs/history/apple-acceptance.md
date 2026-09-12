@@ -76,6 +76,35 @@ milestones. Workspace persistence, switching, layout history and panel sizing
 remain in scope. Earlier saved-layout implementation and validation below record
 the previous design and do not reinstate the removed UI.
 
+## Complete shipped property schemas and opacity lock policy — 2026-09-12
+
+The schema 4 inventory enumerates paint, paper, groups and all forty shipped
+filters on both Apple presets: 43 property scenarios and 160 editable fields.
+Each field changes through its shared action, restores all properties with
+Undo/Redo and resets to its declared default. Lockable targets retain the
+disabled schema and reject a sampled stale edit. Paper has no Lock action and
+retains editable opacity. The audit checks all six property kinds and rejects
+missing scenarios, routes, handlers and contradictory history/lock observations.
+
+These checks reproduced a shared bug: the Properties opacity route bypassed
+the validation used by the layer header, allowing changes to locked paint
+layers and groups. Both routes now use one shared validator, including inherited
+locks and finite 0–1 bounds. Rejected edits preserve the document revision and
+opacity; paper opacity and Undo remain supported. The regression fails before
+the change and passes afterward. All 274 shared UI tests pass.
+
+The direct Swift check replays all 160 edit/Undo/Redo/Reset routes and compares
+all 43 schemas through the actual Apple editor and serial owner on both presets.
+It uses disposable storage without windows or GPU attachment. Native UIKit
+widgets, full document-state/property visuals and physical interaction remain
+separate requirements. Reproduction is in the [Apple README](../../apps/layer-apple/README.md).
+Both signed Release builds pass. The two focused Apple ABI property checks also
+pass, including the existing Metal number-edit pixel and exact Undo regression.
+Ten evidence-corruption probes per preset reject incomplete or contradictory
+property inventories. Raw inventories, logs and signing information stay local
+and ignored.
+Save/Load Layout remains excluded; full performance and parity gates remain open.
+
 ## Shared editor control colors — 2026-09-12
 
 Shared icon buttons now use the editor accent rather than the Mac system accent.
