@@ -781,6 +781,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
+    pub fn tab_drag_preview(
+        &self,
+        position: [f32; 2],
+        tabs: &[TabHit],
+        clip: Bounds,
+    ) -> Option<crate::TabDragPreview> {
+        let drag = self
+            .workspace_drag
+            .filter(|_| self.dragging_attached_tab())?;
+        let group = self.state.workspace.layout.panel_group(drag.panel)?;
+        let source = self
+            .state
+            .workspace
+            .layout
+            .group_panels(group)
+            .ok()?
+            .iter()
+            .position(|p| *p == drag.panel)?;
+        crate::TabDragPreview::new(group, source, drag.press, position, tabs, clip)
+    }
+
     fn drag_workspace(
         &mut self,
         item: DockItem,

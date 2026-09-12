@@ -693,31 +693,48 @@ let revealPointer = null;
 let workspaceGesture = null;
 function startTabSlide(drag) {
   if (!drag.node.matches(".dock-tab")) return;
-  const source = drag.node, bounds = source.getBoundingClientRect();
-  // Keep the real tab's insertion geometry and draw above the clipped header.
-  const preview = source.cloneNode(true);
-  for (const name of [...preview.attributes].map(a => a.name)) {
-    if (name.startsWith("data-") || name === "id") preview.removeAttribute(name);
-  }
-  preview.classList.add("dragged-tab-preview");
-  preview.setAttribute("aria-hidden", "true");
-  preview.inert = true;
-  Object.assign(preview.style, { left: `${bounds.x}px`, top: `${bounds.y}px`,
-    width: `${bounds.width}px`, height: `${bounds.height}px`, font: getComputedStyle(source).font });
-  source.classList.add("dragged-tab-source");
-  workspace.append(preview);
-  drag.tabSlide = { source, preview };
+  const strip = drag.node.parentElement;
+  const group = JSON.parse(strip.parentElement.dataset.workspaceDrag).item.group;
+  const rect = node => {
+    const b = node.getBoundingClientRect();
+    return { x: b.x, y: b.y, width: b.width, height: b.height };
+  };
+  const clip = rect(strip), overlay = element("div", "tab-slide-overlay");
+  Object.assign(overlay.style, { left: `${clip.x}px`, top: `${clip.y}px`,
+    width: `${clip.width}px`, height: `${clip.height}px` });
+  overlay.setAttribute("aria-hidden", "true"); overlay.inert = true;
+  // Freeze insertion geometry; only these noninteractive copies move.
+  const tabs = [...strip.children].map((source, index) => {
+    const bounds = rect(source), preview = source.cloneNode(true);
+    for (const name of [...preview.attributes].map(a => a.name)) {
+      if (name.startsWith("data-") || name === "id") preview.removeAttribute(name);
+    }
+    preview.classList.add(source === drag.node ? "dragged-tab-preview" : "neighbor-tab-preview");
+    Object.assign(preview.style, { left: `${bounds.x - clip.x}px`, top: `${bounds.y - clip.y}px`,
+      width: `${bounds.width}px`, height: `${bounds.height}px`, font: getComputedStyle(source).font, transform: "translateX(0px)" });
+    source.classList.add("dragged-tab-source");
+    overlay.append(preview);
+    return { source, preview, hit: { group, index, bounds } };
+  });
+  workspace.append(overlay);
+  overlay.getBoundingClientRect(); // Establish the neighbors' transition starting positions.
+  drag.tabSlide = { tabs, clip, overlay };
 }
 function clearTabSlide(drag) {
   if (!drag.tabSlide) return;
-  drag.tabSlide.source.classList.remove("dragged-tab-source");
-  drag.tabSlide.preview.remove();
+  for (const tab of drag.tabSlide.tabs) tab.source.classList.remove("dragged-tab-source");
+  drag.tabSlide.overlay.remove();
   drag.tabSlide = null;
 }
 function updateTabSlide(drag, e) {
-  if (!app.dragging_attached_tab()) { clearTabSlide(drag); return; }
-  if (drag.tabSlide) {
-    drag.tabSlide.preview.style.transform = `translateX(${e.clientX - drag.start.clientX}px)`;
+  const slide = drag.tabSlide;
+  if (!slide) return;
+  const preview = app.tab_drag_preview([e.clientX, e.clientY], slide.tabs.map(t => t.hit), slide.clip);
+  if (!preview) { clearTabSlide(drag); return; }
+  for (const tab of slide.tabs) {
+    const offset = tab.source === drag.node ? preview.bounds.x - tab.hit.bounds.x
+      : preview.offsets.find(o => Number(o.index) === tab.hit.index).x;
+    tab.preview.style.transform = `translateX(${offset}px)`;
   }
 }
 function workspaceCursor(cursor) {
@@ -1117,13 +1134,12 @@ window.addEventListener("blur", () => {
 });
 function tabHits() {
   return [...groups.entries()].flatMap(([group, node]) =>
-    [...node.querySelectorAll(".dock-tab")].map((tab) => {
-      const b = tab.getBoundingClientRect();
-      return {
-        group,
-        index: Number(tab.dataset.index),
-        bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
-      };
+    [...node.querySelectorAll(".dock-tab")].flatMap(tab => {
+      const b = tab.getBoundingClientRect(), clip = tab.parentElement.getBoundingClientRect();
+      const x = Math.max(b.x, clip.x), y = Math.max(b.y, clip.y);
+      const width = Math.min(b.right, clip.right) - x, height = Math.min(b.bottom, clip.bottom) - y;
+      return width > 0 && height > 0 ? [{ group, index: Number(tab.dataset.index),
+        bounds: { x, y, width, height } }] : [];
     }),
   ).concat(workspaceChrome?.tabHits() ?? []);
 }

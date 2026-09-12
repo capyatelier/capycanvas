@@ -32,6 +32,8 @@ pub use drawers::{
 pub use zen::{ZenSection, ZenToolbars};
 mod interaction;
 mod layout;
+mod tab_drag;
+pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
 mod settings;

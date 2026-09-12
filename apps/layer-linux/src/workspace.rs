@@ -21,6 +21,9 @@ mod customization;
 mod drawers;
 #[path = "workspace_zen.rs"]
 mod zen;
+#[path = "workspace_tab_drag.rs"]
+mod tab_drag;
+use tab_drag::NativeTabSlide;
 
 mod allocation {
     use super::*;
@@ -384,10 +387,10 @@ mod allocation {
                 && let Some(drag) = owner.workspace_drag.borrow().as_ref()
                 && let Some(tab) = &drag.tab
             {
-                snapshot.save();
-                snapshot.translate(&gtk::graphene::Point::new(drag.point[0] - drag.origin[0], 0.));
-                snapshot.append_node(&tab.node);
-                snapshot.restore();
+                tab.snapshot(
+                    snapshot,
+                    self.obj().frame_clock().map_or(0, |clock| clock.frame_time()),
+                );
             }
         }
     }
@@ -637,13 +640,6 @@ struct NativeWorkspaceDrag {
     sequence: Option<gdk::EventSequence>,
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
-}
-
-#[derive(Clone)]
-struct NativeTabSlide {
-    widget: gtk::Widget,
-    opacity: f64,
-    node: gtk::gsk::RenderNode,
 }
 
 struct GroupView {
@@ -2303,6 +2299,7 @@ impl Workspace {
             .flat_map(|g| {
                 g.tabs.iter().enumerate().filter_map(|(index, (_, tab))| {
                     let b = tab.compute_bounds(&self.surface)?;
+                    let clip = tab_drag::tab_clip(tab.upcast_ref(), &self.surface)?;
                     Some(TabHit {
                         group: g.id,
                         index,
@@ -2311,7 +2308,8 @@ impl Workspace {
                             y: b.y(),
                             width: b.width(),
                             height: b.height(),
-                        },
+                        }
+                        .intersection(clip)?,
                     })
                 })
             })
@@ -2466,100 +2464,6 @@ impl Workspace {
         ));
     }
 
-    fn start_tab_slide(&self, drag: &mut NativeWorkspaceDrag) {
-        if !matches!(drag.target, DragTarget::Dock(DockItem::Panel { .. })) {
-            return;
-        }
-        let mut picked = self.surface.pick(
-            drag.origin[0] as f64,
-            drag.origin[1] as f64,
-            gtk::PickFlags::DEFAULT,
-        );
-        while let Some(widget) = picked {
-            picked = widget.parent();
-            if !widget.is::<gtk::Button>() {
-                continue;
-            }
-            let Some(parent) = widget.parent() else {
-                return;
-            };
-            let Some(position) = parent.compute_point(&self.surface, &gtk::graphene::Point::zero())
-            else {
-                return;
-            };
-            let Some(bounds) = widget.compute_bounds(&self.surface) else {
-                return;
-            };
-            let Some(palette) = self
-                .gpu
-                .borrow()
-                .as_ref()
-                .map(|g| g.session.state().palette)
-            else {
-                return;
-            };
-            let selected = widget.has_css_class("selected-tool");
-            let [r, g, b] = if selected {
-                palette.panel
-            } else {
-                palette.tabbar
-            }
-            .0;
-            let color = gdk::RGBA::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.);
-            // Keep native tab geometry for insertion tests; slide a cached
-            // snapshot above the clipped header, leaving its slot allocated.
-            let snapshot = gtk::Snapshot::new();
-            snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(bounds, 6.));
-            snapshot.append_color(&color, &bounds);
-            snapshot.pop();
-            snapshot.save();
-            snapshot.translate(&position);
-            parent.snapshot_child(&widget, &snapshot);
-            snapshot.restore();
-            if selected {
-                let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(
-                    bounds.x() - 6.,
-                    bounds.y(),
-                    bounds.width() + 12.,
-                    bounds.height(),
-                ));
-                cr.set_source_rgba(
-                    color.red().into(),
-                    color.green().into(),
-                    color.blue().into(),
-                    1.,
-                );
-                let y = (bounds.y() + bounds.height()) as f64;
-                concave_foot(&cr, bounds.x() as f64, y, 6., -1.);
-                concave_foot(&cr, (bounds.x() + bounds.width()) as f64, y, 6., 1.);
-                let _ = cr.fill();
-            }
-            if let Some(node) = snapshot.to_node() {
-                let opacity = widget.opacity();
-                widget.set_opacity(0.);
-                drag.tab = Some(NativeTabSlide {
-                    widget,
-                    opacity,
-                    node,
-                });
-                for group in self.groups.borrow().iter() {
-                    group.tab_joins.queue_draw();
-                }
-            }
-            break;
-        }
-    }
-
-    fn clear_tab_slide(&self, drag: &mut NativeWorkspaceDrag) {
-        if let Some(tab) = drag.tab.take() {
-            tab.widget.set_opacity(tab.opacity);
-            for group in self.groups.borrow().iter() {
-                group.tab_joins.queue_draw();
-            }
-            self.surface.queue_draw();
-        }
-    }
-
     fn set_drag_cursor(&self, drag: &NativeWorkspaceDrag, name: &str) {
         if let Some((widget, _)) = &drag.cursor {
             widget.set_cursor_from_name(Some(name));
@@ -2700,14 +2604,7 @@ impl Workspace {
         drag.point = point;
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
         self.dispatch_drag(drag.target, ContactPhase::Move, point);
-        if !self
-            .gpu
-            .borrow()
-            .as_ref()
-            .is_some_and(|g| g.session.dragging_attached_tab())
-        {
-            self.clear_tab_slide(&mut drag);
-        }
+        self.update_tab_slide(&mut drag);
         *self.workspace_drag.borrow_mut() = Some(drag.clone());
         if let DragTarget::Dock(item) = drag.target {
             *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);

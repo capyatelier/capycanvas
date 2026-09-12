@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 
 export async function checkDragCursors({ call, evaluate, settle }) {
-  const wait = async () => { await settle(); await evaluate("new Promise(r=>setTimeout(r,180))"); };
+  const wait = async () => {
+    await settle(); await evaluate("new Promise(r=>setTimeout(r,180))");
+    await evaluate("Promise.all([...document.querySelectorAll('.neighbor-tab-preview')].flatMap(n=>n.getAnimations()).map(a=>a.finished))");
+  };
   const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await wait(); };
   const saved = await evaluate("layerApp.state().workspace");
   const fixture = structuredClone(saved);
@@ -14,7 +17,7 @@ export async function checkDragCursors({ call, evaluate, settle }) {
   const center = b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
   const rect = selector => evaluate(`(()=>{const b=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height}})()`);
   const cursor = (selector = "#workspace") => evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).cursor`);
-  const noSlide = async () => assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview, .dragged-tab-source').length"), 0);
+  const noSlide = async () => assert.equal(await evaluate("document.querySelectorAll('.tab-slide-overlay, .dragged-tab-source').length"), 0);
   const clean = async () => {
     assert.equal(await evaluate("document.querySelector('#workspace').dataset.workspaceCursor ?? null"), null);
     await noSlide();
@@ -30,15 +33,27 @@ export async function checkDragCursors({ call, evaluate, settle }) {
       const selector = '.dock-tab[data-panel="layers"]';
       assert.equal(await cursor(selector), "grab");
       const original = await rect(selector), start = center(original);
+      const neighbor = await rect('.dock-tab[data-panel="properties"]');
       await press(start); await move({ x: start.x + 2, y: start.y }); await clean();
-      for (const dx of [24, -16]) {
+      for (const dx of [24, 50, 24, -16]) {
         await move({ x: start.x + dx, y: start.y + 8 });
         const preview = await rect('.dragged-tab-preview');
-        assert.equal(preview.x, original.x + dx, "Attached tab follows horizontal pointer movement");
+        assert.equal(preview.x, original.x + Math.max(0, dx), "Attached tab follows the pointer within its strip");
         assert.equal(preview.y, original.y, "Attached tab stays on its original row");
         assert.equal(preview.width, original.width);
         assert.deepEqual(await rect(selector), original, "The tab's insertion slot stays fixed");
+        assert.deepEqual(await rect('.dock-tab[data-panel="properties"]'), neighbor);
+        assert.equal((await rect('.neighbor-tab-preview')).x, neighbor.x - (dx === 50 ? original.width : 0),
+          "Neighbor slides aside at its original midpoint and returns when the pointer reverses");
         assert.equal(await evaluate("layerApp.state().workspace.layout.floating.length"), 0);
+      }
+      const clip = await rect('.tab-slide-overlay');
+      for (const x of [clip.x - 40, clip.x + clip.width + 10]) {
+        await move({ x, y: start.y });
+        const preview = await rect('.dragged-tab-preview');
+        assert.equal(preview.x, x < clip.x ? clip.x : clip.x + clip.width - preview.width);
+        assert.equal(await evaluate("layerApp.state().workspace.layout.floating.length"), 0,
+          "Visual clamping does not change the undocking threshold");
       }
       await move(away);
       await noSlide();
@@ -55,10 +70,15 @@ export async function checkDragCursors({ call, evaluate, settle }) {
     for (const end of ["release", "cancel", "capture", "blur"]) {
       await send({ type: "restore_workspace", workspace: fixture });
       const selector = '.dock-tab[data-panel="properties"]';
-      await press(center(await rect(selector)));
+      const source = await rect(selector);
+      await press(center(source));
       const first = await rect('.dock-tab[data-panel="layers"]');
       await move({ x: first.x + 2, y: first.y + first.height / 2 });
       assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview').length"), 1);
+      assert.equal((await rect('.neighbor-tab-preview')).x, first.x + source.width);
+      await move({ x: first.x + 2, y: first.y + first.height / 2 });
+      assert.equal((await rect('.neighbor-tab-preview')).x, first.x + source.width,
+        "Moving neighbors cannot oscillate the insertion decision");
       if (end === "cancel") await evaluate("document.querySelector('#workspace').dispatchEvent(new PointerEvent('pointercancel',{pointerId:1,bubbles:true}))");
       if (end === "capture") await evaluate("document.querySelector('#workspace').releasePointerCapture(1)");
       if (end === "blur") await evaluate("window.dispatchEvent(new Event('blur'))");

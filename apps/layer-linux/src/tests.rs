@@ -11134,12 +11134,90 @@ fn native_tab_slide_input() {
             );
             let drag = w.workspace_drag.borrow();
             let drag = drag.as_ref().unwrap();
-            assert!(drag.tab.is_some());
+            let slide = drag.tab.as_ref().unwrap();
+            assert!(
+                (slide.bounds.x
+                    - (bounds.x() + dx).clamp(
+                        slide.clip.x,
+                        (slide.clip.x + slide.clip.width - bounds.width()).max(slide.clip.x)
+                    ))
+                .abs()
+                    < 1.
+            );
+            assert_eq!(slide.bounds.y, bounds.y());
             assert!((drag.point[0] - drag.origin[0] - dx).abs() < 1.);
+        }
+        let clip = w
+            .workspace_drag
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .tab
+            .as_ref()
+            .unwrap()
+            .clip;
+        for x in [clip.x - 40., clip.x + clip.width + 10.] {
+            perform(serde_json::json!([{ "point": [x, start[1]] }]));
+            let drag = w.workspace_drag.borrow();
+            let slide = drag.as_ref().unwrap().tab.as_ref().unwrap();
+            assert!(
+                (slide.bounds.x
+                    - if x < clip.x {
+                        clip.x
+                    } else {
+                        clip.x + clip.width - bounds.width()
+                    })
+                .abs()
+                    < 1.
+            );
+            assert!(state(&w).workspace.layout.floating.is_empty());
+        }
+        let first = before_hits
+            .iter()
+            .find(|hit| hit.group == group && hit.index == 0)
+            .unwrap()
+            .bounds;
+        let last = before_hits
+            .iter()
+            .filter(|hit| hit.group == group)
+            .max_by_key(|hit| hit.index)
+            .unwrap()
+            .bounds;
+        // Cross a neighbor, pause, and reverse. Snapshot animation must leave
+        // the original insertion targets fixed and undo the displacement.
+        let target_x = if panel == Panel::Layers {
+            last.x + last.width * 0.5 + 2.
+        } else {
+            first.x + 2.
+        };
+        for _ in 0..2 {
+            perform(serde_json::json!([{ "point": [target_x, start[1]] }]));
+            let drag = w.workspace_drag.borrow();
+            let slide = drag.as_ref().unwrap().tab.as_ref().unwrap();
+            assert!(
+                slide
+                    .tabs
+                    .iter()
+                    .any(|tab| (tab.to.abs() - bounds.width()).abs() < 1.)
+            );
+            assert_eq!(w.tab_hits(), before_hits);
         }
         crate::snapshot(&w)
             .save_to_png(dir.join(format!("tab-slide-{end}.png")))
             .unwrap();
+        perform(serde_json::json!([{ "point": start }]));
+        assert!(
+            w.workspace_drag
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .tab
+                .as_ref()
+                .unwrap()
+                .tabs
+                .iter()
+                .all(|tab| tab.to == 0.)
+        );
         let mut point = [start[0] - 16., start[1] + 8.];
         if end == "detach" {
             point = [
@@ -11185,6 +11263,7 @@ fn native_tab_slide_input() {
     w.window.destroy();
     pump(100);
 }
+
 
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
@@ -11317,7 +11396,7 @@ fn native_column_drawer_drag_input() {
             if !whole {
                 let drag = w.workspace_drag.borrow();
                 let drag = drag.as_ref().unwrap();
-                assert_eq!(drag.tab.as_ref().unwrap().widget.opacity(), 0.);
+                assert!(drag.tab.as_ref().unwrap().tabs.iter().all(|tab| tab.widget.opacity() == 0.));
                 assert!((drag.point[0] - drag.origin[0] + 12.).abs() < 1.);
             }
             perform(serde_json::json!([{ "point": away }]));
