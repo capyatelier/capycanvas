@@ -16,6 +16,11 @@ pub(super) struct Pending {
     validated: bool,
     migrate_instances: bool,
 }
+impl Pending {
+    pub(super) fn library_only(&self) -> bool {
+        !self.migrate_instances
+    }
+}
 impl<R: CanvasRenderer> UiSession<R> {
     /// Hosts acquiring package bytes asynchronously can retain them until this
     /// boundary. Loading still validates the package and renderer availability.

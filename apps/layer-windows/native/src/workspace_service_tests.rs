@@ -138,6 +138,35 @@ impl Fixture {
 }
 
 #[test]
+fn close_before_startup_adoption_releases_claim_without_saving_provisional_layout() {
+    let mut f = Fixture::new();
+    f.native.startup = Default::default();
+    f.pump(|f| f.service.incoming.is_some());
+    let incoming = f.service.incoming.as_ref().unwrap().clone();
+    let expected = incoming.entity.capture().unwrap();
+    let id = incoming.entity.id.clone();
+    assert!(!f.service.status().ready);
+    f.close();
+    assert!(!f.service.status().ready);
+    assert!(!f.native.startup.brush_ready);
+    assert!(f.service.incoming.is_none());
+    assert!(f.service.manager.active_id().is_none());
+    // A second owner can immediately reclaim the unchanged saved workspace.
+    let manager = WorkspaceManager::new(
+        StoreWorker::shared(&f.directory).unwrap(),
+        Platform::Windows,
+    );
+    let restored = pollster::block_on(manager.initialize(wall())).unwrap();
+    assert_eq!(restored.entity.id, id);
+    let actual = restored.entity.capture().unwrap();
+    assert_eq!(actual.history, expected.history);
+    assert_eq!(actual.working, expected.working);
+    pollster::block_on(manager.release(&restored));
+    drop(manager);
+    f.dispose();
+}
+
+#[test]
 fn startup_waits_for_canvas_idle_then_close_restores_layout_and_working_values() {
     let mut f = Fixture::new();
     f.native.startup.complete = false;

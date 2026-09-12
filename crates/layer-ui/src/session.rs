@@ -6303,6 +6303,129 @@ mod tests {
     }
 
     #[test]
+    fn clean_close_during_library_warmup_preserves_document_and_input_guards() {
+        use layer_core::{EffectInstallMode, EffectPackage};
+        for library in [false, true] {
+            for dirty in [false, true] {
+                for interaction in [false, true] {
+                    let mut s = session();
+                    s.set_document_replacement(true);
+                    if dirty {
+                        s.dispatch(UiAction::Invoke {
+                            command: CommandId::AddLayer,
+                        })
+                        .unwrap();
+                        s.frame(0, 0).unwrap();
+                    }
+                    s.frame(0, 0).unwrap();
+                    let package = EffectPackage {
+                        format: 1,
+                        categories: s.effect_catalog.categories().to_vec(),
+                        filters: vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()],
+                    };
+                    let manifest = serde_json::to_string(&package).unwrap();
+                    if library {
+                        s.load_effect_library(&manifest, |_| panic!(), EffectInstallMode::Merge)
+                            .unwrap();
+                    } else {
+                        s.load_effect_package(&manifest, |_| panic!(), EffectInstallMode::Merge)
+                            .unwrap();
+                    }
+                    assert!(s.state.filter_load.pending);
+                    // A pending read-only library does not make document
+                    // replacement safe: its validation still belongs to this session.
+                    assert!(s.request_document_open(false).is_err());
+                    assert!(s.request_document_open(true).is_err());
+                    let checkpoint = s.engine.checkpoint();
+                    s.input_pending = interaction;
+                    assert_eq!(s.require_workspace_idle().is_ok(), library && !interaction);
+                    let accepted = library && !interaction;
+                    let can_close = accepted && !dirty;
+                    assert_eq!(s.request_document_close().is_ok(), accepted);
+                    if accepted && dirty {
+                        let id = s.files.pending.as_ref().unwrap().0;
+                        s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+                        assert!(s.state.document_file.modified);
+                    }
+                    assert_eq!(s.state.document_file.close_ready, can_close);
+                    assert_eq!(s.engine.checkpoint(), checkpoint);
+                    assert!(s.state.filter_load.pending);
+                    s.input_pending = false;
+                    // If application termination is cancelled, completion remains
+                    // valid and a later unsaved prompt still preserves edits.
+                    if can_close {
+                        s.reset_document_close();
+                    }
+                    s.renderer_mut().validation_result =
+                        Some(layer_render::EffectValidationResult {
+                            request_id: s.state.filter_load.request_id,
+                            result: Ok(()),
+                        });
+                    s.frame(1, 1).unwrap();
+                    assert!(!s.state.filter_load.pending);
+                    assert_eq!(s.engine.checkpoint(), checkpoint);
+                    if !can_close {
+                        s.request_document_close().unwrap();
+                        if dirty {
+                            let id = s.files.pending.as_ref().unwrap().0;
+                            s.respond_document_close(id, CloseDecision::Cancel).unwrap();
+                            assert!(!s.state.document_file.close_ready);
+                            assert!(s.state.document_file.modified);
+                        } else {
+                            assert!(s.state.document_file.close_ready);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn save_and_close_during_library_warmup_waits_for_the_saved_checkpoint() {
+        use layer_core::{EffectInstallMode, EffectPackage};
+        let mut s = session();
+        s.dispatch(UiAction::Invoke {
+            command: CommandId::AddLayer,
+        })
+        .unwrap();
+        s.frame(0, 0).unwrap();
+        let document = s.engine.document().clone();
+        let package = EffectPackage {
+            format: 1,
+            categories: s.effect_catalog.categories().to_vec(),
+            filters: vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()],
+        };
+        s.load_effect_library(
+            &serde_json::to_string(&package).unwrap(),
+            |_| panic!(),
+            EffectInstallMode::Merge,
+        )
+        .unwrap();
+        s.request_document_close().unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        s.respond_document_close(id, CloseDecision::Save).unwrap();
+        let id = s.files.pending.as_ref().unwrap().0;
+        let project = s
+            .capture_project_save(
+                id,
+                DocumentLocation {
+                    uri: "fixture.capy".into(),
+                    name: "fixture.capy".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(project.document, document);
+        assert!(s.state.filter_load.pending);
+        assert!(s.state.document_file.modified);
+        assert!(!s.state.document_file.close_ready);
+        s.complete_document_request(id, Ok(true)).unwrap();
+        assert!(s.state.filter_load.pending);
+        assert!(!s.state.document_file.modified);
+        assert!(s.state.document_file.close_ready);
+        assert_eq!(s.engine.document(), &document);
+    }
+
+    #[test]
     fn startup_filter_library_does_not_rewrite_saved_programs() {
         use layer_core::{EffectInstallMode, EffectPackage};
         use std::sync::Arc;

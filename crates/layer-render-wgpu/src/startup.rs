@@ -72,7 +72,7 @@ impl Requirements {
                 plan.state.canvas_wetness,
             );
             self.render
-                .push(r.pipelines.material[kind as usize].clone());
+                .push(r.pipelines.material[kind.index(plan.material)].clone());
             if preview {
                 let variant = MaterialPipelineKind::for_attachments(
                     plan.state.watercolor_wetness,
@@ -80,12 +80,14 @@ impl Requirements {
                     false,
                 );
                 self.render
-                    .push(r.pipelines.material[variant as usize].clone());
+                    .push(r.pipelines.material[variant.index(plan.material)].clone());
                 // A single predicted destination batch on a simple canvas reads
                 // persistent coverage but writes only its disposable color.
                 if !plan.state.watercolor_wetness {
-                    self.render
-                        .push(r.pipelines.material[MaterialPipelineKind::Color as usize].clone());
+                    self.render.push(
+                        r.pipelines.material[MaterialPipelineKind::Color.index(plan.material)]
+                            .clone(),
+                    );
                 }
             }
         }

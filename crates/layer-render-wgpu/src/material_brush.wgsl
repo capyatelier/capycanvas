@@ -17,6 +17,11 @@ struct Style {
     transport_b: vec4<f32>,
 }
 
+// The pass planner supplies the operation as a pipeline constant so the GPU
+// compiler sees only that operation's control flow. Style retains its packed
+// operation field for the shared batch layout and reservoir pass.
+override MATERIAL_OPERATION: u32;
+
 const OP_DEPOSIT: u32 = 0u;
 const OP_COVERAGE: u32 = 1u;
 const OP_LIQUIFY: u32 = 2u;
@@ -640,7 +645,7 @@ fn wet_fragment(
                 1.0,
             );
             stroke_coverage = next_coverage;
-        } else if style.operation.z != OP_DEPOSIT {
+        } else if MATERIAL_OPERATION != OP_DEPOSIT {
             stroke_coverage = max(stroke_coverage, source_alpha);
         }
         batch_color = batch_color * (1.0 - source_alpha) + paint_color * source_alpha;
@@ -663,13 +668,13 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
     let world = render_target.origin_extent.xy + fragment_position.xy;
     let first = style.operation.x;
     let count = style.operation.y;
-    if style.operation.z == OP_WATERCOLOR {
+    if MATERIAL_OPERATION == OP_WATERCOLOR {
         return watercolor_fragment(fragment_position.xy, world, first, count);
     }
-    if style.operation.z == OP_WET {
+    if MATERIAL_OPERATION == OP_WET {
         return wet_fragment(fragment_position.xy, world, first, count);
     }
-    if style.operation.z == OP_SMUDGE {
+    if MATERIAL_OPERATION == OP_SMUDGE {
         let original = canvas_load(world);
         let trace = trace_smudge(world, first, count);
         let dragged = blurred_canvas_sample(trace.coordinate, style.material_b.z);
@@ -679,7 +684,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
             vec4<f32>(0.0),
         );
     }
-    if style.operation.z == OP_LIQUIFY {
+    if MATERIAL_OPERATION == OP_LIQUIFY {
         return MaterialOutput(
             canvas_sample(deform_coordinate(world, first, count)),
             vec4<f32>(0.0),
@@ -719,7 +724,7 @@ fn paint_fragment(fragment_position: vec4<f32>) -> MaterialOutput {
                 1.0,
             );
             stroke_coverage = next_coverage;
-        } else if style.operation.z == OP_COVERAGE {
+        } else if MATERIAL_OPERATION == OP_COVERAGE {
             stroke_coverage = max(stroke_coverage, requested_alpha);
         }
         result = source_over(result, dab.color.rgb, source_alpha);

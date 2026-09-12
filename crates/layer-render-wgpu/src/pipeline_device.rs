@@ -1,6 +1,28 @@
 //! Keep the optional startup cache attached to every pipeline recipe, including
 //! recipes sent to the compiler. Ordinary GPU resource creation dereferences to
 //! wgpu unchanged. Other hosts use an uncached device.
+#[cfg(target_os = "windows")]
+struct CompileTrace<'a>(Option<(std::time::Instant, Option<&'a str>)>);
+#[cfg(target_os = "windows")]
+impl<'a> CompileTrace<'a> {
+    fn new(label: Option<&'a str>) -> Self {
+        Self(std::env::var_os("CAPY_TRACE_SHADER_JOBS").map(|_| {
+            eprintln!("pipeline begin label={label:?}");
+            (std::time::Instant::now(), label)
+        }))
+    }
+}
+#[cfg(target_os = "windows")]
+impl Drop for CompileTrace<'_> {
+    fn drop(&mut self) {
+        if let Some((start, label)) = self.0 {
+            eprintln!(
+                "pipeline end label={label:?} elapsed_ms={:.3}",
+                start.elapsed().as_secs_f64() * 1000.
+            );
+        }
+    }
+}
 #[derive(Clone)]
 pub(crate) struct PipelineDevice {
     device: wgpu::Device,
@@ -37,6 +59,8 @@ impl PipelineDevice {
         &self,
         descriptor: &wgpu::RenderPipelineDescriptor<'_>,
     ) -> wgpu::RenderPipeline {
+        #[cfg(target_os = "windows")]
+        let _trace = CompileTrace::new(descriptor.label);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(cache) = self.cache.as_ref().and_then(|c| c.pipeline()) {
             return self
@@ -52,6 +76,8 @@ impl PipelineDevice {
         &self,
         descriptor: &wgpu::ComputePipelineDescriptor<'_>,
     ) -> wgpu::ComputePipeline {
+        #[cfg(target_os = "windows")]
+        let _trace = CompileTrace::new(descriptor.label);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(cache) = self.cache.as_ref().and_then(|c| c.pipeline()) {
             return self

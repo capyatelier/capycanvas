@@ -189,7 +189,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub(super) fn request_document(&mut self, request: DocumentRequest) -> Result<(), String> {
-        self.require_document_idle()?;
+        if matches!(
+            request,
+            DocumentRequest::ConfirmClose { .. } | DocumentRequest::Save { .. }
+        ) {
+            self.require_document_snapshot_idle()?;
+        } else {
+            self.require_document_idle()?;
+        }
         if self.files.pending.is_some() {
             return Err("A file operation is already in progress".into());
         }
@@ -287,7 +294,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Capture only immutable source state. The host prunes, validates and
     /// compresses this on a worker. No GPU readback or full image copy.
     pub fn capture_project_recovery(&self) -> Result<Project, String> {
-        self.require_document_idle()?;
+        self.require_document_snapshot_idle()?;
         Ok(Project {
             document: self.engine.document().clone(),
             assets: self.files.assets.clone(),
@@ -301,7 +308,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         id: u32,
         location: DocumentLocation,
     ) -> Result<Project, String> {
-        self.require_document_idle()?;
+        self.require_document_snapshot_idle()?;
         location.validate()?;
         if !matches!(self.document_request(id)?, DocumentRequest::Save { .. })
             || self.files.pending.as_ref().is_some_and(|p| p.1.is_some())
@@ -358,7 +365,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn poll_document_close(&mut self) -> u32 {
         if self.files.close_after
             && self.files.pending.is_none()
-            && self.require_document_idle().is_ok()
+            && self.require_document_snapshot_idle().is_ok()
         {
             self.files.close_after = false;
             if let Err(error) = self.request_document_close() {
@@ -371,7 +378,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn request_document_close(&mut self) -> Result<UiChange, String> {
-        self.require_document_idle()?;
+        self.require_document_snapshot_idle()?;
         self.refresh_file_state();
         if self.files.pending.is_some() {
             self.files.close_after = true;
@@ -413,9 +420,34 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::HOST, false))
     }
 
-    pub fn require_document_idle(&self) -> Result<(), String> {
+    fn require_document_interaction_idle(&self) -> Result<(), String> {
         self.require_idle()?;
-        if self.operation.active() || self.region_tools.busy() || self.pending_filters.is_some() {
+        if self.operation.active() || self.region_tools.busy() {
+            Err("Finish the current canvas operation first".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Library-only validation owns private GPU work and cannot change document
+    /// or workspace values. Closing and immutable saves may proceed, including
+    /// their unsaved-changes decisions. Replacing the document still waits.
+    pub fn require_document_snapshot_idle(&self) -> Result<(), String> {
+        self.require_document_interaction_idle()?;
+        if self
+            .pending_filters
+            .as_ref()
+            .is_some_and(|p| !p.library_only())
+        {
+            Err("Finish the current canvas operation first".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn require_document_idle(&self) -> Result<(), String> {
+        self.require_document_interaction_idle()?;
+        if self.pending_filters.is_some() {
             Err("Finish the current canvas operation first".into())
         } else {
             Ok(())

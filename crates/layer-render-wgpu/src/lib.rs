@@ -284,6 +284,17 @@ enum MaterialOperation {
     Watercolor = 5,
 }
 
+impl MaterialOperation {
+    const ALL: [Self; 6] = [
+        Self::Deposit,
+        Self::Coverage,
+        Self::Liquify,
+        Self::Smudge,
+        Self::Wet,
+        Self::Watercolor,
+    ];
+}
+
 #[repr(usize)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DirectPipelineKind {
@@ -315,6 +326,10 @@ enum MaterialPipelineKind {
 
 impl MaterialPipelineKind {
     const COUNT: usize = 5;
+
+    fn index(self, operation: MaterialOperation) -> usize {
+        operation as usize * Self::COUNT + self as usize
+    }
 
     fn for_attachments(watercolor: bool, coverage: bool, wetness: bool) -> Self {
         if watercolor {
@@ -570,7 +585,8 @@ struct TextureSet {
 
 struct Pipelines {
     direct: [Deferred<wgpu::RenderPipeline>; DirectPipelineKind::COUNT],
-    material: [Deferred<wgpu::RenderPipeline>; MaterialPipelineKind::COUNT],
+    material: [Deferred<wgpu::RenderPipeline>;
+        MaterialOperation::ALL.len() * MaterialPipelineKind::COUNT],
     watercolor_transport: [Deferred<wgpu::RenderPipeline>; WATERCOLOR_TRANSPORT_STEPS as usize],
     reservoir: Deferred<wgpu::RenderPipeline>,
     stroke_edge: Deferred<wgpu::RenderPipeline>,
@@ -604,9 +620,15 @@ impl Pipelines {
         &self.direct[kind as usize]
     }
 
-    fn material(&self, watercolor: bool, coverage: bool, wetness: bool) -> &wgpu::RenderPipeline {
+    fn material(
+        &self,
+        operation: MaterialOperation,
+        watercolor: bool,
+        coverage: bool,
+        wetness: bool,
+    ) -> &wgpu::RenderPipeline {
         &self.material
-            [MaterialPipelineKind::for_attachments(watercolor, coverage, wetness) as usize]
+            [MaterialPipelineKind::for_attachments(watercolor, coverage, wetness).index(operation)]
     }
 }
 
@@ -2683,6 +2705,7 @@ impl WgpuRasterizer {
             });
             pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
             let pipeline = self.pipelines.material(
+                plan.material,
                 plan.state.watercolor_wetness,
                 coverage_view.is_some(),
                 scalar_state_view.is_some(),
@@ -3392,6 +3415,7 @@ impl WgpuRasterizer {
             });
             pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
             let pipeline = self.pipelines.material(
+                plan.material,
                 plan.state.watercolor_wetness,
                 coverage_view.is_some(),
                 watercolor_wetness_view.is_some(),
@@ -3498,7 +3522,7 @@ impl WgpuRasterizer {
                 multiview_mask: None,
             });
             pass.set_scissor_rect(local.min_x, local.min_y, local.width(), local.height());
-            pass.set_pipeline(self.pipelines.material(false, false, false));
+            pass.set_pipeline(self.pipelines.material(plan.material, false, false, false));
             pass.set_bind_group(
                 0,
                 &self.style_bind_group,
@@ -6321,7 +6345,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         blend: Some(max_blend),
         write_mask: wgpu::ColorWrites::RED,
     });
-    let material = [
+    let material_targets = [
         (
             [color_target.clone(), None, None],
             "layer destination brush color",
@@ -6350,15 +6374,29 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
             ],
             "layer watercolor brush with wetness state",
         ),
-    ]
-    .map(|(targets, label)| {
+    ];
+    // Keep each destination operation in a separate optimized shader. Compiling
+    // their combined control flow can hold a native driver call for seconds,
+    // delaying newly selected tools and final compiler shutdown. Attachment
+    // variants still share one shader module and the same brush calculations.
+    let material = std::array::from_fn(|index| {
+        let operation = MaterialOperation::ALL[index / MaterialPipelineKind::COUNT];
+        let (targets, label) = material_targets[index % MaterialPipelineKind::COUNT].clone();
         let (device, layout, shader) = (
             device.clone(),
             material_pipeline_layout.clone(),
             material_shader.clone(),
         );
         Deferred::new(move || {
-            fullscreen_pipeline_targets(&device, &layout, &shader, "fragment_main", &targets, label)
+            fullscreen_pipeline_targets_with_constants(
+                &device,
+                &layout,
+                &shader,
+                "fragment_main",
+                &targets,
+                &[("MATERIAL_OPERATION", operation as u32 as f64)],
+                label,
+            )
         })
     });
     let watercolor_transport = std::array::from_fn(|step| {
@@ -6588,37 +6626,6 @@ fn fullscreen_pipeline(
                 blend,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
-
-fn fullscreen_pipeline_targets(
-    device: &PipelineDevice,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    fragment_entry: &'static str,
-    targets: &[Option<wgpu::ColorTargetState>],
-    label: &'static str,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vertex_main"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: Default::default(),
-            targets,
         }),
         multiview_mask: None,
         cache: None,
@@ -6899,6 +6906,7 @@ mod tests {
     }
     mod adjustments;
     mod filter_library;
+    mod material;
     use layer_core::{
         BrushDeform, BrushGrain, BrushRendering, BrushTransport, BrushWetMix, DualBrush, Point,
         Rect, WATERCOLOR_TRANSPORT_LONG_BROAD_ASSET,

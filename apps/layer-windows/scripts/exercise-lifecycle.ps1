@@ -73,6 +73,7 @@ try {
         $dirty=$scenario -eq 'dirty'
         $stderr=Join-Path $run ("$scenario.stderr.log")
         $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+        $null=$review.Handle # Keep exit-code observation valid after a fast close.
         [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/lifecycle-review.pid'),[string]$review.Id)
         Write-Output "Owned lifecycle review $($review.Id), scenario=$scenario"
         if($scenario -eq 'startup'){

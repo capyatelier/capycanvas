@@ -407,10 +407,9 @@ Debug builds optimize Naga, the WGSL compiler dependency, while retaining
 debuggable application Rust. Process exit joins retired shader workers after
 all canvas hosts are destroyed. The lifecycle fixture covers close before
 brush readiness, during shader warmup and from clean/dirty minimized windows;
-it retains the five-second zero-exit requirement. One image-import milestone
-review exceeded that limit in the final shader-worker join; subsequent document
-and lifecycle runs pass, but intermittent cold-compilation close timing remains
-an open acceptance issue.
+it retains the five-second zero-exit requirement. The long material-shader
+compilation responsible for earlier close failures is split by operation; see
+the startup/close checkpoint below for current evidence and its limits.
 
 ## Native Layers editing checkpoint
 
@@ -622,11 +621,11 @@ revision ordering and ordered input boundaries.
 
 Main through 007c3e9 is integrated, including the approved shared workspace
 manager handoff. Workspace storage is integrated as described below. Windows
-still needs the full manager UI, multiwindow support, runtime filter package import,
-packaging, physical gestures, DPI/device lifecycle, full visual parity and all
-overlap/scroll/drag combinations. The intermittent shader-worker final join and
-strict GPU filter-reference mismatch remain open. Final painting presentation
-and input-latency acceptance remain deferred.
+now includes native workspace management, multiple windows, runtime filter
+packages and saved toolbar management. Packaging, physical gestures, DPI/device
+lifecycle, full visual parity and all overlap/scroll/drag combinations still need
+acceptance. The strict GPU filter-reference mismatch remains open. Final painting
+presentation and input-latency acceptance remain deferred.
 
 ## Workspace persistence and recovery
 
@@ -724,9 +723,9 @@ transient HWND property without taking its claim.
 The first fixture checks native lists, previews, name-only creation, history,
 baseline restoration, included/custom workspace policies, brush reset, header
 switching and restart. The second checks independent app instances and owner
-window activation. Both enforce the existing five-second close gate; the known
-intermittent final shader-worker join can still fail that gate. Profiles and
-captures stay local. New Window and runtime filter transport are implemented.
+window activation. Both enforce the existing five-second close gate. The manager
+fixture passes after the material-shader specialization described below.
+Profiles and captures stay local. New Window and runtime filter transport are implemented.
 Full visual/gesture parity, lifecycle/device/DPI validation, distribution and
 final physical-input/presentation acceptance remain open.
 
@@ -809,5 +808,52 @@ copy/restart, library rename, insertion, cancel/delete and survival of installed
 copies after library deletion. Every close still has a five-second gate. If a
 close exceeds it but the same process subsequently exits successfully, the fixture
 can gather the remaining functional results; it still fails overall for any slow
-close. Passing samples do not resolve the known intermittent shutdown delay.
-Profiles, databases, captures and logs stay local under ignored artifacts.
+close. The cause of earlier shader-join delays and the subsequent fix are
+described below. Profiles, databases, captures and logs stay local under ignored artifacts.
+
+## Startup and close checkpoint
+
+Destination-aware brushes now specialize their shared WGSL by material operation.
+The compiler processes individual deposit, coverage, liquify, smudge, wet and
+watercolor pipelines instead of one combined shader. Persistent and predicted
+passes select the same operation as the shared brush pass planner; required
+startup pipelines retain their priority over speculative work. GPU optimization
+stays enabled. Close still cancels queued work and joins any in-flight driver
+call after destroying the hosts.
+
+Shared close/save policy now permits read-only library validation to continue
+without blocking unsaved decisions or immutable snapshots. New/Open, program
+migration and active drawing still retain their existing guards. Windows applies
+that policy to native dialog replies while retaining document epoch/revision
+checks. Closing before workspace adoption releases the incoming claim without
+saving the provisional editor layout or waiting for brush readiness.
+
+The previous combined pipeline took about 6.5 seconds in the native app. Four
+isolated close probes after specialization exited in 0.35–1.25 seconds; the
+slowest material pipeline in those probes took 723 ms. The manager fixture
+also passes both closes. These are scoped development-build measurements,
+not a guarantee for every GPU, painting cadence or input latency.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-startup-close.ps1 -Executable <native-exe>
+~~~
+
+This fixture opens isolated profiles and closes the exact owned process at
+several delays after editor readiness. Each launch must exit successfully within
+five seconds. A late but successful exit is recorded and still fails the fixture.
+Opt-in CAPY_TRACE_SHADER_JOBS records compiler job and pipeline durations to
+stderr; the fixture keeps these logs and its results under ignored artifacts.
+
+The hardware material regression compares specialized and uniform-dispatched
+shaders across all six operations, alpha lock, erasing, sparse page boundaries,
+single/multiple prediction batches and following commits. All 120 full-image
+comparisons match exactly on both the tested Vulkan and D3D12 backends. Windows
+explicitly selects D3D12 for this regression. The wider default-backend renderer
+run has 118 passes, 18 intentionally ignored benchmarks and the existing strict
+filter reference failure (maximum channel error 30). That failure remains open.
+
+The final native lifecycle fixture passes close before brush readiness, warmup,
+clean/dirty minimized close, cancellation, maximized-state restoration and discard.
+The four delayed-close samples exit in 0.36–0.41 seconds. These results retain the
+five-second gate. A transient titlebar-measurement error seen during minimize/restore
+still needs investigation as part of visual and Windows lifecycle acceptance.

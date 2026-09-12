@@ -482,7 +482,7 @@ impl DocumentService {
             .ok_or_else(|| "Unknown document request".into())
     }
     fn matches(host: &NativeHost, epoch: u64, revision: u64) -> Result<(), String> {
-        host.session.require_document_idle()?;
+        host.session.require_document_snapshot_idle()?;
         if host.session.state().document_file.epoch != epoch
             || host.session.engine().document().revision != revision
         {
@@ -678,7 +678,7 @@ impl DocumentService {
         let active = self.active.as_ref().ok_or("Missing export request")?;
         let captured = (|| {
             // A delayed shader/replay must not silently export intervening edits.
-            host.session.require_document_idle()?;
+            host.session.require_document_snapshot_idle()?;
             if active.epoch != host.session.state().document_file.epoch
                 || active.revision != host.session.engine().document().revision
             {

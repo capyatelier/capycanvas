@@ -1549,3 +1549,58 @@ agreement and shutdown timing remain open. Final sustained 120 Hz painting and
 physical input-to-present acceptance remain deferred until the rest of the app is
 ready. Profiles, databases, captures and logs stay ignored/local. The goal remains
 active.
+
+## GPU startup and close milestone — 2026-09-12
+
+Tracing isolated the intermittent final join to the combined destination-brush
+pipeline, which took about 6.5 seconds to compile in the native app. The shared
+renderer now specializes that WGSL by material operation. Attachment variants
+share the shader module; persistent, private-preview and direct-preview passes
+use the same operation as startup dependency selection. GPU optimization stays
+enabled, the compiler still cancels queued jobs on teardown, and final process
+exit still joins the in-flight driver call.
+
+One hardware regression compares all six operations, alpha lock, erase, sparse
+page boundaries, both prediction paths and subsequent commits against uniform
+dispatch. All 120 full-image comparisons match exactly on Vulkan and D3D12.
+The Windows regression explicitly requests the D3D12 backend. Four isolated
+native probes after specialization closed in 0.35–1.25 seconds, with a maximum
+material pipeline compile of 723 ms. Final delayed-close samples exit in
+0.36–0.41 seconds. These are development-build close measurements, not painting
+cadence or physical input latency.
+
+Native lifecycle review also exposed early close requests rejected during
+read-only catalog validation, and initialization waiting to adopt a workspace
+after the document had authorized close. Shared snapshot/close policy now permits
+library-only background validation while retaining the interaction and document
+migration guards. New/Open still waits for validation. Unsaved decisions and
+save completion keep their normal checkpoint semantics; native replies retain
+epoch/revision fencing. Windows releases an unadopted startup workspace claim
+without saving its provisional layout or waiting for GPU readiness.
+
+Two shared tests cover library versus document migration, active interaction,
+replacement rejection, cancelling unsaved decisions, immutable save capture and
+close only after save acknowledgement. A Windows service test verifies immediate
+claim reuse and unchanged stored layout after close before startup adoption.
+The new startup/close fixture uses isolated profiles, exact process handles,
+several close delays, optional compiler timing logs and the unchanged five-second
+zero-exit gate. Earlier failures remain recorded; delayed but successful exit
+does not pass the gate.
+
+Integration includes shared opacity locks and Apple property coverage through
+841cc25. The combined host/UI/workspace/Windows tree passes 440 unit tests
+(24 host, 276 UI, 49 workspace, 91 Windows; four explicit GPU tests ignored),
+Windows Clippy, native builds, the shared inventory example, and WebAssembly
+UI/renderer checks. The broader renderer run has 118 passes, one existing strict
+filter-reference failure (maximum channel error 30), and 18 intentionally ignored
+benchmarks. Seven startup ordering/teardown regressions pass. Native lifecycle
+and runtime-filter fixtures pass after integration, including early close,
+minimized unsaved decisions, cancellation, discard, live WGSL replacement and
+preservation after invalid imports.
+
+A transient titlebar-measurement error observed during minimize/restore remains
+to investigate. Full matched Chrome visual/gesture/scroll/overlap parity, physical
+pen/touch, mixed-DPI/device/suspend recovery, distribution packaging, strict
+GPU reference agreement and final 120 Hz painting/input acceptance remain open.
+Profiles, documents, databases, captures, logs and binaries stay ignored/local.
+The goal remains active.

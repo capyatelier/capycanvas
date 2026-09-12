@@ -242,6 +242,20 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 }
             }
         }
+        if self.status.close_requested
+            && !self.status.ready
+            && self.incoming.is_some()
+            && self.status.error.is_none()
+            && !self.operation.busy()
+            && !self.ownership.busy()
+        {
+            // No editor edits have been accepted before startup adoption.
+            // Release this incoming claim without waiting for a canvas that
+            // has already authorized close, or saving its provisional layout.
+            if let Err(error) = self.discard_close(native) {
+                self.status.error = Some(error.to_string());
+            }
+        }
         if self.incoming.is_some()
             && self.status.error.is_none()
             // Current document/brush readiness is sufficient. Optional catalog

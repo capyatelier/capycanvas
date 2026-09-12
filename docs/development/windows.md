@@ -74,6 +74,7 @@ local files; export does not mark the editable project as saved.
 cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib
 ./apps/layer-windows/scripts/exercise-persistence.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-manager.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+./apps/layer-windows/scripts/exercise-startup-close.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-multiwindow.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ./apps/layer-windows/scripts/exercise-runtime-filters.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe

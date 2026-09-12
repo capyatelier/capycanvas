@@ -129,7 +129,12 @@ impl Drop for Compiler {
         retired.push(self.1.take().unwrap());
     }
 }
-struct Span;
+struct Span {
+    #[cfg(target_os = "windows")]
+    start: Option<std::time::Instant>,
+    #[cfg(target_os = "windows")]
+    priority: u8,
+}
 impl Span {
     fn new(priority: u8) -> Self {
         #[cfg(target_os = "android")]
@@ -145,11 +150,37 @@ impl Span {
         }
         #[cfg(not(target_os = "android"))]
         let _ = priority;
-        Self
+        Self {
+            #[cfg(target_os = "windows")]
+            start: std::env::var_os("CAPY_TRACE_SHADER_JOBS").map(|_| {
+                eprintln!(
+                    "shader_job begin priority={priority} utc_ms={}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+                std::time::Instant::now()
+            }),
+            #[cfg(target_os = "windows")]
+            priority,
+        }
     }
 }
 impl Drop for Span {
     fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        if let Some(start) = self.start {
+            eprintln!(
+                "shader_job end priority={} elapsed_ms={:.3} utc_ms={}",
+                self.priority,
+                start.elapsed().as_secs_f64() * 1000.,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            );
+        }
         #[cfg(target_os = "android")]
         unsafe {
             ATrace_endSection();
