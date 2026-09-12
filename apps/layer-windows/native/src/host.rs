@@ -454,6 +454,9 @@ pub unsafe extern "C" fn capy_workspace_action(host: *mut CapyHost, json: *const
             .as_mut()
             .ok_or("Workspace service is unavailable")?;
         let result = match action {
+            WorkspaceAction::Manager { dialog, command } => {
+                service.manager_input(&mut host.native, dialog, command)
+            }
             WorkspaceAction::Retry => {
                 service.retry(&mut host.native, now_ms());
                 Ok(())
@@ -664,6 +667,10 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .as_ref()
                 .and_then(|service| service.import_request()),
             windows_workspace: host.workspaces.as_ref().map(|s| s.status().clone()),
+            windows_workspace_manager: host
+                .workspaces
+                .as_ref()
+                .and_then(|s| s.manager_view().cloned()),
             windows_isolated_settings: std::env::var_os("CAPY_SETTINGS_DIRECTORY")
                 .map(std::path::PathBuf::from)
                 .is_some_and(|path| path.is_absolute()),

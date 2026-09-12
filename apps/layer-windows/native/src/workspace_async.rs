@@ -75,6 +75,12 @@ impl<T> AsyncTask<T> {
             }
         }
     }
+    /// Cancel an obsolete read. Accepted writes must be retained until completion.
+    /// A late read wake may poll a newer future, but cannot deliver the old result.
+    pub(crate) fn cancel_read(&mut self) {
+        self.future = None;
+        self.signal.ready.store(false, Ordering::Release);
+    }
     /// Call outside the native window's notification mutex, before destroying
     /// its callback context. Normal close first waits for durable completion.
     pub(crate) fn close(&mut self) {

@@ -12,16 +12,32 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "workspace_manager.rs"]
+mod manager_ui;
+pub(crate) use manager_ui::{ManagerInput, ManagerView};
+
 type Result<T> = std::result::Result<T, StoreError>;
 enum Completion {
     Open(Result<Box<StoredEntity>>),
     Save(Result<()>),
     Close(Result<()>),
+    Manager(Result<Option<Box<StoredEntity>>>),
+    Released,
     Export(std::result::Result<(), String>),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct WorkspaceShortcut {
+    pub id: String,
+    pub key: String,
+    pub name: String,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct WorkspaceStatus {
     pub ready: bool,
+    pub id: Option<String>,
+    pub defaults: Vec<WorkspaceShortcut>,
+    pub can_switch: bool,
+    pub owner: Option<String>,
     pub busy: bool,
     pub dirty: bool,
     pub saving: bool,
@@ -40,6 +56,7 @@ pub(crate) struct WorkspaceService<S: WorkspaceStore + 'static> {
     operation: AsyncTask<Completion>,
     ownership: AsyncTask<Result<()>>,
     incoming: Option<StoredEntity>,
+    ui: manager_ui::ManagerUi,
     status: WorkspaceStatus,
     captured_generation: Option<u64>,
     layout_pending: bool,
@@ -54,14 +71,18 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         wake: impl Fn() + Clone + Send + 'static,
     ) -> Self {
         let now = Instant::now();
+        let manager = Rc::new(WorkspaceManager::new(store, Platform::Windows));
+        let owner = manager.owner.id.clone();
         Self {
-            manager: Rc::new(WorkspaceManager::new(store, Platform::Windows)),
+            manager,
             directory,
             operation: AsyncTask::new(wake.clone()),
-            ownership: AsyncTask::new(wake),
+            ownership: AsyncTask::new(wake.clone()),
+            ui: manager_ui::ManagerUi::new(wake),
             incoming: None,
             status: WorkspaceStatus {
                 busy: true,
+                owner: Some(owner),
                 ..Default::default()
             },
             captured_generation: None,
@@ -72,8 +93,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         }
     }
     pub(crate) fn report_error(&mut self, native: &mut NativeHost, error: StoreError) {
-        self.status.error = Some(error.to_string());
-        native.invalidate_snapshot();
+        self.ui_error(native, error);
     }
     pub(crate) fn status(&self) -> &WorkspaceStatus {
         &self.status
@@ -149,6 +169,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         // Startup has no outgoing editable workspace. Switches will release
         // their old claim after adoption through a separate manager operation.
         self.manager.activate(incoming);
+        self.sync_binding(native)?;
         native.session.set_workspace_read_only(false);
         native.take_service_changes();
         self.captured_generation = native.session.workspace_layout_generation();
@@ -167,6 +188,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     pub(crate) fn poll(&mut self, native: &mut NativeHost, now: Instant, wall_ms: u64) {
         let previous = self.status.clone();
         if self.status.ready
+            && !self.ui.active()
             && !self.status.busy
             && !self.status.close_requested
             && let Err(error) = self.observe(native, now, wall_ms, false)
@@ -175,6 +197,8 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
         }
         if let Some(completion) = self.operation.poll() {
             match completion {
+                Completion::Manager(result) => self.manager_completed(native, result, now),
+                Completion::Released => {}
                 Completion::Open(Ok(incoming)) => self.incoming = Some(*incoming),
                 Completion::Open(Err(error)) => {
                     self.status.busy = false;
@@ -275,7 +299,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 });
                 self.last_renew = now;
             }
-            if !self.operation.busy() && !self.ownership.busy() {
+            if !self.ui.active() && !self.operation.busy() && !self.ownership.busy() {
                 if self.status.close_requested && self.status.error.is_none() {
                     // Stop accepting editor mutations before taking this final
                     // snapshot. A prior immutable save may have newer edits.
@@ -305,22 +329,29 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
                 }
             }
         }
+        self.poll_manager(native, now, wall_ms);
         if self.status.close_requested && !self.status.close_ready {
             self.status.busy =
                 self.operation.busy() || self.ownership.busy() || self.incoming.is_some();
         }
+        self.status.can_switch =
+            self.accepts_input(wall_ms) && native.session.require_workspace_idle().is_ok();
         if self.status != previous {
             native.invalidate_snapshot();
         }
     }
     pub(crate) fn accepts_input(&self, wall_ms: u64) -> bool {
         self.status.ready
+            && !self.ui.active()
             && !self.status.busy
             && !self.status.owner_lost
             && !self.status.close_requested
             && self.manager.lease_valid(wall_ms)
     }
     pub(crate) fn request_close(&mut self, native: &mut NativeHost) {
+        if self.ui.active() && !self.ui.has_accepted_write() {
+            self.close_manager(native);
+        }
         self.status.close_attempt = self.status.close_attempt.saturating_add(1);
         self.status.close_requested = true;
         self.status.close_ready = false;
@@ -385,12 +416,14 @@ impl<S: WorkspaceStore + 'static> WorkspaceService<S> {
     pub(crate) fn stop(&mut self) {
         self.operation.close();
         self.ownership.close();
+        self.ui.stop();
     }
 }
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkspaceAction {
+    Manager { dialog: u64, command: ManagerInput },
     Retry,
     KeepOpen,
     DiscardClose,

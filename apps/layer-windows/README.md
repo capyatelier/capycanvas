@@ -663,3 +663,42 @@ file and zero-exit shutdown. Captures, database files and logs remain ignored/lo
 Shared and bridge tests cover pending saves, ownership takeover, failed-operation
 identity, backup contents and worker teardown. This does not establish full manager,
 physical-device or presentation/input-latency acceptance.
+
+## Native task workspace management
+
+The WinUI workspace manager follows the current
+[host handoff](../../docs/ui/workspace-manager-host-handoff.md) and
+[task workspace definitions](../../docs/ui/default-workspaces.md). The titlebar
+pill switches the stable Painter, Illustrator and Photographer identities through
+the shared ownership/save path. Names and edits follow each workspace; included
+workspaces can be renamed but not deleted. Custom workspaces leave all three
+segments unselected. The shared upgrade preserves customized Photographer layouts.
+
+Manage Workspaces and Layout History preview arrangements in the editor behind
+the dialog. Selection, double-click and Enter do not commit the preview. Explicit
+confirmation applies it; Cancel, Escape and dismissal restore the original.
+New Workspace asks only for a name and copies the current arrangement and tool
+settings. Restore Starting Layout preserves current tool settings. Reset All
+Brushes confirms once and saves the shared brush reset without layout history.
+There is no Save Layout or Load Layout UI.
+
+Read-only loads are cancellable and dialog generations reject stale replies.
+Accepted writes finish through the ordered canvas service. Normal close restores
+temporary previews and drains accepted operations. Ownership renewal continues
+while a dialog is open; the outgoing claim is released after live adoption.
+Selecting a workspace owned by another process activates that window through a
+transient HWND property without taking its claim.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-manager.ps1 -Executable <native-exe>
+./apps/layer-windows/scripts/exercise-manager-focus.ps1 -Executable <native-exe>
+~~~
+
+The first fixture checks native lists, previews, name-only creation, history,
+baseline restoration, included/custom workspace policies, brush reset, header
+switching and restart. The second checks independent app instances and owner
+window activation. Both enforce the existing five-second close gate; the known
+intermittent final shader-worker join can still fail that gate. Profiles and
+captures stay local. Same-process New Window, full visual/gesture parity,
+runtime filter packages, lifecycle/device/DPI validation, distribution and final
+physical-input/presentation acceptance remain open.

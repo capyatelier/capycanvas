@@ -48,7 +48,11 @@ function WindowCommand([string]$Id){
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::MenuItem)).Count -eq 0} 'Previous native menu remained visible'
     Start-Sleep -Milliseconds 250
-    Invoke 'application-menu-window';Invoke $Id
+    Invoke 'application-menu-window'
+    if($Id -in @('new_toolbar','manage_toolbars')){
+        (Control 'Quick Access Toolbars' -Name).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    }
+    Invoke $Id
 }
 function Toolbar([string]$Id){(Model).panels|Where-Object id -eq $Id}
 function ToolbarContext([string]$Id){

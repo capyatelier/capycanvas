@@ -123,6 +123,7 @@ fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
         assert!(prompt.choices.is_empty() && prompt.choice_label.is_none());
         assert_eq!(prompt.name.as_deref(), Some("New Workspace"));
         m.close().await.unwrap();
+        drop(m);
         std::fs::remove_dir_all(directory).unwrap();
     });
 }
@@ -362,6 +363,7 @@ fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
         );
         manager.activate(incoming);
         manager.close().await.unwrap();
+        drop(manager);
         std::fs::remove_dir_all(directory).unwrap();
     });
 }

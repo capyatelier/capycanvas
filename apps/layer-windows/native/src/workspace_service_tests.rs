@@ -1,4 +1,6 @@
 use super::*;
+#[path = "workspace_manager_tests.rs"]
+mod manager_tests;
 use layer_ui::{DockLayout, UiAction};
 use layer_workspace::{OWNER_LEASE_MS, StoreResponse, StoreWorker, new_id};
 use std::{
@@ -13,6 +15,9 @@ use std::{
 struct Faults {
     fail: Cell<bool>,
     hold: Cell<bool>,
+    hold_reads: Cell<bool>,
+    read_waiting: Cell<bool>,
+    read_waker: RefCell<Option<Waker>>,
     waiting: Cell<bool>,
     waker: RefCell<Option<Waker>>,
 }
@@ -23,6 +28,7 @@ struct TestStore {
 impl WorkspaceStore for TestStore {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
         let commit = matches!(request, StoreRequest::Commit { .. });
+        let read = matches!(request, StoreRequest::Load { .. });
         if commit && self.faults.fail.get() {
             return Err(StoreError::new(
                 layer_workspace::ErrorKind::FailedWrite,
@@ -30,6 +36,19 @@ impl WorkspaceStore for TestStore {
             ));
         }
         let response = self.worker.request(request).await?;
+        if read && self.faults.hold_reads.get() {
+            self.faults.read_waiting.set(true);
+            poll_fn(|cx| {
+                if self.faults.hold_reads.get() {
+                    *self.faults.read_waker.borrow_mut() = Some(cx.waker().clone());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(())
+                }
+            })
+            .await;
+            self.faults.read_waiting.set(false);
+        }
         if commit && self.faults.hold.get() {
             self.faults.waiting.set(true);
             poll_fn(|cx| {

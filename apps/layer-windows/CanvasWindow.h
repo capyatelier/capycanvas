@@ -6,6 +6,7 @@
 #include "DocumentView.h"
 #include "WorkspaceDialogs.h"
 #include "WorkspaceStorageView.h"
+#include "WorkspaceManagerView.h"
 #include "CanvasWorkBuffer.h"
 #include "CanvasSnapshotMailbox.h"
 #include "FilterPreviews.h"
@@ -51,7 +52,10 @@ private:
     std::unique_ptr<DocumentView> documents;
     std::unique_ptr<WorkspaceDialogs> workspaceDialogs;
     std::unique_ptr<WorkspaceStorageView> workspaceStorage;
+    std::unique_ptr<WorkspaceManagerView> workspaceManager;
     winrt::Windows::Data::Json::JsonObject lastModel;
+    std::wstring workspaceOwnerProperty;
+    HWND workspaceOwnerWindow=nullptr;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
     std::atomic<bool> menuOpen{false},dialogOpen{false};
     struct Hover {float x,y;bool leave,touch;};

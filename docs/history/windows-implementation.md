@@ -1358,3 +1358,58 @@ or final painting/presentation latency. The strict GPU filter-reference mismatch
 and occasional shader-worker shutdown delay remain open. Final 120 Hz painting
 and physical input-to-present benchmarks remain deferred. Private profiles,
 databases, captures, traces, logs and binaries remain ignored/local.
+
+## Native task workspace manager milestone — 2026-09-12
+
+Integrated main through e21850a, including the approved workspaces-only product,
+three stable task workspaces, renamed default identities and the preserved-layout
+Photographer upgrade. Windows now projects the shared manager into retained WinUI
+lists, name-only prompts and layout history. The header pill follows current names
+and actual adoption, uses the shared reference's muted selection tint, and bounds
+long labels before they overlap menus or caption controls. Legacy saved-layout
+commands have no native dialog route.
+
+Selection, Enter and double-click preview the live editor without changing its
+durable capture or tool values. Explicit confirmation adopts the selection.
+Cancel, Escape, stale reads, filtering away a selection and normal window close
+restore the original arrangement. New Workspace copies current working values and
+starts independent history. Restore Starting Layout and history restoration keep
+current tool values. Reset All Brushes confirms once, resets the shared brush
+overrides and flushes through normal retry semantics without a layout event.
+Included workspaces permit rename and reject deletion. Existing quick-access
+toolbar controls remain in their approved sibling submenu.
+
+The canvas owner polls cancellable reads independently from accepted writes.
+Epochs fence delayed dialog/row actions. Ownership renewal stays active through
+previews; outgoing ownership is released after live adoption. Selecting another
+process's owned workspace activates its HWND without claiming or switching the
+source workspace. Same-process New Window is still pending.
+
+Close review found and fixed two manager races: a confirmed create queued behind
+autosave could be cancelled by close, and a completed rename could reopen its list
+while close waited for that dialog. Accepted queued/submitted operations now drain,
+and a failed manager write during close can keep the window open. Bridge tests
+exercise both races with held SQLite acknowledgements. Two upstream catalog tests
+now drop their SQLite owners before removing their temporary directories on Windows.
+
+The combined tree passes 411 unit tests (273 UI, 24 host, 73 Windows, 41 workspace;
+three explicit GPU tests ignored), strict Windows-crate Clippy, native queue tests
+and Rust/C++ builds. Native manager tests cover the included identities, retained
+rows, preview cancellation, explicit switch/history restore, baseline restoration,
+name-only creation, rename/delete, brush reset, header switching and restart after
+closing during a preview. A two-process fixture verifies independent ownership
+and native window activation. The toolbar, editor, persistence/recovery and
+OS-injected tab-drag regressions pass their scoped checks, including retained
+controls, titlebar hit regions, overview movement and successful five-second exit
+samples. Native manager, task-workspace and reset-dialog captures were inspected;
+full matched-viewport Chrome parity remains unaccepted.
+
+The earlier intermittent final shader-worker join is not fixed: manager and
+persistence runs during this milestone included joins around 5.5–6.1 seconds,
+exceeding the unchanged five-second close gate. Later passing runs establish only
+their own samples. Full visual/gesture/scroll/overlap parity, same-process window
+creation, runtime filter packages, physical input, mixed-DPI/device/suspend
+lifecycle, distribution packaging and strict GPU filter-reference agreement
+remain open. Final 120 Hz painting and physical input-to-present benchmarks remain
+deferred until the rest of the app is ready. Profiles, databases, captures, logs,
+traces and binaries remain ignored/local.

@@ -39,7 +39,9 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
     std::function<void()> changed,fullscreen;
     Grid root;
     StackPanel start,end;
-    Border document;
+    Border document,switcher;
+    StackPanel switches;
+    std::vector<std::pair<Primitives::ToggleButton,hstring>> workspaces;
     TextBlock title;
     Button zen,settings,screen;
     bool fullscreenActive=false;
@@ -104,7 +106,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         root.Unloaded([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->requestTimer.Stop();});
     }
     void build(){
-        root.Children().Clear();commands.clear();start=StackPanel();end=StackPanel();
+        root.Children().Clear();commands.clear();workspaces.clear();start=StackPanel();end=StackPanel();
         start.Orientation(Orientation::Horizontal);start.Spacing(6);start.HorizontalAlignment(HorizontalAlignment::Left);
         end.Orientation(Orientation::Horizontal);end.Spacing(6);end.HorizontalAlignment(HorizontalAlignment::Right);
         start.VerticalAlignment(VerticalAlignment::Top);end.VerticalAlignment(VerticalAlignment::Top);
@@ -131,7 +133,14 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         screen.Content(icon(fullscreenActive?L"fullscreen-exit":L"fullscreen-enter",data->theme()));
         auto screenLabel=fullscreenActive?L"Exit full screen":L"Full screen";
         AutomationProperties::SetName(screen,screenLabel);ToolTipService::SetToolTip(screen,box_value(screenLabel));
-        end.Children().Append(screen);end.Children().Append(settings);
+        switcher=Border();switches=StackPanel();switches.Orientation(Orientation::Horizontal);switches.Spacing(2);
+        switcher.Child(switches);switcher.Height(36);switcher.Padding({3,3,3,3});switcher.CornerRadius({18,18,18,18});
+        auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
+        auto ink=color(str(object(data->state,L"palette"),L"text",L"#fafafb"));
+        switcher.Background(fill(blend(bg,ink,.06f)));switcher.BorderBrush(fill(blend(bg,ink,.10f)));switcher.BorderThickness({1});
+        AutomationProperties::SetAutomationId(switcher,L"workspace-switcher");
+        AutomationProperties::SetName(switcher,L"Task workspaces");
+        end.Children().Append(switcher);end.Children().Append(screen);end.Children().Append(settings);
         title=label(data,L"");title.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
         title.VerticalAlignment(VerticalAlignment::Center);title.IsTextSelectionEnabled(true);
         title.TextAlignment(TextAlignment::Center);title.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -147,6 +156,42 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         item.Width(36);item.Padding({0});
         item.Tag(box_value(size));commands.emplace_back(item,id);return item;
     }
+    void applyWorkspaces() {
+        auto storage=object(data->model,L"windows_workspace");
+        auto values=array(storage,L"defaults");auto active=str(storage,L"id");
+        auto bg=color(str(object(data->state,L"palette"),L"bg",L"#333333"));
+        auto chosen=fill(blend(bg,{255,53,132,228},.28f)),hover=fill(blend(bg,{255,53,132,228},.36f));
+        for(auto value:values){
+            auto choice=value.GetObject();auto id=str(choice,L"id");
+            auto found=std::find_if(workspaces.begin(),workspaces.end(),[&](auto const& p){return p.second==id;});
+            if(found==workspaces.end()){
+                Primitives::ToggleButton item;item.MinWidth(0);item.Height(28);item.Padding({10,0,10,0});
+                item.BorderThickness({0});item.CornerRadius({15,15,15,15});item.FontSize(12);
+                item.Foreground(data->brush(L"text"));item.Background(fill({0,0,0,0}));
+                item.Resources().Insert(box_value(L"ToggleButtonBackgroundChecked"),chosen);
+                item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPointerOver"),hover);
+                item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPressed"),hover);
+                item.Resources().Insert(box_value(L"ToggleButtonForegroundChecked"),data->brush(L"text"));
+                AutomationProperties::SetAutomationId(item,L"workspace-switch-"+str(choice,L"key"));
+                TextBlock label;label.TextTrimming(TextTrimming::CharacterEllipsis);label.MaxWidth(110);item.Content(label);
+                item.Click([weak=weak_from_this(),id](auto&&,auto&&){
+                    if(auto self=weak.lock()){
+                        // Toggle state always reflects adoption, including focus-only and failed switches.
+                        self->applyWorkspaces();
+                        self->data->dispatch(O({{L"type",S(L"workspace_manager")},
+                            {L"command",O({{L"type",S(L"switch")},{L"id",S(id)}})}}));
+                    }
+                });
+                switches.Children().Append(item);workspaces.emplace_back(item,id);found=std::prev(workspaces.end());
+            }
+            auto const& item=found->first;auto name=str(choice,L"name");
+            item.Content().as<TextBlock>().Text(name);item.IsChecked(id==active);item.IsEnabled(flag(storage,L"can_switch"));
+            item.Background(id==active?chosen:clear());
+            item.Foreground(data->brush(L"text"));
+            AutomationProperties::SetName(item,name);ToolTipService::SetToolTip(item,box_value(L"Switch to "+name+L" workspace"));
+        }
+        switcher.Visibility(values.Size()?Visibility::Visible:Visibility::Collapsed);
+    }
     void reflow() {
         if(!built)return;
         start.Margin({6+leftInset,6,0,0});end.Margin({0,6,6+rightInset,0});zen.Margin({6+leftInset,6,0,0});
@@ -155,8 +200,18 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
         zen.Visibility(!hidden||keepZen?Visibility::Visible:Visibility::Collapsed);
         // The document occupies the space between the menu and end controls,
         // like the shared desktop header. Caption controls reserve their inset.
-        double width=root.ActualWidth(),left=leftInset+start.ActualWidth()+12,
-            right=rightInset+end.ActualWidth()+12;
+        double width=root.ActualWidth();
+        // Reserve menu and caption hit regions before sizing the optional pill.
+        // Long workspace names ellipsize without covering adjacent controls.
+        double room=width-leftInset-rightInset-start.ActualWidth()-108.;
+        bool showSwitches=!workspaces.empty()&&room>=130.;
+        switcher.Visibility(showSwitches?Visibility::Visible:Visibility::Collapsed);
+        double labelWidth=std::clamp((room-72.)/3.,16.,110.);
+        for(auto const& [item,id]:workspaces){
+            auto label=item.Content().as<TextBlock>();
+            if(std::abs(label.MaxWidth()-labelWidth)>.1)label.MaxWidth(labelWidth);
+        }
+        double left=leftInset+start.ActualWidth()+12,right=rightInset+end.ActualWidth()+12;
         document.Margin({left,6,right,0});
         document.Visibility(!hidden&&width>850&&width-left-right>24?Visibility::Visible:Visibility::Collapsed);
         if(changed)changed();
@@ -186,7 +241,7 @@ struct HeaderView::Impl : std::enable_shared_from_this<Impl> {
             ToolTipService::SetToolTip(item,box_value(str(state,L"tooltip")));
         }
         hidden=flag(snapshot,L"chrome_hidden");keepZen=flag(snapshot,L"keep_zen_button",true);
-        reflow();requests();
+        applyWorkspaces();reflow();requests();
     }
     std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const {
         std::vector<std::pair<float,float>> controls;
