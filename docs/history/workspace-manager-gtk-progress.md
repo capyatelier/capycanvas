@@ -3,7 +3,9 @@
 Target: implement [the proposal](../ui/workspace-manager-proposal.md) on GTK,
 validate it in the native application, and obtain user approval before adapting
 other hosts. Publish notable, tested milestones to main and integrate concurrent
-main changes. This record is a progress log, not a release acceptance claim.
+main changes. GTK implementation and automated/native acceptance checks are now
+complete through milestone 5; user review and approval remain pending. This record
+does not claim approval or acceptance of the other hosts.
 
 ## Milestone 1: shared state and restoration
 
@@ -28,7 +30,7 @@ Validation on 2026-09-11:
   tests passed; doc tests passed.
 - `cargo check --locked -p layer-linux`: passed.
 
-## Remaining implementation and acceptance gates
+## Remaining implementation and acceptance gates at milestone 1
 
 - Shared records/store requests and the native SQLite worker: atomic publication,
   independent layout/working generations, coherent reads, fenced ownership,
@@ -151,7 +153,7 @@ Validation:
 - `cargo check --locked -p layer-linux` passed. Integrated incoming Apple, Windows,
   and Web changes through `56a897e` while retaining the GTK work.
 
-### Remaining GTK acceptance audit
+### Remaining GTK acceptance audit at milestone 4
 
 This milestone is not final GTK approval. Finish and validate interruption recovery
 for non-autosave operations, storage-full cleanup/retry, recovery of unsupported or
@@ -160,3 +162,67 @@ recovery, and resource-publication failure boundaries. Check native file-picker
 backup round trips and concurrent-owner failure presentation. Audit the proposal's
 remaining details and action availability, including newer-template information,
 before supplying the trial command and requesting approval for other hosts.
+
+## Milestone 5: failure recovery and GTK acceptance
+
+Completed ownership revalidation before resumed input, stale-owner input fencing,
+and Save as New Workspace recovery without replacing a successor's state. Failed
+close offers Keep Open, Discard Unsaved Changes, and Export Backup and Close;
+cancellation or export failure keeps the window and restores document close guards.
+
+Failed named operations retain their immutable deliveries for retry, including
+failures before SQLite receives a write. Lost acknowledgements resolve receipts
+before reporting failure. Interrupted publications can be recovered into uniquely
+named independent copies; publication and cancellation of delayed original writes
+commit together. The additive schema-2 migration preserves existing data and
+operation hashes. Storage-full errors clean eligible history and retry the same
+delivery, preserving protected data and pending edits if space remains insufficient.
+
+Export Original Database uses SQLite's backup API on the worker, including WAL
+and unsupported JSON/model records even when normal opening fails. Failed exports
+preserve the source and existing destination. This is a repair backup, separate
+from the portable Workspace Backup importer. A physically unreadable SQLite file
+is preserved and reported; this export does not repair damaged SQLite bytes.
+
+Added newer-source-template information and the action to create from its latest
+version, plus the oldest retained history date in Storage details. Scoped GTK's
+transparent window background and editor palette to editor windows, so native
+dialogs retain opaque themed surfaces. Reviewed fresh manager, Layout History,
+and native file-picker captures. The picker test now waits for GTK's initial
+folder load and verifies its selected path before accepting.
+
+Final validation, after integrating concurrent main through `9a1235e`:
+
+- 260 shared UI and 30 native store/coordinator tests pass, plus doc tests.
+  Recovery cases cover receipt loss, expired ownership, interrupted publication
+  and recovery rollback, schema migration, database backup, unavailable storage,
+  and SQLite disk-full retry using a constrained database page limit.
+- All five native GTK tests pass in separate processes with isolated databases,
+  Wayland, NVIDIA Vulkan, and fatal GTK criticals enabled: manager/templates/
+  toolbar library/history (4.62s), restart and independent windows (6.47s), owner
+  takeover and Save as New (3.07s), unavailable-storage close recovery (2.27s),
+  and backup file-picker export/import with fresh identity (4.37s).
+- `cargo build --locked --release -p layer-linux` passes, and `git diff --check`
+  is clean. Native logs are in `/tmp/capy-gtk-final-kpd_q_sh`; shared test output
+  is `/tmp/workspace-manager-tests.log`.
+
+The proposal audit is complete for GTK and its shared/native storage scope.
+GTK has no legacy on-disk workspace source to migrate. Apple/Android legacy
+imports, Web IndexedDB, and host lifecycle adaptation follow GTK approval.
+Current toolbar resources are built-in commands/tools; introducing a custom brush
+library is separate from packaging the definitions supported by this editor.
+Cross-process ownership is fenced, but focusing or duplicating another process's
+live snapshot requires that source window to close; same-process windows route
+snapshot capture through their owner. Retained-history usage is an estimate.
+Fake-clock and native takeover tests do not establish physical suspend/power-loss
+guarantees or cross-device synchronization.
+
+To review, close an older running GTK instance and run from the repository root:
+
+```sh
+cargo run --locked --release -p layer-linux
+```
+
+Open Window → Workspace → Manage Workspaces. Review switching away and back,
+template creation, reset/undo, toolbar reuse, and Storage and Backups. User approval
+is the remaining GTK gate before adapting other hosts.

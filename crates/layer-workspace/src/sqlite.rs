@@ -29,7 +29,15 @@ impl From<rusqlite::Error> for StoreError {
             Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
                 ErrorKind::Conflict
             }
-            Some(rusqlite::ErrorCode::ConstraintViolation) => ErrorKind::NameCollision,
+            Some(rusqlite::ErrorCode::ConstraintViolation) => {
+                if matches!(&error,rusqlite::Error::SqliteFailure(code,_) if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE)
+                {
+                    ErrorKind::NameCollision
+                } else {
+                    ErrorKind::FailedWrite
+                }
+            }
+            Some(rusqlite::ErrorCode::DiskFull) => ErrorKind::StorageFull,
             _ => ErrorKind::FailedWrite,
         };
         Self::new(kind, format!("Workspace storage: {error}"))
@@ -110,6 +118,10 @@ impl SqliteStore {
                 CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);")?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
+        if version < 2 {
+            tx.execute_batch("CREATE TABLE cancelled_operations(id TEXT PRIMARY KEY)")?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
         tx.commit()?;
         Ok(Self { connection, clock })
     }
@@ -136,7 +148,21 @@ impl SqliteStore {
                 self.release(&id, &owner, parse_counter(&fence)?)?;
                 Ok(StoreResponse::Done)
             }
-            StoreRequest::Commit { batch } => self.commit(batch).map(StoreResponse::Committed),
+            StoreRequest::Commit { batch } => {
+                let result = self.commit(batch.clone());
+                if result
+                    .as_ref()
+                    .is_err_and(|e| e.kind == ErrorKind::StorageFull)
+                {
+                    // The immutable delivery retains its ID and bytes. Defer
+                    // every live owner, including the target of this write, so
+                    // cleanup cannot invalidate its expected generations.
+                    let _ = self.maintenance(None, true, true);
+                    self.commit(batch).map(StoreResponse::Committed)
+                } else {
+                    result.map(StoreResponse::Committed)
+                }
+            }
             StoreRequest::Acknowledge { operation_id } => {
                 let tx = self
                     .connection
@@ -323,6 +349,17 @@ impl SqliteStore {
     pub fn commit(&mut self, batch: CommitBatch) -> Result<CommitReceipt> {
         let encoded = batch.encoded()?;
         let hash = content_id(encoded.as_bytes());
+        let cancelled: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cancelled_operations WHERE id=?1)",
+            [&batch.operation_id],
+            |r| r.get(0),
+        )?;
+        if cancelled {
+            return Err(StoreError::new(
+                ErrorKind::Conflict,
+                "These interrupted changes were already recovered into an independent item.",
+            ));
+        }
         if let Some((original_hash, original)) = receipt(&self.connection, &batch.operation_id)? {
             return if original_hash == hash {
                 Ok(original)
@@ -375,6 +412,19 @@ impl SqliteStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Another process may have delivered the operation while this writer waited.
+        let cancelled: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cancelled_operations WHERE id=?1)",
+            [&batch.operation_id],
+            |r| r.get(0),
+        )?;
+        if cancelled {
+            tx.execute("DELETE FROM pending WHERE id=?1", [&batch.operation_id])?;
+            tx.commit()?;
+            return Err(StoreError::new(
+                ErrorKind::Conflict,
+                "These interrupted changes were already recovered into an independent item.",
+            ));
+        }
         if let Some((original_hash, original)) = receipt(&tx, &batch.operation_id)? {
             return if original_hash == hash {
                 Ok(original)
@@ -392,6 +442,34 @@ impl SqliteStore {
             operation_id: batch.operation_id.clone(),
             items: Vec::new(),
         };
+        for id in &batch.abandon_operations {
+            if id == &batch.operation_id || id.len() > 128 {
+                return Err(StoreError::invalid("Invalid recovery delivery."));
+            }
+            if receipt(&tx, id)?.is_some() {
+                return Err(StoreError::new(
+                    ErrorKind::Conflict,
+                    "The interrupted changes already finished saving. Refresh the manager to view them.",
+                ));
+            }
+            let original: Option<String> = tx
+                .query_row("SELECT payload FROM pending WHERE id=?1", [id], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            if let Some(original) = original {
+                let original: CommitBatch = serde_json::from_str(&original)?;
+                let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM items WHERE owner=?1 AND epoch=?2 AND CAST(lease_until AS INTEGER)>?3)",params![original.owner.id,original.owner.epoch,now as i64],|r|r.get(0))?;
+                if original.owner != batch.owner && live {
+                    return Err(StoreError::new(
+                        ErrorKind::OwnedElsewhere,
+                        "The source window is still saving these changes.",
+                    ));
+                }
+            }
+            tx.execute("INSERT INTO cancelled_operations(id) VALUES(?1)", [id])?;
+            tx.execute("DELETE FROM pending WHERE id=?1", [id])?;
+        }
         for write in &batch.writes {
             let generations = apply_write(&tx, write, &batch.owner, now)?;
             result.items.push((write.id.clone(), generations));

@@ -53,6 +53,22 @@ pub(crate) fn retention_plan(
             }
             continue;
         }
+        let oldest = match &entity.content {
+            ItemContent::Workspace { history, .. } => {
+                history.revisions.values().map(|r| r.timestamp_ms).min()
+            }
+            ItemContent::Reusable { current, previous } => std::iter::once(current)
+                .chain(previous)
+                .map(|r| r.timestamp_ms)
+                .min(),
+        };
+        if let Some(oldest) = oldest {
+            report.oldest_history_ms = Some(
+                report
+                    .oldest_history_ms
+                    .map_or(oldest, |old| old.min(oldest)),
+            );
+        }
         let mut add = |version: Version, date: u64, bytes: usize| {
             report.oldest_history_ms =
                 Some(report.oldest_history_ms.map_or(date, |old| old.min(date)));

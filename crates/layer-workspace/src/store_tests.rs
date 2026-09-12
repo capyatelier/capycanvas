@@ -70,6 +70,250 @@ fn workspace(name: &str) -> Entity {
 }
 
 #[test]
+fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
+    let mut f = Fixture::new();
+    let entity = f.create("Future Workspace");
+    let opaque = "{\"type\":\"future_workspace\",\"private_extension\":123}";
+    f.store
+        .connection
+        .execute(
+            "UPDATE items SET content=?1 WHERE id=?2",
+            params![opaque, entity.entity.id],
+        )
+        .unwrap();
+    f.store
+        .connection
+        .pragma_update(None, "user_version", 99)
+        .unwrap();
+    let worker = StoreWorker::shared(&f.directory).unwrap();
+    assert_eq!(
+        worker.request(StoreRequest::List).wait().unwrap_err().kind,
+        ErrorKind::UnsupportedSchema
+    );
+    let destination = f.directory.join("original-backup.sqlite3");
+    worker.backup_database(&destination).wait().unwrap();
+    let backup = Connection::open(&destination).unwrap();
+    assert_eq!(
+        backup
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        99
+    );
+    assert_eq!(
+        backup
+            .query_row(
+                "SELECT content FROM items WHERE id=?1",
+                [&entity.entity.id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        opaque
+    );
+    assert!(
+        worker
+            .backup_database(&f.directory.join("workspaces.sqlite3"))
+            .wait()
+            .is_err()
+    );
+    assert_eq!(
+        f.store
+            .connection
+            .query_row(
+                "SELECT content FROM items WHERE id=?1",
+                [&entity.entity.id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        opaque
+    );
+}
+
+#[test]
+fn failed_database_export_keeps_the_existing_destination() {
+    let directory = std::env::temp_dir().join(format!("capy-workspace-invalid-{}", new_id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("workspaces.sqlite3"),
+        b"not a sqlite database",
+    )
+    .unwrap();
+    let destination = directory.join("previous-backup.sqlite3");
+    std::fs::write(&destination, b"previous successful backup").unwrap();
+    let worker = StoreWorker::shared(&directory).unwrap();
+    assert!(worker.backup_database(&destination).wait().is_err());
+    assert_eq!(
+        std::fs::read(destination).unwrap(),
+        b"previous successful backup"
+    );
+    assert_eq!(
+        std::fs::read(directory.join("workspaces.sqlite3")).unwrap(),
+        b"not a sqlite database"
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn acknowledged_receipts_are_bounded_while_pending_delivery_remains_resolvable() {
+    let mut f = Fixture::new();
+    let initial = f.create("Receipt Test");
+    let pending: String = f
+        .store
+        .connection
+        .query_row("SELECT id FROM pending LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    for index in 0..270 {
+        let receipt = CommitReceipt {
+            operation_id: format!("ack-{index}"),
+            items: vec![(initial.entity.id.clone(), initial.generations)],
+        };
+        f.store
+            .connection
+            .execute(
+                "INSERT INTO receipts(id,hash,receipt,owner,epoch) VALUES(?1,'test',?2,?3,?4)",
+                params![
+                    receipt.operation_id,
+                    serde_json::to_string(&receipt).unwrap(),
+                    f.owner.id,
+                    f.owner.epoch
+                ],
+            )
+            .unwrap();
+        f.store
+            .handle(StoreRequest::Acknowledge {
+                operation_id: receipt.operation_id,
+            })
+            .unwrap();
+    }
+    let acknowledged: i64 = f
+        .store
+        .connection
+        .query_row(
+            "SELECT count(*) FROM receipts WHERE acknowledged=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(acknowledged, 256);
+    assert!(matches!(
+        f.store
+            .handle(StoreRequest::Receipt {
+                operation_id: pending
+            })
+            .unwrap(),
+        StoreResponse::Receipt(Some(_))
+    ));
+}
+
+#[test]
+fn sqlite_full_preserves_protected_records_and_retries_the_same_delivery() {
+    let mut f = Fixture::new();
+    let saved = f.create("Protected Workspace");
+    let mut metadata = saved.entity.metadata.clone();
+    for index in 0..32 {
+        metadata.previous.push(MetadataVersion {
+            id: new_id(),
+            name: format!("Earlier Name {index}"),
+            description: "x".repeat(16_384),
+            timestamp_ms: 1_000_000,
+        });
+    }
+    let batch = CommitBatch::prepare(
+        f.owner.clone(),
+        vec![change(&saved, Some(metadata.clone()), None, None)],
+    )
+    .unwrap();
+    let pages: i64 = f
+        .store
+        .connection
+        .pragma_query_value(None, "page_count", |r| r.get(0))
+        .unwrap();
+    f.store
+        .connection
+        .pragma_update(None, "max_page_count", pages + 2)
+        .unwrap();
+    let error = f
+        .store
+        .handle(StoreRequest::Commit {
+            batch: batch.clone(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::StorageFull);
+    let after = f.store.load(&saved.entity.id).unwrap();
+    assert_eq!(after.entity, saved.entity);
+    assert_eq!(after.generations, saved.generations);
+    assert!(matches!(
+        f.store
+            .handle(StoreRequest::Receipt {
+                operation_id: batch.operation_id.clone()
+            })
+            .unwrap(),
+        StoreResponse::Receipt(None)
+    ));
+    f.store
+        .connection
+        .pragma_update(None, "max_page_count", pages + 4096)
+        .unwrap();
+    let StoreResponse::Committed(receipt) = f
+        .store
+        .handle(StoreRequest::Commit {
+            batch: batch.clone(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(receipt.operation_id, batch.operation_id);
+    let saved_again = f.store.load(&saved.entity.id).unwrap();
+    assert_eq!(saved_again.entity.metadata, metadata);
+    assert_eq!(saved_again.entity.content, saved.entity.content);
+    assert_eq!(saved_again.entity.working, saved.entity.working);
+    assert!(
+        matches!(f.store.handle(StoreRequest::Commit {batch}).unwrap(),StoreResponse::Committed(repeated) if repeated==receipt)
+    );
+}
+
+#[test]
+fn schema_one_upgrade_keeps_entities_and_existing_delivery_hashes() {
+    let mut f = Fixture::new();
+    let entity = f.create("Legacy Database");
+    let hashes: Vec<(String, String)> = f
+        .store
+        .connection
+        .prepare("SELECT id,hash FROM receipts")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    f.store
+        .connection
+        .execute_batch("DROP TABLE cancelled_operations; PRAGMA user_version=1;")
+        .unwrap();
+    let mut upgraded = f.connection();
+    assert_eq!(
+        upgraded.load(&entity.entity.id).unwrap().entity,
+        entity.entity
+    );
+    assert_eq!(
+        upgraded
+            .connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    for (id, hash) in hashes {
+        assert_eq!(
+            upgraded
+                .connection
+                .query_row("SELECT hash FROM receipts WHERE id=?1", [id], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            hash
+        );
+    }
+}
+
+#[test]
 fn maintenance_preserves_navigation_baselines_shared_content_and_fences() {
     let mut f = Fixture::new();
     let current = f.create("Retained");

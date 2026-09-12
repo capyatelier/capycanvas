@@ -13,6 +13,8 @@ struct State {
     saved: Option<StoredEntity>,
     latest: Option<Entity>,
     pending: Option<PendingSave>,
+    failed_operation: Option<CommitBatch>,
+    older_failed_operations: Vec<CommitBatch>,
     items: Vec<ItemSummary>,
     error: Option<StoreError>,
     error_operation: Option<String>,
@@ -152,7 +154,56 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     async fn publish(&self, batch: CommitBatch) -> Result<CommitReceipt> {
         let id = batch.operation_id.clone();
-        let response = self.store.execute(StoreRequest::Commit { batch }).await?;
+        let response = match self
+            .store
+            .execute(StoreRequest::Commit {
+                batch: batch.clone(),
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                if let Ok(StoreResponse::Receipt(Some(receipt))) = self
+                    .store
+                    .execute(StoreRequest::Receipt {
+                        operation_id: id.clone(),
+                    })
+                    .await
+                {
+                    StoreResponse::Committed(receipt)
+                } else {
+                    let mut state = self.state.borrow_mut();
+                    if matches!(
+                        error.kind,
+                        ErrorKind::Unavailable
+                            | ErrorKind::FailedWrite
+                            | ErrorKind::StorageFull
+                            | ErrorKind::Conflict
+                    ) && batch
+                        .writes
+                        .iter()
+                        .any(|write| write.id != DEFAULT_TEMPLATE_ID)
+                        && state
+                            .pending
+                            .as_ref()
+                            .is_none_or(|p| p.batch.operation_id != id)
+                    {
+                        if let Some(previous) = state.failed_operation.take()
+                            && previous.operation_id != id
+                        {
+                            state.older_failed_operations.retain(|b| {
+                                b.operation_id != previous.operation_id && b.operation_id != id
+                            });
+                            state.older_failed_operations.push(previous);
+                        }
+                        state.failed_operation = Some(batch);
+                        state.error = Some(error.clone());
+                        state.error_operation = Some(id);
+                    }
+                    return Err(error);
+                }
+            }
+        };
         let StoreResponse::Committed(receipt) = response else {
             return Err(StoreError::invalid("Unexpected workspace commit reply."));
         };
@@ -162,7 +213,51 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .store
             .execute(StoreRequest::Acknowledge { operation_id: id })
             .await;
+        let mut state = self.state.borrow_mut();
+        if state
+            .failed_operation
+            .as_ref()
+            .is_some_and(|b| b.operation_id == receipt.operation_id)
+        {
+            state.failed_operation = None;
+        }
+        state
+            .older_failed_operations
+            .retain(|b| b.operation_id != receipt.operation_id);
+        if state.error_operation.as_deref() == Some(&receipt.operation_id) {
+            state.error = None;
+            state.error_operation = None;
+        }
         Ok(receipt)
+    }
+    pub fn has_failed_operation(&self) -> bool {
+        let state = self.state.borrow();
+        state.failed_operation.is_some() || !state.older_failed_operations.is_empty()
+    }
+    pub async fn retry_failed_operation(&self) -> Result<Option<StoredEntity>> {
+        let batch = {
+            let state = self.state.borrow();
+            state
+                .failed_operation
+                .clone()
+                .or_else(|| state.older_failed_operations.last().cloned())
+        };
+        let Some(batch) = batch else {
+            return Ok(None);
+        };
+        self.flush().await?;
+        let incoming = batch
+            .bindings
+            .iter()
+            .find(|(key, _)| key == &format!("window:{}", self.owner.id))
+            .and_then(|(_, id)| id.clone())
+            .or_else(|| self.active_id());
+        self.publish(batch).await?;
+        self.refresh().await?;
+        match incoming {
+            Some(id) => self.claim(&id).await.map(Some),
+            None => Ok(None),
+        }
     }
     pub async fn refresh(&self) -> Result<()> {
         let StoreResponse::List(items) = self.store.execute(StoreRequest::List).await? else {
@@ -207,6 +302,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
     pub async fn initialize(&self, now: u64) -> Result<StoredEntity> {
+        if self.has_failed_operation()
+            && let Some(incoming) = self.retry_failed_operation().await?
+        {
+            return Ok(incoming);
+        }
         self.store
             .execute(StoreRequest::Maintenance {
                 owner: None,
@@ -471,10 +571,91 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                 }
                 Ok(_) => return Err(StoreError::invalid("Unexpected ownership reply.")),
                 Err(error) => {
-                    self.set_error(error.clone());
+                    if self.active_id().as_deref() == Some(&id) {
+                        self.set_error(error.clone());
+                    }
                     return Err(error);
                 }
             }
+        }
+        Ok(())
+    }
+    pub fn lease_valid(&self, now: u64) -> bool {
+        self.state
+            .borrow()
+            .saved
+            .as_ref()
+            .and_then(|s| s.claim.as_ref())
+            .is_some_and(|c| c.owner == self.owner && c.expires_at_ms > now)
+    }
+    /// Resume an expired owner only after a coherent claim proves no intervening
+    /// writes. Dirty memory is preserved; an unresolved old-fence delivery needs
+    /// explicit recovery as a new workspace, never silent payload mutation.
+    pub async fn revalidate_owner(&self, now: u64) -> Result<()> {
+        if self.lease_valid(now) {
+            let before = self.error();
+            self.renew().await?;
+            let mut state = self.state.borrow_mut();
+            if state.error_operation.is_none()
+                && state.error == before
+                && state.error.as_ref().is_some_and(|e| {
+                    matches!(
+                        e.kind,
+                        ErrorKind::Unavailable | ErrorKind::Conflict | ErrorKind::OwnedElsewhere
+                    )
+                })
+            {
+                state.error = None;
+            }
+            return Ok(());
+        }
+        let pending = self.state.borrow().pending.clone();
+        if let Some(pending) = pending {
+            match self
+                .store
+                .execute(StoreRequest::Receipt {
+                    operation_id: pending.batch.operation_id.clone(),
+                })
+                .await?
+            {
+                StoreResponse::Receipt(Some(_)) => self.save_once().await?,
+                _ => {
+                    return Err(StoreError::new(
+                        ErrorKind::Conflict,
+                        "Ownership expired while a save was awaiting confirmation. Your changes remain in memory. Use Save as New Workspace or export a backup.",
+                    ));
+                }
+            }
+        }
+        let saved = self
+            .state
+            .borrow()
+            .saved
+            .clone()
+            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+        let incoming = self.claim(&saved.entity.id).await?;
+        if incoming.entity.metadata.deleted_at_ms.is_some()
+            || incoming.generations != saved.generations
+        {
+            self.release(&incoming).await;
+            return Err(StoreError::new(
+                ErrorKind::Conflict,
+                "This workspace changed while the window was suspended. Your changes remain in memory. Use Save as New Workspace or export a backup.",
+            ));
+        }
+        if self.active_id().as_deref() != Some(&saved.entity.id) {
+            self.release(&incoming).await;
+            return Ok(());
+        }
+        let mut state = self.state.borrow_mut();
+        state.saved.as_mut().unwrap().claim = incoming.claim;
+        if state
+            .error
+            .as_ref()
+            .is_some_and(|e| matches!(e.kind, ErrorKind::Conflict | ErrorKind::OwnedElsewhere))
+        {
+            state.error = None;
+            state.error_operation = None;
         }
         Ok(())
     }
@@ -638,3 +819,6 @@ mod tests;
 
 #[path = "manager_operations.rs"]
 mod operations;
+
+#[path = "manager_recovery.rs"]
+mod recovery;

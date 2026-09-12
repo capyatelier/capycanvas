@@ -4,6 +4,80 @@ use layer_workspace::{Entity, ManagerAction as A, PackageKind, StoreRequest};
 type Result<T> = std::result::Result<T, StoreError>;
 
 impl NativeWorkspaces {
+    pub(super) fn recover_close(&self, w: &Rc<Workspace>) {
+        if self.close_prompt.replace(true) {
+            return;
+        }
+        glib::spawn_future_local(glib::clone!(
+            #[weak]
+            w,
+            async move {
+                let prompt = adw::AlertDialog::builder().heading("Workspace Changes Aren’t Saved")
+                .body("Export a Workspace Backup to preserve your current layout, working values, and retained history before closing. You can also keep this window open and retry storage.").build();
+                prompt.set_widget_name("workspace-close-recovery");
+                prompt.add_responses(&[
+                    ("cancel", "Keep Open"),
+                    ("discard", "Discard Unsaved Changes"),
+                    ("export", "Export Backup and Close…"),
+                ]);
+                prompt.set_close_response("cancel");
+                prompt.set_default_response(Some("export"));
+                prompt.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+                prompt.set_response_appearance("export", adw::ResponseAppearance::Suggested);
+                let response = prompt.choose_future(Some(&w.window)).await;
+                let _operation = if response == "discard" || response == "export" {
+                    match w.workspaces.begin_operation(&w).await {
+                        Ok(guard) => Some(guard),
+                        Err(error) => {
+                            w.workspaces.close_prompt.set(false);
+                            if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                                gpu.session.reset_document_close();
+                            }
+                            w.workspaces.show_error(error);
+                            w.workspaces.update_status();
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+                let close = if response == "discard" {
+                    Ok(true)
+                } else if response == "export" {
+                    match w.workspaces.recovery_entity(&w) {
+                        Ok(entity) => export(&w, entity).await,
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Ok(false)
+                };
+                w.workspaces.close_prompt.set(false);
+                match close {
+                    Ok(true) => {
+                        if let Some(manager) = &w.workspaces.manager
+                            && let Some(current) = manager.current_record()
+                        {
+                            manager.release(&current).await;
+                        }
+                        w.workspaces.close_ready.set(true);
+                        w.window.close();
+                    }
+                    Ok(false) => {
+                        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                            gpu.session.reset_document_close();
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(gpu) = w.gpu.borrow_mut().as_mut() {
+                            gpu.session.reset_document_close();
+                        }
+                        w.workspaces.show_error(error);
+                        w.workspaces.update_status();
+                    }
+                }
+            }
+        ));
+    }
     fn recovery_entity(&self, w: &Rc<Workspace>) -> Result<Entity> {
         let capture = w
             .gpu
@@ -36,19 +110,62 @@ impl NativeWorkspaces {
             .as_ref()
             .ok_or_else(|| StoreError::invalid("Workspace storage is unavailable."))?;
         match action {
+            A::RecoverInterrupted => {
+                let choices = manager.interrupted_changes(now_ms()).await?;
+                if choices.is_empty() {
+                    self.ui
+                        .note
+                        .set_text("There are no interrupted changes to recover.");
+                    self.ui.note.set_visible(true);
+                    return Ok(());
+                }
+                let Some(operation)=dialog::choice_dialog(w,"Recover Interrupted Changes","Recover the selected changes into independent copies with unique names. Pending values use the stored layout when the layout was not part of the interrupted change. Existing items stay as they are.","Recover Copies",&choices).await else {return Ok(());};
+                let _operation = self.begin_operation(w).await?;
+                match manager.recover_interrupted(&operation, now_ms()).await? {
+                    Some(incoming) => self.adopt(w, Ok(incoming)).await,
+                    None => (),
+                }
+                self.refresh_interrupted().await;
+            }
+            A::ExportDatabase => {
+                let picker = gtk::FileDialog::builder()
+                    .title("Export Original Database")
+                    .initial_name("capycanvas-workspaces.sqlite3")
+                    .modal(true)
+                    .build();
+                match picker.save_future(Some(&w.window)).await {
+                    Ok(file) => {
+                        let path = file
+                            .path()
+                            .ok_or_else(|| StoreError::invalid("Choose a file on this device."))?;
+                        manager.store.backup_database(&path).await?;
+                    }
+                    Err(e)
+                        if e.matches(gtk::DialogError::Dismissed)
+                            || e.matches(gtk::DialogError::Cancelled) =>
+                    {
+                        ()
+                    }
+                    Err(e) => return Err(StoreError::invalid(e.to_string())),
+                }
+            }
             A::Storage => {
                 let description = match manager.storage_report(false).await {
                     Ok(report) => format!(
-                        "Database: {:.1} MiB\nShared configuration data: {:.1} MiB\nEligible history (estimated): {:.1} MiB\nHistory target: 100 MiB\nRecently Deleted: retained for 30 days\n\nCurrent state, original reset layouts, and up to 100 undo and 100 redo entries per workspace are protected. Other open workspaces are cleaned by their own windows.\n\nWorkspace backups include latest tool values, original layouts, and retained history. Template exports contain layout and toolbar configuration only.",
+                        "Database: {:.1} MiB\nShared configuration data: {:.1} MiB\nEligible history (estimated): {:.1} MiB\nHistory target: 100 MiB\nOldest retained history: {}\nRecently Deleted: retained for 30 days\n\nCurrent state, original reset layouts, and up to 100 undo and 100 redo entries per workspace are protected. Other open workspaces are cleaned by their own windows.\n\nWorkspace backups include latest tool values, original layouts, and retained history. Template exports contain layout and toolbar configuration only.",
                         report.database_bytes as f64 / 1048576.,
                         report.component_bytes as f64 / 1048576.,
-                        report.eligible_history_bytes as f64 / 1048576.
+                        report.eligible_history_bytes as f64 / 1048576.,
+                        report
+                            .oldest_history_ms
+                            .map(layer_workspace::date)
+                            .unwrap_or_else(|| "None".into())
                     ),
                     Err(error) => format!(
                         "Storage is unavailable: {error}\n\nThe current workspace remains in memory. Export a Workspace Backup to preserve its layout, tool values, reset baseline, and retained history, then Retry Storage."
                     ),
                 };
-                self.ui.storage(w, description);
+                self.ui.storage(w, format!("{description}\n\nExport Original Database preserves all stored items for repair, including unsupported records. Use a Workspace Backup for normal import."));
             }
             A::Export(id) => {
                 let entity = if manager.active_id().as_deref() == Some(&id) {
@@ -168,7 +285,16 @@ impl NativeWorkspaces {
             }
             A::RetryStorage => {
                 manager.store.request(StoreRequest::Reopen).await?;
-                if self.ready.get() {
+                if self.ready.get() && manager.has_failed_operation() {
+                    let _operation = self.begin_operation(w).await?;
+                    match manager.retry_failed_operation().await {
+                        Ok(Some(incoming)) => self.adopt(w, Ok(incoming)).await,
+                        Ok(None) => (),
+                        Err(error) => return Err(error),
+                    }
+                } else if self.ready.get() && self.owner_lost.get() {
+                    self.revalidate(w);
+                } else if self.ready.get() {
                     self.save(w, true);
                 } else {
                     self.start(w);
@@ -180,7 +306,7 @@ impl NativeWorkspaces {
     }
 }
 
-async fn export(w: &Rc<Workspace>, entity: Entity) -> Result<()> {
+async fn export(w: &Rc<Workspace>, entity: Entity) -> Result<bool> {
     let kind = PackageKind::for_entity(&entity);
     let name = format!(
         "{}.{}",
@@ -188,7 +314,7 @@ async fn export(w: &Rc<Workspace>, entity: Entity) -> Result<()> {
         kind.extension()
     );
     let Some(path) = choose_package(w, kind, Some(&name)).await? else {
-        return Ok(());
+        return Ok(false);
     };
     gio::spawn_blocking(move || {
         let bytes = layer_workspace::export_package(&entity)?;
@@ -199,7 +325,7 @@ async fn export(w: &Rc<Workspace>, entity: Entity) -> Result<()> {
     })
     .await
     .map_err(|_| StoreError::invalid("Package writer stopped."))??;
-    Ok(())
+    Ok(true)
 }
 async fn choose_package(
     w: &Rc<Workspace>,

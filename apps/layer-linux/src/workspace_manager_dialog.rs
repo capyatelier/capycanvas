@@ -345,9 +345,10 @@ impl ManagerUi {
                             .borrow()
                             .as_ref()
                             .is_some_and(|g| g.session.require_workspace_idle().is_ok());
-                        w.workspaces
-                            .ui
-                            .render(&w, manager.details(&stored, idle, now_ms()));
+                        let details = manager.inspect_details(&stored, idle, now_ms()).await;
+                        if w.workspaces.ui.generation.get() == generation {
+                            w.workspaces.ui.render(&w, details);
+                        }
                     }
                     Err(error) => {
                         clear(&w.workspaces.ui.details);
@@ -418,10 +419,12 @@ impl ManagerUi {
         self.details.append(&text);
         for action in [
             ManagerAction::ExportCurrent,
+            ManagerAction::ExportDatabase,
             ManagerAction::ImportBackup,
             ManagerAction::ClearOlderHistory,
             ManagerAction::SaveAsNew,
             ManagerAction::RetryStorage,
+            ManagerAction::RecoverInterrupted,
         ] {
             self.details.append(&action_button(w, action, false, true));
         }

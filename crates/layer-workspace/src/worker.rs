@@ -6,7 +6,11 @@ use std::{
 };
 
 type Result<T> = std::result::Result<T, StoreError>;
-type Message = (StoreRequest, async_channel::Sender<Result<StoreResponse>>);
+enum WorkerRequest {
+    Store(StoreRequest),
+    Backup(PathBuf),
+}
+type Message = (WorkerRequest, async_channel::Sender<Result<StoreResponse>>);
 pub struct StoreReply(async_channel::Receiver<Result<StoreResponse>>);
 impl StoreReply {
     /// Hosts poll from their event loop; no disk or SQLite lock is acquired here.
@@ -63,6 +67,16 @@ impl StoreWorker {
             .spawn(move || {
                 let mut store = SqliteStore::open(&database);
                 while let Ok((request, reply)) = receiver.recv() {
+                    let request = match request {
+                        WorkerRequest::Backup(destination) => {
+                            let _ = reply.try_send(
+                                backup_database(&database, &destination)
+                                    .map(|()| StoreResponse::Done),
+                            );
+                            continue;
+                        }
+                        WorkerRequest::Store(request) => request,
+                    };
                     if matches!(request, StoreRequest::Reopen) && store.is_err() {
                         store = SqliteStore::open(&database);
                     }
@@ -82,9 +96,68 @@ impl StoreWorker {
     }
     pub fn request(&self, request: StoreRequest) -> StoreReply {
         let (sender, receiver) = async_channel::unbounded();
-        let _ = self.0.sender.send((request, sender));
+        let _ = self.0.sender.send((WorkerRequest::Store(request), sender));
         StoreReply(receiver)
     }
+    /// Native recovery also works for databases with an unsupported model
+    /// schema: SQLite's backup API reads the coherent snapshot including WAL.
+    pub fn backup_database(&self, destination: &Path) -> StoreReply {
+        let (sender, receiver) = async_channel::unbounded();
+        let _ = self
+            .0
+            .sender
+            .send((WorkerRequest::Backup(destination.to_path_buf()), sender));
+        StoreReply(receiver)
+    }
+}
+
+fn backup_database(source: &Path, destination: &Path) -> Result<()> {
+    let source_path = std::fs::canonicalize(source)
+        .map_err(|e| StoreError::new(ErrorKind::Unavailable, e.to_string()))?;
+    if std::fs::canonicalize(destination).ok().as_ref() == Some(&source_path)
+        || destination == PathBuf::from(format!("{}-wal", source.display()))
+        || destination == PathBuf::from(format!("{}-shm", source.display()))
+    {
+        return Err(StoreError::invalid(
+            "Choose an export file outside the live workspace database files.",
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| StoreError::invalid("Choose a destination folder."))?;
+    let temporary = parent.join(format!(".capy-workspace-backup-{}", new_id()));
+    let result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(&temporary)
+            .map_err(|e| StoreError::new(ErrorKind::FailedWrite, e.to_string()))?;
+        let database = rusqlite::Connection::open_with_flags(
+            source,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        database.backup(rusqlite::MAIN_DB, &temporary, None)?;
+        drop(database);
+        std::fs::File::open(&temporary)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| StoreError::new(ErrorKind::FailedWrite, e.to_string()))?;
+        std::fs::rename(&temporary, destination)
+            .map_err(|e| StoreError::new(ErrorKind::FailedWrite, e.to_string()))?;
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| StoreError::new(ErrorKind::FailedWrite, e.to_string()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 impl std::future::IntoFuture for StoreReply {

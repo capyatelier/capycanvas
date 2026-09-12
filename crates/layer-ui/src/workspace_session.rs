@@ -163,6 +163,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_transition = true;
         Ok(())
     }
+    pub fn set_workspace_read_only(&mut self, read_only: bool) {
+        self.workspace_read_only = read_only;
+    }
     pub fn end_workspace_transition(&mut self) {
         self.workspace_transition = false;
     }

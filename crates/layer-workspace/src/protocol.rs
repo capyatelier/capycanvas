@@ -81,6 +81,8 @@ pub struct CommitBatch {
     pub(crate) components: BTreeMap<String, Vec<u8>>,
     pub bindings: Vec<(String, Option<String>)>,
     pub legacy_imports: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abandon_operations: Vec<String>,
 }
 impl CommitBatch {
     pub fn prepare(owner: Owner, mutations: Vec<Mutation>) -> Result<Self, StoreError> {
@@ -91,6 +93,7 @@ impl CommitBatch {
             components: BTreeMap::new(),
             bindings: Vec::new(),
             legacy_imports: Vec::new(),
+            abandon_operations: Vec::new(),
         };
         for mutation in mutations {
             let (id, create, claim, expected, fence, metadata, content, working, name_policy) =

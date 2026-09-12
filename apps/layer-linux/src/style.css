@@ -1,6 +1,7 @@
-/* GTK paints native controls above our full-window Wayland canvas underlay. */
-window.background { background: transparent; }
-window { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); }
+/* Only editor windows have a Wayland canvas underlay. Native dialogs retain
+   their opaque themed surfaces so text stays readable above other windows. */
+window.background.capy-workspace { background: transparent; }
+window.capy-workspace { --window-bg-color: var(--capy-bg); --window-fg-color: var(--capy-text); --headerbar-bg-color: var(--capy-panel); --headerbar-backdrop-color: var(--capy-panel); --view-bg-color: var(--capy-view); --popover-bg-color: var(--capy-panel); --panel-bg: var(--capy-panel); --tabbar-bg: var(--capy-tabbar); --input-bg: var(--capy-input); --sidebar-bg-color: var(--capy-sidebar); --sidebar-backdrop-color: var(--capy-sidebar-backdrop); --dialog-bg-color: var(--capy-dialog); }
 /* Shared 6px workspace gaps; retain native close-circle padding/placement. */
 window, label, text { font-size: var(--ui-text-size); }
 .workspace-header { background: transparent; box-shadow: none; }

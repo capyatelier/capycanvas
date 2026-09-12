@@ -9,11 +9,19 @@ use std::{
 struct TestStore {
     worker: StoreWorker,
     fail: Cell<bool>,
+    lose_reply: Cell<bool>,
+    block_receipts: Cell<bool>,
     gate: RefCell<Option<async_channel::Receiver<()>>>,
     waiting: Cell<bool>,
 }
 impl WorkspaceStore for TestStore {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
+        if matches!(request, StoreRequest::Receipt { .. }) && self.block_receipts.get() {
+            return Err(StoreError::new(
+                ErrorKind::Unavailable,
+                "Receipt temporarily unavailable",
+            ));
+        }
         let commit = matches!(&request, StoreRequest::Commit { .. });
         if commit && self.fail.get() {
             return Err(StoreError::new(
@@ -22,6 +30,12 @@ impl WorkspaceStore for TestStore {
             ));
         }
         let response = self.worker.request(request).await?;
+        if commit && self.lose_reply.replace(false) {
+            return Err(StoreError::new(
+                ErrorKind::FailedWrite,
+                "Simulated lost acknowledgement",
+            ));
+        }
         if commit {
             let gate = self.gate.borrow_mut().take();
             if let Some(gate) = gate {
@@ -45,6 +59,8 @@ impl Fixture {
             TestStore {
                 worker,
                 fail: Cell::new(false),
+                lose_reply: Cell::new(false),
+                block_receipts: Cell::new(false),
                 gate: RefCell::new(None),
                 waiting: Cell::new(false),
             },
@@ -59,6 +75,280 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+#[test]
+fn resumed_owner_revalidates_without_losing_dirty_edits_or_overwriting_successors() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let id = m.active_id().unwrap();
+        let expire = || {
+            m.state
+                .borrow_mut()
+                .saved
+                .as_mut()
+                .unwrap()
+                .claim
+                .as_mut()
+                .unwrap()
+                .expires_at_ms = 0;
+            let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+            sql.execute("UPDATE items SET lease_until='0' WHERE id=?1", [&id])
+                .unwrap();
+        };
+        let mut capture = m.current().unwrap().capture().unwrap();
+        capture.working.zen_mode = true;
+        m.observe(capture.clone(), 2_000);
+        expire();
+        m.revalidate_owner(1).await.unwrap();
+        assert!(m.dirty());
+        assert_eq!(m.current().unwrap().working, Some(capture.working.clone()));
+        assert!(m.current_record().unwrap().claim.unwrap().fence > 1);
+        m.flush().await.unwrap();
+        expire();
+        let other = Owner::fresh();
+        let StoreResponse::Entity(successor) = m
+            .store
+            .worker
+            .request(StoreRequest::Claim {
+                id: id.clone(),
+                owner: other.clone(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!()
+        };
+        let mut working = capture.working.clone();
+        working.zen_mode = false;
+        m.store
+            .worker
+            .request(StoreRequest::Commit {
+                batch: CommitBatch::prepare(
+                    other.clone(),
+                    vec![update(&successor, None, None, Some(working)).unwrap()],
+                )
+                .unwrap(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            m.revalidate_owner(1).await.unwrap_err().kind,
+            ErrorKind::OwnedElsewhere
+        );
+        assert_eq!(m.current().unwrap().working, Some(capture.working.clone()));
+        m.store
+            .worker
+            .request(StoreRequest::Release {
+                id: id.clone(),
+                owner: other,
+                fence: successor.claim.unwrap().fence.to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            m.revalidate_owner(1).await.unwrap_err().kind,
+            ErrorKind::Conflict
+        );
+        let recovered = m
+            .save_as_new(capture.clone(), "Recovered", 3_000)
+            .await
+            .unwrap();
+        assert_ne!(recovered.entity.id, id);
+        assert_eq!(recovered.entity.working, Some(capture.working));
+        assert!(!m.load(&id).await.unwrap().entity.working.unwrap().zen_mode);
+    });
+}
+
+#[test]
+fn expired_owner_resolves_a_committed_save_before_reacquiring_its_claim() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let id = m.active_id().unwrap();
+        let mut capture = m.current().unwrap().capture().unwrap();
+        capture.working.zen_mode = true;
+        m.observe(capture.clone(), 2_000);
+        m.store.lose_reply.set(true);
+        m.store.block_receipts.set(true);
+        assert!(m.save_once().await.is_err());
+        assert!(m.dirty());
+        m.store.block_receipts.set(false);
+        m.state
+            .borrow_mut()
+            .saved
+            .as_mut()
+            .unwrap()
+            .claim
+            .as_mut()
+            .unwrap()
+            .expires_at_ms = 0;
+        let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute("UPDATE items SET lease_until='0' WHERE id=?1", [&id])
+            .unwrap();
+        m.revalidate_owner(1).await.unwrap();
+        assert!(!m.dirty());
+        assert!(m.error().is_none());
+        assert_eq!(m.current().unwrap().working, Some(capture.working));
+    });
+}
+
+#[test]
+fn failed_named_creation_retries_its_identity_and_keeps_later_outgoing_edits() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let outgoing = m.active_id().unwrap();
+        let before = m.items().len();
+        m.store.lose_reply.set(true);
+        m.store.block_receipts.set(true);
+        assert!(
+            m.create_workspace("Pending Creation", None, false, 2_000)
+                .await
+                .is_err()
+        );
+        assert!(m.has_failed_operation());
+        assert_eq!(m.active_id(), Some(outgoing.clone()));
+        let mut capture = m.current().unwrap().capture().unwrap();
+        capture.working.zen_mode = true;
+        m.observe(capture, 3_000);
+        m.store.block_receipts.set(false);
+        let incoming = m.retry_failed_operation().await.unwrap().unwrap();
+        m.activate(incoming);
+        assert_eq!(m.active_name().as_deref(), Some("Pending Creation"));
+        assert_eq!(m.items().len(), before + 1);
+        assert!(!m.has_failed_operation());
+        assert!(m.error().is_none());
+        assert!(
+            m.load(&outgoing)
+                .await
+                .unwrap()
+                .entity
+                .working
+                .unwrap()
+                .zen_mode
+        );
+        assert!(!m.current().unwrap().working.unwrap().zen_mode);
+        m.store.fail.set(true);
+        assert!(
+            m.save_template("Pending Template", "", 4_000)
+                .await
+                .is_err()
+        );
+        assert!(m.has_failed_operation());
+        m.store.fail.set(false);
+        m.retry_failed_operation().await.unwrap();
+        assert_eq!(
+            m.items()
+                .iter()
+                .filter(|i| i.metadata.name == "Pending Template")
+                .count(),
+            1
+        );
+    });
+}
+
+#[test]
+fn immediate_receipt_recovery_prevents_duplicate_named_actions() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let before = m.items().len();
+        m.store.lose_reply.set(true);
+        let incoming = m
+            .create_workspace("Accepted Once", None, false, 2_000)
+            .await
+            .unwrap();
+        assert_eq!(incoming.entity.metadata.name, "Accepted Once");
+        assert_eq!(m.items().len(), before + 1);
+        assert!(!m.has_failed_operation());
+    });
+}
+
+#[test]
+fn interrupted_publication_recovers_after_reopen_and_cancels_delayed_delivery_atomically() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let mut capture = m.current().unwrap().capture().unwrap();
+        capture.working.zen_mode = true;
+        m.observe(capture, 2_000);
+        let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute_batch("CREATE TRIGGER interrupt_creation BEFORE INSERT ON items WHEN NEW.name='Interrupted Copy' BEGIN SELECT RAISE(ABORT,'interrupted publication'); END;").unwrap();
+        assert!(
+            m.create_workspace("Interrupted Copy", None, true, 3_000)
+                .await
+                .is_err()
+        );
+        let StoreResponse::Pending(pending) =
+            m.store.worker.request(StoreRequest::Pending).await.unwrap()
+        else {
+            panic!()
+        };
+        let original = pending
+            .iter()
+            .find(|b| {
+                b.writes.iter().any(|w| {
+                    w.metadata
+                        .as_ref()
+                        .is_some_and(|m| m.name == "Interrupted Copy")
+                })
+            })
+            .unwrap()
+            .clone();
+        sql.execute_batch("DROP TRIGGER interrupt_creation; UPDATE items SET owner=NULL,epoch=NULL,lease_until=NULL;").unwrap();
+        let reopened = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        let incoming = reopened.initialize(4_000).await.unwrap();
+        reopened.activate(incoming);
+        let choices = reopened.interrupted_changes(4_000).await.unwrap();
+        assert!(choices.iter().any(|(id, _)| id == &original.operation_id));
+        let before = reopened.items().len();
+        sql.execute_batch("CREATE TRIGGER interrupt_recovery BEFORE INSERT ON receipts BEGIN SELECT RAISE(ABORT,'interrupted recovery'); END;").unwrap();
+        assert!(
+            reopened
+                .recover_interrupted(&original.operation_id, 5_000)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            sql.query_row(
+                "SELECT count(*) FROM cancelled_operations WHERE id=?1",
+                [&original.operation_id],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        reopened.refresh().await.unwrap();
+        assert_eq!(reopened.items().len(), before);
+        sql.execute_batch("DROP TRIGGER interrupt_recovery;")
+            .unwrap();
+        let recovered = reopened.retry_failed_operation().await.unwrap().unwrap();
+        assert_eq!(recovered.entity.metadata.name, "Interrupted Copy Recovered");
+        assert!(recovered.entity.working.as_ref().unwrap().zen_mode);
+        assert_ne!(recovered.entity.id, original.writes[0].id);
+        assert_eq!(reopened.items().len(), before + 1);
+        assert_eq!(
+            m.store
+                .worker
+                .request(StoreRequest::Commit {
+                    batch: original.clone()
+                })
+                .await
+                .unwrap_err()
+                .kind,
+            ErrorKind::Conflict
+        );
+        assert!(
+            reopened
+                .interrupted_changes(6_000)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(reopened.load(&original.writes[0].id).await.is_err());
+    });
 }
 
 #[test]
@@ -99,6 +389,20 @@ fn manager_recovery_library_and_backup_round_trip() {
         m.rename(&template, "New Illustration", "Changed", 6_000)
             .await
             .unwrap();
+        let details = m
+            .inspect_details(&m.current_record().unwrap(), true, 6_000)
+            .await;
+        assert!(
+            details
+                .description
+                .contains("A newer template version is available")
+        );
+        assert!(
+            details
+                .actions
+                .iter()
+                .any(|button| button.label == "New Workspace from Latest Template…")
+        );
         m.delete_item(&template, None, 7_000).await.unwrap();
         let reset = m
             .change_layout(&painting.entity.id, None, 8_000)
