@@ -626,6 +626,7 @@ struct NativeWorkspaceDrag {
     point: [f32; 2],
     started: bool,
     sequence: Option<gdk::EventSequence>,
+    cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
 }
 
 struct GroupView {
@@ -1371,7 +1372,9 @@ impl Workspace {
 
     pub fn interact(self: &Rc<Self>, input: UiInput) -> InputReply {
         if matches!(input, UiInput::Blur) {
-            self.workspace_drag.borrow_mut().take();
+            if let Some(drag) = self.workspace_drag.borrow_mut().take() {
+                self.restore_drag_cursor(&drag);
+            }
             self.clear_drop();
         }
         #[cfg(test)]
@@ -2403,6 +2406,9 @@ impl Workspace {
     }
 
     fn register_drag(&self, widget: &impl IsA<gtk::Widget>, target: DragTarget) {
+        if matches!(target, DragTarget::Dock(_)) {
+            widget.set_cursor_from_name(Some("grab"));
+        }
         let mut targets = self.drag_targets.borrow_mut();
         targets.retain(|(widget, _)| widget.upgrade().is_some());
         targets.push((widget.as_ref().downgrade(), target));
@@ -2442,6 +2448,48 @@ impl Workspace {
         ));
     }
 
+    fn set_drag_cursor(&self, drag: &NativeWorkspaceDrag, name: &str) {
+        if let Some((widget, _)) = &drag.cursor {
+            widget.set_cursor_from_name(Some(name));
+        }
+        if let Some(surface) = self.window.surface()
+            && let Some(pointer) = surface.display().default_seat().and_then(|s| s.pointer())
+            && let Some(cursor) = gdk::Cursor::from_name(name, None)
+        {
+            // The pressed widget may be unparented by a tab tear-off. Keep
+            // feedback on the native pointer throughout that same gesture.
+            surface.set_device_cursor(&pointer, &cursor);
+        }
+    }
+
+    fn restore_drag_cursor(&self, drag: &NativeWorkspaceDrag) {
+        if !drag.started || !matches!(drag.target, DragTarget::Dock(_)) {
+            return;
+        }
+        if let Some((widget, cursor)) = &drag.cursor {
+            widget.set_cursor(cursor.as_ref());
+        }
+        let mut picked = self.surface.pick(
+            drag.point[0] as f64,
+            drag.point[1] as f64,
+            gtk::PickFlags::DEFAULT,
+        );
+        let mut cursor = None;
+        while let Some(widget) = picked {
+            cursor = widget.cursor();
+            if cursor.is_some() {
+                break;
+            }
+            picked = widget.parent();
+        }
+        if let Some(surface) = self.window.surface()
+            && let Some(pointer) = surface.display().default_seat().and_then(|s| s.pointer())
+            && let Some(cursor) = cursor.or_else(|| gdk::Cursor::from_name("default", None))
+        {
+            surface.set_device_cursor(&pointer, &cursor);
+        }
+    }
+
     fn workspace_drag_input(
         self: &Rc<Self>,
         phase: ContactPhase,
@@ -2458,6 +2506,7 @@ impl Workspace {
                     point,
                     started: false,
                     sequence,
+                    cursor: None,
                 });
             }
             return false;
@@ -2475,6 +2524,8 @@ impl Workspace {
             if drag.started {
                 self.dispatch_drag(drag.target, phase, point);
             }
+            drag.point = point;
+            self.restore_drag_cursor(&drag);
             self.clear_drop();
             self.update_zen();
             return drag.started;
@@ -2514,6 +2565,20 @@ impl Workspace {
                 picked = widget.parent();
             }
             drag.started = true;
+            if matches!(drag.target, DragTarget::Dock(_)) {
+                drag.cursor = self
+                    .surface
+                    .pick(
+                        drag.origin[0] as f64,
+                        drag.origin[1] as f64,
+                        gtk::PickFlags::DEFAULT,
+                    )
+                    .map(|widget| {
+                        let cursor = widget.cursor();
+                        (widget, cursor)
+                    });
+                self.set_drag_cursor(&drag, "grabbing");
+            }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
             self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
         }
@@ -2522,6 +2587,13 @@ impl Workspace {
         self.dispatch_drag(drag.target, ContactPhase::Move, point);
         if let DragTarget::Dock(item) = drag.target {
             *self.drop_hint.borrow_mut() = self.drop_at(point[0], point[1], item);
+            let cursor =
+                if matches!(item, DockItem::Column { .. }) && self.drop_hint.borrow().is_none() {
+                    "no-drop"
+                } else {
+                    "grabbing"
+                };
+            self.set_drag_cursor(&drag, cursor);
             self.surface.queue_draw();
         }
         true

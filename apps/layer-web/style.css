@@ -23,6 +23,7 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--se
 .brush-preview, svg { -webkit-user-drag: none; pointer-events: none; }
 #canvas:focus { outline: none; }
 #workspace { position: relative; width: 100vw; height: 100dvh; min-height: 320px; }
+#workspace[data-workspace-cursor], #workspace[data-workspace-cursor] * { cursor: var(--workspace-cursor) !important; }
 #center { position: absolute; inset: 0; }
 body:not([data-gpu="ready"]) #canvas { visibility: hidden; }
 #gpu-notice { position: absolute; inset: 54px 6px 30px; display: flex; flex-direction: column; padding: 6px; overflow: auto; background: var(--bg); cursor: default; container-type: inline-size; }

@@ -691,6 +691,15 @@ function update(regions) {
 // records; CSS animates the returned visibility without resizing the canvas.
 let revealPointer = null;
 let workspaceGesture = null;
+function workspaceCursor(cursor) {
+  if (cursor) {
+    workspace.dataset.workspaceCursor = cursor;
+    workspace.style.setProperty("--workspace-cursor", cursor);
+  } else {
+    delete workspace.dataset.workspaceCursor;
+    workspace.style.removeProperty("--workspace-cursor");
+  }
+}
 function workspaceGestureEvent(phase, e) {
   const drag = workspaceGesture;
   if (!drag) return;
@@ -705,6 +714,7 @@ function endWorkspaceGesture(e, cancel = false) {
   if (!drag || (e && drag.id !== e.pointerId)) return;
   if (drag.started) workspaceGestureEvent(cancel ? "cancel" : "up", e || drag.last);
   workspaceGesture = null;
+  workspaceCursor(null);
   if (workspace.hasPointerCapture(drag.id)) workspace.releasePointerCapture(drag.id);
   dropIndicator.hidden = true;
   if (drag.started) { revealPointer = drag.id; e?.preventDefault(); e?.stopPropagation(); }
@@ -715,7 +725,7 @@ workspace.addEventListener("pointerdown", e => {
   const node = e.target.closest("[data-workspace-drag]");
   if (!node) return;
   workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
-    start: e, last: e, started: false };
+    start: e, last: e, started: false, cursor: getComputedStyle(node).cursor };
   // External resize strips are outside the unselectable panel. Prevent a
   // native text-selection drag from stealing their pointer sequence.
   if (workspaceGesture.action.type !== "drag_workspace") e.preventDefault();
@@ -734,7 +744,13 @@ workspace.addEventListener("pointermove", e => {
     workspaceGestureEvent("down", drag.start);
   }
   workspaceGestureEvent("move", e);
-  if (drag.action.type === "drag_workspace") showDropHint(dropHint(e, drag.action.item));
+  if (drag.action.type === "drag_workspace") {
+    const hint = dropHint(e, drag.action.item);
+    showDropHint(hint);
+    workspaceCursor(drag.action.item.kind === "column" && !hint ? "no-drop" : "grabbing");
+  } else {
+    workspaceCursor(drag.cursor);
+  }
   e.preventDefault(); e.stopPropagation();
 }, { capture: true });
 workspace.addEventListener("pointerup", e => endWorkspaceGesture(e), { capture: true });

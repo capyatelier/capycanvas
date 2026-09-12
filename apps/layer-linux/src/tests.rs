@@ -11088,6 +11088,14 @@ fn native_column_drawer_drag_input() {
         );
         step += 1;
         pump(150);
+        let native = w.window.surface().unwrap();
+        let pointer = native.display().default_seat().unwrap().pointer().unwrap();
+        let cursor = native.device_cursor(&pointer).and_then(|c| c.name());
+        if w.workspace_drag.borrow().as_ref().is_some_and(|d| d.started) {
+            assert_eq!(cursor.as_deref(), Some("grabbing"));
+        } else {
+            assert_ne!(cursor.as_deref(), Some("grabbing"));
+        }
     };
     for (group, panel, whole) in [
         (8, Panel::Layers, false),
@@ -11779,6 +11787,9 @@ fn native_collapsed_column_input() {
     pump(1200);
     let viewport = [w.surface.width() as f32, w.surface.height() as f32];
     let initial = state(&w).workspace;
+    let native = w.window.surface().unwrap();
+    let pointer = native.display().default_seat().unwrap().pointer().unwrap();
+    let cursor = || native.device_cursor(&pointer).and_then(|c| c.name());
     let mut step = 0;
     std::fs::write(dir.join("ready"), "ready").unwrap();
     let mut perform = |events: serde_json::Value| {
@@ -11883,6 +11894,8 @@ fn native_collapsed_column_input() {
             };
             let y = divider.bounds.y + divider.bounds.height * 0.5;
             let sign = if right { -1. } else { 1. };
+            perform(serde_json::json!([{ "point": start }]));
+            assert_eq!(cursor().as_deref(), Some("grab"));
             perform(serde_json::json!([
                 {"point": start}, {"down": true}, {"point": [viewport[0] * 0.5, y]}
             ]));
@@ -11891,9 +11904,11 @@ fn native_collapsed_column_input() {
                 let hint = w.drop_hint.borrow().clone();
                 if distance == 90. {
                     assert!(hint.is_none());
+                    assert_eq!(cursor().as_deref(), Some("no-drop"));
                 } else {
                     let hint = hint.unwrap_or_else(|| panic!("missing native column hint: right={right}, collapsed={collapsed}, distance={distance}"));
                     assert_eq!(hint.bounds.height, divider.bounds.height);
+                    assert_eq!(cursor().as_deref(), Some("grabbing"));
                 }
                 assert_eq!(
                     state(&w).workspace,
@@ -11902,6 +11917,7 @@ fn native_collapsed_column_input() {
                 );
             }
             perform(serde_json::json!([{"down": false}]));
+            assert!(!matches!(cursor().as_deref(), Some("grabbing" | "no-drop")));
             let after = state(&w).workspace;
             assert_ne!(after, before);
             after.validate().unwrap();
@@ -11932,6 +11948,35 @@ fn native_collapsed_column_input() {
             });
             assert_eq!(state(&w).workspace, after);
         }
+    }
+    for blur in [false, true] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
+        pump(250);
+        let before = state(&w).workspace;
+        let grip = w
+            .resolved()
+            .collapsed
+            .into_iter()
+            .find(|c| c.id == 8)
+            .unwrap()
+            .grip;
+        let start = [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5];
+        let away = [viewport[0] * 0.5, viewport[1] * 0.5];
+        perform(serde_json::json!([{ "point": start }, { "down": true }, { "point": away }]));
+        assert_eq!(cursor().as_deref(), Some("no-drop"));
+        if blur {
+            w.interact(UiInput::Blur);
+        } else {
+            w.workspace_drag_input(ContactPhase::Cancel, away, None);
+        }
+        pump(100);
+        assert!(w.workspace_drag.borrow().is_none());
+        assert!(!matches!(cursor().as_deref(), Some("grabbing" | "no-drop")));
+        perform(serde_json::json!([{ "down": false }]));
+        assert_eq!(state(&w).workspace, before);
     }
     std::fs::write(dir.join("finished"), "done").unwrap();
     pump(100);
