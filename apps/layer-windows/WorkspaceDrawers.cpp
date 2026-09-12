@@ -274,7 +274,7 @@ struct Drawer:std::enable_shared_from_this<Drawer>{
         for(auto const& column:columns)for(auto const& panel:column.panels){
             auto const& body=bodies.at(panel).view;
             if(!body||!body->navigator)continue;
-            auto slot=body->navigator->Placement(workspace,visibleBounds(column.scroll,workspace),order());
+            auto slot=body->navigator->Placement(workspace,visibleBounds(column.scroll,workspace),visualOrder(workspace,frame));
             if(slot.Size())slots.Append(slot);
         }
     }

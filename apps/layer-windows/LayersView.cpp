@@ -96,7 +96,7 @@ void LayersView::init(){
     }});
     controls.emplace_back([more](J layer,J){more.IsEnabled(layer.Size()!=0);});
     footer.Children().RemoveAtEnd();footer.Padding({0});
-    Grid footerFrame;footerFrame.Padding({6,4,6,4});
+    footerFrame.Padding({6,4,6,4});
     ColumnDefinition actionsColumn;actionsColumn.Width({1,GridUnitType::Star});footerFrame.ColumnDefinitions().Append(actionsColumn);
     ColumnDefinition moreColumn;moreColumn.Width({24,GridUnitType::Pixel});footerFrame.ColumnDefinitions().Append(moreColumn);
     footerFrame.Children().Append(footer);Grid::SetColumn(more,1);footerFrame.Children().Append(more);
@@ -130,6 +130,13 @@ void LayersView::init(){
 }
 void LayersView::refresh(){
     CapyEffects::Updating updating(data);
+    auto panel=find(array(data->model,L"panels"),L"id",L"layers");
+    auto shown=[&](wchar_t const* control){return flag(find(array(panel,L"controls"),L"control",control),L"visible_in_panel",true);};
+    bool rowsShown=shown(L"layers"),opacityShown=shown(L"layer_opacity");
+    header.Visibility(rowsShown||opacityShown?Visibility::Visible:Visibility::Collapsed);
+    blend.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);tools.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);
+    list.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);opacityGate.Visibility(opacityShown?Visibility::Visible:Visibility::Collapsed);
+    footerFrame.Visibility(shown(L"layer_actions")?Visibility::Visible:Visibility::Collapsed);
     auto nextEpoch=epochOf(data);if(epoch!=nextEpoch){
         epoch=nextEpoch;++menuGeneration;if(menu)menu.Hide();clearDrag();source.Clear();
     }

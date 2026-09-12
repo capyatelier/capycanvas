@@ -156,6 +156,77 @@ mod tests {
         assert_eq!(host.session.engine().document().revision, revision);
     }
     #[test]
+    fn windows_expansion_retains_presented_geometry_on_resize_and_close() {
+        use layer_ui::{CustomizationAction, Panel, UiAction};
+        let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+        host.resize(1600, 1000, 1.).unwrap();
+        let revision = host.session.engine().document().revision;
+        for panel in [Panel::Sizes, Panel::Toolbar] {
+            host.dispatch(UiAction::Customize {
+                action: CustomizationAction::ShowAllControls { panel },
+            })
+            .unwrap();
+            let request = json!({"type":"expansion","panel":panel,"heights":[0,420],"progress":1});
+            let open = metadata(super::query(&mut host, &request.to_string()).unwrap());
+            assert!(open["error"].is_null());
+            let placement = open["result"].clone();
+            assert_eq!(placement["configuration"]["width"], 380.);
+            if panel == Panel::Toolbar {
+                let layout = host.session.layout([1600., 1000.]);
+                let group = layout
+                    .groups
+                    .iter()
+                    .find(|g| g.panels.contains(&panel))
+                    .unwrap();
+                let config = host.session.state().workspace.layout.panel(panel).unwrap();
+                let expected = layer_ui::toolbar_tile_layout(
+                    placement["preview"]["width"].as_f64().unwrap() as f32,
+                    (placement["preview"]["height"].as_f64().unwrap()
+                        - placement["configuration"]["y"].as_f64().unwrap())
+                        as f32,
+                    group.axis,
+                    config.tiles(),
+                    !group.tabs_visible,
+                    config.tile_style,
+                );
+                let expected: Value = serde_json::from_str(&json!(expected).to_string()).unwrap();
+                assert_eq!(placement["tiles"], expected);
+            }
+            host.resize(1000, 700, 1.).unwrap();
+            let request = json!({"type":"expansion","panel":panel,"heights":[0,420],
+                "from":placement,"progress":0});
+            let resized = metadata(super::query(&mut host, &request.to_string()).unwrap());
+            assert_eq!(resized["result"]["bounds"], placement["bounds"]);
+            assert_eq!(resized["result"]["preview"], placement["preview"]);
+            host.dispatch(UiAction::Customize {
+                action: CustomizationAction::CloseExpanded,
+            })
+            .unwrap();
+            assert!(host.session.state().customization.expanded.is_none());
+            for progress in [0., 1.] {
+                let request = json!({"type":"expansion","panel":panel,"heights":[0,420],
+                    "from":placement,"progress":progress,"closing":true});
+                let result = metadata(super::query(&mut host, &request.to_string()).unwrap());
+                assert!(result["error"].is_null());
+                if progress == 0. {
+                    assert_eq!(result["result"]["bounds"], placement["bounds"]);
+                } else {
+                    let layout = host.session.layout([1000., 700.]);
+                    let group = layout
+                        .groups
+                        .iter()
+                        .find(|g| g.panels.contains(&panel))
+                        .unwrap();
+                    let expected: Value =
+                        serde_json::from_str(&json!(group.bounds).to_string()).unwrap();
+                    assert_eq!(result["result"]["bounds"], expected);
+                }
+            }
+            host.resize(1600, 1000, 1.).unwrap();
+        }
+        assert_eq!(host.session.engine().document().revision, revision);
+    }
+    #[test]
     fn optional_queries_reject_mutations_oversize_and_stale_geometry_without_failing_host() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let revision = host.session.engine().document().revision;

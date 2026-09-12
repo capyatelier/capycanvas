@@ -1097,3 +1097,47 @@ strict Windows Clippy and native rebuild pass. Toolbar and drawer fixtures pass
 again on that merged build. The toolbar fixture also closes a modified drawing
 while its picker is open, verifies the unsaved-decision handoff and exits with
 zero status. The earlier document/lifecycle shutdown failures remain open.
+
+The next workspace milestone implements native panel configuration expansion.
+The shared CPU query supplies both columns, animation retargeting, tile wrapping
+and joined corners; retained preview widgets move without being recreated on
+each geometry update. The configuration uses shared titles, hints, control
+visibility and toolbar actions, 12 DIP outer padding and 12/6 DIP section/control
+spacing. Numeric controls, brush presets, color, tool settings, properties,
+filters, statistics, Navigator and layer controls reuse native implementations.
+Layer selection/opacity carry the editing target and document epoch.
+
+A visual review caught two defects before publication: aggregate padding
+initialized only its left edge, and the shared button tint was mistakenly
+opaque. Explicit four-edge padding and the shared 13/255 tint now match the
+Android configuration. A second capture exposed lower XAML panels appearing
+through the GPU Navigator opening. Native compositor geometry now subtracts
+higher preview rectangles from lower workspace visuals, preserving native paint
+order (including equal-z child order) and restoring clips when previews close.
+The path uses Direct2D geometry through
+[CompositionPath](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.composition.compositionpath.-ctor?view=windows-app-sdk-1.8);
+it adds no CPU image readback or separate presentation surface.
+
+Main through afa058a merged without disturbing the Windows changes. Shared
+snapshot streaming, collapsed-column fixes and the move of theme selection
+into Preferences are included. The merged tree passes 312 unit tests
+(250 UI, 18 host, 44 Windows; three explicit GPU tests ignored), strict Windows
+Clippy and the native build. Bridge coverage checks retained expansion geometry
+across resize/close and shared toolbar wrapping through the actual metadata
+packet interface. The final expansion, drawers, toolbar management and Layers
+fixtures pass, including zero process exit. Expansion checks shared width and
+narrow resizing, retained controls, live brush values, visibility, layer
+selection/targeted opacity, Escape, toolbar insertion and both themes. Its pixel
+check verifies a GPU preview over a lower opaque panel and exact restoration
+after closing. The merged Layers fixture now scopes its Preferences Close
+button to that dialog, avoiding the identically named window caption button.
+
+Before publication, main advanced to 2fbcc23 with GTK/Web and Android workspace
+cursor updates. Those changes merged cleanly and do not modify the validated
+Windows or shared Rust sources.
+
+This remains partial Windows acceptance. Full editor defaults and native panel
+measurement, partial Zen, full Chrome parity, runtime filter package import,
+packaging, physical gestures, device/DPI lifecycle and final presentation/input
+latency gates remain. The earlier intermittent final shader-worker shutdown
+delay is still open. Captures, profiles, logs and binaries stay ignored/local.

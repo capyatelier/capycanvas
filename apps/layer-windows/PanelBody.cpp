@@ -8,6 +8,9 @@
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyUi;
+namespace {
+bool shows(J const& panel,wchar_t const* control){return flag(find(array(panel,L"controls"),L"control",control),L"visible_in_panel");}
+}
 Grid PanelBody::sizes(double width){
         Grid grid;int columns=width<130?2:width<174?3:4;
         for(int i=0;i<columns;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});grid.ColumnDefinitions().Append(column);}
@@ -29,15 +32,27 @@ Grid PanelBody::sizes(double width){
             bindings.emplace_back([data=data,pick,value]{
                 pick.Background(num(object(data->state,L"brush"),L"diameter")==value?selected():clear());
             });
-        }return grid;
+        }
+        auto weak=make_weak(grid);auto last=std::make_shared<int>(columns);
+        grid.SizeChanged([weak,last](auto&&,auto&&){if(auto grid=weak.get()){
+            double width=grid.ActualWidth();int columns=width<130?2:width<174?3:4;
+            if(columns==*last)return;*last=columns;grid.ColumnDefinitions().Clear();grid.RowDefinitions().Clear();
+            for(int i=0;i<columns;++i){ColumnDefinition c;c.Width({1,GridUnitType::Star});grid.ColumnDefinitions().Append(c);}
+            for(uint32_t i=0;i<grid.Children().Size();++i){
+                if(i%columns==0){RowDefinition r;r.Height({1,GridUnitType::Auto});grid.RowDefinitions().Append(r);}
+                auto child=grid.Children().GetAt(i).as<FrameworkElement>();
+                Grid::SetColumn(child,int(i)%columns);Grid::SetRow(child,int(i)/columns);
+            }
+        }});
+        return grid;
     }
 PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J const& geometry,
     std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures,bool scrollable):data(std::move(source)){
         auto tileGeometry=object(geometry,L"tiles");
-        if(str(panel,L"id")==L"navigator"){
+        if(str(panel,L"id")==L"navigator"&&shows(panel,L"navigator")){
             navigator=std::make_unique<NavigatorView>(data,std::move(layoutChanged));
             auto view=navigator->Root();root=view;
-        }else if(str(panel,L"id")==L"adjustments"){
+        }else if(str(panel,L"id")==L"adjustments"&&shows(panel,L"adjustments")){
             auto view=FiltersPanel(data,bindings);root=view;
         }else if(str(panel,L"id")==L"layers"){
             auto view=LayersPanel(data,bindings);root=view;
@@ -48,7 +63,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 auto kind=str(object(tile,L"control"),L"kind");
                 auto item=O({{L"kind",S(L"tile")},{L"panel",S(panelId)},{L"tile",N(id)}});
                 auto attach=[&](FrameworkElement const& element){
-                    tileElements.emplace(uint32_t(id),element);
+                    tileElements.emplace(uint32_t(id),element);tileOrder.push_back(uint32_t(id));
                     if(gestures)gestures->Source(element,O({{L"type",S(L"tile_drag")},{L"item",item}}),item);
                 };
                 if(kind==L"divider"){
@@ -58,7 +73,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                     line.Width(horizontal?num(bounds,L"width")*.7:1);
                     line.Height(horizontal?1:num(bounds,L"height")*.7);
                     line.HorizontalAlignment(HorizontalAlignment::Center);line.VerticalAlignment(VerticalAlignment::Center);
-                    slot.Child(line);tiles.Children().Append(slot);attach(slot);
+                    slot.Child(line);dividers.emplace(uint32_t(id),line);tiles.Children().Append(slot);attach(slot);
                     AutomationProperties::SetAutomationId(slot,L"tile-"+panelId+L"-"+to_hstring(uint32_t(id)));
                     continue;
                 }
@@ -101,7 +116,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
             auto grip=object(tileGeometry,L"grip");
             if(grip.Size()&&gestures){
                 auto handle=button(data,L"Move "+str(panel,L"title"),[]{});
-                place(handle,grip);
+                place(handle,grip);tileGrip=handle;
                 Border mark;mark.Width(16);mark.Height(2);mark.Background(data->brush(L"settings_secondary"));mark.Opacity(.4);
                 mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);handle.Content(mark);
                 auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});
@@ -129,6 +144,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                         object(data->catalog,size?L"brush_size":L"opacity"),
                         [brushValue,size]{return brushValue(size?L"diameter":L"opacity");},
                         [data=data,size](double value){data->dispatch(O({{L"type",S(size?L"set_brush_size":L"set_brush_opacity")},{L"value",N(value)}}));},bindings));
+                }else if(kind==L"brush_color"){
+                    content.Children().Append(ColorPanel(data,bindings));
                 }else if(kind==L"layer_opacity"){
                     content.Children().Append(number(data,L"Opacity",object(data->catalog,L"layer_opacity"),
                         [data=data]{for(auto value:array(data->state,L"layers")){auto layer=value.GetObject();if(flag(layer,L"selected"))return num(layer,L"opacity");}return 1.;},
@@ -156,8 +173,25 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
         }
     if(!scrollable){
         auto id=str(panel,L"id");
-        if(id==L"layers"||id==L"adjustments")root.Height(480);
-        else if(id==L"navigator")root.Height(272);
+        if((id==L"layers"&&shows(panel,L"layers"))||(id==L"adjustments"&&shows(panel,L"adjustments")))root.Height(480);
+        else if(navigator)root.Height(272);
+    }
+}
+void PanelBody::Layout(J const& geometry){
+    auto layout=object(geometry,L"tiles");auto bounds=array(layout,L"tiles");
+    for(uint32_t i=0;i<tileOrder.size();++i){
+        auto element=tileElements.at(tileOrder[i]);element.Visibility(i<bounds.Size()?Visibility::Visible:Visibility::Collapsed);
+        if(i>=bounds.Size())continue;
+        auto box=bounds.GetObjectAt(i);place(element,box);
+        if(auto found=dividers.find(tileOrder[i]);found!=dividers.end()){
+            bool horizontal=num(box,L"width")>num(box,L"height");
+            found->second.Width(horizontal?num(box,L"width")*.7:1);
+            found->second.Height(horizontal?1:num(box,L"height")*.7);
+        }
+    }
+    if(tileGrip){
+        auto grip=object(layout,L"grip");tileGrip.Visibility(grip.Size()?Visibility::Visible:Visibility::Collapsed);
+        if(grip.Size())place(tileGrip,grip);
     }
 }
 void PanelBody::Apply(bool visible){

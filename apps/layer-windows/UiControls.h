@@ -115,6 +115,10 @@ struct WorkspaceData {
     }
     double textSize()const{return num(catalog,L"text_size_pt",11)*96./72.;}
 };
+// Shared button color is a tint; native Android/Web apply 13/255 opacity.
+inline SolidColorBrush buttonBackground(std::shared_ptr<WorkspaceData> const& data){
+    auto tint=color(str(object(data->state,L"palette"),L"button"));tint.A=13;return fill(tint);
+}
 inline TextBlock label(std::shared_ptr<WorkspaceData> const& data,hstring const& text,bool bold=false){
     TextBlock result;result.Text(text);result.FontSize(data->textSize());
     result.FontFamily(FontFamily(L"Segoe UI"));result.Foreground(data->brush(L"text"));

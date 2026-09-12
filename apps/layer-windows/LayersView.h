@@ -48,7 +48,7 @@ struct ElementFactory : implements<ElementFactory,IElementFactory> {
 };
 struct LayersView : std::enable_shared_from_this<LayersView> {
     std::shared_ptr<WorkspaceData> data;
-    Grid root,values;
+    Grid root,values,footerFrame;
     StackPanel header,tools,footer;
     ScrollView list;
     ItemsRepeater repeater;

@@ -520,10 +520,33 @@ name edits, validation, creation, rename, duplicate, insertion, manager selectio
 delete/cancel confirmation, workspace undo/redo, picker cancellation and closing
 with a picker open. Toolbar grips support keyboard context requests.
 
-Main through 16c5886 is merged, including preservation of tab preferences
-through drags and the other ports' drawer and layout work. Panel configuration expansion,
-full editor defaults and partial Zen remain unfinished. Drawer origin corner
-clipping, overlapping GPU previews, scroll/drag cancellation and physical
-gestures require acceptance. The intermittent final shader-worker join still
-exceeds the five-second process-exit gate in some reviews. Presentation
-benchmarking remains deferred.
+Panel configuration uses the shared expansion placement, 200 ms transition,
+joined outline and configuration width (380 DIP, clamped by the viewport).
+Preview controls remain attached through opening, closing and resizing.
+Configuration controls share values, visibility choices and toolbar actions
+with Core. Layers respects the selected editing target and document epoch.
+
+GPU Navigator previews stay on the existing canvas surface. A native
+CompositionGeometricClip removes the preview openings from lower XAML visuals
+in paint order, preventing an underlying panel from covering a higher preview.
+Clip geometry changes with layout; painting does not copy preview pixels or
+create additional swap chains. Removing an overview restores the lower visual.
+
+~~~powershell
+./apps/layer-windows/scripts/exercise-expansion.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
+~~~
+
+This isolated fixture checks shared width, narrow-window layout, retained
+configuration controls, live numeric values, visibility, editing-layer selection
+and targeted opacity, Escape, toolbar insertion and theme changes through
+Preferences. Its app-only pixel check verifies a GPU overview over an opaque
+lower panel and restoration after closing configuration.
+
+Main through 2fbcc23 is merged, including streamed native snapshots and the
+other ports' collapsed-column and drop-target fixes. Full editor defaults,
+native panel measurements, partial Zen, runtime filter package import and
+packaging remain unfinished. Drawer origin corner clipping, all overlap/scroll/
+drag combinations, physical gestures and full Chrome visual parity still
+require acceptance. The intermittent final shader-worker join still exceeds
+the five-second process-exit gate in some reviews. Presentation benchmarking
+remains deferred.

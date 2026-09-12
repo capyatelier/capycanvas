@@ -1,6 +1,10 @@
 #include "pch.h"
 #include "WorkspaceView.h"
 #include "PanelBody.h"
+#include "PanelConfiguration.h"
+#include "WorkspaceExpansion.h"
+#include "WorkspaceGeometry.h"
+#include "OverviewOcclusion.h"
 #include "WorkspaceDrawers.h"
 #include "CollapsedColumns.h"
 #include "WorkspaceGestures.h"
@@ -39,10 +43,25 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<WorkspaceGestures> gestures;
     std::unique_ptr<WorkspaceDrawers> drawers;
     std::unique_ptr<CollapsedColumns> collapsed;
+    std::unique_ptr<WorkspaceExpansion> expansion;
+    bool presenting=false;
+    OverviewOcclusion overviewOcclusion;
     std::map<std::wstring,Border> handles;
     Dispatch overviews;
     hstring lastOverviews;
-    struct Group {Border border;std::wstring key;std::unique_ptr<PanelBody> body;};
+    struct Group {
+        Border frame,border,configurationFrame;
+        Canvas content;
+        Microsoft::UI::Xaml::Shapes::Path background;
+        Border footer{nullptr};
+        std::wstring key;
+        J geometry,presented;
+        hstring backgroundKey;
+        std::unique_ptr<PanelBody> body;
+        std::unique_ptr<PanelConfiguration> configuration;
+        bool hidden=false;
+        int order=0;
+    };
     std::map<uint32_t,Group> groups;
     hstring previousTheme,previousPalette;
     Flyout popup{nullptr};
@@ -65,9 +84,11 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     void init(){
         collapsed=std::make_unique<CollapsedColumns>(data,root,gestures);
         drawers=std::make_unique<WorkspaceDrawers>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();});
+        expansion=std::make_unique<WorkspaceExpansion>(data,root,gestures,[weak=weak_from_this()]{if(auto self=weak.lock())self->present();});
+        root.LayoutUpdated([weak=weak_from_this()](auto&&,auto&&){if(auto self=weak.lock())self->measured();});
     }
     void build(Group& group,J const& geometry,J const& panel){
-        group.body.reset();
+        group.body.reset();group.footer=nullptr;
         auto groupItem=O({{L"kind",S(L"group")},{L"group",N(num(geometry,L"id"))}});
         group.border.Background(data->brush(L"panel"));group.border.CornerRadius(CornerRadius{8,8,8,8});
         Grid frame;
@@ -100,13 +121,13 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             frame.Children().Append(tabScroll);
         }
         group.body=std::make_unique<PanelBody>(data,panel,geometry,
-            [weak=weak_from_this()]{if(auto self=weak.lock())self->publishOverviews();},gestures);
+            [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();},gestures);
         auto body=group.body->Root();Grid::SetRow(body,1);frame.Children().Append(body);
         if(group.body->navigator)group.border.Background(clear());
         auto grip=object(geometry,L"footer_grip");
         if(grip.Size()){
             Canvas overlay;Grid::SetRow(overlay,1);
-            Border handle;handle.Background(clear());place(handle,grip);
+            Border handle;group.footer=handle;handle.Background(clear());place(handle,grip);
             Border mark;mark.Width(16);mark.Height(2);mark.Background(data->brush(L"settings_secondary"));mark.Opacity(.4);
             mark.HorizontalAlignment(HorizontalAlignment::Center);mark.VerticalAlignment(VerticalAlignment::Center);handle.Child(mark);
             auto item=O({{L"kind",S(L"panel")},{L"panel",S(str(panel,L"id"))}});
@@ -119,13 +140,17 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     void updatePopup(){
         auto control=str(object(data->state,L"customization"),L"control");
         std::wstring next=control.c_str();
-        if(next!=popupControl){
+        if(next!=popupControl||(!next.empty()&&!popup)){
             ++*popupGeneration;
             if(popup)popup.Hide();
             popup=nullptr;popupBindings.clear();popupControl=next;
             FrameworkElement anchor{nullptr};
+            for(auto const& [id,group]:groups)if(group.presented.Size()&&group.configuration&&!group.hidden){
+                anchor=group.configuration->Anchor(next);if(anchor)break;
+            }
             for(auto const& [id,group]:groups){
-                if(group.border.Visibility()!=Visibility::Visible||!group.body)continue;
+                if(anchor)break;
+                if(group.hidden||!group.body)continue;
                 auto found=group.body->anchors.find(next);
                 if(found!=group.body->anchors.end()){anchor=found->second;break;}
             }
@@ -160,7 +185,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
-            drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(camera);
+            expansion->Reset();drawers->Reset();collapsed->Reset();root.Children().Clear();groups.clear();handles.clear();previousTheme=theme;previousPalette=palette;root.Children().Append(camera);
         }
         root.RequestedTheme(theme==L"dark"?ElementTheme::Dark:ElementTheme::Light);
         auto layout=object(snapshot,L"layout");
@@ -170,30 +195,30 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto geometry=value.GetObject();uint32_t id=uint32_t(num(geometry,L"id"));visible.push_back(id);
             auto panel=find(array(snapshot,L"panels"),L"id",str(geometry,L"active"));
             auto [it,added]=groups.try_emplace(id);auto& group=it->second;
-            if(added)root.Children().Append(group.border);
-            // Geometry and structure may rebuild this group. Value-only updates
-            // below keep its native focus, slider capture and scroll position.
+            if(added){
+                group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({8,8,8,8});
+                group.background.IsHitTestVisible(false);group.background.Fill(data->brush(L"panel"));
+                group.content.Children().Append(group.background);group.content.Children().Append(group.border);
+                group.configurationFrame.Background(clear());group.content.Children().Append(group.configurationFrame);
+                root.Children().Append(group.frame);
+                AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
+            }
+            group.geometry=geometry;
+            // Geometry-only changes retain controls, focus, capture and scroll.
             auto structure=J::Parse(geometry.Stringify());
-            if(structure.HasKey(L"resize_handles"))structure.Remove(L"resize_handles");
-            auto size=object(structure,L"bounds");size.Remove(L"x");size.Remove(L"y");
-            structure.Insert(L"bounds",size);
-            if(str(panel,L"id")==L"navigator"||str(panel,L"id")==L"properties"||str(panel,L"id")==L"adjustments"||str(panel,L"id")==L"layers")structure.Remove(L"bounds");
-            J signature=O({{L"geometry",structure},{L"controls",array(panel,L"controls")},
-                {L"style",S(str(panel,L"tile_style"))}});
-            A tileKeys;for(auto item:array(panel,L"tiles")){
-                auto tile=item.GetObject();tileKeys.Append(O({{L"id",N(num(tile,L"id"))},{L"control",object(tile,L"control")}}));
-            }signature.Insert(L"tiles",tileKeys);
+            for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip"})if(structure.HasKey(field))structure.Remove(field);
+            structure.Insert(L"footer",B(object(geometry,L"footer_grip").Size()!=0));
+            J signature=O({{L"geometry",structure},{L"panel",panelStructure(panel)}});
             A headers;for(auto member:array(geometry,L"panels")){
                 auto model=find(array(snapshot,L"panels"),L"id",member.GetString());
                 headers.Append(O({{L"title",S(str(model,L"title"))},{L"icon",S(str(model,L"icon"))},{L"tab",object(model,L"tab")}}));
             }signature.Insert(L"headers",headers);
             std::wstring key=signature.Stringify().c_str();
             if(group.key!=key){group.key=std::move(key);build(group,geometry,panel);}
-            place(group.border,object(geometry,L"bounds"));
             bool hidden=flag(snapshot,L"chrome_hidden")&&(!flag(geometry,L"floating")||flag(snapshot,L"hide_floating_panels"));
-            group.border.Visibility(hidden?Visibility::Collapsed:Visibility::Visible);
+            group.hidden=hidden;
             int z=flag(geometry,L"floating")?100+2*order:0;++order;
-            Canvas::SetZIndex(group.border,z);
+            group.order=z;
             if(!hidden)for(auto handleValue:array(geometry,L"resize_handles")){
                 auto handle=handleValue.GetObject();auto handleKey=L"floating-"+std::to_wstring(id)+L"-"+std::wstring(str(handle,L"edge"));
                 resizeHandle(handleKey,object(handle,L"bounds"),O({{L"type",S(L"resize_floating")},
@@ -203,7 +228,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         }
         for(auto it=groups.begin();it!=groups.end();){
             if(std::find(visible.begin(),visible.end(),it->first)==visible.end()){
-                uint32_t index;if(root.Children().IndexOf(it->second.border,index))root.Children().RemoveAt(index);
+                uint32_t index;if(root.Children().IndexOf(it->second.frame,index))root.Children().RemoveAt(index);
                 it=groups.erase(it);
             }else ++it;
         }
@@ -219,10 +244,130 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 it=handles.erase(it);
             }else ++it;
         }
+        updateConfiguration();
+        expansion->Apply(configurationHeight());present();
         collapsed->Apply();drawers->Apply();gestures->Refresh();
         camera.Foreground(data->brush(L"text"));place(camera,object(layout,L"status"));
         camera.TextAlignment(TextAlignment::Right);updateCamera(object(data->state,L"camera"));
         updatePopup();publishOverviews();
+    }
+
+    double configurationHeight()const{
+        auto panel=str(object(data->state,L"customization"),L"expanded");
+        if(panel.empty())panel=expansion->Panel();
+        for(auto const& [id,group]:groups)if(group.configuration&&group.configuration->Panel()==panel)
+            return group.configuration->ContentHeight();
+        return 0;
+    }
+    void updateConfiguration(){
+        auto wanted=str(object(data->state,L"customization"),L"expanded");
+        auto active=expansion->Geometry();
+        for(auto& [id,group]:groups){
+            if(!wanted.empty()&&str(group.geometry,L"active")==wanted){
+                auto panel=find(array(data->model,L"panels"),L"id",wanted);
+                if(!group.configuration||group.configuration->Panel()!=wanted){
+                    group.configurationFrame.Child(nullptr);
+                    group.configuration=std::make_unique<PanelConfiguration>(data,panel,
+                        [weak=weak_from_this()]{if(auto self=weak.lock())self->measured();});
+                    group.configurationFrame.Child(group.configuration->Root());
+                }
+                group.configuration->Apply(panel,!group.hidden&&group.presented.Size()!=0);
+            }else if(group.configuration&&active.Size()&&num(active,L"group")==id){
+                auto panel=find(array(data->model,L"panels"),L"id",group.configuration->Panel());
+                group.configuration->Apply(panel,!group.hidden);
+            }else{
+                group.configurationFrame.Child(nullptr);group.configuration.reset();
+            }
+        }
+    }
+    void measured(){
+        if(presenting||data->updating||!root.IsLoaded())return;
+        expansion->Apply(configurationHeight());backgrounds();publishOverviews();
+        if(!popup&&!str(object(data->state,L"customization"),L"control").empty())updatePopup();
+    }
+    void present(){
+        if(presenting)return;presenting=true;
+        struct Reset{bool& flag;~Reset(){flag=false;}} reset{presenting};
+        auto expanded=expansion->Geometry();
+        for(auto& [id,group]:groups){
+            bool active=expanded.Size()&&num(expanded,L"group")==id&&group.configuration;
+            group.presented=active?expanded:J{};
+            auto bounds=object(active?expanded:group.geometry,L"bounds");auto box=rectangle(bounds);
+            auto preview=active?object(expanded,L"preview"):rectangle({0,0,box.Width,box.Height});
+            auto previewBox=rectangle(preview);
+            place(group.frame,bounds);place(group.border,preview);
+            group.content.Width(box.Width);group.content.Height(box.Height);
+            RectangleGeometry clip;clip.Rect({0,0,box.Width,box.Height});group.content.Clip(clip);
+            group.frame.Visibility(group.hidden?Visibility::Collapsed:Visibility::Visible);
+            Canvas::SetZIndex(group.frame,active?1000:group.order);
+            auto geometry=J::Parse(group.geometry.Stringify());geometry.Insert(L"bounds",preview);
+            if(active&&expanded.HasKey(L"tiles"))geometry.Insert(L"tiles",object(expanded,L"tiles"));
+            group.body->Layout(geometry);
+            if(group.footer){
+                auto grip=rectangle(object(group.geometry,L"footer_grip"));
+                grip.Y=std::max(0.f,previewBox.Height-(flag(group.geometry,L"tabs_visible")?36.f:0.f)-grip.Height);
+                place(group.footer,rectangle(grip));
+            }
+            if(active){
+                auto configuration=object(expanded,L"configuration");auto configBox=rectangle(configuration);
+                bool left=configBox.X<previewBox.X;bool tabs=configBox.Y>0;
+                group.border.CornerRadius(left?CornerRadius{tabs?8.:0.,8,8,0}:CornerRadius{8,tabs?8.:0.,0,8});
+                group.configurationFrame.CornerRadius(left?CornerRadius{8,0,0,8}:CornerRadius{0,8,8,0});
+                place(group.configurationFrame,configuration);
+                group.configurationFrame.Opacity(1);group.configurationFrame.IsHitTestVisible(!group.hidden);
+                group.configuration->SetVisible(!group.hidden);
+                AutomationProperties::SetItemStatus(group.configuration->Root(),expanded.Stringify());
+            }else{
+                group.border.CornerRadius({8,8,8,8});
+                // Measure full natural content before the first shared geometry reply.
+                place(group.configurationFrame,rectangle({box.Width,0,std::min(380.f,float(root.ActualWidth())),box.Height}));
+                group.configurationFrame.Opacity(0);group.configurationFrame.IsHitTestVisible(false);
+                if(group.configuration){group.configuration->SetVisible(false);AutomationProperties::SetItemStatus(group.configuration->Root(),L"");}
+            }
+            AutomationProperties::SetItemStatus(group.frame,active?expanded.Stringify():L"");
+            auto prefix=L"floating-"+std::to_wstring(id)+L"-";
+            for(auto const& [key,handle]:handles)if(key.starts_with(prefix))
+                handle.Visibility(active||group.hidden?Visibility::Collapsed:Visibility::Visible);
+        }
+        if(!expanded.Size()&&str(object(data->state,L"customization"),L"expanded").empty()){
+            for(auto& [id,group]:groups){group.configurationFrame.Child(nullptr);group.configuration.reset();}
+        }
+        backgrounds();publishOverviews();
+    }
+    void appendGroupOverviews(A& slots,Group const& group){
+        if(group.hidden||!group.frame.IsLoaded())return;
+        auto clip=visibleBounds(group.frame,root);int order=visualOrder(root,group.frame);
+        if(group.body&&group.body->navigator){
+            auto visible=intersect(clip,visibleBounds(group.body->navigator->Root(),root));
+            auto slot=group.body->navigator->Placement(root,visible,order);
+            if(slot.Size())slots.Append(slot);
+        }
+        if(group.presented.Size()&&group.configuration)group.configuration->AppendOverviews(slots,root,clip,order);
+    }
+    void backgrounds(){
+        auto tabs=array(data->state,L"tabs");auto document=tabs.Size()?tabs.GetObjectAt(0):J{};
+        for(auto& [id,group]:groups){
+            if(!group.frame.IsLoaded()||group.hidden)continue;
+            A slots;appendGroupOverviews(slots,group);
+            auto bounds=object(group.presented.Size()?group.presented:group.geometry,L"bounds");
+            auto key=O({{L"expansion",group.presented},{L"bounds",bounds},{L"slots",slots},
+                {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
+            if(key==group.backgroundKey)continue;group.backgroundKey=key;
+            GeometryGroup shape;shape.FillRule(FillRule::EvenOdd);
+            shape.Children().Append(group.presented.Size()?expansionShape(group.presented):
+                roundedRectangle(float(num(bounds,L"width")),float(num(bounds,L"height")),{8,8,8,8}));
+            for(auto value:slots){
+                auto slot=value.GetObject();auto area=array(slot,L"bounds"),clip=array(slot,L"clip");float image[4]{};
+                if(area.Size()!=4||clip.Size()!=4||!capy_navigator_image(float(area.GetNumberAt(2)),float(area.GetNumberAt(3)),
+                    uint32_t(num(document,L"width")),uint32_t(num(document,L"height")),image))continue;
+                Rect hole{float(area.GetNumberAt(0))+image[0],float(area.GetNumberAt(1))+image[1],image[2],image[3]};
+                hole=intersect(hole,{float(clip.GetNumberAt(0)),float(clip.GetNumberAt(1)),float(clip.GetNumberAt(2)),float(clip.GetNumberAt(3))});
+                if(hole.Width<=0||hole.Height<=0)continue;
+                hole.X-=float(num(bounds,L"x"));hole.Y-=float(num(bounds,L"y"));
+                RectangleGeometry cutout;cutout.Rect(hole);shape.Children().Append(cutout);
+            }
+            group.background.Data(shape);
+        }
     }
     void resizeHandle(std::wstring const& key,J const& bounds,J const& action,int z,bool resetColumn=false){
         auto [it,added]=handles.try_emplace(key);
@@ -234,13 +379,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     }
     void publishOverviews(){
         A slots;
-        Windows::Foundation::Rect clip{0,0,float(root.ActualWidth()),float(root.ActualHeight())};
-        for(auto const& [id,group]:groups){
-            if(!group.body||!group.body->navigator||group.border.Visibility()!=Visibility::Visible)continue;
-            auto slot=group.body->navigator->Placement(root,clip,Canvas::GetZIndex(group.border));
-            if(slot.Size())slots.Append(slot);
-        }
+        for(auto const& [id,group]:groups)appendGroupOverviews(slots,group);
         if(drawers)drawers->AppendOverviews(slots);
+        auto tabs=array(data->state,L"tabs");overviewOcclusion.Apply(root,slots,tabs.Size()?tabs.GetObjectAt(0):J{});
         auto json=slots.Stringify();
         if(json!=lastOverviews){lastOverviews=json;overviews(to_string(json));}
     }

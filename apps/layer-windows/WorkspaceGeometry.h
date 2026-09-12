@@ -30,6 +30,10 @@ inline Rect visibleBounds(FrameworkElement const& element,FrameworkElement const
     }
     return {};
 }
+inline int visualOrder(Canvas const& root,FrameworkElement const& element){
+    uint32_t index=0;root.Children().IndexOf(element,index);
+    return Canvas::GetZIndex(element)*16384+int(index);
+}
 inline J panelStructure(J const& panel){
     A keys;
     for(auto value:array(panel,L"tiles")){auto tile=value.GetObject();keys.Append(O({{L"id",N(num(tile,L"id"))},{L"control",object(tile,L"control")}}));}
@@ -47,6 +51,31 @@ inline PathGeometry roundedRectangle(float width,float height,std::array<float,4
     };
     line({width-tr,0});arc({width,tr},tr);line({width,height-br});arc({width-br,height},br);
     line({bl,height});arc({0,height-bl},bl);line({0,tl});arc({tl,0},tl);
+    PathGeometry geometry;geometry.Figures().Append(figure);return geometry;
+}
+// Same joined outline as the shared-layout Android expansion. The two
+// native child frames clip their own content; this path paints the join.
+inline PathGeometry expansionShape(J const& value){
+    auto preview=rectangle(object(value,L"preview")),configuration=rectangle(object(value,L"configuration"));
+    auto bounds=rectangle(object(value,L"bounds"));float width=bounds.Width,height=bounds.Height;
+    if(configuration.Y<=0)return roundedRectangle(width,height,{8,8,8,8});
+    float left=preview.X,right=left+preview.Width,top=configuration.Y;
+    float radius=std::min({8.f,height*.5f,width*.5f});
+    PathFigure figure;figure.StartPoint({left+radius,0});figure.IsClosed(true);figure.IsFilled(true);
+    auto line=[&](float x,float y){LineSegment segment;segment.Point({x,y});figure.Segments().Append(segment);};
+    auto curve=[&](float x1,float y1,float x2,float y2){
+        QuadraticBezierSegment segment;segment.Point1({x1,y1});segment.Point2({x2,y2});figure.Segments().Append(segment);
+    };
+    line(right-radius,0);curve(right,0,right,radius);
+    if(right<width){line(right,top);line(width-radius,top);curve(width,top,width,top+radius);}
+    line(width,height-radius);curve(width,height,width-radius,height);
+    line(radius,height);curve(0,height,0,height-radius);
+    if(left>0){
+        line(0,top+radius);curve(0,top,radius,top);
+        if(flag(value,L"concave_join")){line(left-radius,top);curve(left,top,left,top-radius);}
+        else line(left,top);
+    }
+    line(left,radius);curve(left,0,left+radius,0);
     PathGeometry geometry;geometry.Figures().Append(figure);return geometry;
 }
 inline PathGeometry drawerBridge(J const& value){
