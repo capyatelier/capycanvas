@@ -3957,7 +3957,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_window_menu_orders_layout_actions_and_uses_short_names() {
+    fn managed_window_menu_saves_workspaces_without_separate_layout_controls() {
         let mut s = session();
         s.configure_workspace_manager(ManagedWorkspace {
             id: "test".into(),
@@ -3980,13 +3980,6 @@ mod tests {
             })
         ));
         assert_eq!(menu.sections[1][0].label, "Workspaces");
-        assert!(
-            menu.sections[1][0]
-                .sections
-                .iter()
-                .flatten()
-                .any(|i| i.label == "Save Layout…")
-        );
         assert!(menu.sections[2].iter().any(|i| i.label == "Layers"));
         assert!(
             menu.sections[2]
@@ -4009,7 +4002,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 vec!["New Workspace…", "Manage Workspaces…"],
-                vec!["Save Layout…", "Load Layout…"],
                 vec!["Layout History…", "Restore Starting Layout…"],
             ]
         );
@@ -4023,7 +4015,12 @@ mod tests {
                 .sections
                 .iter()
                 .flatten()
-                .any(|item| item.label == "Load Layout…")
+                .all(|item| !matches!(
+                    item.action,
+                    Some(UiAction::WorkspaceManager {
+                        command: WorkspaceCommand::SaveAsTemplate | WorkspaceCommand::ManageTemplates
+                    })
+                ))
         );
         assert_eq!(menu.sections[1].len(), 2);
         let toolbars = &menu.sections[1][1];

@@ -13607,6 +13607,8 @@ fn native_workspace_menu_input() {
             click(popup_point(&popup, &workspace), 272);
             let manage = menu_label(popup.upcast_ref(), "Manage Workspaces…")
                 .expect("Workspace submenu should open");
+            assert!(menu_label(popup.upcast_ref(), "Save Layout…").is_none());
+            assert!(menu_label(popup.upcast_ref(), "Load Layout…").is_none());
             capture_popover(&popup, dir.join("Workspace.png").to_str().unwrap());
             click(popup_point(&popup, &manage), 272);
             assert!(
@@ -13622,6 +13624,7 @@ fn native_workspace_menu_input() {
                 ],
                 272,
             );
+            assert!(find_named(w.window.upcast_ref(), "workspace-start-with").is_none());
             let entry = find_named(w.window.upcast_ref(), "workspace-item-name").unwrap();
             let prompt = entry.ancestor(adw::AlertDialog::static_type()).unwrap();
             assert_eq!(
@@ -13632,86 +13635,6 @@ fn native_workspace_menu_input() {
                     .as_deref(),
                 Some("New Workspace")
             );
-            let cancel = find_button(&prompt, "Cancel")
-                .unwrap()
-                .compute_bounds(&w.window)
-                .unwrap();
-            click(
-                [
-                    cancel.x() + cancel.width() / 2.,
-                    cancel.y() + cancel.height() / 2.,
-                ],
-                272,
-            );
-            w.workspaces.ui.close();
-            pump(250);
-            click(
-                [
-                    bounds.x() + bounds.width() * 0.5,
-                    bounds.y() + bounds.height() * 0.5,
-                ],
-                272,
-            );
-            let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
-            click(popup_point(&popup, &workspace), 272);
-            let templates = menu_label(popup.upcast_ref(), "Load Layout…").unwrap();
-            click(popup_point(&popup, &templates), 272);
-            assert!(w.workspaces.ui.dialog.is_visible());
-            assert!(find_button(w.window.upcast_ref(), "Load Layout").is_some());
-            assert!(find_named(w.window.upcast_ref(), "workspace-manager-new").is_some());
-            assert!(find_button(w.window.upcast_ref(), "Backups and Storage…").is_none());
-            let active = w.workspaces.manager.as_ref().unwrap().active_id();
-            let list = find_named(w.window.upcast_ref(), "workspace-manager-items")
-                .unwrap()
-                .downcast::<gtk::ListBox>()
-                .unwrap();
-            let row = list
-                .row_at_index(0)
-                .unwrap()
-                .compute_bounds(&w.window)
-                .unwrap();
-            click(
-                [row.x() + row.width() / 2., row.y() + row.height() / 2.],
-                272,
-            );
-            assert!(
-                find_button(w.window.upcast_ref(), "Load Layout")
-                    .unwrap()
-                    .is_sensitive()
-            );
-            assert!(w.workspaces.ui.dialog.is_mapped());
-            assert_eq!(w.workspaces.manager.as_ref().unwrap().active_id(), active);
-            let plus = find_named(w.window.upcast_ref(), "workspace-manager-new")
-                .unwrap()
-                .compute_bounds(&w.window)
-                .unwrap();
-            click(
-                [plus.x() + plus.width() / 2., plus.y() + plus.height() / 2.],
-                272,
-            );
-            let entry = find_named(w.window.upcast_ref(), "workspace-item-name").unwrap();
-            let prompt = entry.ancestor(adw::AlertDialog::static_type()).unwrap();
-            assert_eq!(
-                prompt
-                    .downcast_ref::<adw::AlertDialog>()
-                    .unwrap()
-                    .heading()
-                    .as_deref(),
-                Some("Save Layout")
-            );
-            assert_eq!(
-                entry.downcast_ref::<gtk::Entry>().unwrap().text().as_str(),
-                format!(
-                    "{} Layout",
-                    w.workspaces
-                        .manager
-                        .as_ref()
-                        .unwrap()
-                        .active_name()
-                        .unwrap()
-                )
-            );
-            crate::capture(&w, dir.join("Save-Layout.png").to_str().unwrap());
             let cancel = find_button(&prompt, "Cancel")
                 .unwrap()
                 .compute_bounds(&w.window)
@@ -13896,7 +13819,7 @@ fn native_workspace_database_resume_and_independent_windows() {
 
 #[test]
 #[ignore = "requires an isolated CAPY_WORKSPACE_DIR and native GTK/Vulkan display"]
-fn native_named_workspace_manager_templates_library_and_history() {
+fn native_named_workspace_manager_library_and_history() {
     use layer_workspace::{ItemKind, ManagerAction as A, ManagerPage};
     assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
     let app = native_test_app("art.capycanvas.NamedWorkspaceManager");
@@ -13973,34 +13896,6 @@ fn native_named_workspace_manager_templates_library_and_history() {
         viewport: [1200., 900.],
     });
     let customized = durable_layout(&state(&w).workspace.layout);
-    run(
-        A::SaveAsTemplate(painting.clone()),
-        Some("Illustration"),
-        Some("Save Layout"),
-    );
-    let template = manager
-        .items()
-        .into_iter()
-        .find(|i| i.metadata.name == "Illustration")
-        .unwrap()
-        .id;
-    w.customize(CustomizationAction::SetPanelVisible {
-        panel: Panel::Layers,
-        visible: false,
-    });
-    let before_apply = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
-        .capture_workspace()
-        .unwrap();
-    let workspace_count = manager
-        .items()
-        .iter()
-        .filter(|i| i.metadata.kind == ItemKind::Workspace)
-        .count();
     let manager_list = || {
         find_named(w.window.upcast_ref(), "workspace-manager-items")
             .unwrap()
@@ -14042,131 +13937,10 @@ fn native_named_workspace_manager_templates_library_and_history() {
             .capture()
             .unwrap()
     };
-    w.workspaces.ui.show(&w, ManagerPage::Templates);
-    pump(200);
-    assert!(manager_list().selected_row().is_none());
-    let apply = find_button(w.window.upcast_ref(), "Load Layout").unwrap();
-    assert!(!apply.is_sensitive());
-    assert_eq!(
-        durable_layout(&state(&w).workspace.layout),
-        *before_apply.history.layout()
-    );
-    let saved_before_apply = saved(&painting);
-    assert_eq!(
-        saved_before_apply.history.layout(),
-        before_apply.history.layout()
-    );
-    assert_eq!(
-        saved_before_apply.history.generation,
-        before_apply.history.generation
-    );
-    select_item("Illustration");
-    pump(150);
-    assert!(apply.is_sensitive());
-    assert!(w.workspaces.ui.dialog.is_mapped());
-    assert_eq!(manager.active_id().as_deref(), Some(painting.as_str()));
-    assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
-    assert_eq!(capture(), before_apply);
-    assert_eq!(saved(&painting), saved_before_apply);
-    // Asynchronous loads must not display an older selection after a newer one.
-    select_item("Default");
-    select_item("Illustration");
-    select_item("Default");
-    pump(150);
-    assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
-    select_item("Illustration");
-    pump(100);
-    let search = find_named(w.window.upcast_ref(), "workspace-manager-search")
-        .unwrap()
-        .downcast::<gtk::SearchEntry>()
-        .unwrap();
-    search.set_text("no matching item");
-    pump(300);
-    assert!(manager_list().selected_row().is_none());
-    assert!(!apply.is_sensitive());
-    assert_eq!(
-        durable_layout(&state(&w).workspace.layout),
-        *before_apply.history.layout()
-    );
-    search.set_text("");
-    pump(300);
-    select_item("Illustration");
-    // Closing before an asynchronous selection returns must also restore.
-    find_button(w.window.upcast_ref(), "Cancel")
-        .unwrap()
-        .emit_clicked();
-    pump(200);
-    assert!(!w.workspaces.busy.get());
-    assert_eq!(
-        durable_layout(&state(&w).workspace.layout),
-        *before_apply.history.layout()
-    );
-    assert_eq!(capture(), before_apply);
-    assert_eq!(saved(&painting), saved_before_apply);
-    w.workspaces.ui.show(&w, ManagerPage::Templates);
-    pump(200);
-    select_item("Illustration");
-    pump(150);
-    crate::capture(&w, "/tmp/capy-workspace-templates-preview.png");
-    let apply = find_button(w.window.upcast_ref(), "Load Layout").unwrap();
-    apply.emit_clicked();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while w.workspaces.ui.dialog.is_mapped() || w.workspaces.busy.get() {
-        pump(20);
-        assert!(
-            Instant::now() < deadline,
-            "Load Layout did not finish: {:?}",
-            manager.error()
-        );
-    }
-    pump(100);
-    let applied = w
-        .gpu
-        .borrow_mut()
-        .as_mut()
-        .unwrap()
-        .session
-        .capture_workspace()
-        .unwrap();
-    assert_eq!(manager.active_id().as_deref(), Some(painting.as_str()));
-    assert_eq!(manager.active_name().as_deref(), Some("Painting"));
-    assert_eq!(
-        manager
-            .items()
-            .iter()
-            .filter(|i| i.metadata.kind == ItemKind::Workspace)
-            .count(),
-        workspace_count
-    );
-    assert_eq!(
-        glib::MainContext::default()
-            .block_on(manager.load(&template))
-            .unwrap()
-            .entity
-            .metadata
-            .name,
-        "Illustration"
-    );
-    assert_eq!(applied.working, before_apply.working);
-    assert_eq!(
-        applied.history.generation,
-        before_apply.history.generation + 1
-    );
-    assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::UndoWorkspace,
-    });
-    assert_eq!(
-        durable_layout(&state(&w).workspace.layout),
-        *before_apply.history.layout()
-    );
-    w.dispatch(UiAction::Invoke {
-        command: CommandId::RedoWorkspace,
-    });
-    assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
     run(A::New, Some("Inking"), Some("Create and Switch"));
     assert_eq!(manager.active_name().as_deref(), Some("Inking"));
     assert_eq!(durable_layout(&state(&w).workspace.layout), customized);
+    assert_eq!(state(&w).brush.diameter, 73.);
     let inking = manager.active_id().unwrap();
     w.dispatch(UiAction::SetBrushSize { value: 31. });
     w.customize(CustomizationAction::SetPanelVisible {
@@ -14195,6 +13969,32 @@ fn native_named_workspace_manager_templates_library_and_history() {
         if commit {
             apply.emit_clicked();
         } else {
+            // Workspace previews retain the same cancellation and stale-load
+            // protection after removing the separate saved-layout picker.
+            select_item("Painting");
+            select_item("Inking");
+            select_item("Painting");
+            pump(150);
+            assert_eq!(
+                durable_layout(&state(&w).workspace.layout),
+                *painting_before_preview.history.layout()
+            );
+            select_item("Inking");
+            let search = find_named(w.window.upcast_ref(), "workspace-manager-search")
+                .unwrap()
+                .downcast::<gtk::SearchEntry>()
+                .unwrap();
+            search.set_text("no matching item");
+            pump(300);
+            assert!(manager_list().selected_row().is_none());
+            assert!(!apply.is_sensitive());
+            assert_eq!(
+                durable_layout(&state(&w).workspace.layout),
+                *painting_before_preview.history.layout()
+            );
+            search.set_text("");
+            pump(300);
+            select_item("Inking");
             find_button(w.window.upcast_ref(), "Cancel")
                 .unwrap()
                 .emit_clicked();
@@ -14440,16 +14240,11 @@ fn native_named_workspace_manager_templates_library_and_history() {
         "Workspace list should have no details pane"
     );
     crate::capture(&w, "/tmp/capy-workspace-manager-simple.png");
-    w.workspaces.ui.show(&w, ManagerPage::Templates);
-    pump(200);
-    assert!(find_named(w.window.upcast_ref(), "workspace-manager-search").is_some());
-    assert!(
-        find_named(w.window.upcast_ref(), "workspace-manager-details")
-            .is_none_or(|widget| !widget.is_mapped())
-    );
-    assert!(find_button(w.window.upcast_ref(), "Load Layout").is_some());
+    assert!(find_button(w.window.upcast_ref(), "Switch to Workspace").is_some());
     assert!(find_named(w.window.upcast_ref(), "workspace-manager-new").is_some());
     for label in [
+        "Save Layout",
+        "Load Layout",
         "Export…",
         "Previous Versions…",
         "Recently Deleted…",
@@ -14458,13 +14253,12 @@ fn native_named_workspace_manager_templates_library_and_history() {
     ] {
         assert!(find_button(w.window.upcast_ref(), label).is_none());
     }
-    crate::capture(&w, "/tmp/capy-workspace-templates-simple.png");
     assert_eq!(
         w.gpu.borrow().as_ref().unwrap().session.engine().document(),
         &drawing
     );
     let saved_before_close = saved(&painting);
-    select_item("Default");
+    select_item("Inking");
     pump(150);
     assert!(w.workspaces.busy.get());
     // GTK dismisses the modal on the first window-close action. A second

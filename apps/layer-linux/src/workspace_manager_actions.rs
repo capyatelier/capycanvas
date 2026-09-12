@@ -41,9 +41,8 @@ impl NativeWorkspaces {
                 self.ui.show(w, ManagerPage::Workspaces);
                 return Ok(());
             }
-            WorkspaceCommand::ManageTemplates => {
-                self.ui.show(w, ManagerPage::Templates);
-                return Ok(());
+            WorkspaceCommand::ManageTemplates | WorkspaceCommand::SaveAsTemplate => {
+                return Err("Use workspaces to save and load your setup.".into());
             }
             WorkspaceCommand::ManageToolbars => {
                 self.ui.show(w, ManagerPage::ThisWorkspace);
@@ -51,9 +50,6 @@ impl NativeWorkspaces {
             }
             WorkspaceCommand::Switch { id } => A::Switch(id),
             WorkspaceCommand::New => A::New,
-            WorkspaceCommand::SaveAsTemplate => {
-                A::SaveAsTemplate(current.ok_or("No workspace is active")?)
-            }
             WorkspaceCommand::ResetLayout => A::Reset(current.ok_or("No workspace is active")?),
             WorkspaceCommand::LayoutHistory => A::History(current.ok_or("No workspace is active")?),
             WorkspaceCommand::SaveToolbar { panel } => A::SaveToolbar(panel),
@@ -180,19 +176,17 @@ impl NativeWorkspaces {
                     }
                 }
             }
-            A::New
-            | A::EditAsWorkspace(_)
-            | A::Duplicate(_)
-            | A::Rename(_)
-            | A::SaveAsTemplate(_)
-            | A::SaveToolbar(_) => {
+            A::New | A::Duplicate(_) | A::Rename(_) | A::SaveToolbar(_) => {
                 self.named(w, action).await?;
             }
-            A::UseTemplate(id) => {
-                let _operation = self.begin_operation(w).await?;
-                let incoming = manager.apply_template(&id, now_ms()).await?;
-                self.ui.close();
-                self.adopt(w, Ok(incoming)).await;
+            // These shared variants remain until the core layout-library API is retired.
+            A::UseTemplate(_)
+            | A::EditAsWorkspace(_)
+            | A::SaveAsTemplate(_)
+            | A::UpdateFromCurrent(_) => {
+                return Err(StoreError::invalid(
+                    "Use workspaces to save and load your setup.",
+                ));
             }
             A::Reset(id) => {
                 let stored = self.selected(&id).await?;
@@ -213,30 +207,6 @@ impl NativeWorkspaces {
                         return Err(error);
                     }
                 }
-            }
-            A::UpdateFromCurrent(id) => {
-                let stored = self.selected(&id).await?;
-                let current = manager
-                    .current()
-                    .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
-                let prompt = layer_workspace::update_prompt(&stored.entity, &current);
-                if !dialog::confirm(w, &prompt.title, &prompt.message, prompt.confirm, false).await
-                {
-                    return Ok(());
-                }
-                let _operation = self.begin_operation(w).await?;
-                let content = ReusableContent::Layout {
-                    layout: manager
-                        .current()
-                        .unwrap()
-                        .capture()?
-                        .history
-                        .layout()
-                        .clone(),
-                };
-                let result = manager.update_reusable(&id, content, now_ms()).await;
-                self.finish_operation(w);
-                result?;
             }
             A::Delete(id) => {
                 let stored = self.selected(&id).await?;
@@ -408,9 +378,7 @@ impl NativeWorkspaces {
     async fn named(&self, w: &Rc<Workspace>, action: A) -> Result<()> {
         let manager = self.manager.as_ref().unwrap();
         let source_id = match &action {
-            A::EditAsWorkspace(id) | A::Duplicate(id) | A::Rename(id) | A::SaveAsTemplate(id) => {
-                Some(id.as_str())
-            }
+            A::Duplicate(id) | A::Rename(id) => Some(id.as_str()),
             _ => None,
         };
         let source = if let Some(id) = source_id {
@@ -418,26 +386,9 @@ impl NativeWorkspaces {
         } else {
             None
         };
-        let creation = matches!(action, A::New | A::EditAsWorkspace(_));
-        let mut choices = Vec::new();
-        if creation {
-            choices.push((String::new(), "Current layout".into()));
-            choices.extend(
-                manager
-                    .items()
-                    .into_iter()
-                    .filter(|i| {
-                        i.metadata.kind == ItemKind::Template && i.metadata.deleted_at_ms.is_none()
-                    })
-                    .map(|i| (i.id, i.metadata.name)),
-            );
-        }
         let mut name = match &action {
             A::Rename(_) => source.as_ref().unwrap().entity.metadata.name.clone(),
             A::Duplicate(_) => format!("{} Copy", source.as_ref().unwrap().entity.metadata.name),
-            A::SaveAsTemplate(_) => {
-                format!("{} Layout", source.as_ref().unwrap().entity.metadata.name)
-            }
             A::SaveToolbar(panel) => manager
                 .current()
                 .unwrap()
@@ -469,11 +420,6 @@ impl NativeWorkspaces {
                 "Copy this workspace for another task.",
                 "Duplicate and Switch",
             ),
-            A::SaveAsTemplate(_) => (
-                "Save Layout",
-                "Save this tool and panel arrangement to reuse in any workspace.",
-                "Save Layout",
-            ),
             A::SaveToolbar(_) => (
                 "Save to Toolbar Library",
                 "Save this toolbar to reuse in any workspace.",
@@ -485,7 +431,6 @@ impl NativeWorkspaces {
                 "Create and Switch",
             ),
         };
-        let mut selected = source_id.map(str::to_string);
         let mut error = None;
         loop {
             let show_description = matches!(action, A::Rename(_))
@@ -500,8 +445,8 @@ impl NativeWorkspaces {
                 confirm,
                 &name,
                 desc,
-                &choices,
-                selected.as_deref(),
+                &[],
+                None,
                 error.as_deref(),
             )
             .await
@@ -512,16 +457,10 @@ impl NativeWorkspaces {
             if show_description {
                 description = values.description;
             }
-            selected = values.choice;
             let _operation = self.begin_operation(w).await?;
             let outcome: Result<Option<StoredEntity>> = match &action {
-                A::New | A::EditAsWorkspace(_) => manager
-                    .create_workspace(
-                        &name,
-                        selected.as_deref().filter(|s| !s.is_empty()),
-                        false,
-                        now_ms(),
-                    )
+                A::New => manager
+                    .create_workspace(&name, None, false, now_ms())
                     .await
                     .map(Some),
                 A::Duplicate(id)
@@ -544,17 +483,6 @@ impl NativeWorkspaces {
                     .rename(id, &name, &description, now_ms())
                     .await
                     .map(|_| None),
-                A::SaveAsTemplate(id) => {
-                    async {
-                        manager.flush().await?;
-                        let snapshot = self.snapshot_source(id).await?;
-                        manager
-                            .save_template_snapshot(snapshot, &name, &description, now_ms())
-                            .await
-                            .map(|_| None)
-                    }
-                    .await
-                }
                 A::SaveToolbar(panel) => manager
                     .save_toolbar(*panel, &name, now_ms())
                     .await

@@ -1,7 +1,8 @@
 # Workspace manager: approved host implementation handoff
 
-The user approved the GTK design on 2026-09-12. Other-platform implementation can
-start. This document and the [GTK visual reference](workspace-manager-gtk-redesign.md)
+The user approved the GTK design on 2026-09-12 and then removed separate layout
+load/save from scope. Implement saved workspaces, workspace previews, and history.
+This document and the [GTK visual reference](workspace-manager-gtk-redesign.md)
 define the approved scope. The [original proposal](workspace-manager-proposal.md)
 and its review are historical background; their larger UI is superseded.
 
@@ -10,16 +11,15 @@ and its review are historical background; their larger UI is superseded.
 | Term | Meaning |
 | --- | --- |
 | Workspace | A named layout and its latest tool settings, saved automatically for a task |
-| Saved layout | A named, reusable arrangement of tools and panels, including toolbar configuration |
 | Layout History | Earlier arrangements of the current workspace; excludes historical tool settings and document edits |
-| Starting layout | The workspace's original arrangement, retained even after loading another saved layout |
+| Starting layout | The workspace's original arrangement |
 
 Use the exact shared captions and introductory copy in
 [`workspace_manager_ui.rs`](../../crates/layer-ui/src/workspace_manager_ui.rs) and
-the GTK reference. Internal names such as `Template`, `ManageTemplates`,
-`SaveAsTemplate`, and `UseTemplate` are compatibility vocabulary, not UI wording.
-Do not rename serialized record kinds, command IDs, or package formats just to
-match the visible Layout terminology.
+the GTK reference. Do not implement separate saved-layout menus, dialogs, or host
+operations. Shared template APIs and serialized records remain temporarily; their
+removal belongs to the core cleanup. Preserve existing stored data during that
+transition. A Reset All Brushes action is planned separately.
 
 ## Approved UI and behavior
 
@@ -28,11 +28,10 @@ Workspaces, then Quick Access Toolbars, followed by the direct panel rows.
 Quick Access Toolbars is a sibling directly below Workspaces. Panel and toolbar
 visibility names omit the redundant "panel" and "toolbar" suffixes.
 
-Workspaces contains recent workspace choices followed by three sections:
+Workspaces contains recent workspace choices followed by two sections:
 
 1. New Workspace… / Manage Workspaces…
-2. Save Layout… / Load Layout…
-3. Layout History… / Restore Starting Layout…
+2. Layout History… / Restore Starting Layout…
 
 Recent workspace menu choices switch directly. The manager dialogs use preview
 selection and explicit confirmation instead:
@@ -42,30 +41,22 @@ selection and explicit confirmation instead:
   Initially select the current workspace and disable its Switch button. An item
   already owned by another window offers Switch to Window through the existing
   ownership policy.
-- **Saved Layouts:** opened by Load Layout…, with a top-right + for Save Layout,
-  per-row Rename/Delete for user entries, Cancel and Load Layout below the list.
-  Initially no row is selected and Load Layout is disabled. The included Default
-  layout can be loaded but cannot be renamed/deleted. Save Layout suggests
-  `<workspace name> Layout`; the name is editable and ordinary collision handling
-  remains in place.
 - **Layout History — <workspace name>:** one scrollable list of versions, Cancel,
   and Restore This Version. Select the current version initially and disable its
   Restore button. Entries identify affected panels/toolbars and the action/date.
   Do not add "select a version to preview" instructions.
 
-In all three dialogs, row selection, double-click, and Enter on a row only preview
+In both dialogs, row selection, double-click, and Enter on a row only preview
 the arrangement in the actual editor behind the dialog. Confirming with the
 button finalizes it. Cancel, Escape, back navigation, and native modal dismissal
 restore the original arrangement. Use opaque dialogs and a light enough backdrop
 to see the preview. Adapt sizing to the host and viewport without changing these
 semantics; retain keyboard focus, accessibility labels, and scrollable lists.
 
-New Workspace supports a name and starting layout. Starting from Current layout
-copies the current working settings into a new independent history. Starting from
-a saved layout uses default working settings. Loading a saved layout into an
-existing workspace preserves its identity, starting layout, and working settings.
-It creates one undoable layout change, or no event if the layout is identical.
-Restore Starting Layout restores the original baseline with one undoable change.
+New Workspace asks for a name and copies the current layout and tool settings into
+a new independent history. There is no saved-layout source selector. Switching to
+a workspace restores that workspace’s latest tool settings and layout. Restore
+Starting Layout restores its original baseline with one undoable change.
 
 Keep the existing simple toolbar management flow. Do not add Recently Deleted,
 backup/import/export, metadata or saved-layout version screens, duplication/update
@@ -142,14 +133,13 @@ refactor is a prerequisite to starting the host work.
 
 ## Acceptance evidence for each host
 
-1. Real native/browser input opens menus, both + dialogs, row options, and history.
+1. Real native/browser input opens menus, the New Workspace + dialog, row options, and history.
    Capture and inspect screenshots against the approved GTK reference.
 2. Selection previews without switching, saving, or adding history. Verify rapid
    selections, filtering away a selection, Cancel/Escape/back, and dismissal while
-   a load is pending. Verify default saved-layout naming and explicit button apply.
-3. Load Layout preserves current workspace identity/tool settings/baseline and is
-   undoable once. Switch to Workspace restores that workspace's own latest tool
-   settings. Layout History and Restore Starting Layout preserve tool settings.
+   a load is pending. Verify workspace naming and explicit button apply.
+3. Switch to Workspace restores that workspace's own latest tool settings and
+   layout. Layout History and Restore Starting Layout preserve tool settings.
 4. Restart preserves active workspaces, settings, layout history, and undo/redo.
    Live tool changes do not create layout history; gestures create one event.
 5. Existing legacy state migrates once, including interrupted/concurrent startup.
@@ -162,7 +152,7 @@ refactor is a prerequisite to starting the host work.
 
 Run the shared UI/store suite and the host's relevant build and integration checks.
 For Web, run the store contract cases against IndexedDB itself. GTK reference
-checks are `native_named_workspace_manager_templates_library_and_history` and
+checks are `native_named_workspace_manager_library_and_history` and
 `apps/layer-linux/bench/workspace-menus.sh`; their bodies show assertions and
 safe isolation requirements. Record actual host test/build/screenshot evidence;
 GTK approval alone does not certify another platform implementation.

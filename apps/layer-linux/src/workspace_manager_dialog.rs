@@ -188,10 +188,7 @@ impl ManagerUi {
             #[weak]
             w,
             move |_, row| {
-                if matches!(
-                    w.workspaces.ui.page.get(),
-                    ManagerPage::Workspaces | ManagerPage::Templates
-                ) {
+                if w.workspaces.ui.page.get() == ManagerPage::Workspaces {
                     w.workspaces.ui.list.select_row(Some(row));
                     return;
                 }
@@ -204,6 +201,10 @@ impl ManagerUi {
         ));
     }
     pub fn show(&self, w: &Rc<Workspace>, page: ManagerPage) {
+        // The shared enum still includes layouts while its core API is retired.
+        if page == ManagerPage::Templates {
+            return;
+        }
         self.stop_preview();
         self.presented.set(true);
         *self.selected.borrow_mut() = None;
@@ -215,10 +216,9 @@ impl ManagerUi {
             ManagerPage::ThisWorkspace | ManagerPage::ToolbarLibrary
         );
         self.generation.set(self.generation.get().wrapping_add(1));
-        let compact = matches!(page, ManagerPage::Workspaces | ManagerPage::Templates);
+        let compact = page == ManagerPage::Workspaces;
         let empty = gtk::Label::new(Some(match page {
             ManagerPage::Workspaces => "No matching workspaces.",
-            ManagerPage::Templates => "No matching layouts.",
             _ => "No matching toolbars.",
         }));
         margins(&empty, 18);
@@ -226,11 +226,7 @@ impl ManagerUi {
         self.list.set_selection_mode(gtk::SelectionMode::Single);
         self.footer.set_visible(compact);
         self.create.set_visible(compact);
-        self.apply.set_label(if page == ManagerPage::Templates {
-            "Load Layout"
-        } else {
-            "Switch to Workspace"
-        });
+        self.apply.set_label("Switch to Workspace");
         self.dialog
             .set_content_width(if compact { 460 } else { 780 });
         self.dialog
@@ -245,9 +241,7 @@ impl ManagerUi {
             ManagerPage::Workspaces => {
                 "Workspaces save your tool settings and layout for different tasks."
             }
-            ManagerPage::Templates => {
-                "Layouts save tool and panel arrangements to reuse in any workspace."
-            }
+            ManagerPage::Templates => unreachable!(),
             ManagerPage::ThisWorkspace => "Arrange the toolbars in this workspace.",
             ManagerPage::ToolbarLibrary => "Save toolbars to reuse in any workspace.",
         });
@@ -276,20 +270,10 @@ impl ManagerUi {
         clear(&self.actions);
         let action = match page {
             ManagerPage::Workspaces => Some(ManagerAction::New),
-            ManagerPage::Templates => w
-                .workspaces
-                .manager
-                .as_ref()
-                .and_then(|m| m.active_id())
-                .map(ManagerAction::SaveAsTemplate),
             _ => None,
         };
         *self.create_action.borrow_mut() = action;
-        let create_label = if page == ManagerPage::Templates {
-            "Save Current Layout"
-        } else {
-            "New Workspace"
-        };
+        let create_label = "New Workspace";
         self.create.set_tooltip_text(Some(create_label));
         self.create
             .update_property(&[gtk::accessible::Property::Label(create_label)]);
@@ -333,10 +317,7 @@ impl ManagerUi {
             return;
         };
         let rows = manager.rows(self.page.get(), &self.search.text(), now_ms());
-        let compact = matches!(
-            self.page.get(),
-            ManagerPage::Workspaces | ManagerPage::Templates
-        );
+        let compact = self.page.get() == ManagerPage::Workspaces;
         self.search
             .set_visible(!compact || rows.len() > 7 || !self.search.text().is_empty());
         let selected = self.selected.borrow().clone().or_else(|| {
@@ -359,8 +340,7 @@ impl ManagerUi {
             row.set_use_markup(false);
             row.set_activatable(true);
             if compact {
-                let templates = self.page.get() == ManagerPage::Templates;
-                let active = !templates && manager.active_id().as_deref() == Some(&item.id);
+                let active = manager.active_id().as_deref() == Some(&item.id);
                 if active {
                     row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
                 }
@@ -409,10 +389,7 @@ impl ManagerUi {
         }
     }
     fn selection(&self, w: &Rc<Workspace>) {
-        if matches!(
-            self.page.get(),
-            ManagerPage::Workspaces | ManagerPage::Templates
-        ) {
+        if self.page.get() == ManagerPage::Workspaces {
             self.preview_selection(w);
             return;
         }
@@ -506,10 +483,7 @@ impl ManagerUi {
     fn start_preview(&self, w: &Rc<Workspace>) {
         if !self.presented.get()
             || self.action_pending.get()
-            || !matches!(
-                self.page.get(),
-                ManagerPage::Workspaces | ManagerPage::Templates
-            )
+            || self.page.get() != ManagerPage::Workspaces
         {
             return;
         }
@@ -578,7 +552,7 @@ impl ManagerUi {
                 let result = stored.and_then(|stored| {
                     if stored.entity.metadata.deleted_at_ms.is_some() {
                         return Err(StoreError::invalid(
-                            "This item was deleted. Choose another layout.",
+                            "This workspace was deleted. Choose another workspace.",
                         ));
                     }
                     let details =
@@ -604,7 +578,6 @@ impl ManagerUi {
                 match result {
                     Ok(Some(primary)) => {
                         ui.apply.set_label(match &primary.action {
-                            ManagerAction::UseTemplate(_) => "Load Layout",
                             ManagerAction::SwitchToWindow(_) => "Switch to Window",
                             _ => "Switch to Workspace",
                         });

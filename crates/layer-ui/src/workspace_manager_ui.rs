@@ -69,10 +69,6 @@ impl ManagedWorkspace {
                     command("Manage Workspaces…", WorkspaceCommand::Manage, true),
                 ],
                 vec![
-                    command("Save Layout…", WorkspaceCommand::SaveAsTemplate, idle),
-                    command("Load Layout…", WorkspaceCommand::ManageTemplates, true),
-                ],
-                vec![
                     command("Layout History…", WorkspaceCommand::LayoutHistory, idle),
                     command(
                         "Restore Starting Layout…",
