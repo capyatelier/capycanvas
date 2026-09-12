@@ -6,7 +6,7 @@ pub(super) struct NativeTabSlide {
     pub clip: Bounds,
     pub tabs: Vec<SlidingTab>,
     source: usize,
-    hits: Vec<TabHit>,
+    pub hits: Vec<TabHit>,
     started: i64,
     duration: i64,
     tick: Rc<RefCell<Option<gtk::TickCallbackId>>>,
@@ -60,7 +60,7 @@ impl NativeTabSlide {
 }
 
 impl Workspace {
-    pub(super) fn start_tab_slide(self: &Rc<Self>, drag: &mut NativeWorkspaceDrag) {
+    pub(super) fn grab_tab_slide(self: &Rc<Self>, drag: &mut NativeWorkspaceDrag) {
         let DragTarget::Dock(DockItem::Panel { panel }) = drag.target else {
             return;
         };
@@ -108,16 +108,13 @@ impl Workspace {
                     bounds: tab.bounds,
                 })
                 .collect();
-            for tab in &tabs {
-                tab.widget.set_opacity(0.);
-            }
             let duration = if gtk::Settings::default().is_some_and(|s| s.is_gtk_enable_animations())
             {
                 120_000
             } else {
                 0
             };
-            drag.tab = Some(NativeTabSlide {
+            drag.tab_grab = Some(NativeTabSlide {
                 bounds: tabs[source].bounds,
                 clip,
                 tabs,
@@ -127,8 +124,17 @@ impl Workspace {
                 duration,
                 tick: Rc::new(RefCell::new(None)),
             });
-            self.queue_tab_joins();
             break;
+        }
+    }
+
+    pub(super) fn start_tab_slide(&self, drag: &mut NativeWorkspaceDrag) {
+        drag.tab = drag.tab_grab.take();
+        if let Some(tab) = &drag.tab {
+            for tab in &tab.tabs {
+                tab.widget.set_opacity(0.);
+            }
+            self.queue_tab_joins();
         }
     }
 
@@ -138,7 +144,7 @@ impl Workspace {
             .gpu
             .borrow()
             .as_ref()
-            .and_then(|g| g.session.tab_drag_preview(drag.point, &tab.hits, tab.clip));
+            .and_then(|g| g.session.tab_drag_preview(drag.point));
         let Some(preview) = preview else {
             self.clear_tab_slide(drag);
             return;

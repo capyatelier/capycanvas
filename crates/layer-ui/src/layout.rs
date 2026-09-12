@@ -3695,7 +3695,7 @@ fn resize_node_extent(
     }
 }
 
-fn tab_insertion_line(group: &GroupPlacement, tabs: &[TabHit], index: usize) -> Bounds {
+pub(crate) fn tab_insertion_line(group: &GroupPlacement, tabs: &[TabHit], index: usize) -> Bounds {
     let b = group.bounds;
     let slot = tabs
         .iter()

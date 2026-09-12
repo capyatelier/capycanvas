@@ -640,6 +640,7 @@ struct NativeWorkspaceDrag {
     sequence: Option<gdk::EventSequence>,
     cursor: Option<(gtk::Widget, Option<gdk::Cursor>)>,
     tab: Option<NativeTabSlide>,
+    tab_grab: Option<NativeTabSlide>,
 }
 
 struct GroupView {
@@ -2516,7 +2517,7 @@ impl Workspace {
             if self.workspace_drag.borrow().is_none()
                 && let Some(target) = self.drag_target_at(point)
             {
-                *self.workspace_drag.borrow_mut() = Some(NativeWorkspaceDrag {
+                let mut drag = NativeWorkspaceDrag {
                     target,
                     origin: point,
                     point,
@@ -2524,7 +2525,10 @@ impl Workspace {
                     sequence,
                     cursor: None,
                     tab: None,
-                });
+                    tab_grab: None,
+                };
+                self.grab_tab_slide(&mut drag);
+                *self.workspace_drag.borrow_mut() = Some(drag);
             }
             return false;
         }
@@ -2600,6 +2604,11 @@ impl Workspace {
             }
             *self.workspace_drag.borrow_mut() = Some(drag.clone());
             self.dispatch_drag(drag.target, ContactPhase::Down, drag.origin);
+            if let Some(tab) = &drag.tab
+                && let Some(gpu) = self.gpu.borrow_mut().as_mut()
+            {
+                gpu.session.begin_tab_drag(&tab.hits, tab.clip);
+            }
         }
         drag.point = point;
         *self.workspace_drag.borrow_mut() = Some(drag.clone());

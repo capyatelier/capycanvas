@@ -35,7 +35,7 @@ export async function checkDragCursors({ call, evaluate, settle }) {
       const original = await rect(selector), start = center(original);
       const neighbor = await rect('.dock-tab[data-panel="properties"]');
       await press(start); await move({ x: start.x + 2, y: start.y }); await clean();
-      for (const dx of [24, 50, 24, -16]) {
+      for (const dx of [17, 19, 19, 17, 50, 24, -16]) {
         await move({ x: start.x + dx, y: start.y + 8 });
         const preview = await rect('.dragged-tab-preview');
         assert.equal(preview.x, original.x + Math.max(0, dx), "Attached tab follows the pointer within its strip");
@@ -43,8 +43,8 @@ export async function checkDragCursors({ call, evaluate, settle }) {
         assert.equal(preview.width, original.width);
         assert.deepEqual(await rect(selector), original, "The tab's insertion slot stays fixed");
         assert.deepEqual(await rect('.dock-tab[data-panel="properties"]'), neighbor);
-        assert.equal((await rect('.neighbor-tab-preview')).x, neighbor.x - (dx === 50 ? original.width : 0),
-          "Neighbor slides aside at its original midpoint and returns when the pointer reverses");
+        assert.equal((await rect('.neighbor-tab-preview')).x, neighbor.x - (dx >= neighbor.width / 2 ? original.width : 0),
+          "The dragged edge crosses a frozen midpoint; the same boundary reverses the swap");
         assert.equal(await evaluate("layerApp.state().workspace.layout.floating.length"), 0);
       }
       const clip = await rect('.tab-slide-overlay');
@@ -71,12 +71,15 @@ export async function checkDragCursors({ call, evaluate, settle }) {
       await send({ type: "restore_workspace", workspace: fixture });
       const selector = '.dock-tab[data-panel="properties"]';
       const source = await rect(selector);
-      await press(center(source));
+      const start = center(source);
+      await press(start);
       const first = await rect('.dock-tab[data-panel="layers"]');
-      await move({ x: first.x + 2, y: first.y + first.height / 2 });
+      // Release just past halfway, before the pointer reaches the old midpoint.
+      const target = { x: start.x - first.width / 2 - 1, y: start.y };
+      await move(target);
       assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview').length"), 1);
       assert.equal((await rect('.neighbor-tab-preview')).x, first.x + source.width);
-      await move({ x: first.x + 2, y: first.y + first.height / 2 });
+      await move(target);
       assert.equal((await rect('.neighbor-tab-preview')).x, first.x + source.width,
         "Moving neighbors cannot oscillate the insertion decision");
       if (end === "cancel") await evaluate("document.querySelector('#workspace').dispatchEvent(new PointerEvent('pointercancel',{pointerId:1,bubbles:true}))");

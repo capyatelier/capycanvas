@@ -11177,19 +11177,27 @@ fn native_tab_slide_input() {
             .find(|hit| hit.group == group && hit.index == 0)
             .unwrap()
             .bounds;
-        let last = before_hits
+        let neighbor = before_hits
             .iter()
-            .filter(|hit| hit.group == group)
-            .max_by_key(|hit| hit.index)
+            .find(|hit| hit.group == group && hit.index == 1)
             .unwrap()
             .bounds;
-        // Cross a neighbor, pause, and reverse. Snapshot animation must leave
-        // the original insertion targets fixed and undo the displacement.
-        let target_x = if panel == Panel::Layers {
-            last.x + last.width * 0.5 + 2.
+        // Cross only halfway over the adjacent tab, pause, and reverse across
+        // that same boundary. The pointer has not reached the old midpoint.
+        let threshold = if panel == Panel::Layers {
+            neighbor.width * 0.5
         } else {
-            first.x + 2.
+            -first.width * 0.5
         };
+        let direction = threshold.signum();
+        let target_x = start[0] + threshold + direction * 2.;
+        for crossed in [false, true, true, false] {
+            let x = start[0] + threshold + direction * if crossed { 2. } else { -2. };
+            perform(serde_json::json!([{ "point": [x, start[1]] }]));
+            let drag = w.workspace_drag.borrow();
+            let slide = drag.as_ref().unwrap().tab.as_ref().unwrap();
+            assert_eq!(slide.tabs.iter().any(|tab| tab.to != 0.), crossed);
+        }
         for _ in 0..2 {
             perform(serde_json::json!([{ "point": [target_x, start[1]] }]));
             let drag = w.workspace_drag.borrow();
@@ -11226,16 +11234,24 @@ fn native_tab_slide_input() {
             ];
             perform(serde_json::json!([{ "point": point }]));
             assert_eq!(state(&w).workspace.layout.floating.len(), 1);
+            let layout = w.gpu.borrow().as_ref().unwrap().session.layout([
+                w.surface.width() as f32,
+                w.surface.height() as f32,
+            ]);
+            let floated = layout
+                .groups
+                .iter()
+                .find(|g| g.floating && g.active == panel)
+                .unwrap();
+            assert!(
+                (floated.bounds.x - (point[0] - (start[0] - bounds.x()))).abs() < 1.,
+                "The pointer stays over the grabbed point within the detached tab"
+            );
             assert!(w.workspace_drag.borrow().as_ref().unwrap().tab.is_none());
             assert_eq!(tab.opacity(), 1.);
             w.workspace_drag_input(ContactPhase::Cancel, point, None);
         } else if end == "release" {
-            let first = before_hits
-                .iter()
-                .find(|hit| hit.group == group && hit.index == 0)
-                .unwrap()
-                .bounds;
-            point = [first.x + 2., first.y + first.height * 0.5];
+            point = [target_x, start[1]];
             perform(serde_json::json!([{ "point": point }]));
         } else if end == "blur" {
             w.interact(UiInput::Blur);
@@ -11263,7 +11279,6 @@ fn native_tab_slide_input() {
     w.window.destroy();
     pump(100);
 }
-
 
 #[test]
 #[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]

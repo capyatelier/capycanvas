@@ -57,7 +57,8 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         await send({type:"restore_workspace",workspace:fixture});await open();
         const b=await rect(drawer),g=await rect(`${drawer} .column-drawer-grip`);
         assert.ok(Math.abs(g.x+g.width-b.x-b.width)<1,"Grip stays at the right edge");
-        const start=source==="grip"?center(g):source==="empty"?{x:g.x-12,y:g.y+g.height/2}:center(await rect(`${drawer} .drawer-tabs .dock-tab[data-panel="${source==="active"?"brushes":"sizes"}"]`));
+        const tab=["active","inactive"].includes(source)?await rect(`${drawer} .drawer-tabs .dock-tab[data-panel="${source==="active"?"brushes":"sizes"}"]`):null;
+        const start=source==="grip"?center(g):source==="empty"?{x:g.x-12,y:g.y+g.height/2}:center(tab);
         const before=await snap(),away=await evaluate("({x:innerWidth*.5,y:innerHeight*.55})");
         await press(start);await move({x:start.x+10,y:start.y});assert.deepEqual(await snap(),before,`${pointer} ${source}: Moving inside drawer keeps source docked`);
         assert.equal(await evaluate("document.querySelectorAll('.dragged-tab-preview').length"),["active","inactive"].includes(source)?1:0);
@@ -70,6 +71,12 @@ export async function checkDrawerDragging({call,evaluate,settle}) {
         assert.deepEqual(measured,b,"Rust receives displayed drawer bounds");
         await move(away);assert.equal((await snap()).layout.floating.length,1,`${pointer} ${source} live tear-off: ${JSON.stringify(await evaluate("({status:document.querySelector('#status').textContent,drawer:layerApp.state().customization.column_drawers})"))}`);
         assert.equal(await evaluate("document.querySelectorAll('.tab-slide-overlay, .dragged-tab-source').length"),0);
+        if (["active", "inactive"].includes(source)) {
+          const panel = source === "inactive" ? "sizes" : "brushes";
+          const floated = await rect(`.dock-group .dock-tab[data-panel="${panel}"]`);
+          assert.ok(Math.abs(floated.x - (away.x - tab.width / 2)) < 1,
+            "Detachment preserves the grab point within the original tab");
+        }
         await release();
         assert.deepEqual((await snap()).layout.panels,before.layout.panels,"Tear-off preserves tab preferences");
         const moved=await group(source==="inactive"?"sizes":"brushes");

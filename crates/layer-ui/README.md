@@ -22,6 +22,27 @@ The workspace model describes both panel placement and configurable contents.
 Layout changes have their own history, separate from artwork undo. Preferences,
 workspace state and project data also have separate persistence models.
 
+## Sliding workspace tabs
+
+At pointer down, capture every tab's original `TabHit` (including its full natural
+width) and the visible tab-strip bounds, in logical workspace coordinates. Once
+the drag is recognized, send `DragWorkspace` with `ContactPhase::Down` and the
+original press point, then call `UiSession::begin_tab_drag` with that geometry.
+
+After each drag move, `tab_drag_preview(position)` returns the dragged tab's
+clamped bounds and each neighbor's horizontal offset. Render these positions
+without moving the original hit targets; animate neighbor offsets in the host.
+Remove the visual overlay when the preview becomes `None`, or on release,
+cancellation, capture loss or blur. Continue sending the raw pointer position to
+`DragWorkspace` so clamping does not interfere with undocking.
+
+The core precomputes switch points from the dragged tab's leading edge to each
+neighbor's original midpoint. The same fixed points apply in both directions,
+with no hysteresis. It also uses these points for the drop target and committed
+order, so hosts must not implement their own tab-reordering thresholds.
+On detachment it preserves the grab offset within the original tab, rather than
+within the source group, keeping the grabbed point under the pointer.
+
 ## Where to start
 
 | Source | Contents |

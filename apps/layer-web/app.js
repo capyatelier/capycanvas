@@ -691,21 +691,29 @@ function update(regions) {
 // records; CSS animates the returned visibility without resizing the canvas.
 let revealPointer = null;
 let workspaceGesture = null;
-function startTabSlide(drag) {
+function grabTabSlide(drag) {
   if (!drag.node.matches(".dock-tab")) return;
   const strip = drag.node.parentElement;
+  if (!strip.matches(".tab-list, .drawer-tab-strip")) return;
   const group = JSON.parse(strip.parentElement.dataset.workspaceDrag).item.group;
   const rect = node => {
     const b = node.getBoundingClientRect();
     return { x: b.x, y: b.y, width: b.width, height: b.height };
   };
-  const clip = rect(strip), overlay = element("div", "tab-slide-overlay");
+  drag.tabGrab = { clip: rect(strip), tabs: [...strip.children].map((source, index) =>
+    ({ source, hit: { group, index, bounds: rect(source) } })) };
+}
+function startTabSlide(drag) {
+  if (!drag.tabGrab) return;
+  const { clip, tabs: grabbed } = drag.tabGrab;
+  drag.tabGrab = null;
+  const overlay = element("div", "tab-slide-overlay");
   Object.assign(overlay.style, { left: `${clip.x}px`, top: `${clip.y}px`,
     width: `${clip.width}px`, height: `${clip.height}px` });
   overlay.setAttribute("aria-hidden", "true"); overlay.inert = true;
   // Freeze insertion geometry; only these noninteractive copies move.
-  const tabs = [...strip.children].map((source, index) => {
-    const bounds = rect(source), preview = source.cloneNode(true);
+  const tabs = grabbed.map(({ source, hit }) => {
+    const bounds = hit.bounds, preview = source.cloneNode(true);
     for (const name of [...preview.attributes].map(a => a.name)) {
       if (name.startsWith("data-") || name === "id") preview.removeAttribute(name);
     }
@@ -714,7 +722,7 @@ function startTabSlide(drag) {
       width: `${bounds.width}px`, height: `${bounds.height}px`, font: getComputedStyle(source).font, transform: "translateX(0px)" });
     source.classList.add("dragged-tab-source");
     overlay.append(preview);
-    return { source, preview, hit: { group, index, bounds } };
+    return { source, preview, hit };
   });
   workspace.append(overlay);
   overlay.getBoundingClientRect(); // Establish the neighbors' transition starting positions.
@@ -729,7 +737,7 @@ function clearTabSlide(drag) {
 function updateTabSlide(drag, e) {
   const slide = drag.tabSlide;
   if (!slide) return;
-  const preview = app.tab_drag_preview([e.clientX, e.clientY], slide.tabs.map(t => t.hit), slide.clip);
+  const preview = app.tab_drag_preview([e.clientX, e.clientY]);
   if (!preview) { clearTabSlide(drag); return; }
   for (const tab of slide.tabs) {
     const offset = tab.source === drag.node ? preview.bounds.x - tab.hit.bounds.x
@@ -773,6 +781,7 @@ workspace.addEventListener("pointerdown", e => {
   if (!node) return;
   workspaceGesture = { id: e.pointerId, action: JSON.parse(node.dataset.workspaceDrag),
     start: e, last: e, started: false, node, cursor: getComputedStyle(node).cursor };
+  grabTabSlide(workspaceGesture);
   // External resize strips are outside the unselectable panel. Prevent a
   // native text-selection drag from stealing their pointer sequence.
   if (workspaceGesture.action.type !== "drag_workspace") e.preventDefault();
@@ -790,6 +799,7 @@ workspace.addEventListener("pointermove", e => {
     groups.forEach(node => node.getAnimations().forEach(a => a.cancel()));
     startTabSlide(drag);
     workspaceGestureEvent("down", drag.start);
+    if (drag.tabSlide) app.begin_tab_drag(drag.tabSlide.tabs.map(t => t.hit), drag.tabSlide.clip);
   }
   workspaceGestureEvent("move", e);
   updateTabSlide(drag, e);

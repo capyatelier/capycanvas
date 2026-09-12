@@ -79,6 +79,7 @@ pub struct UiSession<R: CanvasRenderer> {
     divider_drag: Option<(u32, ResizeDrag)>,
     floating_resize: Option<FloatingResize>,
     workspace_drag: Option<WorkspaceDrag>,
+    workspace_tab_drag: Option<crate::tab_drag::TabDrag>,
     workspace_history: workspace::WorkspaceHistory,
     interaction: Interaction,
     cursor: cursor::Cursor,
@@ -127,6 +128,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             divider_drag: None,
             floating_resize: None,
             workspace_drag: None,
+            workspace_tab_drag: None,
             workspace_history: workspace::WorkspaceHistory::default(),
             interaction: Interaction::default(),
             cursor: cursor::Cursor::default(),
@@ -690,6 +692,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let divider = self.divider_drag.take();
                 let floating = self.floating_resize.take();
                 let workspace = self.workspace_drag.take();
+                self.workspace_tab_drag = None;
                 if divider.is_some() || floating.is_some() || workspace.is_some() {
                     self.workspace_history.cancel(&mut self.state.workspace);
                     self.sync_work_area();
@@ -785,25 +788,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
-    pub fn tab_drag_preview(
-        &self,
-        position: [f32; 2],
-        tabs: &[TabHit],
-        clip: Bounds,
-    ) -> Option<crate::TabDragPreview> {
-        let drag = self
-            .workspace_drag
-            .filter(|_| self.dragging_attached_tab())?;
-        let group = self.state.workspace.layout.panel_group(drag.panel)?;
-        let source = self
-            .state
-            .workspace
-            .layout
-            .group_panels(group)
-            .ok()?
-            .iter()
-            .position(|p| *p == drag.panel)?;
-        crate::TabDragPreview::new(group, source, drag.press, position, tabs, clip)
+    /// Hosts supply the complete tab geometry captured on pointer down, once
+    /// their drag recognizer starts the workspace gesture.
+    pub fn begin_tab_drag(&mut self, tabs: &[TabHit], clip: Bounds) {
+        self.workspace_tab_drag = (|| {
+            let drag = self
+                .workspace_drag
+                .filter(|_| self.dragging_attached_tab())?;
+            let group = self.state.workspace.layout.panel_group(drag.panel)?;
+            let panels = self.state.workspace.layout.group_panels(group).ok()?;
+            if tabs.iter().filter(|tab| tab.group == group).count() != panels.len() {
+                return None;
+            }
+            let source = panels.iter().position(|p| *p == drag.panel)?;
+            crate::tab_drag::TabDrag::new(group, source, drag.press, tabs, clip)
+        })();
+    }
+
+    pub fn tab_drag_preview(&self, position: [f32; 2]) -> Option<crate::TabDragPreview> {
+        if !self.dragging_attached_tab() {
+            return None;
+        }
+        self.workspace_tab_drag.as_ref()?.preview(position)
     }
 
     fn drag_workspace(
@@ -821,6 +827,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if phase == ContactPhase::Cancel {
             if let Some(drag) = self.workspace_drag.filter(|d| d.original == item) {
                 self.workspace_drag = None;
+                self.workspace_tab_drag = None;
                 self.workspace_history.cancel(&mut self.state.workspace);
                 if let Some(DrawerAnchor::Column {
                     column,
@@ -848,6 +855,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.interaction.viewport = Some(viewport);
         self.interaction.zen_entry_guard = false;
         if phase == ContactPhase::Down {
+            self.workspace_tab_drag = None;
             let mut layout = self.layout(viewport);
             layout.groups.extend(
                 self.state
@@ -975,7 +983,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             // bottom. Tabbed groups keep the original header grab offset.
             drag.offset = if floated.tabs_visible {
                 [
-                    drag.offset[0].min(floated.bounds.width - 10.0).max(0.0),
+                    self.workspace_tab_drag
+                        .as_ref()
+                        .map_or(drag.offset[0], |tab| tab.grab_offset_x())
+                        .min(floated.bounds.width - 10.0)
+                        .max(0.0),
                     drag.offset[1].min(TAB_BAR_HEIGHT),
                 ]
             } else {
@@ -1000,6 +1012,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .move_item(viewport, drag.item, hint.target)?;
             }
             self.workspace_drag = None;
+            self.workspace_tab_drag = None;
             self.workspace_history
                 .finish_move(&mut self.state.workspace);
             self.interaction.keep_chrome_until_contact = false;
@@ -1110,7 +1123,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if source_group.is_some() {
             resolved.groups.retain(|g| Some(g.id) != source_group);
         }
-        let hint = if let DockItem::Column { column } = item {
+        let mut hint = if let DockItem::Column { column } = item {
             if docks_hidden {
                 return None;
             }
@@ -1123,6 +1136,26 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             resolved.drop_hint(position[0], position[1], tabs, !docks_hidden)?
         };
+        // The attached preview and the committed drop use the same frozen
+        // switch points, including a release between pointer-motion events.
+        if let DockTarget::Tab {
+            group,
+            index: Some(_),
+        } = hint.target
+            && let Some(drag) = self.workspace_tab_drag.as_ref()
+            && drag.group == group
+            && let Some(preview) = self.tab_drag_preview(position)
+        {
+            hint.target = DockTarget::Tab {
+                group,
+                index: Some(preview.insertion),
+            };
+            hint.bounds = crate::layout::tab_insertion_line(
+                resolved.groups.iter().find(|g| g.id == group)?,
+                tabs,
+                preview.insertion,
+            );
+        }
         let mut probe = self.state.workspace.layout.clone();
         probe.move_item(viewport, item, hint.target.clone()).ok()?;
         (probe != self.state.workspace.layout).then_some(hint)
@@ -1624,6 +1657,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.divider_drag = None;
                 self.floating_resize = None;
                 self.workspace_drag = None;
+                self.workspace_tab_drag = None;
                 self.state.customization = CustomizationState::default();
                 (LAYOUT | CUSTOMIZATION, false)
             }
@@ -2804,6 +2838,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.customization = CustomizationState::default();
                 self.floating_resize = None;
                 self.workspace_drag = None;
+                self.workspace_tab_drag = None;
                 self.interaction.keep_chrome_until_contact = self.state.workspace.zen_mode;
                 Ok((LAYOUT | CUSTOMIZATION, false))
             }
@@ -9487,6 +9522,152 @@ mod tests {
                 assert_eq!(s.state.workspace, after);
                 invoke(&mut s, CommandId::UndoWorkspace);
                 s.state.customization.column_drawers = vec![drawer.clone()];
+            }
+        }
+    }
+
+    #[test]
+    fn attached_tab_release_uses_frozen_halfway_points() {
+        for (delta, insertion, order) in [
+            (
+                31.,
+                3,
+                [Panel::Layers, Panel::Properties, Panel::Adjustments],
+            ),
+            (
+                -41.,
+                0,
+                [Panel::Adjustments, Panel::Layers, Panel::Properties],
+            ),
+        ] {
+            let mut s = session();
+            let viewport = [1200., 900.];
+            let group = 8;
+            let bounds = s
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.id == group)
+                .unwrap()
+                .bounds;
+            let mut tabs: Vec<_> = [80., 36., 60.]
+                .into_iter()
+                .enumerate()
+                .scan(bounds.x, |x, (index, width)| {
+                    let tab = TabHit {
+                        group,
+                        index,
+                        bounds: Bounds {
+                            x: *x,
+                            width,
+                            height: TAB_BAR_HEIGHT,
+                            ..bounds
+                        },
+                    };
+                    *x += width;
+                    Some(tab)
+                })
+                .collect();
+            let press = [bounds.x + 98., bounds.y + 18.];
+            let item = DockItem::Panel {
+                panel: Panel::Adjustments,
+            };
+            let before = s.state.workspace.clone();
+            s.drag_workspace(item, ContactPhase::Down, press, viewport, &tabs)
+                .unwrap();
+            s.begin_tab_drag(&tabs, bounds);
+            s.drag_workspace(
+                item,
+                ContactPhase::Move,
+                [press[0] + 9., press[1]],
+                viewport,
+                &tabs,
+            )
+            .unwrap();
+            assert_eq!(s.state.workspace, before);
+            // Even a changed host measurement cannot change the chosen slot.
+            for tab in &mut tabs {
+                tab.bounds.x += 100.;
+            }
+            let release = [press[0] + delta, press[1]];
+            assert_eq!(s.tab_drag_preview(release).unwrap().insertion, insertion);
+            assert_eq!(
+                s.drop_hint(viewport, release, &tabs, item, None)
+                    .unwrap()
+                    .target,
+                DockTarget::Tab {
+                    group,
+                    index: Some(insertion)
+                }
+            );
+            // Release can cross a switch without an intervening move event.
+            s.drag_workspace(item, ContactPhase::Up, release, viewport, &tabs)
+                .unwrap();
+            assert_eq!(
+                s.state.workspace.layout.group_panels(group).unwrap(),
+                &order
+            );
+            assert!(s.tab_drag_preview(release).is_none());
+            invoke(&mut s, CommandId::UndoWorkspace);
+            assert_eq!(s.state.workspace, before);
+        }
+    }
+
+    #[test]
+    fn detached_tabs_preserve_the_grab_point_within_each_tab() {
+        for (index, panel) in [Panel::Layers, Panel::Adjustments, Panel::Properties]
+            .into_iter()
+            .enumerate()
+        {
+            let mut s = session();
+            let viewport = [1200., 900.];
+            let bounds = s
+                .layout(viewport)
+                .groups
+                .into_iter()
+                .find(|g| g.id == 8)
+                .unwrap()
+                .bounds;
+            let tabs: Vec<_> = [80., 36., 60.]
+                .into_iter()
+                .enumerate()
+                .scan(bounds.x, |x, (index, width)| {
+                    let tab = TabHit {
+                        group: 8,
+                        index,
+                        bounds: Bounds {
+                            x: *x,
+                            width,
+                            height: TAB_BAR_HEIGHT,
+                            ..bounds
+                        },
+                    };
+                    *x += width;
+                    Some(tab)
+                })
+                .collect();
+            let before = s.state.workspace.clone();
+            let item = DockItem::Panel { panel };
+            for offset in [7., tabs[index].bounds.width - 2.] {
+                let press = [tabs[index].bounds.x + offset, bounds.y + 18.];
+                s.drag_workspace(item, ContactPhase::Down, press, viewport, &tabs)
+                    .unwrap();
+                s.begin_tab_drag(&tabs, bounds);
+                let away = [600., 450.];
+                s.drag_workspace(item, ContactPhase::Move, away, viewport, &tabs)
+                    .unwrap();
+                let floated = s
+                    .layout(viewport)
+                    .groups
+                    .into_iter()
+                    .find(|g| g.floating && g.active == panel)
+                    .unwrap();
+                assert_eq!(floated.bounds.x, away[0] - offset);
+                assert_eq!(floated.bounds.y, away[1] - 18.);
+                assert!(s.tab_drag_preview(away).is_none());
+                s.drag_workspace(item, ContactPhase::Cancel, away, viewport, &tabs)
+                    .unwrap();
+                assert_eq!(s.state.workspace, before);
             }
         }
     }

@@ -694,16 +694,15 @@ impl WebApp {
     pub fn dragging_attached_tab(&self) -> bool {
         self.session.dragging_attached_tab()
     }
-    pub fn tab_drag_preview(
-        &self,
-        position: JsValue,
-        tabs: JsValue,
-        clip: JsValue,
-    ) -> Result<JsValue, JsValue> {
-        let position = serde_wasm_bindgen::from_value(position).map_err(js)?;
+    pub fn begin_tab_drag(&mut self, tabs: JsValue, clip: JsValue) -> Result<(), JsValue> {
         let tabs: Vec<layer_ui::TabHit> = serde_wasm_bindgen::from_value(tabs).map_err(js)?;
         let clip = serde_wasm_bindgen::from_value(clip).map_err(js)?;
-        serialize(&self.session.tab_drag_preview(position, &tabs, clip))
+        self.session.begin_tab_drag(&tabs, clip);
+        Ok(())
+    }
+    pub fn tab_drag_preview(&self, position: JsValue) -> Result<JsValue, JsValue> {
+        let position = serde_wasm_bindgen::from_value(position).map_err(js)?;
+        serialize(&self.session.tab_drag_preview(position))
     }
 
     pub fn drop_hint(&self, query: JsValue) -> Result<JsValue, JsValue> {
