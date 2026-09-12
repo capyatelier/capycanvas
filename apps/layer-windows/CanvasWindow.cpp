@@ -116,6 +116,7 @@ void CanvasWindow::Open() {
     }
     root.Children().Append(toolbar);
     status.Text(L"Preparing canvas…");
+    Microsoft::UI::Xaml::Automation::AutomationProperties::SetAutomationId(status,L"canvas-status");
     status.IsHitTestVisible(false);
     status.HorizontalAlignment(HorizontalAlignment::Center);
     status.VerticalAlignment(VerticalAlignment::Bottom);
@@ -126,8 +127,12 @@ void CanvasWindow::Open() {
     panel.SizeChanged([weak=weak_from_this()](auto&&,auto&&) { if(auto self=weak.lock()) self->Resize(); });
     panel.CompositionScaleChanged([weak=weak_from_this()](auto&&,auto&&) { if(auto self=weak.lock()) self->Resize(); });
     window.Activated([weak=weak_from_this()](auto&&, WindowActivatedEventArgs const& e) {
-        if(e.WindowActivationState()==WindowActivationState::Deactivated)
-            if(auto self=weak.lock()){if(self->workspace)self->workspace->CancelGesture();self->heldKeys.clear();self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);}
+        if(auto self=weak.lock()){
+            if(e.WindowActivationState()==WindowActivationState::Deactivated){
+                if(self->workspace)self->workspace->CancelGesture();self->heldKeys.clear();
+                self->Send(R"({"type":"blur"})",CanvasCommandKind::Input);
+            }else self->Resize();
+        }
     });
     window.AppWindow().Closing([weak=weak_from_this()](auto&&,AppWindowClosingEventArgs const& e) {
         if(auto self=weak.lock()) {
@@ -158,31 +163,51 @@ void CanvasWindow::Open() {
     } catch(...) {Stop();throw;}
 }
 void CanvasWindow::Resize() {
-    if(closing||closed)return;
+    // Retain the surface and caption geometry while minimized. Activation or
+    // layout will supply the restored window's dimensions and DPI.
+    if(closing||closed||IsIconic(Handle()))return;
     float scale=panel.CompositionScaleX();
     Size next{uint32_t(std::max(1L, std::lround(panel.ActualWidth()*scale))),
               uint32_t(std::max(1L, std::lround(panel.ActualHeight()*scale))),scale};
     // Physical-pixel drag regions leave the app controls and system caption buttons interactive.
     auto titlebar=window.AppWindow().TitleBar();
     bool caption=window.AppWindow().Presenter().Kind()==AppWindowPresenterKind::Overlapped;
-    if(workspace)workspace->SetTitlebarInsets(caption?float(titlebar.LeftInset())/scale:0,
-        caption?float(titlebar.RightInset())/scale:0,caption?float(titlebar.Height())/scale:0);
-    std::vector<Windows::Graphics::RectInt32> regions;
-    if(header){
-        header->SetFullscreen(!caption);
-        header->SetInsets(caption?float(titlebar.LeftInset())/scale:0,caption?float(titlebar.RightInset())/scale:0);
-        if(caption)regions=header->DragRegions(scale,next.width);
-    } else if(caption)regions.push_back(Windows::Graphics::RectInt32{
-        titlebar.LeftInset(),0,std::max(0,int32_t(next.width)-titlebar.LeftInset()-titlebar.RightInset()),int32_t(48*scale)});
-    if(caption){
-        bool same=captionRegionsValid&&regions.size()==captionRegions.size()&&
-            std::equal(regions.begin(),regions.end(),captionRegions.begin(),[](auto a,auto b){
-                return a.X==b.X&&a.Y==b.Y&&a.Width==b.Width&&a.Height==b.Height;
+    auto left=caption?titlebar.LeftInset():0;
+    auto right=caption?titlebar.RightInset():0;
+    auto height=caption?titlebar.Height():0;
+    // AppWindow can briefly return a negative inset even after IsIconic clears.
+    // Preserve all caption projections together until Windows has valid metrics;
+    // the swap chain can still follow the current client size below.
+    if(left<0||right<0||height<0){
+        if(!captionRetry){
+            captionRetry=dispatcher.CreateTimer();
+            captionRetry.IsRepeating(false);
+            captionRetry.Interval(std::chrono::milliseconds(16));
+            captionRetry.Tick([weak=weak_from_this()](auto&&,auto&&){
+                if(auto self=weak.lock())self->Resize();
             });
-        // Painting snapshots can refresh header state without moving controls.
-        // Only changed hit geometry needs a non-client window update.
-        if(!same){titlebar.SetDragRectangles(regions);captionRegions=std::move(regions);captionRegionsValid=true;}
-    }else captionRegionsValid=false;
+        }
+        if(!captionRetry.IsRunning())captionRetry.Start();
+    }else{
+        if(captionRetry)captionRetry.Stop();
+        if(workspace)workspace->SetTitlebarInsets(float(left)/scale,float(right)/scale,float(height)/scale);
+        std::vector<Windows::Graphics::RectInt32> regions;
+        if(header){
+            header->SetFullscreen(!caption);
+            header->SetInsets(float(left)/scale,float(right)/scale);
+            if(caption)regions=header->DragRegions(scale,next.width);
+        } else if(caption)regions.push_back(Windows::Graphics::RectInt32{
+            left,0,std::max(0,int32_t(next.width)-left-right),int32_t(48*scale)});
+        if(caption){
+            bool same=captionRegionsValid&&regions.size()==captionRegions.size()&&
+                std::equal(regions.begin(),regions.end(),captionRegions.begin(),[](auto a,auto b){
+                    return a.X==b.X&&a.Y==b.Y&&a.Width==b.Width&&a.Height==b.Height;
+                });
+            // Painting snapshots can refresh header state without moving controls.
+            // Only changed hit geometry needs a non-client window update.
+            if(!same){titlebar.SetDragRectangles(regions);captionRegions=std::move(regions);captionRegionsValid=true;}
+        }else captionRegionsValid=false;
+    }
     {
         std::lock_guard lock(mutex);
         bool changed=next.width!=desired.width||next.height!=desired.height||next.scale!=desired.scale;
@@ -724,9 +749,13 @@ void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject 
     if(!full&&model.HasKey(L"camera"))camera=to_string(CapyUi::O({{L"camera",model.GetNamedValue(L"camera")}}).Stringify());
     // Explicit local test evidence. This can include user state and is never
     // enabled by ordinary or presentation-probe launches.
-    if(full&&GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))
-        TraceState("ui-state","{\"process_id\":"+std::to_string(GetCurrentProcessId())+
-            ",\"window_id\":"+std::to_string(windowId)+",\"model\":"+snapshot+"}");
+    if(GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)){
+        auto identity="{\"process_id\":"+std::to_string(GetCurrentProcessId())+
+            ",\"window_id\":"+std::to_string(windowId);
+        if(full)TraceState("ui-state",identity+",\"model\":"+snapshot+"}");
+        auto view=full?CapyUi::object(CapyUi::object(model,L"state"),L"camera"):CapyUi::object(model,L"camera");
+        if(view.Size())TraceState("camera-state",identity+",\"camera\":"+to_string(view.Stringify())+"}");
+    }
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;

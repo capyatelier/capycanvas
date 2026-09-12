@@ -36,12 +36,33 @@ function Button([string]$Name) {
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,$Name),
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button)))
 }
+function Check-Caption {
+    # Caption validation must observe a settled UI; filter discovery can still
+    # be running after the brush and document become ready.
+    Wait-Until {
+        $captionStatus = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'canvas-status'))
+        !$captionStatus -or $captionStatus.Current.IsOffscreen -or
+            $captionStatus.Current.Name -notin @('Preparing canvas…','Preparing brushes…','Loading filters…')
+    } 'Startup status did not settle before caption validation' 45
+    $insets = @((Model).titlebar_insets)
+    if ($insets.Count -ne 3 -or $insets[1] -le 0 -or $insets[2] -le 0 -or
+        @($insets | Where-Object { [double]::IsNaN($_) -or [double]::IsInfinity($_) -or $_ -lt 0 }).Count) {
+        throw 'Restored native caption measurements are invalid.'
+    }
+    $status = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'canvas-status'))
+    if ($status -and !$status.Current.IsOffscreen) {
+        throw ('Restored editor reports a native error: ' + $status.Current.Name)
+    }
+}
 function Wait-Canvas {
     Wait-Until {
         $canvas=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Drawing canvas'))
         $canvas -and $canvas.Current.IsEnabled
     } 'Modal input gate did not clear'
+    Check-Caption
 }
 function Minimize {
     [CapyWindowLifecycle]::ShowWindowAsync($handle,6)|Out-Null
@@ -121,6 +142,7 @@ try {
         visible_unsaved_decision_from_minimized='passed'
         cancelled_close_preserves_drawing='passed'
         maximized_state_survives_minimize_and_prompt='passed'
+        restored_caption_measurements_and_error_status='passed'
         discard_and_zero_exit='passed'
         scope='isolated native window state and controlled replay; not physical input, mixed DPI or presentation acceptance'
     }|ConvertTo-Json

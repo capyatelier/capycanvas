@@ -1604,3 +1604,42 @@ pen/touch, mixed-DPI/device/suspend recovery, distribution packaging, strict
 GPU reference agreement and final 120 Hz painting/input acceptance remain open.
 Profiles, documents, databases, captures, logs and binaries stay ignored/local.
 The goal remains active.
+
+## Matched Windows editor captures and caption restoration
+
+The minimized-window trace reproduced a negative native RightInset even after
+IsIconic cleared. The host now keeps the last valid caption projections together
+and retries after the transition, while continuing to resize the GPU surface.
+Activation remeasures restored geometry. The lifecycle fixture checks valid
+caption measurements and native error status after transient startup messages.
+The existing cancel/discard and five-second close requirements remain.
+
+The new native capture fixture exercises actual theme and camera controls and
+records the complete drawing surface, full client, model and UI Automation bounds.
+A separate opt-in camera trace includes camera-only publications so a full model
+snapshot cannot supply stale camera evidence. Captures verify the visible readout
+and settled layout. The tested client contains a one-physical-pixel OS frame above
+the XAML content; the complete XAML surface is selected from the same retained raw
+frame, with its offset recorded explicitly.
+
+A shared Chrome capture mode consumes the manifest. Hardware WebGPU initializes
+without browser exceptions, and native/Chrome camera transforms match for both
+themes and initial/zoomed-under-header states at 960 x 660 logical and 1.5 scale.
+Chrome reserves native caption-button space without importing native panel
+measurements or substituting native camera transforms. Full-image comparisons
+retain all differences, including system caption glyphs.
+
+Tool Set now follows the shared compact group and subtool layout: stacked group
+icons/labels, four-DIP group gaps, equal flex rows, eight-DIP group/list separation,
+and horizontal 82 x 32 preview boxes with preserved aspect ratio. Position, size
+and edge differences are at most half a physical pixel in all four captures.
+Native tools regression checks pass. Full-editor raster parity remains open:
+responsive header behavior, shadows, numeric controls and layer-row details are
+among the observed differences. This checkpoint does not establish physical input,
+DPI/device recovery, package delivery, strict GPU agreement or final 120 Hz cadence.
+
+Integration includes Apple's tool-action styling and focused Metal execution
+analysis through 219cda5. Both new Chrome capture scenarios remain available.
+Native builds, the tool regression fixture and the strengthened lifecycle fixture
+pass; the merged Chrome runner passes the four hardware editor captures and Tool
+Set geometry checks. Capture artifacts and isolated profiles stay ignored/local.

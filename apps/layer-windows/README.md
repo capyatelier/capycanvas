@@ -855,5 +855,53 @@ filter reference failure (maximum channel error 30). That failure remains open.
 The final native lifecycle fixture passes close before brush readiness, warmup,
 clean/dirty minimized close, cancellation, maximized-state restoration and discard.
 The four delayed-close samples exit in 0.36–0.41 seconds. These results retain the
-five-second gate. A transient titlebar-measurement error seen during minimize/restore
-still needs investigation as part of visual and Windows lifecycle acceptance.
+five-second gate. The titlebar-measurement error during minimize/restore is now
+handled: Windows briefly reports a negative caption inset even after IsIconic
+clears. Keep the last valid caption geometry and retry the measurement while
+allowing the canvas to resize. The lifecycle fixture now checks restored caption
+measurements and visible error status, after normal startup messages settle.
+
+## Matched editor captures
+
+The native capture fixture requires an isolated settings directory and
+CAPY_TRACE_UI=1. It uses actual Preferences, View and Navigator controls, then
+captures light/dark initial and zoomed paper-under-titlebar states. The drawing
+surface is sized to an exact logical viewport and scale; camera diagnostics
+include incremental updates and must agree with the native zoom readout.
+
+~~~powershell
+$env:CAPY_SETTINGS_DIRECTORY=Join-Path (Get-Location) ('artifacts/windows/parity-profile/'+[Guid]::NewGuid().ToString('N'))
+$env:CAPY_TRACE_UI='1'
+$review=Start-Process ./artifacts/windows/Review/CapyCanvas.exe -WorkingDirectory ./artifacts/windows/Review -WindowStyle Hidden -PassThru
+./apps/layer-windows/scripts/capture-editor.ps1 -ProcessId $review.Id -OutputDirectory artifacts/windows/parity/native
+$env:CAPY_CHROME='C:/Program Files/Google/Chrome/Application/chrome.exe'
+node tools/visual/chrome-capture.mjs 960 660 1.5 artifacts/windows/parity/web light windows-editor artifacts/windows/parity/native/fixtures.json
+python tools/visual/compare.py artifacts/windows/parity/web/web-light-initial.png artifacts/windows/parity/native/native-light-initial.png --output artifacts/windows/parity/diff-light-initial
+./apps/layer-windows/scripts/exercise-window.ps1 -ProcessId $review.Id -Action Close
+~~~
+
+Repeat the full-image comparator for all four pairs. A nonzero comparison result
+means raster differences remain; generating a capture does not pass visual parity.
+Chrome requires hardware WebGPU and waits for startup, fonts, thumbnails and
+stable layout. It uses the same document/workspace/theme and native caption-button
+reservation, while measuring its own panels and fitting its own camera.
+
+Windows retains an OS frame above the XAML content (one physical pixel on the
+tested display). The fixture saves the raw full-client PNG, then selects the
+complete measured XAML surface, including the custom titlebar, from that same
+frame. The manifest records both images and the exact offset. It does not remove
+any application pixels, adjust scale, hide differences or overwrite reference
+measurements. System caption glyphs remain Windows-owned; Chrome leaves their
+reserved area visible. Profiles, camera traces, model snapshots and images are local
+test evidence under ignored artifacts.
+
+Tool Set group buttons now stack their icon and label and wrap with shared gaps;
+brush previews use compact horizontal rows with preserved aspect ratio. Across
+the tested 960 x 660 logical viewport at 1.5 scale, all four captures match Tool Set
+position/size/edge geometry within half a physical pixel. Native tool/subtool,
+numeric expression, retained control/scrolling, stale draft, target replacement,
+figure/gradient/ruler and transform-cancel checks pass. Full-image comparisons
+still differ, including responsive header layout, panel shadows, number controls,
+and layer-row details. Full editor visual/gesture parity, physical input, DPI/device
+recovery, packaging, strict GPU reference agreement and final 120 Hz acceptance
+remain open.

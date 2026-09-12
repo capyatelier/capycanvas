@@ -30,25 +30,34 @@ Grid toolLabel(std::shared_ptr<WorkspaceData> const& data,J const& item){
 struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     std::shared_ptr<WorkspaceData> data;
     StackPanel root,list;
-    Grid groups;
+    Canvas groups;
     std::vector<Button> groupButtons,subtoolButtons;
     hstring groupKey,subtoolKey;
-    int columns=0;
+    double arrangedWidth=-1;
     explicit ToolSetView(std::shared_ptr<WorkspaceData> data):data(std::move(data)){}
     void init(){
-        root.Spacing(6);list.Spacing(2);groups.ColumnSpacing(2);groups.RowSpacing(2);
+        root.Spacing(8);list.Spacing(4);
         auto weak=weak_from_this();
         root.Children().Append(groups);root.Children().Append(list);
         groups.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
     }
     void arrange(){
-        int count=std::max(1,int((groups.ActualWidth()+2)/114.));
-        if(columns==count)return;columns=count;groups.ColumnDefinitions().Clear();groups.RowDefinitions().Clear();
-        for(int i=0;i<count;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});groups.ColumnDefinitions().Append(column);}
-        for(size_t i=0;i<groupButtons.size();i++){
-            if(i%count==0){RowDefinition row;row.Height({36,GridUnitType::Pixel});groups.RowDefinitions().Append(row);}
-            Grid::SetColumn(groupButtons[i],int(i)%count);Grid::SetRow(groupButtons[i],int(i)/count);
+        double width=groups.ActualWidth();
+        if(std::abs(arrangedWidth-width)<.01)return;arrangedWidth=width;
+        int size=int(groupButtons.size());
+        int count=std::max(1,std::min(size,int((width+4)/74.)));
+        double height=32+data->textSize()*.85*1.66;
+        // Match the shared flex rows: 70 DIP minimum, four-DIP gaps, and equal
+        // widths within each row, including a partially filled final row.
+        for(int i=0;i<size;i++){
+            int row=i/count,items=std::min(count,size-row*count);
+            double itemWidth=std::max(0.,(width-4*(items-1))/items);
+            auto const& pick=groupButtons[i];
+            Canvas::SetLeft(pick,(i%count)*(itemWidth+4));Canvas::SetTop(pick,row*(height+4));
+            pick.Width(itemWidth);pick.Height(height);
         }
+        int rows=(size+count-1)/count;
+        groups.Height(rows?rows*height+(rows-1)*4:0);
     }
     void rebuild(A const& items,bool group){
         auto& buttons=group?groupButtons:subtoolButtons;buttons.clear();
@@ -58,18 +67,33 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
             auto item=items.GetObjectAt(i);auto action=object(item,L"action");
             auto pick=button(data,str(item,L"label"),[weak,action]{if(auto self=weak.lock())self->data->dispatch(action);});
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-            pick.Padding({6,3,6,3});ToolTipService::SetToolTip(pick,box_value(str(item,L"label")));
+            pick.Padding({12,4,12,4});ToolTipService::SetToolTip(pick,box_value(str(item,L"label")));
             AutomationProperties::SetAutomationId(pick,(group?L"tool-group-":L"tool-subtool-")+to_hstring(i));
-            auto preview=item.GetNamedValue(L"preview",JsonValue::CreateNullValue());
-            if(preview.ValueType()==JsonValueType::Number){
-                StackPanel content;Image image;image.Height(40);image.Stretch(Stretch::Fill);
-                image.Source(Imaging::BitmapImage(asset(L"brush-previews/"+std::to_wstring(int(preview.GetNumber()))+L"-"+std::wstring(data->theme().c_str())+L".png")));
-                content.Children().Append(image);auto title=label(data,str(item,L"label"),true);
-                title.TextAlignment(TextAlignment::Right);title.TextTrimming(TextTrimming::CharacterEllipsis);content.Children().Append(title);pick.Content(content);
-            }else{pick.Content(toolLabel(data,item));pick.Height(36);}
+            auto title=label(data,str(item,L"label"),true);
+            title.FontSize(data->textSize()*(group?.85:1.));title.LineHeight(title.FontSize()*1.66);
+            title.TextTrimming(TextTrimming::CharacterEllipsis);title.VerticalAlignment(VerticalAlignment::Center);
+            if(group){
+                StackPanel content;content.Spacing(8);
+                auto glyph=icon(str(item,L"icon"),data->theme());glyph.HorizontalAlignment(HorizontalAlignment::Center);
+                title.TextAlignment(TextAlignment::Center);content.Children().Append(glyph);content.Children().Append(title);
+                pick.Content(content);
+            }else{
+                Grid content;content.ColumnSpacing(8);
+                auto preview=item.GetNamedValue(L"preview",JsonValue::CreateNullValue());
+                bool brush=preview.ValueType()==JsonValueType::Number;
+                ColumnDefinition glyph;glyph.Width({brush?82.:16.,GridUnitType::Pixel});content.ColumnDefinitions().Append(glyph);
+                ColumnDefinition text;text.Width({1,GridUnitType::Star});content.ColumnDefinitions().Append(text);
+                if(brush){
+                    Image image;image.Width(82);image.Height(32);image.Stretch(Stretch::Uniform);
+                    image.Source(Imaging::BitmapImage(asset(L"brush-previews/"+std::to_wstring(int(preview.GetNumber()))+L"-"+std::wstring(data->theme().c_str())+L".png")));
+                    content.Children().Append(image);
+                }else content.Children().Append(icon(str(item,L"icon"),data->theme()));
+                Grid::SetColumn(title,1);content.Children().Append(title);pick.Content(content);
+                pick.Height(8+std::max(brush?32.:16.,title.LineHeight()));
+            }
             buttons.push_back(pick);if(group)groups.Children().Append(pick);else list.Children().Append(pick);
         }
-        if(group){columns=0;arrange();}
+        if(group){arrangedWidth=-1;arrange();}
     }
     void refresh(){
         auto view=object(data->state,L"tool_set");

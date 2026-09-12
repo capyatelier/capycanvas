@@ -37,6 +37,22 @@ layer thumbnail pixels and layout. GPU attachment alone can precede the actual
 preview readbacks; a fixed delay is insufficient for a settled reference.
 The native scenario must use the same theme, document, workspace and camera.
 
+For Windows, use the native `capture-editor.ps1` fixture documented in
+[the Windows host notes](../../apps/layer-windows/README.md#matched-editor-captures),
+then pass its manifest to the `windows-editor` scenario:
+
+~~~powershell
+node tools/visual/chrome-capture.mjs 960 660 1.5 artifacts/windows/parity/web light windows-editor artifacts/windows/parity/native/fixtures.json
+~~~
+
+The manifest supplies each viewport, scale, theme, workspace and caption inset.
+Chrome reserves the measured native caption area but measures its own controls and
+runs the real shared camera commands. Reports retain camera/layout facts and full
+screenshots; Tool Set position, size and edge comparisons have a one-physical-pixel
+rounding bound. That component geometry check does not waive full-image differences.
+The native manifest also records the complete XAML capture boundary and retains
+the raw Windows client image, including the OS frame outside the app surface.
+
 ## Complete header components
 
 This fast fixture renders the actual shared Apple header in an invisible AppKit

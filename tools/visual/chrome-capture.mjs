@@ -11,12 +11,13 @@ import {captureWorkspaceTabs} from './workspace-tabs.mjs';
 import {captureHeaderControls} from './header-controls.mjs';
 import {captureControlColors} from './control-colors.mjs';
 import {captureToolActions} from './tool-actions.mjs';
+import {captureWindowsEditor} from './windows-editor.mjs';
 const [widthArg='1200', heightArg='900', scaleArg='2', output='artifacts/ui/parity', theme='light', scenario='initial', fixturePath] = process.argv.slice(2);
 const width = Number(widthArg), height = Number(heightArg), scale = Number(scaleArg);
 assert(Number.isInteger(width) && width > 0 && Number.isInteger(height) && height > 0);
 assert(Number.isFinite(scale) && scale > 0);
 assert(['light', 'dark'].includes(theme));
-assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions'].includes(scenario));
+assert(['initial', 'canvas-under-header', 'layer-added', 'filter-properties', 'panel-configuration', 'partial-zen', 'toolbar-tiles', 'workspace-tabs', 'header-controls', 'control-colors', 'tool-actions', 'windows-editor'].includes(scenario));
 await mkdir(output, {recursive:true});
 const root = resolve('apps/layer-web');
 const server = createServer(async (req, res) => {
@@ -77,7 +78,10 @@ try {
     assert.deepEqual(errors,[]);
   } else {
   await evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function check(){if(window.layerApp&&document.body.dataset.gpu==='ready')resolve(true);else if(performance.now()-start>25000)reject(new Error(document.querySelector('#gpu-notice')?.textContent||'GPU startup timeout'));else setTimeout(check,100);}check();})`);
-  if (scenario === 'header-controls') {
+  if (scenario === 'windows-editor') {
+    await captureWindowsEditor({manifest:JSON.parse(await readFile(fixturePath,'utf8')),output,evaluate,call});
+    assert.deepEqual(errors,[]);
+  } else if (scenario === 'header-controls') {
     await captureHeaderControls({manifest: JSON.parse(await readFile(fixturePath, 'utf8')), output, evaluate, call});
     assert.deepEqual(errors, []);
   } else if (scenario === 'workspace-tabs') {

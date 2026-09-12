@@ -94,6 +94,7 @@ private:
     Size desired;
     std::vector<winrt::Windows::Graphics::RectInt32> captionRegions;
     bool captionRegionsValid=false;
+    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer captionRetry{nullptr};
     bool closing=false, closed=false, finishing=false, resize=false, paused=false, servicesReady=false;
     std::atomic<bool> rendererDone{false};
     uint64_t sequence=0;
