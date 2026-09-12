@@ -59,9 +59,6 @@ import org.json.JSONObject
                     IconButton(cancel, Modifier.size(32.dp).semantics { contentDescription = "Close" }) { Text("×", fontSize = 22.sp) }
                 }
                 view.getString("intro").takeIf { it.isNotEmpty() }?.let { Text(it, color = colors.settingsSecondary) }
-                var query by remember(page) { mutableStateOf("") }
-                CoreTextField(query, { query = it; host.workspaceInput(obj("type" to "filter", "query" to it)) },
-                    Modifier.fillMaxWidth().testTag("workspace-search"), label = { Text("Search") })
                 WorkspaceRows(host, view, rowInteraction, Modifier.weight(1f, fill = false).height(315.dp).fillMaxWidth())
                 view.optString("switcher_error").takeUnless { it == "null" || it.isEmpty() }?.let {
                     Text(it, color = MaterialTheme.colorScheme.error)

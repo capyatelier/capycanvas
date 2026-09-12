@@ -119,9 +119,6 @@ class AndroidWorkspaceManagerTest {
         Thread.sleep(300); idle(); assertTrue(view().isNull("page"))
         assertEquals(changed.toString(), capture().toString())
         menu("Manage Workspaces…"); tap("workspace-row-$original")
-        compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("workspace-search")), useUnmergedTree = true).performTextReplacement("No matching workspace")
-        compose.waitUntil(5000) { view().isNull("selected") }
-        compose.onNodeWithTag("workspace-confirm").assertIsNotEnabled()
         tap("workspace-cancel"); idle()
         assertEquals(changed.toString(), capture().toString())
         menu("Manage Workspaces…"); tap("workspace-row-$original"); tap("workspace-confirm"); idle()
