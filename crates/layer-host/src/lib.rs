@@ -1,6 +1,7 @@
 //! Shared transport facade for native hosts. No UI toolkit or surface ownership.
 //! Call from one engine/render owner; platform callbacks enqueue owned batches.
 mod renderer;
+mod snapshot;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
 use layer_render::CanvasRenderer;
@@ -528,113 +529,6 @@ impl NativeHost {
                     engine.transform_preview().is_some(),
                 )
         })
-    }
-    /// Check the core revision before building any layout, panel models or JSON.
-    /// Camera-only changes return a small patch, without constructing UI models.
-    /// Presentation-only state is included because it is not part of UiState.
-    pub fn take_snapshot(&mut self) -> Option<Value> {
-        let key = SnapshotKey {
-            revision: self.session.state().revision,
-            logical: self.logical,
-            chrome_hidden: self.chrome_hidden,
-            hide_floating_panels: self.hide_floating_panels,
-            keep_zen_button: self.keep_zen_button,
-            gpu_ready: self.session.engine().backend().0.is_some(),
-            startup: self.startup,
-            error: self.error.clone(),
-        };
-        if self.last_snapshot.as_ref() == Some(&key) {
-            let camera = &self.session.state().camera;
-            if self.last_camera_revision != Some(camera.revision) {
-                self.last_camera_revision = Some(camera.revision);
-                return Some(json!({"camera": camera, "revision": key.revision}));
-            }
-            return None;
-        }
-        self.last_snapshot = Some(key);
-        self.last_camera_revision = Some(self.session.state().camera.revision);
-        let mut snapshot = self.snapshot();
-        let workspace = self.session.durable_workspace();
-        if self.last_durable_workspace.as_ref() != Some(&workspace) {
-            snapshot["workspace_persistence"] = json!(workspace);
-            self.last_durable_workspace = Some(workspace);
-        }
-        Some(snapshot)
-    }
-    fn snapshot(&self) -> Value {
-        let layout = self.session.layout(self.logical);
-        let state = self.session.state();
-        let zen = if state.partial_zen() {
-            state.workspace.layout.zen_toolbars(self.logical)
-        } else {
-            Default::default()
-        };
-        // Drawers and partial Zen can project panels absent from the ordinary
-        // dock groups. Publish their shared views as well, without moving docks.
-        let mut panel_ids: Vec<_> = layout
-            .groups
-            .iter()
-            .flat_map(|g| &g.panels)
-            .copied()
-            .collect();
-        for panel in zen
-            .sections
-            .iter()
-            .map(|s| s.panel)
-            .chain(
-                layout
-                    .collapsed
-                    .iter()
-                    .flat_map(|c| &c.groups)
-                    .flat_map(|g| &g.icons)
-                    .map(|i| i.panel),
-            )
-            .chain(
-                state
-                    .customization
-                    .drawer
-                    .iter()
-                    .chain(&state.customization.column_drawers)
-                    .flat_map(|d| d.columns.iter().flatten())
-                    .copied(),
-            )
-        {
-            if !panel_ids.contains(&panel) {
-                panel_ids.push(panel);
-            }
-        }
-        let panels: Vec<_> = panel_ids
-            .into_iter()
-            .filter_map(|p| self.session.panel_view(p).ok())
-            .collect();
-        json!({"state": self.session.state(), "layout": layout, "panels": panels,
-            "filter_preview_revision": self.session.filter_preview_revision(),
-            "partial_zen": state.partial_zen(), "zen_toolbars": zen,
-            "application_menus": layer_ui::ApplicationMenu::ALL.map(|menu| json!({"id": menu, "label": menu.label(), "model": self.session.application_menu(menu)})),
-            "color_panel": self.session.state().colors.view(),
-            "document_options": {"extent": layer_ui::DEFAULT_DOCUMENT_EXTENT,
-                "max_dimension": layer_ui::MAX_NEW_DOCUMENT_DIMENSION,
-                "width_label": layer_ui::DOCUMENT_WIDTH_LABEL, "height_label": layer_ui::DOCUMENT_HEIGHT_LABEL,
-                "new_title": layer_ui::DocumentRequest::New.title(),
-                "unsaved_description": layer_ui::UNSAVED_DESCRIPTION, "discard_label": layer_ui::DISCARD_DOCUMENT_LABEL,
-                "cancel_label": layer_ui::CANCEL_DOCUMENT_LABEL,
-                "save_label": layer_ui::DocumentRequest::ConfirmClose { title: String::new() }.accept_label(),
-                "open_label": layer_ui::DocumentRequest::Open.accept_label(),
-                "filter_label": layer_ui::DocumentRequest::Open.filter().0,
-                "extension": layer_ui::DocumentRequest::Open.filter().1,
-                "export_label": layer_ui::DocumentRequest::Export { name: String::new() }.accept_label(),
-                "export_filter_label": layer_ui::DocumentRequest::Export { name: String::new() }.filter().0,
-                "export_extension": layer_ui::DocumentRequest::Export { name: String::new() }.filter().1},
-            "preferences": self.session.preferences(), "picker": self.session.tool_picker(),
-            "workspace_menu": self.session.workspace_menu(), "toolbar_prompt": self.session.toolbar_prompt(),
-            "toolbar_manager": self.session.toolbar_manager(),
-            "panel_measurements": self.session.state().workspace.layout.measurements,
-            "chrome_hidden": self.chrome_hidden, "gpu_ready": self.session.engine().backend().0.is_some(),
-            "hide_floating_panels": self.hide_floating_panels, "keep_zen_button": self.keep_zen_button,
-            "canvas_ready": self.session.engine().backend().0.is_some() && self.startup.canvas_ready,
-            "brush_ready": self.session.engine().backend().0.is_some() && self.startup.brush_ready,
-            "shaders_ready": self.session.engine().backend().0.is_some() && self.startup.complete,
-            "error": self.error})
     }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {
         #[derive(Deserialize)]

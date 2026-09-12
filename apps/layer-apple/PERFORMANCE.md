@@ -256,6 +256,86 @@ Reports are in ignored `artifacts/performance/{mac,ipad}-scheduler-control`
 and corresponding `-no-gpu` directories. The Mac's completed synthetic painting
 was captured and inspected; test apps were closed after collection.
 
+## Snapshot transport
+
+CPU sampling of the isolated 4K watercolor workload identified snapshot
+construction, serialization and Foundation decoding in the owner publication
+path. These profiling runs are diagnostic: sampling can interrupt the process,
+so their frame timings are not used as an unsampled performance baseline.
+
+Apple's snapshot request now uses `NativeHost::take_snapshot_bytes`, writing
+UTF-8 directly from the shared models. Other native callers retain the value
+API. Both paths use one schema and the same change detection, camera patches
+and workspace-persistence policy. The writer preserves the value transport's
+exact widening of `f32` numbers to `f64`; it does not shorten color or geometry
+values. Failed serialization leaves the pending update unacknowledged.
+
+Forty independent snapshots captured before the refactor match the new decoded
+wire payloads exactly. They cover both Apple presets, fractional brush/color
+values, camera changes, all five settings pages, collapsed drawers, workspace
+history, Zen, surface errors and resize. The fixture emits the actual bytes
+without an extra parse/re-encode step. Direct regressions also cover native
+Android and Windows projections, unchanged-state suppression, mixed value/byte
+consumers and serialization failure for full/camera/workspace updates.
+
+After the final integration through `6eb0418`, all 40 current value/byte payload
+pairs still match exactly. The original reference differs only by that incoming
+change's removal of the theme-toggle item from the shared View menu. Every other
+field and numeric value is preserved; the theme-toggle command remains in the
+catalog. The original reference and the explicit difference report stay local.
+
+```sh
+mkdir -p artifacts
+cargo run --release -p layer-host --example snapshot-transport \
+  > artifacts/snapshot-value.json
+cargo run --release -p layer-host --example snapshot-transport -- --stream \
+  > artifacts/snapshot-stream.json
+cargo run --release -p layer-host --example snapshot-transport -- --benchmark \
+  > artifacts/snapshot-benchmark.json
+```
+
+On the development Mac, four alternating rounds of 200 full snapshots per mode
+give these CPU transport measurements. Both rows run on Mac hardware with the
+indicated platform's models; the iPad row is not physical iPad timing. Each
+sample includes construction, encoding and destruction. The test excludes
+Swift decoding, rendering and presentation and cannot establish a frame budget.
+
+| Snapshot preset | Value path median / p99, ms | Direct path median / p99, ms |
+| --- | --- | --- |
+| iPad | 0.509 / 0.599 | 0.168 / 0.199 |
+| Mac | 0.512 / 0.568 | 0.176 / 0.197 |
+
+Matching twenty-second physical `wet-watercolor-4k` runs, with GPU timing
+disabled and no CPU sampler, completed before and after the change. Each
+retains warm-up, prediction, pen-up gaps and the full editor. These short pairs
+are exploratory and do not establish sustained acceptance or precise overhead
+calibration. Both builds use shared changes through `16c5886`; later integration
+through `6eb0418` is outside these recorded hardware intervals.
+
+| Host / transport | CPU owner p99 / max, ms | CPU frames over target | Time outside recorded Rust stages p99, ms | Actual presentations |
+| --- | --- | --- | --- | --- |
+| iPad / value | 7.713 / 10.925 | 22 | 2.415 | 2,220 |
+| iPad / direct | 9.057 / 10.643 | 32 | 1.534 | 2,189 |
+| Mac / value | 6.399 / 8.512 | 0 | 2.936 | 1,638 |
+| Mac / direct | 5.508 / 9.057 | 0 | 1.844 | 1,641 |
+
+The residual column subtracts all five measured Rust stages from owner service;
+it is not an isolated publication timer. On iPad, drawable acquisition p99 rises
+from 0.025 to 4.322 ms, and the overall CPU tail worsens despite the transport
+improvement. Its continuous presentation interval p99 remains 16.667 ms and its
+maximum rises from 33.332 to 50.001 ms. Mac retains continuous intervals up to
+66.667 ms. None of these late frames are waived. All four measured intervals
+have zero rejected input batches, renderer errors, recorder overflow, missing
+presentation callbacks or zero-time presentations. Disabled GPU spans remain
+unmeasured, and no physical input-to-pixel latency is inferred.
+
+The detailed traces, stage distributions, memory/thermal observations and
+comparison reports remain in ignored `artifacts/performance/*snapshot*` and
+`artifacts/apple-snapshot-*` paths. This change reduces transport work; it does
+not close the 90 Hz Mac / 120 Hz iPad performance gates. Further investigation
+must include drawable waiting and presentation scheduling as well as the
+remaining ten-minute workload matrix.
+
 ## Capture locally
 
 Build with `CAPY_CONFIGURATION=Release` for performance investigations. See

@@ -139,9 +139,19 @@ pub unsafe extern "C" fn capy_apple_request(
         return std::ptr::null_mut();
     };
     app.perform(|a| {
-        let value = if request == 3 {
-            serde_json::Value::Null
-        } else {
+        if request == 3 {
+            return a
+                .host
+                .take_snapshot_bytes()
+                .map_err(|e| e.to_string())?
+                .map(|bytes| {
+                    CString::new(bytes)
+                        .map(CString::into_raw)
+                        .map_err(|e| e.to_string())
+                })
+                .transpose();
+        }
+        let value = {
             if json.is_null() {
                 return Err("Missing request JSON".into());
             }
@@ -170,7 +180,6 @@ pub unsafe extern "C" fn capy_apple_request(
                 Some(serde_json::to_value(reply).map_err(|e| e.to_string())?)
             }
             2 => Some(a.host.query(value)?),
-            3 => a.host.take_snapshot(),
             4 => Some(
                 serde_json::to_value(
                     serde_json::from_value::<layer_ui::NumericRequest>(value)

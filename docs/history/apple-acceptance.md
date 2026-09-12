@@ -70,6 +70,50 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Shared native snapshot transport — 2026-09-11
+
+Both Apple targets now serialize full UI snapshots directly from the shared
+host models to UTF-8, avoiding the temporary JSON tree on the serial render
+owner. The existing value API and new byte API share one schema and publication
+policy. Camera-only updates remain small patches, workspace persistence is sent
+only when needed, and failed serialization leaves updates pending. Direct
+floating-point formatting preserves the old exact numeric values.
+
+Forty snapshots captured before the refactor match the new complete decoded
+payloads exactly. Direct regressions cover all four current native host presets,
+unchanged-state suppression, camera updates, errors, document adoption and
+serialization failure. A real shared SwiftUI drawer check also passes without
+XCTest or a visible editor. The CPU transport benchmark runs on the development
+Mac with both Apple presets: median construction/encoding/destruction falls
+from about 0.51 ms to 0.17 ms. This excludes Swift decoding and rendering.
+
+Short physical 4K watercolor pairs show reduced owner time outside the measured
+Rust stages on both devices. Mac CPU p99 falls from 6.399 to 5.508 ms. The iPad
+pair has a worse drawable-acquisition tail and overall CPU p99 rises from 7.713
+to 9.057 ms. Presentation gaps remain on both platforms. Each measured interval
+has zero rejected input batches, renderer errors, overflow, missing callbacks
+or zero-time presentations. These are twenty-second observations with GPU
+timing disabled, not sustained acceptance or physical-input latency evidence.
+The [performance guide](../../apps/layer-apple/PERFORMANCE.md#snapshot-transport)
+retains the full scope, limitations and reproduction commands.
+
+Incoming Android header, Windows workspace and GTK/shared sidebar fixes through
+`6eb0418` are integrated. Both final Apple Release builds, all 34 Apple bridge,
+18 host and 250 shared UI checks pass (302 total; one existing hardware-only
+host check remains ignored). All 40 final value/byte payload pairs match. The
+original reference differs only by the incoming shared View menu's removal of
+the theme-toggle item; every other field and value is preserved. The direct
+SwiftUI check passes through `c0596bb`. The command audit retains all 62 commands,
+including the theme toggle, and the integrated
+signed app installs and is observed running on the physical iPad before its
+isolated process is closed. This last check establishes startup only.
+The recorded hardware pairs precede this integration. Capture
+bundles, traces, account/device details and build logs stay in ignored local
+artifacts. Completed synthetic benchmark editors are closed; the original Mac
+editor is preserved. Full UI/visual parity, input/lifecycle coverage, existing
+filter-reference failures and sustained 90 Hz Mac / 120 Hz iPad performance
+remain open; Mac 120 Hz remains deferred.
+
 ## Apple drawer docking and shared layout geometry — 2026-09-11
 
 Both Apple editors now use one tab/header/grip implementation for docked panels,

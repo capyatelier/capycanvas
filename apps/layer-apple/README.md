@@ -20,6 +20,12 @@ CPU spikes, missing GPU observations and the remaining workload matrix leave
 performance acceptance open. Benchmark sessions use
 isolated storage; ordinary launches do not start synthetic input or recording.
 
+Apple snapshot publication serializes the shared host models directly to UTF-8,
+avoiding the intermediate JSON tree on the render owner. The value and byte
+transports share one schema, camera-update policy and exact numeric values.
+The [snapshot transport checks](PERFORMANCE.md#snapshot-transport) include
+reproducible payload fixtures and a CPU benchmark.
+
 ## Build
 
 See the [Apple development guide](../../docs/development/apple.md) for prerequisites,
