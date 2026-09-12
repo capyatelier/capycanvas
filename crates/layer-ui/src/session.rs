@@ -87,6 +87,7 @@ pub struct UiSession<R: CanvasRenderer> {
     workspace_history: workspace::WorkspaceHistory,
     workspace_transition: bool,
     workspace_read_only: bool,
+    workspace_preview: Option<WorkspaceState>,
     managed_workspace: Option<ManagedWorkspace>,
     interaction: Interaction,
     cursor: cursor::Cursor,
@@ -141,6 +142,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             workspace_history: workspace::WorkspaceHistory::default(),
             workspace_transition: false,
             workspace_read_only: false,
+            workspace_preview: None,
             managed_workspace: None,
             interaction: Interaction::default(),
             cursor: cursor::Cursor::default(),
@@ -203,12 +205,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut workspace = self
             .workspace_history
             .gesture_start()
+            .or(self.workspace_preview.as_ref())
             .unwrap_or(&self.state.workspace)
             .clone();
         workspace.layout.measurements.clear();
         workspace.layout.column_scroll.clear();
         workspace.layout.titlebar_insets = [0.0; 3];
-        workspace.zen_mode = self.state.workspace.zen_mode;
+        workspace.zen_mode = self
+            .workspace_preview
+            .as_ref()
+            .unwrap_or(&self.state.workspace)
+            .zen_mode;
         workspace
     }
     pub fn poll_navigator_preview(
@@ -327,13 +334,39 @@ impl<R: CanvasRenderer> UiSession<R> {
             ],
         };
         if let Some(workspace) = &self.managed_workspace {
-            menu.sections.insert(
-                0,
+            let undo = menu.sections.remove(0);
+            let mut panels = menu.sections.remove(0);
+            let mut toolbars = menu.sections.remove(0);
+            let toolbar_actions = menu.sections.remove(0);
+            for item in panels.iter_mut().chain(toolbars.iter_mut()) {
+                match item.action {
+                    Some(UiAction::Customize {
+                        action: CustomizationAction::SetPanelVisible { panel, .. },
+                    }) => {
+                        if let Ok(config) = self.state.workspace.layout.panel(panel) {
+                            item.label = config.title().into();
+                        }
+                    }
+                    Some(UiAction::Customize {
+                        action: CustomizationAction::RestoreBuiltinToolbar { panel, .. },
+                    }) => {
+                        item.label = format!("Restore {}", panel.label());
+                    }
+                    _ => (),
+                }
+            }
+            menu.sections = vec![
+                undo,
                 vec![workspace.menu(
                     self.require_workspace_idle().is_ok(),
                     durable_layout(&self.state.workspace.layout) != workspace.baseline,
                 )],
-            );
+                panels,
+                vec![ContextMenuItem::submenu(
+                    "Quick Access Toolbars",
+                    vec![toolbars, toolbar_actions],
+                )],
+            ];
         }
         menu.with_shortcuts(&self.state.settings, self.state.platform)
     }
@@ -989,7 +1022,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .find(|c| c.id == column)
                     .ok_or("Unknown collapsed column")?;
-                self.workspace_history.begin(&self.state.workspace);
+                self.workspace_history.begin_named(
+                    &self.state.workspace,
+                    format!(
+                        "Moved {}",
+                        workspace::description::item_name(&self.state.workspace.layout, item)
+                    ),
+                );
                 self.workspace_drag = Some(WorkspaceDrag {
                     original: item,
                     item,
@@ -1022,7 +1061,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 item
             };
             let whole = matches!(normalized, DockItem::Group { .. });
-            self.workspace_history.begin(&self.state.workspace);
+            self.workspace_history.begin_named(
+                &self.state.workspace,
+                format!(
+                    "Moved {}",
+                    workspace::description::item_name(&self.state.workspace.layout, item)
+                ),
+            );
             self.workspace_drag = Some(WorkspaceDrag {
                 position,
                 viewport,
@@ -1537,6 +1582,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
         )
         .then(|| self.state.workspace.clone());
+        let move_item = match &action {
+            UiAction::MovePanel { panel, .. } => Some(DockItem::Panel { panel: *panel }),
+            UiAction::MoveGroup { group, .. } => Some(DockItem::Group { group: *group }),
+            UiAction::MoveColumn { column, .. } => Some(DockItem::Column { column: *column }),
+            _ => None,
+        };
+        let workspace_description = move_item.map(|item| {
+            format!(
+                "Moved {}",
+                workspace::description::item_name(&self.state.workspace.layout, item)
+            )
+        });
         let mut save_settings = matches!(
             &action,
             UiAction::SetTheme { .. }
@@ -1727,7 +1784,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .find(|g| g.id == group && g.floating)
                         .ok_or("Unknown floating group")?
                         .bounds;
-                    self.workspace_history.begin(&self.state.workspace);
+                    self.workspace_history.begin_named(
+                        &self.state.workspace,
+                        format!(
+                            "Resized {}",
+                            workspace::description::item_name(
+                                &self.state.workspace.layout,
+                                DockItem::Group { group }
+                            )
+                        ),
+                    );
                     self.floating_resize = Some(FloatingResize {
                         group,
                         edge,
@@ -2288,7 +2354,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
-            self.workspace_history.record(before, &self.state.workspace);
+            if let Some(description) = workspace_description {
+                self.workspace_history
+                    .record_named(before, &self.state.workspace, &description);
+            } else {
+                self.workspace_history.record(before, &self.state.workspace);
+            }
         }
         if explicit_color
             || revision != self.engine.document().revision
@@ -3639,6 +3710,176 @@ mod tests {
             [1000, 1000],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn history_preview_never_changes_capture_and_restoration_is_one_undoable_edit() {
+        let mut s = session();
+        let starting = s.capture_workspace().unwrap();
+        for position in [[410., 170.], [520., 220.]] {
+            s.dispatch(UiAction::MovePanel {
+                panel: Panel::Layers,
+                target: DockTarget::Float { position },
+                viewport: [1200., 900.],
+            })
+            .unwrap();
+        }
+        invoke(&mut s, CommandId::UndoWorkspace);
+        s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
+        invoke(&mut s, CommandId::ZenMode);
+        let original = s.capture_workspace().unwrap();
+        assert!(!original.history.redo.is_empty());
+        let document = s.engine.document().clone();
+        let durable = s.durable_workspace();
+        assert!(s.begin_workspace_layout_preview().is_err());
+        s.begin_workspace_transition().unwrap();
+        s.begin_workspace_layout_preview().unwrap();
+        assert!(s.begin_workspace_layout_preview().is_err());
+        for layout in [
+            starting.history.layout(),
+            original.history.layout(),
+            starting.history.layout(),
+        ] {
+            s.preview_workspace_layout(layout).unwrap();
+            assert_eq!(durable_layout(&s.state.workspace.layout), *layout);
+            assert!(!s.state.workspace.zen_mode);
+            assert_eq!(s.capture_workspace().unwrap(), original);
+            assert_eq!(s.durable_workspace(), durable);
+            assert_eq!(
+                s.workspace_layout_generation(),
+                Some(original.history.generation)
+            );
+        }
+        assert!(s.dispatch(UiAction::SetBrushSize { value: 99. }).is_err());
+        assert!(
+            s.restore_workspace_layout(starting.history.layout().clone(), "Restored layout")
+                .is_err()
+        );
+        assert!(
+            s.adopt_workspace(PreparedWorkspace::new(starting.clone()).unwrap())
+                .is_err()
+        );
+        s.cancel_workspace_layout_preview();
+        s.end_workspace_transition();
+        assert_eq!(s.capture_workspace().unwrap(), original);
+        assert!(s.state.workspace.zen_mode);
+        s.restore_workspace_layout(starting.history.layout().clone(), "Restored layout")
+            .unwrap();
+        let restored = s.capture_workspace().unwrap();
+        assert_eq!(
+            restored.history.revisions.len(),
+            original.history.revisions.len() + 1
+        );
+        assert_eq!(restored.history.generation, original.history.generation + 1);
+        assert_eq!(restored.working, original.working);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(
+            durable_layout(&s.state.workspace.layout),
+            *original.history.layout()
+        );
+        assert_eq!(s.engine.document(), &document);
+    }
+
+    #[test]
+    fn history_names_affected_panels_and_toolbars() {
+        let mut s = session();
+        s.dispatch(UiAction::MovePanel {
+            panel: Panel::Layers,
+            target: DockTarget::Float {
+                position: [410., 170.],
+            },
+            viewport: [1200., 900.],
+        })
+        .unwrap();
+        let history = s.capture_workspace().unwrap().history;
+        assert_eq!(
+            history.revisions[&history.current].description,
+            "Moved Layers panel"
+        );
+        s.dispatch(UiAction::Customize {
+            action: CustomizationAction::SetPanelVisible {
+                panel: Panel::Layers,
+                visible: false,
+            },
+        })
+        .unwrap();
+        let history = s.capture_workspace().unwrap().history;
+        assert_eq!(
+            history.revisions[&history.current].description,
+            "Hid Layers panel"
+        );
+        let mut toolbar = s
+            .state
+            .workspace
+            .layout
+            .panel(Panel::Toolbar)
+            .unwrap()
+            .clone();
+        if let PanelContent::Toolbar { name, .. } = &mut toolbar.content {
+            *name = "Inking".into();
+        }
+        let (panel, _) = s.install_workspace_toolbar(toolbar, None, None).unwrap();
+        let history = s.capture_workspace().unwrap().history;
+        assert_eq!(
+            history.revisions[&history.current].description,
+            "Added Inking toolbar"
+        );
+        let mut after = history.layout().clone();
+        after.panels.retain(|p| p.id != panel);
+        assert_eq!(
+            layout_change_description(history.layout(), &after),
+            "Deleted Inking toolbar"
+        );
+        let before_settings = s.capture_workspace().unwrap().history;
+        s.dispatch(UiAction::SetBrushSize { value: 82. }).unwrap();
+        assert_eq!(s.capture_workspace().unwrap().history, before_settings);
+    }
+
+    #[test]
+    fn managed_window_menu_orders_layout_actions_and_uses_short_names() {
+        let mut s = session();
+        s.configure_workspace_manager(ManagedWorkspace {
+            id: "test".into(),
+            name: "Painting".into(),
+            baseline: durable_layout(&s.state.workspace.layout),
+            choices: Vec::new(),
+        })
+        .unwrap();
+        let menu = s.workspace_menu();
+        assert!(matches!(
+            menu.sections[0][0].action,
+            Some(UiAction::Invoke {
+                command: CommandId::UndoWorkspace
+            })
+        ));
+        assert!(matches!(
+            menu.sections[0][1].action,
+            Some(UiAction::Invoke {
+                command: CommandId::RedoWorkspace
+            })
+        ));
+        assert_eq!(menu.sections[1][0].label, "Workspaces");
+        assert!(
+            menu.sections[1][0]
+                .sections
+                .iter()
+                .flatten()
+                .any(|i| i.label == "Save Layout as Workspace Template…")
+        );
+        assert!(menu.sections[2].iter().any(|i| i.label == "Layers"));
+        assert!(
+            menu.sections[2]
+                .iter()
+                .all(|i| !i.label.ends_with(" panel"))
+        );
+        let toolbars = &menu.sections[3][0];
+        assert_eq!(toolbars.label, "Quick Access Toolbars");
+        assert!(
+            toolbars.sections[0]
+                .iter()
+                .all(|i| !i.label.ends_with(" toolbar"))
+        );
+        assert_eq!(toolbars.sections[1][0].label, "New Toolbar…");
     }
 
     #[test]

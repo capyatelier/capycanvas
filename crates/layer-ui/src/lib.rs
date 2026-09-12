@@ -95,7 +95,7 @@ pub use shortcuts::{
 pub use theme::{HexColor, Theme, ThemePalette};
 pub use workspace::{
     LayoutHistory, LayoutRevision, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
-    durable_layout,
+    durable_layout, layout_change_description,
 };
 
 /// Logical units; rendering still uses the entire physical window viewport.

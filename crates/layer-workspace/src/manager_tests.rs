@@ -395,13 +395,13 @@ fn manager_recovery_library_and_backup_round_trip() {
         assert!(
             details
                 .description
-                .contains("A newer template version is available")
+                .contains("This Workspace Template has been updated")
         );
         assert!(
             details
                 .actions
                 .iter()
-                .any(|button| button.label == "New Workspace from Latest Template…")
+                .any(|button| button.label == "New Workspace from Latest Workspace Template…")
         );
         m.delete_item(&template, None, 7_000).await.unwrap();
         let reset = m

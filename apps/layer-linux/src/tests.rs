@@ -13574,7 +13574,22 @@ fn native_workspace_menu_input() {
         assert!(popup.is_mapped());
         capture_popover(&popup, dir.join(format!("{label}.png")).to_str().unwrap());
         if label == "Window" {
-            let workspace = menu_label(popup.upcast_ref(), "Workspace").unwrap();
+            assert!(menu_label(popup.upcast_ref(), "Layers").is_some());
+            assert!(menu_label(popup.upcast_ref(), "Layers panel").is_none());
+            let toolbars = menu_label(popup.upcast_ref(), "Quick Access Toolbars").unwrap();
+            click(popup_point(&popup, &toolbars), 272);
+            assert!(menu_label(popup.upcast_ref(), "Tools").is_some());
+            assert!(menu_label(popup.upcast_ref(), "Tools toolbar").is_none());
+            capture_popover(
+                &popup,
+                dir.join("Quick-Access-Toolbars.png").to_str().unwrap(),
+            );
+            popup
+                .downcast_ref::<gtk::PopoverMenu>()
+                .unwrap()
+                .set_visible_submenu(Some("main"));
+            pump(100);
+            let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
             click(popup_point(&popup, &workspace), 272);
             let manage = menu_label(popup.upcast_ref(), "Manage Workspaces…")
                 .expect("Workspace submenu should open");
@@ -13831,7 +13846,7 @@ fn native_named_workspace_manager_templates_library_and_history() {
     run(
         A::SaveAsTemplate(painting.clone()),
         Some("Illustration"),
-        Some("Save as Template"),
+        Some("Save Workspace Template"),
     );
     let template = manager
         .items()
@@ -13878,24 +13893,190 @@ fn native_named_workspace_manager_templates_library_and_history() {
     run(A::AddToolbar(library.clone()), None, None);
     assert_eq!(state(&w).workspace.layout.panels.len(), count + 1);
     assert_eq!(state(&w).brush.diameter, 73.);
-    run(
-        A::Delete(library.clone()),
-        None,
-        Some("Move to Recently Deleted"),
-    );
+    run(A::Delete(library.clone()), None, Some("Delete"));
     assert_eq!(state(&w).workspace.layout.panels.len(), count + 1);
     run(A::RestoreDeleted(library), None, None);
-    run(A::History(painting.clone()), None, None);
-    assert!(find_named(w.window.upcast_ref(), "workspace-history-restore").is_some());
-    crate::capture(&w, "/tmp/capy-workspace-layout-history.png");
+    // Exercise the actual modal and check both live and persisted state while browsing.
+    let original = w
+        .gpu
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .session
+        .capture_workspace()
+        .unwrap();
+    let persisted_original = glib::MainContext::default()
+        .block_on(manager.load(&painting))
+        .unwrap()
+        .entity
+        .capture()
+        .unwrap();
+    assert_eq!(
+        persisted_original.history.generation,
+        original.history.generation
+    );
+    let open_history = || {
+        let done = Rc::new(Cell::new(false));
+        glib::spawn_future_local(glib::clone!(
+            #[strong]
+            w,
+            #[strong]
+            painting,
+            #[strong]
+            done,
+            async move {
+                w.workspaces
+                    .perform(&w, A::History(painting))
+                    .await
+                    .unwrap();
+                done.set(true);
+            }
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let dialog = loop {
+            pump(20);
+            if let Some(dialog) = find_named(w.window.upcast_ref(), "workspace-layout-history") {
+                break dialog.downcast::<adw::AlertDialog>().unwrap();
+            }
+            assert!(Instant::now() < deadline, "History modal did not open");
+        };
+        pump(100);
+        let list = find_named(dialog.upcast_ref(), "workspace-history-items")
+            .unwrap()
+            .downcast::<gtk::ListBox>()
+            .unwrap();
+        (dialog, list, done)
+    };
+    for response in ["cancel", "restore"] {
+        let (dialog, list, done) = open_history();
+        let before = glib::MainContext::default()
+            .block_on(manager.load(&painting))
+            .unwrap()
+            .entity
+            .capture()
+            .unwrap();
+        assert_eq!(before, persisted_original);
+        assert!(!dialog.is_response_enabled("restore"));
+        let current_row = list.selected_row().unwrap();
+        let starting = list
+            .last_child()
+            .unwrap()
+            .downcast::<gtk::ListBoxRow>()
+            .unwrap();
+        list.select_row(Some(&starting));
+        pump(150);
+        assert_eq!(durable_layout(&state(&w).workspace.layout), baseline);
+        assert_eq!(
+            w.gpu
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .session
+                .capture_workspace()
+                .unwrap(),
+            original
+        );
+        assert_eq!(
+            glib::MainContext::default()
+                .block_on(manager.load(&painting))
+                .unwrap()
+                .entity
+                .capture()
+                .unwrap(),
+            persisted_original
+        );
+        list.select_row(Some(&current_row));
+        pump(50);
+        assert_eq!(
+            durable_layout(&state(&w).workspace.layout),
+            *original.history.layout()
+        );
+        assert!(!dialog.is_response_enabled("restore"));
+        list.select_row(Some(&starting));
+        pump(100);
+        assert!(dialog.is_response_enabled("restore"));
+        if response == "cancel" {
+            let expires = manager
+                .current_record()
+                .unwrap()
+                .claim
+                .unwrap()
+                .expires_at_ms;
+            pump(layer_workspace::OWNER_RENEW_MS + 200);
+            let renewed = glib::MainContext::default()
+                .block_on(manager.load(&painting))
+                .unwrap();
+            assert!(
+                renewed.claim.as_ref().unwrap().expires_at_ms > expires,
+                "History browsing must keep this workspace claimed"
+            );
+            assert_eq!(renewed.entity.capture().unwrap(), persisted_original);
+        }
+        crate::capture(&w, "/tmp/capy-workspace-layout-history.png");
+        find_button(
+            dialog.upcast_ref(),
+            if response == "restore" {
+                "Restore This Version"
+            } else {
+                "Cancel"
+            },
+        )
+        .unwrap()
+        .emit_clicked();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done.get() {
+            pump(20);
+            assert!(Instant::now() < deadline);
+        }
+        pump(100);
+        assert!(!w.workspaces.busy.get());
+        let after = w
+            .gpu
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .session
+            .capture_workspace()
+            .unwrap();
+        if response == "cancel" {
+            assert_eq!(after, original);
+            assert_eq!(
+                durable_layout(&state(&w).workspace.layout),
+                *original.history.layout()
+            );
+        } else {
+            assert_eq!(after.history.layout(), &baseline);
+            assert_eq!(
+                after.history.revisions.len(),
+                original.history.revisions.len() + 1
+            );
+            assert_eq!(after.history.generation, original.history.generation + 1);
+            assert_eq!(after.working, original.working);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                durable_layout(&state(&w).workspace.layout),
+                *original.history.layout()
+            );
+        }
+    }
+    w.workspaces.ui.show(&w, ManagerPage::Workspaces);
+    pump(200);
+    let details = find_named(w.window.upcast_ref(), "workspace-manager-details");
+    assert!(
+        details.is_none_or(|widget| !widget.is_mapped()),
+        "Workspace list should have no details pane"
+    );
+    crate::capture(&w, "/tmp/capy-workspace-manager-simple.png");
     w.workspaces.ui.show(&w, ManagerPage::Templates);
     pump(200);
     assert!(find_named(w.window.upcast_ref(), "workspace-manager-search").is_some());
     assert!(find_named(w.window.upcast_ref(), "workspace-layout-preview").is_some());
     crate::capture(&w, "/tmp/capy-workspace-manager.png");
     run(A::Storage, None, None);
-    assert!(find_button(w.window.upcast_ref(), "Import Workspace Backup…").is_some());
-    assert!(find_button(w.window.upcast_ref(), "Export Workspace Backup…").is_some());
+    assert!(find_button(w.window.upcast_ref(), "Restore from Backup…").is_some());
+    assert!(find_button(w.window.upcast_ref(), "Save Backup…").is_some());
     assert_eq!(
         w.gpu.borrow().as_ref().unwrap().session.engine().document(),
         &drawing
@@ -13930,7 +14111,7 @@ fn native_workspace_unavailable_close_recovery() {
     w.window.close();
     pump(100);
     let dialog = find_named(w.window.upcast_ref(), "workspace-close-recovery").unwrap();
-    assert!(find_button(&dialog, "Export Backup and Close…").is_some());
+    assert!(find_button(&dialog, "Save Backup and Close…").is_some());
     find_button(&dialog, "Keep Open").unwrap().emit_clicked();
     pump(100);
     assert!(w.window.is_visible());

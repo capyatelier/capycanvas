@@ -11,6 +11,8 @@ thread_local! {
 mod actions;
 #[path = "workspace_manager_dialog.rs"]
 mod dialog;
+#[path = "workspace_history_dialog.rs"]
+mod history;
 #[path = "workspace_manager_storage.rs"]
 mod storage;
 pub(crate) fn now_ms() -> u64 {
@@ -567,7 +569,7 @@ impl NativeWorkspaces {
             Err(error) => {
                 self.interrupted_count.set(1);
                 *self.interruption_error.borrow_mut() = Some(format!(
-                    "Interrupted changes need recovery: {error}. Export Original Database preserves the stored records."
+                    "Interrupted changes need recovery: {error}. Export All Stored Data preserves the stored records."
                 ));
             }
         }

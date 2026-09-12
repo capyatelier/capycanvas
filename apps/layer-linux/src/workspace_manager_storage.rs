@@ -13,12 +13,12 @@ impl NativeWorkspaces {
             w,
             async move {
                 let prompt = adw::AlertDialog::builder().heading("Workspace Changes Aren’t Saved")
-                .body("Export a Workspace Backup to preserve your current layout, working values, and retained history before closing. You can also keep this window open and retry storage.").build();
+                .body("Your latest workspace changes couldn’t be saved. Save a backup before closing, or keep this window open and try again.").build();
                 prompt.set_widget_name("workspace-close-recovery");
                 prompt.add_responses(&[
                     ("cancel", "Keep Open"),
                     ("discard", "Discard Unsaved Changes"),
-                    ("export", "Export Backup and Close…"),
+                    ("export", "Save Backup and Close…"),
                 ]);
                 prompt.set_close_response("cancel");
                 prompt.set_default_response(Some("export"));
@@ -119,7 +119,7 @@ impl NativeWorkspaces {
                     self.ui.note.set_visible(true);
                     return Ok(());
                 }
-                let Some(operation)=dialog::choice_dialog(w,"Recover Interrupted Changes","Recover the selected changes into independent copies with unique names. Pending values use the stored layout when the layout was not part of the interrupted change. Existing items stay as they are.","Recover Copies",&choices).await else {return Ok(());};
+                let Some(operation)=dialog::choice_dialog(w,"Recover Interrupted Changes","Some changes couldn’t finish saving. Choose an item to recover as a new workspace or saved setup.","Recover",&choices).await else {return Ok(());};
                 let _operation = self.begin_operation(w).await?;
                 match manager.recover_interrupted(&operation, now_ms()).await? {
                     Some(incoming) => self.adopt(w, Ok(incoming)).await,
@@ -129,7 +129,7 @@ impl NativeWorkspaces {
             }
             A::ExportDatabase => {
                 let picker = gtk::FileDialog::builder()
-                    .title("Export Original Database")
+                    .title("Export All Stored Data")
                     .initial_name("capycanvas-workspaces.sqlite3")
                     .modal(true)
                     .build();
@@ -152,20 +152,14 @@ impl NativeWorkspaces {
             A::Storage => {
                 let description = match manager.storage_report(false).await {
                     Ok(report) => format!(
-                        "Database: {:.1} MiB\nShared configuration data: {:.1} MiB\nEligible history (estimated): {:.1} MiB\nHistory target: 100 MiB\nOldest retained history: {}\nRecently Deleted: retained for 30 days\n\nCurrent state, original reset layouts, and up to 100 undo and 100 redo entries per workspace are protected. Other open workspaces are cleaned by their own windows.\n\nWorkspace backups include latest tool values, original layouts, and retained history. Template exports contain layout and toolbar configuration only.",
+                        "Save a backup so you can restore this workspace later or move it to another computer. Backups include your layout, saved settings, and history.\n\nStorage used: {:.1} MiB",
                         report.database_bytes as f64 / 1048576.,
-                        report.component_bytes as f64 / 1048576.,
-                        report.eligible_history_bytes as f64 / 1048576.,
-                        report
-                            .oldest_history_ms
-                            .map(layer_workspace::date)
-                            .unwrap_or_else(|| "None".into())
                     ),
                     Err(error) => format!(
-                        "Storage is unavailable: {error}\n\nThe current workspace remains in memory. Export a Workspace Backup to preserve its layout, tool values, reset baseline, and retained history, then Retry Storage."
+                        "Your workspace couldn’t be saved: {error}\n\nSave a backup to keep your changes. Open More storage options to try saving again."
                     ),
                 };
-                self.ui.storage(w, format!("{description}\n\nExport Original Database preserves all stored items for repair, including unsupported records. Use a Workspace Backup for normal import."));
+                self.ui.storage(w, description);
             }
             A::Export(id) => {
                 let entity = if manager.active_id().as_deref() == Some(&id) {
@@ -225,7 +219,7 @@ impl NativeWorkspaces {
                             layer_workspace::ManagerPage::ToolbarLibrary
                         },
                     );
-                    self.ui.note.set_text(if kind == PackageKind::Template {"Template imported. Select it and choose New Workspace from Template to use it."} else {"Toolbar imported. Select it and choose Add to Workspace to use it."});
+                    self.ui.note.set_text(if kind == PackageKind::Template {"Workspace Template imported. Choose Use Layout to start a workspace with it."} else {"Toolbar imported. Select it and choose Add to Workspace to use it."});
                     self.ui.note.set_visible(true);
                     let _ = id;
                 }
@@ -233,8 +227,8 @@ impl NativeWorkspaces {
             A::ClearOlderHistory => {
                 let report = manager.storage_report(true).await?;
                 let message = format!(
-                    "Remove {} older layout, metadata, and library versions, and {} expired items? Current state, original layouts, and active undo/redo entries remain available. This cannot be undone. {} workspaces open in other windows are deferred.",
-                    report.versions_to_remove, report.expired_items, report.deferred_open_items
+                    "Delete {} older versions and {} expired deleted items to free storage? You’ll keep your current layouts and recent undo steps. This cannot be undone.",
+                    report.versions_to_remove, report.expired_items
                 );
                 if !dialog::confirm(
                     w,
@@ -260,12 +254,37 @@ impl NativeWorkspaces {
             }
             A::DeletePermanently(id) => {
                 let entity = self.selected(&id).await?.entity;
-                if dialog::confirm(w,"Delete Permanently",&format!("Permanently delete {} and its retained history? Content used by other workspaces remains available. This cannot be undone.",entity.metadata.name),"Delete Permanently",true).await {
+                if dialog::confirm(
+                    w,
+                    "Delete Permanently",
+                    &format!(
+                        "Permanently delete “{}” and its history? This cannot be undone.",
+                        entity.metadata.name
+                    ),
+                    "Delete Permanently",
+                    true,
+                )
+                .await
+                {
                     manager.delete_permanently(&id).await?;
                 }
             }
             A::SaveAsNew => {
-                let Some(values) = dialog::name_dialog(w,"Save as New Workspace","Preserve the current in-memory workspace under an independent name. This can recover edits after another window takes ownership.","Save and Switch","Recovered Workspace",None,&[],None,None).await else {return Ok(());};
+                let Some(values) = dialog::name_dialog(
+                    w,
+                    "Save as New Workspace",
+                    "Keep the changes you can see in a new workspace.",
+                    "Save and Switch",
+                    "Recovered Workspace",
+                    None,
+                    &[],
+                    None,
+                    None,
+                )
+                .await
+                else {
+                    return Ok(());
+                };
                 let _operation = self.begin_operation(w).await?;
                 let result = async {
                     let capture = self.recovery_entity(w)?.capture()?;

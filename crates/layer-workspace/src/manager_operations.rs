@@ -11,13 +11,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let mut template = self.load(id).await?.entity;
         let ItemContent::Reusable { current, previous } = &mut template.content else {
-            return Err(StoreError::invalid("Choose a template."));
+            return Err(StoreError::invalid("Choose a Workspace Template."));
         };
         let selected = std::iter::once(&*current)
             .chain(previous.iter())
             .find(|v| v.id == version)
             .cloned()
-            .ok_or_else(|| StoreError::invalid("This template version is no longer retained."))?;
+            .ok_or_else(|| StoreError::invalid("This Workspace Template version is no longer available."))?;
         *current = selected;
         self.create_and_bind(
             self.workspace_from_template(&template, name, now)?,
@@ -160,7 +160,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub async fn duplicate_reusable(&self, id: &str, name: &str, now: u64) -> Result<String> {
         let mut entity = self.load(id).await?.entity;
         if entity.metadata.kind == ItemKind::Workspace {
-            return Err(StoreError::invalid("Choose a template or saved toolbar."));
+            return Err(StoreError::invalid("Choose a Workspace Template or saved toolbar."));
         }
         entity.id = new_id();
         entity.metadata.builtin = false;
@@ -182,7 +182,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let result: Result<()> = async {
             let ItemContent::Reusable { current, previous } = &stored.entity.content else {
                 return Err(StoreError::invalid(
-                    "Choose a reusable template or toolbar.",
+                    "Choose a Workspace Template or saved toolbar.",
                 ));
             };
             if current.content.kind() != content.kind() {
@@ -220,7 +220,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let stored = self.load(id).await?;
         let ItemContent::Reusable { current, previous } = &stored.entity.content else {
             return Err(StoreError::invalid(
-                "Choose a reusable template or toolbar.",
+                "Choose a Workspace Template or saved toolbar.",
             ));
         };
         let selected = std::iter::once(current)
@@ -261,9 +261,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             history.append(
                 &layout,
                 if revision.is_some() {
-                    "Restore layout from history"
+                    "Restored earlier layout"
                 } else {
-                    "Reset to original layout"
+                    "Reset to starting layout"
                 },
             );
             for r in history

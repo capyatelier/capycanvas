@@ -239,28 +239,30 @@ impl NativeWorkspaces {
                         .map(|i| (i.id, i.metadata.name))
                         .collect();
                     if !choices.is_empty() {
-                        let Some(id) = dialog::choice_dialog(w,"Choose Replacement Workspace","This window will switch to the workspace you select before moving the current workspace to Recently Deleted.","Continue",&choices).await else { return Ok(()); };
+                        let Some(id) = dialog::choice_dialog(
+                            w,
+                            "Switch Before Deleting",
+                            "Choose which workspace to use after deleting this one.",
+                            "Continue",
+                            &choices,
+                        )
+                        .await
+                        else {
+                            return Ok(());
+                        };
                         replacement = Some(id);
                     }
                 }
                 let message = format!(
-                    "Move {} to Recently Deleted? It can be restored for 30 days.{}",
+                    "Delete “{}”? You can restore it from Recently Deleted for 30 days.{}",
                     stored.entity.metadata.name,
-                    if active {
-                        " This window will switch to another workspace; if none exists, a new workspace will be created from Default."
+                    if active && replacement.is_none() {
+                        " You’ll switch to a new default workspace."
                     } else {
                         ""
                     }
                 );
-                if !dialog::confirm(
-                    w,
-                    "Move to Recently Deleted",
-                    &message,
-                    "Move to Recently Deleted",
-                    true,
-                )
-                .await
-                {
+                if !dialog::confirm(w, "Delete", &message, "Delete", true).await {
                     return Ok(());
                 }
                 let _operation = self.begin_operation(w).await?;
@@ -297,7 +299,7 @@ impl NativeWorkspaces {
                 w.customize(CustomizationAction::DeleteToolbar { panel });
             }
             A::History(id) => {
-                self.ui.history(w, &id, false).await?;
+                history::show(w, &id).await?;
             }
             A::Versions(id) => {
                 self.ui.history(w, &id, true).await?;
@@ -321,7 +323,7 @@ impl NativeWorkspaces {
                 } else {
                     return Err(StoreError::new(
                         layer_workspace::ErrorKind::OwnedElsewhere,
-                        "This workspace is open in another application window. Use that window or duplicate the workspace.",
+                        "This workspace is open in another application window. Switch to that window to use it.",
                     ));
                 }
             }
@@ -333,7 +335,7 @@ impl NativeWorkspaces {
                 if choices.is_empty() {
                     return Err(StoreError::invalid("Save a toolbar to the Library first."));
                 }
-                if let Some(id) = dialog::choice_dialog(w,"Replace from Library","Replace this toolbar’s contents and display options while preserving its placement. Undo Workspace Change can restore it.","Replace Toolbar",&choices).await {
+                if let Some(id) = dialog::choice_dialog(w,"Replace from Library","Choose the saved toolbar you want to use here. It will replace the tools in this toolbar. You can undo this change.","Replace Toolbar",&choices).await {
                     self.add_toolbar(w,&id,Some(panel),None,None).await?;
                 }
             }
@@ -351,7 +353,7 @@ impl NativeWorkspaces {
                     .map(|p| (serde_json::to_string(&p.id).unwrap(), p.title().to_string()))
                     .collect();
                 let target = self.selected(&id).await?;
-                if let Some(panel) = dialog::choice_dialog(w,"Update Saved Toolbar",&format!("Choose a toolbar from {} to update {}. Previous versions remain available; existing workspace copies stay as they are.",source.metadata.name,target.entity.metadata.name),"Update",&choices).await {
+                if let Some(panel) = dialog::choice_dialog(w,"Update Saved Toolbar",&format!("Which toolbar from “{}” should replace the saved “{}”? Future additions will use this version.",source.metadata.name,target.entity.metadata.name),"Update",&choices).await {
                     let panel: Panel = serde_json::from_str(&panel).map_err(|e|StoreError::invalid(e.to_string()))?;
                     let _operation = self.begin_operation(w).await?;
                     let current = manager.current().unwrap().capture()?;
@@ -402,7 +404,7 @@ impl NativeWorkspaces {
         );
         let mut choices = Vec::new();
         if creation {
-            choices.push((String::new(), "Current workspace".into()));
+            choices.push((String::new(), "Current layout".into()));
             choices.extend(
                 manager
                     .items()
@@ -435,11 +437,7 @@ impl NativeWorkspaces {
             String::new()
         };
         let (title, message, confirm) = match &action {
-            A::Rename(_) => (
-                "Rename",
-                "Choose a name and optional description.",
-                "Rename",
-            ),
+            A::Rename(_) => ("Rename", "Choose a name you’ll recognize.", "Rename"),
             A::Duplicate(_)
                 if source
                     .as_ref()
@@ -447,36 +445,40 @@ impl NativeWorkspaces {
             {
                 (
                     "Duplicate",
-                    "Create an independent, editable copy in your library.",
+                    "Make a copy you can change and use separately.",
                     "Duplicate",
                 )
             }
             A::Duplicate(_) => (
                 "Duplicate Workspace",
-                "The copy keeps its own changes, history, working values, and original reset target.",
+                "Start with a copy of this workspace. Give it a name for the task you’ll use it for.",
                 "Duplicate and Switch",
             ),
             A::SaveAsTemplate(_) => (
-                "Save as Template",
-                "Capture panels, toolbars, and their customizations. Brush settings and colors are excluded. This does not change the current workspace’s original reset target.",
-                "Save as Template",
+                "Save Workspace Template",
+                "A Workspace Template saves the exact layout of your tools and panels so you can load it again whenever you want. Give this layout a name, such as “Inking”.",
+                "Save Workspace Template",
             ),
             A::SaveToolbar(_) => (
                 "Save to Toolbar Library",
-                "Create a reusable copy of this toolbar. Its placement belongs to each receiving workspace.",
+                "Save these tools together so you can add the same toolbar to another workspace.",
                 "Save to Library",
             ),
             _ => (
                 "New Workspace",
-                "Choose a name and starting layout. Starting from a template uses default tool settings.",
+                "Keep a separate layout for a task, such as sketching or painting. Name your workspace and choose its starting layout. Changes are saved automatically.",
                 "Create and Switch",
             ),
         };
         let mut selected = source_id.map(str::to_string);
         let mut error = None;
         loop {
-            let desc = matches!(action, A::Rename(_) | A::SaveAsTemplate(_))
-                .then_some(description.as_str());
+            let show_description = matches!(action, A::SaveAsTemplate(_))
+                || matches!(action, A::Rename(_))
+                    && source
+                        .as_ref()
+                        .is_some_and(|s| s.entity.metadata.kind != ItemKind::Workspace);
+            let desc = show_description.then_some(description.as_str());
             let Some(values) = dialog::name_dialog(
                 w,
                 title,
@@ -493,7 +495,9 @@ impl NativeWorkspaces {
                 return Ok(());
             };
             name = values.name;
-            description = values.description;
+            if show_description {
+                description = values.description;
+            }
             selected = values.choice;
             let _operation = self.begin_operation(w).await?;
             let outcome: Result<Option<StoredEntity>> = match &action {
@@ -646,7 +650,7 @@ impl NativeWorkspaces {
             let Some(values) = dialog::name_dialog(
                 w,
                 "New Toolbar",
-                "Start with an empty toolbar or an independent copy from the Toolbar Library.",
+                "Keep the tools you use most together. Start empty or use a saved toolbar.",
                 "Add to Workspace",
                 &name,
                 None,

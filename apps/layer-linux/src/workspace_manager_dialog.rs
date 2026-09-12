@@ -22,21 +22,37 @@ pub(crate) struct ManagerUi {
     rebuilding: Cell<bool>,
     history_mode: Cell<bool>,
     actions: gtk::Box,
+    intro: gtk::Label,
+    more: gtk::MenuButton,
+    split: gtk::Paned,
+    sidebar: gtk::Box,
+    details_view: gtk::ScrolledWindow,
 }
 impl ManagerUi {
     pub fn new() -> Self {
         let dialog = adw::Dialog::builder()
             .title("Manage Workspaces")
-            .content_width(920)
-            .content_height(680)
+            .content_width(520)
+            .content_height(540)
             .build();
         dialog.set_widget_name("workspace-manager");
         let view = adw::ToolbarView::new();
-        view.add_top_bar(&adw::HeaderBar::new());
+        let header = adw::HeaderBar::new();
+        let more = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("More options")
+            .build();
+        more.add_css_class("flat");
+        header.pack_end(&more);
+        view.add_top_bar(&header);
         let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
         margins(&body, 18);
         let tabs = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         body.append(&tabs);
+        let intro = gtk::Label::new(None);
+        intro.set_xalign(0.);
+        intro.set_wrap(true);
+        body.append(&intro);
         let note = gtk::Label::new(None);
         note.set_xalign(0.);
         note.set_wrap(true);
@@ -74,12 +90,11 @@ impl ManagerUi {
         details.set_margin_start(18);
         details.set_margin_end(8);
         split.set_start_child(Some(&sidebar));
-        split.set_end_child(Some(
-            &gtk::ScrolledWindow::builder()
-                .hscrollbar_policy(gtk::PolicyType::Never)
-                .child(&details)
-                .build(),
-        ));
+        let details_view = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .child(&details)
+            .build();
+        split.set_end_child(Some(&details_view));
         body.append(&split);
         view.set_content(Some(&body));
         dialog.set_child(Some(&view));
@@ -100,6 +115,11 @@ impl ManagerUi {
             rebuilding: Cell::new(false),
             history_mode: Cell::new(false),
             actions,
+            intro,
+            more,
+            split,
+            sidebar,
+            details_view,
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
@@ -140,7 +160,13 @@ impl ManagerUi {
         self.list.connect_row_activated(glib::clone!(
             #[weak]
             w,
-            move |_, _| {
+            move |_, row| {
+                if w.workspaces.ui.page.get() == ManagerPage::Workspaces {
+                    if let Some(id) = w.workspaces.ui.rows.borrow().get(row.index() as usize) {
+                        w.workspaces.ui.run(&w, workspace_primary(&w, id));
+                    }
+                    return;
+                }
                 // Enter selects a row; the explicitly labeled primary button applies it.
                 w.workspaces
                     .ui
@@ -158,16 +184,40 @@ impl ManagerUi {
             page,
             ManagerPage::ThisWorkspace | ManagerPage::ToolbarLibrary
         );
+        let compact = page == ManagerPage::Workspaces;
+        self.list.set_selection_mode(if compact {
+            gtk::SelectionMode::None
+        } else {
+            gtk::SelectionMode::Single
+        });
+        self.dialog
+            .set_content_width(if compact { 520 } else { 780 });
+        self.dialog
+            .set_content_height(if compact { 540 } else { 600 });
+        self.split.set_start_child(Some(&self.sidebar));
+        self.split.set_end_child(if compact {
+            None
+        } else {
+            Some(&self.details_view)
+        });
+        self.intro.set_text(match page {
+            ManagerPage::Workspaces=>"Switch between layouts you use for different tasks. Your changes are saved automatically.",
+            ManagerPage::Templates=>"Workspace Templates save the exact layout of your tools and panels so you can load it again whenever you want. Choose one to start a new workspace.",
+            ManagerPage::ThisWorkspace=>"Show, hide, or customize the toolbars in this workspace.",
+            ManagerPage::ToolbarLibrary=>"Save your favorite toolbar setups here, then add them to any workspace.",
+            ManagerPage::RecentlyDeleted=>"Deleted items are kept for 30 days. Restore one to use it again.",
+        });
+        self.intro.set_visible(true);
         self.dialog.set_title(if toolbar {
             "Manage Toolbars"
         } else {
-            "Manage Workspaces"
+            page.label()
         });
         clear(&self.tabs);
         for page in if toolbar {
             vec![ManagerPage::ThisWorkspace, ManagerPage::ToolbarLibrary]
         } else {
-            vec![ManagerPage::Workspaces, ManagerPage::Templates]
+            Vec::new()
         } {
             let button = gtk::ToggleButton::with_label(page.label());
             button.set_active(page == self.page.get());
@@ -178,28 +228,49 @@ impl ManagerUi {
             ));
             self.tabs.append(&button);
         }
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        self.tabs.append(&spacer);
-        for (title, action) in [
-            ("Recently Deleted", None),
-            ("Storage and Backups…", Some(ManagerAction::Storage)),
+        if !toolbar && !compact {
+            let back = gtk::Button::with_label("Back to Workspaces");
+            back.add_css_class("flat");
+            back.connect_clicked(glib::clone!(
+                #[weak]
+                w,
+                move |_| w.workspaces.ui.show(&w, ManagerPage::Workspaces)
+            ));
+            self.tabs.append(&back);
+        }
+        self.tabs.set_visible(!compact);
+        let popup = gtk::Popover::new();
+        let options = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        margins(&options, 6);
+        for (title, page, action) in [
+            ("Workspace Templates…", Some(ManagerPage::Templates), None),
+            (
+                "Recently Deleted…",
+                Some(ManagerPage::RecentlyDeleted),
+                None,
+            ),
+            ("Backups and Storage…", None, Some(ManagerAction::Storage)),
         ] {
             let button = gtk::Button::with_label(title);
             button.add_css_class("flat");
             button.connect_clicked(glib::clone!(
                 #[weak]
                 w,
+                #[weak]
+                popup,
                 move |_| {
+                    popup.popdown();
                     if let Some(action) = &action {
                         w.workspaces.ui.run(&w, action.clone());
                     } else {
-                        w.workspaces.ui.show(&w, ManagerPage::RecentlyDeleted);
+                        w.workspaces.ui.show(&w, page.unwrap());
                     }
                 }
             ));
-            self.tabs.append(&button);
+            options.append(&button);
         }
+        popup.set_child(Some(&options));
+        self.more.set_popover(Some(&popup));
         clear(&self.actions);
         let action = match page {
             ManagerPage::Workspaces => Some(ManagerAction::New),
@@ -247,6 +318,9 @@ impl ManagerUi {
             return;
         };
         let rows = manager.rows(self.page.get(), &self.search.text(), now_ms());
+        let compact = self.page.get() == ManagerPage::Workspaces;
+        self.search
+            .set_visible(!compact || rows.len() > 7 || !self.search.text().is_empty());
         let selected = self.selected.borrow().clone();
         self.rebuilding.set(true);
         self.list.remove_all();
@@ -262,6 +336,42 @@ impl ManagerUi {
                 .build();
             row.set_use_markup(false);
             row.set_activatable(true);
+            if compact {
+                let active = manager.active_id().as_deref() == Some(&item.id);
+                if active {
+                    row.add_suffix(&gtk::Image::from_icon_name("object-select-symbolic"));
+                } else {
+                    let switch = action_button(w, workspace_primary(w, &item.id), false, true);
+                    switch.set_valign(gtk::Align::Center);
+                    row.add_suffix(&switch);
+                }
+                let elsewhere = manager.items().iter().any(|i| {
+                    i.id == item.id
+                        && i.claim
+                            .as_ref()
+                            .is_some_and(|c| c.owner != manager.owner && c.expires_at_ms > now_ms())
+                });
+                let more = actions_menu(
+                    w,
+                    &format!("Options for {}", item.title),
+                    vec![
+                        ManagerButton {
+                            action: ManagerAction::Rename(item.id.clone()),
+                            label: "Rename…".into(),
+                            enabled: !elsewhere,
+                            primary: false,
+                        },
+                        ManagerButton {
+                            action: ManagerAction::Delete(item.id.clone()),
+                            label: "Delete…".into(),
+                            enabled: !elsewhere,
+                            primary: false,
+                        },
+                    ],
+                );
+                more.set_valign(gtk::Align::Center);
+                row.add_suffix(&more);
+            }
             self.rows.borrow_mut().push(item.id);
             self.list.append(&row);
         }
@@ -275,6 +385,9 @@ impl ManagerUi {
         }
     }
     fn selection(&self, w: &Rc<Workspace>) {
+        if self.page.get() == ManagerPage::Workspaces {
+            return;
+        }
         self.history_mode.set(false);
         let generation = self.generation.get().wrapping_add(1);
         self.generation.set(generation);
@@ -306,7 +419,6 @@ impl ManagerUi {
                 actions: [
                     ManagerAction::ShowToolbar(panel, !visible),
                     ManagerAction::RenameToolbar(panel),
-                    ManagerAction::DuplicateToolbar(panel),
                     ManagerAction::SaveToolbar(panel),
                     ManagerAction::ReplaceToolbar(panel),
                     ManagerAction::DeleteToolbar(panel),
@@ -372,10 +484,20 @@ impl ManagerUi {
         description.set_wrap(true);
         description.set_selectable(true);
         self.details.append(&description);
+        let mut secondary = Vec::new();
         for button in details.actions {
+            if !button.primary {
+                secondary.push(button);
+                continue;
+            }
             let widget = action_button(w, button.action, button.primary, button.enabled);
             widget.set_label(&button.label);
             self.details.append(&widget);
+        }
+        if !secondary.is_empty() {
+            let more = actions_menu(w, "More options", secondary);
+            more.set_label("More…");
+            self.details.append(&more);
         }
     }
     pub fn error(&self, error: &str) {
@@ -407,6 +529,10 @@ impl ManagerUi {
         self.show(w, ManagerPage::Workspaces);
         self.history_mode.set(true);
         self.generation.set(self.generation.get().wrapping_add(1));
+        self.split.set_start_child(None::<&gtk::Widget>);
+        self.split.set_end_child(Some(&self.details_view));
+        self.intro.set_visible(false);
+        self.dialog.set_title("Backups and Storage");
         clear(&self.details);
         let title = gtk::Label::new(Some("Storage and Backups"));
         title.add_css_class("title-2");
@@ -417,17 +543,30 @@ impl ManagerUi {
         text.set_xalign(0.);
         text.set_selectable(true);
         self.details.append(&text);
+        for action in [ManagerAction::ExportCurrent, ManagerAction::ImportBackup] {
+            self.details.append(&action_button(w, action, false, true));
+        }
+        let advanced = gtk::Expander::builder()
+            .label("More storage options")
+            .build();
+        let options = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let explanation = gtk::Label::new(Some(
+            "Recover unsaved changes, free space by clearing older history, or export all stored data for troubleshooting.",
+        ));
+        explanation.set_wrap(true);
+        explanation.set_xalign(0.);
+        options.append(&explanation);
         for action in [
-            ManagerAction::ExportCurrent,
-            ManagerAction::ExportDatabase,
-            ManagerAction::ImportBackup,
             ManagerAction::ClearOlderHistory,
             ManagerAction::SaveAsNew,
             ManagerAction::RetryStorage,
             ManagerAction::RecoverInterrupted,
+            ManagerAction::ExportDatabase,
         ] {
-            self.details.append(&action_button(w, action, false, true));
+            options.append(&action_button(w, action, false, true));
         }
+        advanced.set_child(Some(&options));
+        self.details.append(&advanced);
     }
     pub fn run(&self, w: &Rc<Workspace>, action: ManagerAction) {
         self.note.set_visible(false);
@@ -449,6 +588,51 @@ fn margins(widget: &impl IsA<gtk::Widget>, value: i32) {
     widget.set_margin_bottom(value);
     widget.set_margin_start(value);
     widget.set_margin_end(value);
+}
+fn workspace_primary(w: &Workspace, id: &str) -> ManagerAction {
+    let manager = w.workspaces.manager.as_ref().unwrap();
+    if manager.items().iter().any(|i| {
+        i.id == id
+            && i.claim
+                .as_ref()
+                .is_some_and(|c| c.owner != manager.owner && c.expires_at_ms > now_ms())
+    }) {
+        ManagerAction::SwitchToWindow(id.into())
+    } else {
+        ManagerAction::Switch(id.into())
+    }
+}
+fn actions_menu(w: &Rc<Workspace>, label: &str, actions: Vec<ManagerButton>) -> gtk::MenuButton {
+    let menu = gtk::MenuButton::builder()
+        .icon_name("view-more-symbolic")
+        .tooltip_text(label)
+        .build();
+    menu.add_css_class("flat");
+    let popup = gtk::Popover::new();
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    margins(&content, 6);
+    for item in actions {
+        let button = gtk::Button::with_label(&item.label);
+        button.add_css_class("flat");
+        button.set_sensitive(item.enabled);
+        if item.action.destructive() {
+            button.add_css_class("destructive-action");
+        }
+        button.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            #[weak]
+            popup,
+            move |_| {
+                popup.popdown();
+                w.workspaces.ui.run(&w, item.action.clone());
+            }
+        ));
+        content.append(&button);
+    }
+    popup.set_child(Some(&content));
+    menu.set_popover(Some(&popup));
+    menu
 }
 fn clear(container: &gtk::Box) {
     while let Some(child) = container.first_child() {
@@ -639,6 +823,9 @@ impl ManagerUi {
         id: &str,
         library: bool,
     ) -> Result<(), StoreError> {
+        if !library {
+            return super::history::show(w, id).await;
+        }
         let manager = w.workspaces.manager.as_ref().unwrap().clone();
         let stored = w.workspaces.selected(id).await?;
         let page = match stored.entity.metadata.kind {
@@ -710,9 +897,9 @@ impl ManagerUi {
         heading.set_xalign(0.);
         self.details.append(&heading);
         let description = gtk::Label::new(Some(if library {
-            "Restoring publishes a new latest version. Existing workspaces keep their captured layouts."
+            "Choose an earlier version to use for future additions."
         } else {
-            "Restore panels and toolbar customizations. Brush settings, colors, and Zen keep their latest values."
+            "Select a version to preview its layout."
         }));
         description.set_wrap(true);
         description.set_xalign(0.);
@@ -825,20 +1012,81 @@ impl ManagerUi {
         open.set_widget_name("workspace-history-open-new");
         open.set_sensitive(stored.entity.metadata.kind != ItemKind::Toolbar);
         let name = format!("{} Recovered", stored.entity.metadata.name);
-        open.connect_clicked(glib::clone!(#[weak] w, #[strong] selected, #[strong] versions, move |_| {
-            let Some((version,_,_,_)) = versions.get(selected.get()) else { return; }; let version = version.clone(); let id = entity_id.clone(); let name = name.clone();
-            glib::spawn_future_local(glib::clone!(#[weak] w, async move {
-                let Some(values) = name_dialog(&w,"Open as New Workspace","The selected layout becomes the new workspace’s starting configuration.","Create and Switch",&name,None,&[],None,None).await else { return; };
-                let result: Result<(),StoreError> = async {
-                    let _operation = w.workspaces.begin_operation(&w).await?;
-                    let manager = w.workspaces.manager.as_ref().unwrap();
-                    let result = if library { manager.create_from_library_version(&id,&version,&values.name,now_ms()).await }
-                        else { manager.open_history_as_workspace(&id,&version,&values.name,now_ms()).await };
-                    match result { Ok(incoming) => { w.workspaces.ui.close(); w.workspaces.adopt(&w,Ok(incoming)).await; Ok(()) }, Err(error) => { w.workspaces.finish_operation(&w); Err(error) } }
-                }.await;
-                if let Err(error) = result { w.workspaces.ui.error(&error.to_string()); }
-            }));
-        }));
+        open.connect_clicked(glib::clone!(
+            #[weak]
+            w,
+            #[strong]
+            selected,
+            #[strong]
+            versions,
+            move |_| {
+                let Some((version, _, _, _)) = versions.get(selected.get()) else {
+                    return;
+                };
+                let version = version.clone();
+                let id = entity_id.clone();
+                let name = name.clone();
+                glib::spawn_future_local(glib::clone!(
+                    #[weak]
+                    w,
+                    async move {
+                        let Some(values) = name_dialog(
+                            &w,
+                            "Open as New Workspace",
+                            "Start a new workspace with this layout.",
+                            "Create and Switch",
+                            &name,
+                            None,
+                            &[],
+                            None,
+                            None,
+                        )
+                        .await
+                        else {
+                            return;
+                        };
+                        let result: Result<(), StoreError> = async {
+                            let _operation = w.workspaces.begin_operation(&w).await?;
+                            let manager = w.workspaces.manager.as_ref().unwrap();
+                            let result = if library {
+                                manager
+                                    .create_from_library_version(
+                                        &id,
+                                        &version,
+                                        &values.name,
+                                        now_ms(),
+                                    )
+                                    .await
+                            } else {
+                                manager
+                                    .open_history_as_workspace(
+                                        &id,
+                                        &version,
+                                        &values.name,
+                                        now_ms(),
+                                    )
+                                    .await
+                            };
+                            match result {
+                                Ok(incoming) => {
+                                    w.workspaces.ui.close();
+                                    w.workspaces.adopt(&w, Ok(incoming)).await;
+                                    Ok(())
+                                }
+                                Err(error) => {
+                                    w.workspaces.finish_operation(&w);
+                                    Err(error)
+                                }
+                            }
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            w.workspaces.ui.error(&error.to_string());
+                        }
+                    }
+                ));
+            }
+        ));
         self.details.append(&open);
         let _ = manager;
         Ok(())

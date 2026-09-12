@@ -640,7 +640,7 @@ fn apply_write(
     check_owner(&row, owner, write.fence, now)?;
     if row.builtin {
         return Err(StoreError::invalid(
-            "Duplicate to customize this built-in template.",
+            "Create a workspace from this built-in Workspace Template to customize its layout.",
         ));
     }
     if (write.metadata.is_some() && write.expected.metadata != row.generations.metadata)

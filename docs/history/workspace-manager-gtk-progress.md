@@ -254,3 +254,40 @@ bash apps/layer-linux/bench/workspace-menus.sh
 
 GTK remains subject to user approval. Close the older running instance before
 using the normal `cargo run --locked --release -p layer-linux` trial command.
+
+## GTK redesign after user feedback
+
+Implemented the latest requested menu order: Undo/Redo first, Workspaces,
+flat panel rows, then Quick Access Toolbars. Generated panel/toolbar suffixes
+are omitted from these rows. User-facing Template terminology is now Workspace
+Template, including its introductory explanation.
+
+Manage Workspaces is a single list with New, Switch, and Rename/Delete options.
+Secondary library, deletion recovery, and storage pages are behind More options;
+maintenance controls are collapsed. Workspace, toolbar, backup, and recovery
+copy explains the user's task without storage implementation details.
+
+Layout History is now one modal with real editor previews, Cancel, and Restore
+This Version. Shared captures preserve the pre-preview layout and working state;
+GTK blocks editor input/autosave and renews ownership while browsing. Restore
+rolls back the temporary preview before committing one recoverable layout edit.
+New history descriptions name the affected panel/toolbar. Older generic labels
+can be recovered along retained navigation ancestry; unknown abandoned branches
+remain honestly labeled Earlier layout.
+
+Validation on concurrent main through `1b4dc00`: 264 shared UI and 30 native
+store/coordinator tests pass. Five isolated GTK acceptance tests pass, including
+15.12s manager/history/lease renewal, restart/independent windows, takeover,
+unavailable-storage recovery, and backup picker round-trip. Native pointer tests
+open Window → Workspaces and Quick Access Toolbars, File, and panel context
+menus (5.80s). Screenshot inspection confirms opaque dialogs and a lighter
+history backdrop. Logs: `/tmp/capy-workspace-redesign.wnLSpJ`,
+`/tmp/capy-workspace-menus.bmCiGt`, and `/tmp/workspace-redesign-shared-tests.log`.
+
+See [the review guide and screenshots](../ui/workspace-manager-gtk-redesign.md).
+The release build and diff checks pass. This milestone is ready for user review;
+approval before adapting other hosts remains outstanding.
+
+Integrated the subsequent GTK/Web layer-hold milestone `ce3751b` before
+publication. The combined release build passes, and the native pointer-menu
+check passes again in 5.69s (`/tmp/capy-workspace-menus.Qa6ihE`).

@@ -3,6 +3,9 @@
 
 use crate::DockLayout;
 use serde::{Deserialize, Serialize};
+#[path = "workspace_description.rs"]
+pub(crate) mod description;
+pub use description::layout_change_description;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,7 +92,7 @@ impl LayoutHistory {
         let revision = LayoutRevision {
             id: "r0".into(),
             layout: durable_layout(layout),
-            description: "Starting configuration".into(),
+            description: "Starting layout".into(),
             timestamp_ms: 0,
         };
         Self {
@@ -149,6 +152,11 @@ impl LayoutHistory {
         if self.layout() == &layout {
             return;
         }
+        let description = if description == "Arrange panels and toolbars" {
+            layout_change_description(self.layout(), &layout)
+        } else {
+            description.into()
+        };
         self.advance();
         let mut id = format!("r{}", self.generation);
         // Imported IDs are opaque and need not have been allocated by this version.
@@ -160,7 +168,7 @@ impl LayoutHistory {
             LayoutRevision {
                 id: id.clone(),
                 layout,
-                description: description.into(),
+                description,
                 timestamp_ms: 0,
             },
         );
@@ -194,6 +202,7 @@ impl LayoutHistory {
 pub(crate) struct WorkspaceHistory {
     durable: Option<LayoutHistory>,
     gesture: Option<WorkspaceState>,
+    gesture_description: Option<String>,
 }
 impl WorkspaceHistory {
     pub fn generation(&self) -> Option<u64> {
@@ -216,6 +225,7 @@ impl WorkspaceHistory {
         Self {
             durable: Some(history),
             gesture: None,
+            gesture_description: None,
         }
     }
     pub fn gesture_start(&self) -> Option<&WorkspaceState> {
@@ -249,9 +259,19 @@ impl WorkspaceHistory {
     pub fn begin(&mut self, state: &WorkspaceState) {
         self.gesture.get_or_insert_with(|| state.clone());
     }
+    pub fn begin_named(&mut self, state: &WorkspaceState, description: String) {
+        if self.gesture.is_none() {
+            self.gesture_description = Some(description);
+        }
+        self.begin(state);
+    }
     pub fn finish(&mut self, state: &WorkspaceState) {
         if let Some(before) = self.gesture.take() {
-            self.record(before, state);
+            let description = self
+                .gesture_description
+                .take()
+                .unwrap_or_else(|| layout_change_description(&before.layout, &state.layout));
+            self.record_named(before, state, &description);
         }
     }
     pub fn finish_move(&mut self, state: &mut WorkspaceState) {
@@ -266,6 +286,7 @@ impl WorkspaceHistory {
         }
     }
     pub fn cancel(&mut self, state: &mut WorkspaceState) {
+        self.gesture_description = None;
         if let Some(before) = self.gesture.take() {
             Self::adopt_layout(state, before.layout);
         }

@@ -13,9 +13,9 @@ impl ManagerPage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspaces => "Workspaces",
-            Self::Templates => "Templates",
+            Self::Templates => "Workspace Templates",
             Self::ThisWorkspace => "This Workspace",
-            Self::ToolbarLibrary => "Library",
+            Self::ToolbarLibrary => "Saved Toolbars",
             Self::RecentlyDeleted => "Recently Deleted",
         }
     }
@@ -62,30 +62,30 @@ impl ManagerAction {
     pub fn label(&self) -> &'static str {
         match self {
             Self::New => "New Workspace…",
-            Self::ImportTemplate => "Import Template…",
+            Self::ImportTemplate => "Import Workspace Template…",
             Self::ImportToolbar => "Import Toolbar…",
-            Self::Storage => "Storage and Backups…",
-            Self::ExportCurrent => "Export Workspace Backup…",
-            Self::ExportDatabase => "Export Original Database…",
-            Self::ImportBackup => "Import Workspace Backup…",
+            Self::Storage => "Backups and Storage…",
+            Self::ExportCurrent => "Save Backup…",
+            Self::ExportDatabase => "Export All Stored Data…",
+            Self::ImportBackup => "Restore from Backup…",
             Self::ClearOlderHistory => "Clear Older History…",
             Self::SaveAsNew => "Save as New Workspace…",
             Self::RetryStorage => "Retry Storage",
             Self::RecoverInterrupted => "Recover Interrupted Changes…",
-            Self::Switch(_) => "Switch Workspace",
+            Self::Switch(_) => "Switch",
             Self::SwitchToWindow(_) => "Switch to Window",
-            Self::NewFromTemplate(_) => "New Workspace from Template…",
+            Self::NewFromTemplate(_) => "Use Layout…",
             Self::EditAsWorkspace(_) => "Edit as Workspace…",
             Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
             Self::Duplicate(_) | Self::DuplicateToolbar(_) => "Duplicate…",
-            Self::SaveAsTemplate(_) => "Save as Template…",
+            Self::SaveAsTemplate(_) => "Save Layout as Workspace Template…",
             Self::Reset(_) => "Reset Layout…",
             Self::History(_) => "Layout History…",
             Self::Metadata(_) => "Name and Description History…",
-            Self::UpdateFromCurrent(_) => "Update from Current Workspace…",
+            Self::UpdateFromCurrent(_) => "Replace with Current Layout…",
             Self::Export(_) => "Export…",
             Self::Versions(_) => "Previous Versions…",
-            Self::Delete(_) => "Move to Recently Deleted",
+            Self::Delete(_) => "Delete…",
             Self::RestoreDeleted(_) => "Restore",
             Self::DeletePermanently(_) => "Delete Permanently…",
             Self::AddToolbar(_) => "Add to Workspace",
@@ -152,13 +152,13 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             && let ItemContent::Reusable { current, .. } = &template.entity.content
             && current.id != origin.version
         {
-            details.description.push_str("\nA newer template version is available. Reset still restores the original starting configuration.");
+            details.description.push_str("\nThis Workspace Template has been updated. Create a new workspace to try its latest layout.");
             let mut button = ManagerButton::new(
                 ManagerAction::NewFromTemplate(origin.id.clone()),
                 idle,
                 false,
             );
-            button.label = "New Workspace from Latest Template…".into();
+            button.label = "New Workspace from Latest Workspace Template…".into();
             details.actions.push(button);
         }
         details
@@ -225,26 +225,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         date(deleted.saturating_add(TRASH_LIFETIME_MS))
                     )
                 } else if active.as_ref() == Some(&i.id) {
-                    "Current Workspace".into()
+                    "Current workspace".into()
                 } else if i
                     .claim
                     .is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now)
                 {
                     "Open in another window".into()
                 } else if i.metadata.builtin {
-                    "Built-in · Duplicate to customize".into()
+                    "Included with CapyCanvas".into()
                 } else if i.metadata.kind == ItemKind::Workspace {
-                    format!("Last used {}", date(i.metadata.last_used_ms))
+                    String::new()
                 } else {
-                    format!(
-                        "My {} · Modified {}",
-                        if i.metadata.kind == ItemKind::Template {
-                            "Templates"
-                        } else {
-                            "Toolbars"
-                        },
-                        date(i.metadata.modified_at_ms)
-                    )
+                    i.metadata.description.clone()
                 };
                 ManagerRow {
                     id: i.id,
@@ -276,8 +268,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut add =
             |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
         if entity.metadata.deleted_at_ms.is_some() {
-            description
-                .push_str("\nRestore this item with its retained history and previous versions.");
+            description.push_str("\nRestore this item to use it again.");
             add(ManagerAction::RestoreDeleted(id.clone()), !elsewhere, true);
             add(
                 ManagerAction::DeletePermanently(id.clone()),
@@ -286,31 +277,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             );
         } else {
             match &entity.content {
-                ItemContent::Workspace {
-                    baseline,
-                    history,
-                    origin,
-                } => {
-                    description.push_str("\nChanges saved automatically.");
-                    if let Some(origin) = origin {
-                        description.push_str(&format!(
-                            "\nStarted from {} · {}",
-                            origin.name,
-                            date(origin.timestamp_ms)
-                        ));
-                        if self
-                            .items()
-                            .iter()
-                            .find(|i| i.id == origin.id)
-                            .is_none_or(|i| i.metadata.deleted_at_ms.is_some())
-                        {
-                            description.push_str("\nOriginal template was deleted; its starting configuration is still available.");
-                        }
-                    } else {
-                        description.push_str(
-                            "\nReset returns to this workspace’s starting configuration.",
-                        );
-                    }
+                ItemContent::Workspace { .. } => {
                     add(
                         if elsewhere {
                             ManagerAction::SwitchToWindow(id.clone())
@@ -321,31 +288,17 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         true,
                     );
                     add(ManagerAction::Rename(id.clone()), available, false);
-                    add(ManagerAction::Duplicate(id.clone()), idle, false);
-                    add(ManagerAction::SaveAsTemplate(id.clone()), idle, false);
-                    add(
-                        ManagerAction::Reset(id.clone()),
-                        available && idle && history.layout() != baseline,
-                        false,
-                    );
-                    add(ManagerAction::History(id.clone()), true, false);
-                    add(
-                        ManagerAction::Metadata(id.clone()),
-                        !entity.metadata.previous.is_empty(),
-                        false,
-                    );
                     add(ManagerAction::Delete(id.clone()), available && idle, false);
                 }
                 ItemContent::Reusable {
                     current: revision, ..
                 } => {
                     if entity.metadata.builtin {
-                        description.push_str("\nBuilt-in · Duplicate to customize.");
+                        description.push_str("\nIncluded with CapyCanvas.");
                     }
                     if revision.content.kind() == ItemKind::Template {
                         add(ManagerAction::NewFromTemplate(id.clone()), idle, true);
                         if available {
-                            add(ManagerAction::EditAsWorkspace(id.clone()), idle, false);
                             add(ManagerAction::UpdateFromCurrent(id.clone()), idle, false);
                         }
                     } else {
@@ -359,22 +312,16 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     if available {
                         add(ManagerAction::Rename(id.clone()), true, false);
                     }
-                    add(ManagerAction::Duplicate(id.clone()), true, false);
                     add(ManagerAction::Export(id.clone()), true, false);
                     if available {
                         add(ManagerAction::Versions(id.clone()), true, false);
-                        add(
-                            ManagerAction::Metadata(id.clone()),
-                            !entity.metadata.previous.is_empty(),
-                            false,
-                        );
                         add(ManagerAction::Delete(id.clone()), true, false);
                     }
                 }
             }
         }
         if current && let Some(primary) = actions.first_mut() {
-            primary.label = "Current Workspace".into();
+            primary.label = "Current workspace".into();
         }
         ManagerDetails {
             title: entity.metadata.name.clone(),
@@ -410,13 +357,13 @@ pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
         return Err(StoreError::invalid("Choose a workspace."));
     };
     let target = origin.as_ref().map_or_else(
-        || "starting configuration".into(),
+        || "starting layout".into(),
         |o| format!("original {} layout", o.name),
     );
     Ok(WorkspacePrompt {
         title: "Reset Layout".into(),
         message: format!(
-            "Reset {} to its {target}? This restores panels, toolbars, and their customizations. Brush settings and colors stay as they are. Your current setup will remain available in Layout History.",
+            "Return {} to its {target}? You can undo this if you change your mind.",
             entity.metadata.name
         ),
         confirm: "Reset Layout",
@@ -424,11 +371,11 @@ pub fn reset_prompt(entity: &Entity) -> Result<WorkspacePrompt, StoreError> {
 }
 pub fn update_prompt(target: &Entity, source: &Entity) -> WorkspacePrompt {
     WorkspacePrompt {
-        title: format!("Update {}", target.metadata.kind.label()),
+        title: "Replace Saved Layout".into(),
         message: format!(
-            "Update {} using {}? The previous version will remain available. Existing workspace layouts and their original reset targets stay as they are.",
+            "Replace the layout saved in “{}” with the layout you’re using in “{}”? Choose this Workspace Template next time to start with the updated layout.",
             target.metadata.name, source.metadata.name
         ),
-        confirm: "Update",
+        confirm: "Replace Layout",
     }
 }

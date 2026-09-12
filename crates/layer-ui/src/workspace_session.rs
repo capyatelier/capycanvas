@@ -126,15 +126,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         added.hide_tab = config.hide_tab;
         layout.validate()?;
         self.state.workspace.layout = layout;
-        self.workspace_history.record_named(
-            before,
-            &self.state.workspace,
+        let description = format!(
+            "{} {}",
             if replace.is_some() {
-                "Replace toolbar from library"
+                "Replaced"
             } else {
-                "Add toolbar from library"
+                "Added"
             },
+            workspace::description::panel_name(&self.state.workspace.layout, panel)
         );
+        self.workspace_history
+            .record_named(before, &self.state.workspace, &description);
         self.state.customization = CustomizationState::default();
         self.sync_work_area();
         self.refresh_commands();
@@ -200,7 +202,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             region_sources: self.region_tools.source,
             gradient: self.layer_interaction.gradient,
             figure: self.layer_interaction.figure,
-            zen_mode: self.state.workspace.zen_mode,
+            zen_mode: self
+                .workspace_preview
+                .as_ref()
+                .unwrap_or(&self.state.workspace)
+                .zen_mode,
         }
     }
 
@@ -211,7 +217,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Finish arranging the workspace first".into());
         }
         Ok(WorkspaceCapture {
-            history: self.workspace_history.capture(&self.state.workspace),
+            history: self.workspace_history.capture(
+                self.workspace_preview
+                    .as_ref()
+                    .unwrap_or(&self.state.workspace),
+            ),
             working: self.workspace_working_state(),
         })
     }
@@ -219,8 +229,54 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_history.generation()
     }
 
+    /// History browsing changes only the presented layout. Every durable
+    /// capture still sees the layout from before the preview was opened.
+    pub fn begin_workspace_layout_preview(&mut self) -> Result<(), String> {
+        self.require_workspace_idle()?;
+        if !self.workspace_transition || self.workspace_preview.is_some() {
+            return Err("Layout preview is already open or not ready".into());
+        }
+        self.workspace_preview = Some(self.state.workspace.clone());
+        Ok(())
+    }
+    pub fn preview_workspace_layout(&mut self, layout: &DockLayout) -> Result<UiChange, String> {
+        if self.workspace_preview.is_none() {
+            return Err("Open Layout History first".into());
+        }
+        layout.validate()?;
+        let insets = self.state.workspace.layout.titlebar_insets;
+        self.state.workspace.layout = durable_layout(layout);
+        self.state.workspace.zen_mode = false;
+        self.state.workspace.layout.titlebar_insets = insets;
+        self.state.customization = CustomizationState::default();
+        self.sync_work_area();
+        self.refresh_commands();
+        Ok(self.changed(
+            regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,
+            false,
+        ))
+    }
+    pub fn cancel_workspace_layout_preview(&mut self) -> UiChange {
+        if let Some(original) = self.workspace_preview.take() {
+            let insets = self.state.workspace.layout.titlebar_insets;
+            self.state.workspace = original;
+            self.state.workspace.layout.titlebar_insets = insets;
+            self.state.customization = CustomizationState::default();
+            self.sync_work_area();
+            self.refresh_commands();
+            return self.changed(
+                regions::LAYOUT | regions::CUSTOMIZATION | regions::COMMANDS,
+                false,
+            );
+        }
+        UiChange::default()
+    }
+
     pub fn adopt_workspace(&mut self, prepared: PreparedWorkspace) -> Result<UiChange, String> {
         self.require_workspace_idle()?;
+        if self.workspace_preview.is_some() {
+            return Err("Finish previewing the layout first".into());
+        }
         let PreparedWorkspace {
             capture,
             brush,
@@ -279,6 +335,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         description: &str,
     ) -> Result<UiChange, String> {
         self.require_workspace_idle()?;
+        if self.workspace_preview.is_some() {
+            return Err("Finish previewing the layout first".into());
+        }
         layout.validate()?;
         let before = self.state.workspace.clone();
         self.state.workspace.layout = durable_layout(&layout);

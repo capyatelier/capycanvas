@@ -60,12 +60,16 @@ impl ManagedWorkspace {
             })
             .collect();
         ContextMenuItem::submenu(
-            "Workspace",
+            "Workspaces",
             vec![
                 choices,
                 vec![
                     command("New Workspace…", WorkspaceCommand::New, idle),
-                    command("Save as Template…", WorkspaceCommand::SaveAsTemplate, idle),
+                    command(
+                        "Save Layout as Workspace Template…",
+                        WorkspaceCommand::SaveAsTemplate,
+                        idle,
+                    ),
                     command(
                         "Reset Layout…",
                         WorkspaceCommand::ResetLayout,
@@ -73,7 +77,7 @@ impl ManagedWorkspace {
                     ),
                 ],
                 vec![
-                    command("Layout History…", WorkspaceCommand::LayoutHistory, true),
+                    command("Layout History…", WorkspaceCommand::LayoutHistory, idle),
                     command("Manage Workspaces…", WorkspaceCommand::Manage, true),
                 ],
             ],

@@ -106,7 +106,7 @@ impl ItemKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Workspace => "Workspace",
-            Self::Template => "Template",
+            Self::Template => "Workspace Template",
             Self::Toolbar => "Toolbar",
         }
     }
@@ -174,7 +174,7 @@ impl Metadata {
         }
         if self.builtin {
             return Err(StoreError::invalid(
-                "Duplicate to customize this built-in template.",
+                "Create a workspace from this built-in Workspace Template to customize its layout.",
             ));
         }
         if name.trim() == self.name && description == self.description {
@@ -414,7 +414,7 @@ impl Entity {
             self.capture()?.validate().map_err(StoreError::invalid)?;
         } else if self.working.is_some() {
             return Err(StoreError::invalid(
-                "Templates and saved toolbars exclude working values.",
+                "Workspace Templates and saved toolbars contain layouts and tool customizations.",
             ));
         }
         Ok(())
