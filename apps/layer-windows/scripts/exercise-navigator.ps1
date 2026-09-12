@@ -28,13 +28,15 @@ function Wait-Until([scriptblock]$Condition,[string]$Message,[int]$Seconds=5) {
     do {if(& $Condition){return};$review.Refresh();if($review.HasExited){throw 'Navigator review exited unexpectedly'};Start-Sleep -Milliseconds 50}while($watch.Elapsed.TotalSeconds -lt $Seconds)
     throw $Message
 }
-function Find([string]$Value,[switch]$Id){
+function Find([string]$Value,[switch]$Id,$Type){
     $property=if($Id){[System.Windows.Automation.AutomationElement]::AutomationIdProperty}else{[System.Windows.Automation.AutomationElement]::NameProperty}
-    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new($property,$Value))
+    $match=[System.Windows.Automation.PropertyCondition]::new($property,$Value)
+    if($Type){$match=[System.Windows.Automation.AndCondition]::new($match,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,$Type))}
+    $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$match)
 }
-function Control([string]$Value,[switch]$Id){
+function Control([string]$Value,[switch]$Id,$Type){
     $hit=@{element=$null}
-    Wait-Until {$hit.element=Find $Value -Id:$Id;$null -ne $hit.element} "Missing control: $Value"
+    Wait-Until {$hit.element=Find $Value -Id:$Id -Type $Type;$null -ne $hit.element} "Missing control: $Value"
     $hit.element
 }
 function Invoke([string]$Value,[switch]$Id){(Control $Value -Id:$Id).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()}
@@ -162,8 +164,14 @@ try {
     Wait-Until {!(Find 'navigator-overview' -Id)} 'Hiding Navigator left its native controls loaded'
     Navigator
     $null=Control 'navigator-overview' -Id
-    Invoke 'View'
-    (Control 'Dark Mode').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    $theme=(Model).state.theme
+    Invoke 'Preferences'
+    (Control 'Color theme' -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
+    (Control $choice -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
+    Invoke 'Close'
+    Wait-Until {!(Find 'Preferences' -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     $null=Control 'navigator-overview' -Id
     $light=Capture 'alternate-theme'
     try{Check-Surround $light}finally{$light.Dispose()}

@@ -2528,7 +2528,7 @@ impl Workspace {
     }
 
     fn install_workspace_drag(self: &Rc<Self>) {
-        let column_click = Rc::new(Cell::new(None::<(u32, u32, [f32; 2])>));
+        let column_click = Rc::new(Cell::new(None::<(DockItem, u32, [f32; 2])>));
         let click = gtk::GestureClick::new();
         click.set_name(Some("panel-handle-double-click"));
         click.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -2540,32 +2540,35 @@ impl Workspace {
             move |gesture, mut count, x, y| {
                 let point = [x as f32, y as f32];
                 let target = w.drag_target_at(point);
+                let collapsed_column = w.columns.background_at(&w, point);
                 if let Some(event) = gesture
                     .current_event()
                     .filter(|e| e.event_type() == gdk::EventType::ButtonPress)
                 {
-                    let column = match target {
-                        Some(DragTarget::Dock(DockItem::Group { group }))
-                            if w.surface
-                                .imp()
-                                .layout
-                                .borrow()
-                                .column_for_group(group)
-                                .is_some() =>
-                        {
-                            Some(group)
-                        }
-                        _ => None,
-                    };
+                    let column = collapsed_column
+                        .map(|column| DockItem::Column { column })
+                        .or_else(|| match target {
+                            Some(DragTarget::Dock(DockItem::Group { group }))
+                                if w.surface
+                                    .imp()
+                                    .layout
+                                    .borrow()
+                                    .column_for_group(group)
+                                    .is_some() =>
+                            {
+                                Some(DockItem::Group { group })
+                            }
+                            _ => None,
+                        });
                     let previous =
-                        column_click.replace(column.map(|group| (group, event.time(), point)));
-                    if let Some(group) = column {
-                        // GTK may cancel a blank header's click sequence on
+                        column_click.replace(column.map(|item| (item, event.time(), point)));
+                    if let Some(item) = column {
+                        // GTK may cancel a blank header/strip's click sequence on
                         // release. Keep the pair on the stable workspace using
                         // GTK's own time/distance limits; drags clear it below.
                         let settings = gtk::Settings::for_display(&w.surface.display());
                         let double = previous.is_some_and(|(id, time, position)| {
-                            id == group
+                            id == item
                                 && event.time().wrapping_sub(time)
                                     <= settings.gtk_double_click_time().max(0) as u32
                                 && (point[0] - position[0])
@@ -2585,22 +2588,30 @@ impl Workspace {
                     return;
                 }
                 let viewport = [w.surface.width() as f32, w.surface.height() as f32];
-                let action = match target {
-                    Some(DragTarget::Divider(id))
-                        if w.resolved().dividers.iter().any(|d| {
-                            d.id == id && d.band && d.axis == layer_ui::Axis::Horizontal
-                        }) =>
-                    {
-                        Some(UiAction::ResetColumnWidth { id, viewport })
+                let action = if let Some(column) = collapsed_column {
+                    w.resolved()
+                        .collapsed
+                        .iter()
+                        .find(|c| c.id == column)
+                        .map(|c| c.expand_action())
+                } else {
+                    match target {
+                        Some(DragTarget::Divider(id))
+                            if w.resolved().dividers.iter().any(|d| {
+                                d.id == id && d.band && d.axis == layer_ui::Axis::Horizontal
+                            }) =>
+                        {
+                            Some(UiAction::ResetColumnWidth { id, viewport })
+                        }
+                        Some(DragTarget::Dock(item)) => w
+                            .surface
+                            .imp()
+                            .layout
+                            .borrow()
+                            .panel_handle_target(item)
+                            .map(|group| UiAction::DoubleClickPanelHandle { group, viewport }),
+                        _ => None,
                     }
-                    Some(DragTarget::Dock(item)) => w
-                        .surface
-                        .imp()
-                        .layout
-                        .borrow()
-                        .panel_handle_target(item)
-                        .map(|group| UiAction::DoubleClickPanelHandle { group, viewport }),
-                    _ => None,
                 };
                 let Some(action) = action else { return };
                 gesture.set_state(gtk::EventSequenceState::Claimed);

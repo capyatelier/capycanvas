@@ -253,7 +253,11 @@ impl DockLayout {
             DockTarget::Split {
                 group,
                 edge: Edge::Left | Edge::Right,
-            } if matches!(self.group_edge(group), Some(Edge::Left | Edge::Right)) => {
+            } if self.bands.iter().any(|b| {
+                // Column targets can be split subtrees containing a whole
+                // stack, so membership cannot use the tab-only group lookup.
+                matches!(b.edge, Edge::Left | Edge::Right) && b.root.find(group).is_some()
+            }) => {
                 if moving.find(group).is_some() {
                     return Ok(());
                 }

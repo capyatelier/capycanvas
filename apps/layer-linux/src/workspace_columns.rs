@@ -16,6 +16,27 @@ pub(super) struct Columns {
     pub drawers: RefCell<Vec<Rc<drawers::Drawer>>>,
 }
 impl Columns {
+    pub fn background_at(&self, w: &Workspace, point: [f32; 2]) -> Option<u32> {
+        let mut picked =
+            w.surface
+                .pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT);
+        let strips = self.strips.borrow();
+        while let Some(widget) = picked {
+            // Buttons (including their image/label children) keep their own
+            // click actions. All other descendants belong to the strip.
+            if widget.is::<gtk::Button>() {
+                return None;
+            }
+            if let Some(strip) = strips
+                .iter()
+                .find(|s| s.root.upcast_ref::<gtk::Widget>() == &widget)
+            {
+                return Some(strip.id);
+            }
+            picked = widget.parent();
+        }
+        None
+    }
     pub fn button(&self, column: u32, panel: Panel) -> Option<gtk::Button> {
         self.strips
             .borrow()

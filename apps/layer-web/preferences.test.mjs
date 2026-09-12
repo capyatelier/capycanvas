@@ -151,13 +151,9 @@ export async function checkPreferences({ call, evaluate, settle }) {
   await action({ type: "close_settings" });
   for (const theme of ["dark", "light"]) {
     await action({ type: "set_theme", theme });
-    const darkMode = '.header-menu [data-command="toggle_theme"]';
-    assert.equal(await evaluate(`document.querySelector('${darkMode} .command-label').textContent`), 'Dark Mode');
-    assert.equal(await evaluate(`document.querySelector('${darkMode}').getAttribute('aria-pressed')`), String(theme === 'dark'));
-    await click(darkMode);
-    assert.equal(await evaluate(`document.querySelector('${darkMode}').getAttribute('aria-pressed')`), String(theme !== 'dark'));
-    assert.equal(await evaluate('document.body.dataset.theme'), theme === 'dark' ? 'light' : 'dark');
-    await click(darkMode);
+    await click('.header-menu[data-menu="view"] summary');
+    assert.equal(await evaluate('document.querySelector(\'.header-menu[data-menu="view"] [data-command="toggle_theme"]\')'), null);
+    await click('.header-menu[data-menu="view"] summary');
     const menus = await evaluate("layerApp.app.catalog().menus");
     for (const [index, spec] of menus.entries()) {
       // Dynamic workspace menus have their own real-pointer suite.

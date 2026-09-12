@@ -65,15 +65,17 @@ Wait-Until {(Read-Model).brush_ready} 'Shared brush startup did not finish befor
 if(!(Read-Model).windows_isolated_settings){throw 'Launch this fixture with CAPY_SETTINGS_DIRECTORY pointing to a disposable profile.'}
 if(Find-Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)){throw 'Close Preferences before running this fixture.'}
 Invoke-Control 'View'
-$before=Toggle-State 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)
-Toggle-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)
-Wait-Until {!(Find-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem))} 'Menu did not close'
-Invoke-Control 'View'
-if((Toggle-State 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)) -eq $before){throw 'Shared theme state did not change'}
-Toggle-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)
-Wait-Until {!(Find-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem))} 'Menu did not close'
-
+if(Find-Control 'Dark Mode' ([System.Windows.Automation.ControlType]::MenuItem)){throw 'View must not include Dark Mode'}
 Open-Preferences
+$originalTheme=(Read-Model).state.settings.theme
+$restoreTheme=if($originalTheme -eq 'dark'){'Dark'}elseif($originalTheme -eq 'light'){'Light'}else{'System'}
+foreach($choice in @('Light','Dark',$restoreTheme)){
+    (Control 'Color theme' ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $script:scope=$root
+    (Control $choice ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Read-Model).state.settings.theme -eq $(if($choice -eq 'System'){$null}else{$choice.ToLowerInvariant()})} 'Color theme preference did not update'
+    $script:scope=Control 'Preferences' ([System.Windows.Automation.ControlType]::Window)
+}
 $base=Read-Text 'Dark theme base color'
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $identity=$entry.GetRuntimeId() -join ':'
@@ -142,7 +144,8 @@ Wait-Until {Find-Control 'Exit full screen' ([System.Windows.Automation.ControlT
 Invoke-Control 'Exit full screen'
 Wait-Until {Find-Control 'Full screen' ([System.Windows.Automation.ControlType]::Button)} 'Windowed presenter did not restore header'
 [pscustomobject]@{
-    menu_theme_roundtrip='passed'
+    view_menu_without_theme='passed'
+    preferences_theme_roundtrip='passed'
     settings_color_validation='passed'
     retained_settings_field='passed'
     exclusive_icon_tiles='passed'

@@ -182,9 +182,13 @@ try {
     $scroll.SetScrollPercent(-1,0)
     Capture 'virtualized'
     $theme=(Model).state.theme
-    Invoke 'View' -Name
-    (Control 'toggle_theme').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Wait-Until {(Model).state.theme -ne $theme} 'Layer theme did not change'
+    Invoke 'Preferences' -Name
+    (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
+    (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
+    Invoke 'Close' -Name
+    Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     Capture 'alternate-theme'
     Invoke 'File' -Name;Invoke 'new_document';Invoke 'Discard Changes' -Name
     Edit 'document-width' '128';Edit 'document-height' '64';Invoke 'Create' -Name

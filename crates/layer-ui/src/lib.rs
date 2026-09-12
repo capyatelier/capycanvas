@@ -173,11 +173,7 @@ pub const VIEW_MENU: MenuSpec = MenuSpec {
         &[CommandId::RotateLeft, CommandId::RotateRight],
         &[CommandId::FlipHorizontal, CommandId::FlipVertical],
         &[CommandId::ShowRulers, CommandId::SnapRulers],
-        &[
-            CommandId::ZenMode,
-            CommandId::Fullscreen,
-            CommandId::ToggleTheme,
-        ],
+        &[CommandId::ZenMode, CommandId::Fullscreen],
         &[CommandId::ResetLayout],
     ],
 };

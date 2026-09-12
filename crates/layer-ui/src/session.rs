@@ -8320,6 +8320,119 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_column_drop_reaches_the_full_canvas_side_snap_zone() {
+        let viewport = [1200., 900.];
+        for right in [false, true] {
+            for structure in ["stacked", "nested", "single"] {
+                for collapsed in [false, true] {
+                    let mut s = session();
+                    s.set_platform(Platform::Gtk);
+                    let stacked = structure != "single";
+                    let (source, band) = if stacked { (8, 3) } else { (5, 7) };
+                    let layout = &mut s.state.workspace.layout;
+                    for b in &mut layout.bands {
+                        if matches!(b.edge, Edge::Left | Edge::Right) {
+                            b.edge = if (b.id == band) == right {
+                                Edge::Right
+                            } else {
+                                Edge::Left
+                            };
+                        }
+                    }
+                    if structure == "nested" {
+                        layout
+                            .move_panel(
+                                viewport,
+                                Panel::Properties,
+                                DockTarget::Split {
+                                    group: 5,
+                                    edge: Edge::Right,
+                                },
+                            )
+                            .unwrap();
+                    }
+                    layout.set_column_collapsed(source, true, viewport).unwrap();
+                    if collapsed {
+                        let root = layout
+                            .bands
+                            .iter()
+                            .find(|b| b.id == band)
+                            .unwrap()
+                            .root
+                            .id();
+                        layout.set_column_collapsed(root, true, viewport).unwrap();
+                    }
+                    let column = layout.column_for_group(source).unwrap();
+                    let original = s.state.workspace.clone();
+                    let r = s.layout(viewport);
+                    let divider = r.dividers.iter().find(|d| d.id == band).unwrap();
+                    let x = if right {
+                        divider.bounds.x
+                    } else {
+                        divider.bounds.x + divider.bounds.width
+                    };
+                    let sign = if right { -1. } else { 1. };
+                    let item = DockItem::Column { column };
+                    for distance in 0..=80 {
+                        for fraction in [0.2, 0.5, 0.8] {
+                            let point = [
+                                x + sign * distance as f32,
+                                divider.bounds.y + divider.bounds.height * fraction,
+                            ];
+                            let hint = s.drop_hint(viewport, point, &[], item, None).unwrap_or_else(|| {
+                                panic!("missing column target: right={right}, structure={structure}, collapsed={collapsed}, distance={distance}, fraction={fraction}")
+                            });
+                            assert_eq!(hint.bounds.height, divider.bounds.height);
+                        }
+                    }
+                    let y = divider.bounds.y + divider.bounds.height * 0.5;
+                    assert!(
+                        s.drop_hint(viewport, [x + sign * 90., y], &[], item, None)
+                            .is_none()
+                    );
+                    let grip = r.collapsed.iter().find(|c| c.id == column).unwrap().grip;
+                    for (phase, position) in [
+                        (
+                            ContactPhase::Down,
+                            [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5],
+                        ),
+                        (ContactPhase::Move, [x + sign * 20., y]),
+                        (ContactPhase::Up, [x + sign * 20., y]),
+                    ] {
+                        s.dispatch(UiAction::DragWorkspace {
+                            item,
+                            phase,
+                            position,
+                            viewport,
+                            tabs: vec![],
+                        })
+                        .unwrap();
+                    }
+                    let moved = s.state.workspace.clone();
+                    assert_ne!(moved, original);
+                    assert_eq!(
+                        moved.layout.collapsed.len(),
+                        original.layout.collapsed.len()
+                    );
+                    for column in &original.layout.collapsed {
+                        assert!(moved.layout.collapsed.contains(column));
+                    }
+                    assert!(moved.layout.floating.is_empty());
+                    assert_eq!(
+                        moved.layout.group_edge(source),
+                        Some(if right { Edge::Right } else { Edge::Left })
+                    );
+                    moved.validate().unwrap();
+                    invoke(&mut s, CommandId::UndoWorkspace);
+                    assert_eq!(s.state.workspace, original);
+                    invoke(&mut s, CommandId::RedoWorkspace);
+                    assert_eq!(s.state.workspace, moved);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn collapsed_column_drag_never_tears_off_and_is_one_undo_transaction() {
         let mut s = session();
         s.set_platform(Platform::Gtk);
@@ -10279,7 +10392,7 @@ mod tests {
                 ["rotate_left", "rotate_right"],
                 ["flip_horizontal", "flip_vertical"],
                 ["show_rulers", "snap_rulers"],
-                ["zen_mode", "fullscreen", "toggle_theme"],
+                ["zen_mode", "fullscreen"],
                 ["reset_layout"]
             ])
         );

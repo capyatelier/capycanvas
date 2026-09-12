@@ -8258,10 +8258,6 @@ fn native_menu_sections() {
     }
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        activate(&open(ApplicationMenu::View), CommandId::ToggleTheme.label());
-        assert_ne!(state(&w).theme, theme);
-        activate(&open(ApplicationMenu::View), CommandId::ToggleTheme.label());
-        assert_eq!(state(&w).theme, theme);
         for id in ApplicationMenu::ALL
             .into_iter()
             .chain([ApplicationMenu::Primary])
@@ -8275,6 +8271,12 @@ fn native_menu_sections() {
                 .session
                 .application_menu(id);
             check(&menu.menu_model().unwrap(), &expected.sections);
+            if id == ApplicationMenu::View {
+                assert!(
+                    menu_action(&menu.menu_model().unwrap(), CommandId::ToggleTheme.label())
+                        .is_none()
+                );
+            }
             pump(200);
             capture_popover(
                 menu.upcast_ref(),
@@ -11758,6 +11760,177 @@ fn native_floating_click_input() {
             } else {
                 assert_eq!(actual.tabs_visible, cycle % 2 == 1, "panel toggle {cycle}");
             }
+        }
+    }
+    std::fs::write(dir.join("finished"), "done").unwrap();
+    pump(100);
+    w.window.close();
+    pump(100);
+}
+
+#[test]
+#[ignore = "isolated Mutter remote-input driver required; see native-input benchmark"]
+fn native_collapsed_column_input() {
+    let dir = std::path::PathBuf::from(std::env::var("LAYER_NATIVE_INPUT_DIR").unwrap());
+    let app = native_test_app("art.capycanvas.CollapsedColumnInput");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1200);
+    let viewport = [w.surface.width() as f32, w.surface.height() as f32];
+    let initial = state(&w).workspace;
+    let mut step = 0;
+    std::fs::write(dir.join("ready"), "ready").unwrap();
+    let mut perform = |events: serde_json::Value| {
+        std::fs::write(
+            dir.join(format!("step-{step}.json")),
+            serde_json::to_vec(&events).unwrap(),
+        )
+        .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < timeout && !dir.join(format!("done-{step}")).exists() {
+            pump(10);
+        }
+        assert!(
+            dir.join(format!("done-{step}")).exists(),
+            "native pointer timed out"
+        );
+        step += 1;
+        pump(250);
+    };
+    let mut double_click = |point: [f32; 2]| {
+        perform(serde_json::json!([
+            {"point": point}, {"down": true}, {"down": false},
+            {"down": true}, {"down": false}
+        ]));
+    };
+    for group in [5, 8] {
+        w.dispatch(UiAction::RestoreWorkspace {
+            workspace: initial.clone(),
+        });
+        w.dispatch(UiAction::DoubleClickPanelHandle { group, viewport });
+        pump(250);
+        let column = w.resolved().collapsed.into_iter().next().unwrap();
+        let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
+        assert_eq!(w.columns.background_at(&w, center(column.expand)), None);
+        for icon in column.groups.iter().flat_map(|g| &g.icons) {
+            let point = center(icon.bounds);
+            assert_eq!(w.columns.background_at(&w, point), None);
+            double_click(point);
+            assert!(state(&w).workspace.layout.is_collapsed(column.id));
+            assert!(state(&w).customization.column_drawers.is_empty());
+        }
+        let collapsed = state(&w).workspace;
+        let gap = [
+            column.bounds.x + column.bounds.width * 0.5,
+            column.expand.y + column.expand.height + WORKSPACE_SPACING * 0.5,
+        ];
+        for point in [center(column.empty), gap, center(column.grip)] {
+            assert_eq!(w.columns.background_at(&w, point), Some(column.id));
+            double_click(point);
+            let expanded = state(&w).workspace;
+            assert!(!expanded.layout.is_collapsed(column.id));
+            assert!(w.workspace_drag.borrow().is_none());
+            assert!(!w.workspace_drag_input(ContactPhase::Move, [point[0] + 20., point[1]], None));
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&collapsed).unwrap()
+            );
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            });
+            assert_eq!(
+                serde_json::to_value(state(&w).workspace).unwrap(),
+                serde_json::to_value(&expanded).unwrap()
+            );
+            w.dispatch(UiAction::RestoreWorkspace {
+                workspace: collapsed.clone(),
+            });
+            pump(250);
+        }
+    }
+    for right in [false, true] {
+        for collapsed in [false, true] {
+            let mut workspace = initial.clone();
+            for band in &mut workspace.layout.bands {
+                if matches!(band.edge, Edge::Left | Edge::Right) {
+                    band.edge = if (band.id == 3) == right {
+                        Edge::Right
+                    } else {
+                        Edge::Left
+                    };
+                }
+            }
+            w.dispatch(UiAction::RestoreWorkspace { workspace });
+            w.dispatch(UiAction::DoubleClickPanelHandle { group: 8, viewport });
+            if collapsed {
+                w.dispatch(UiAction::DoubleClickPanelHandle { group: 5, viewport });
+            }
+            pump(250);
+            let before = state(&w).workspace;
+            let r = w.resolved();
+            let source = r.collapsed.iter().find(|c| c.id == 8).unwrap();
+            let grip = source.grip;
+            let start = [grip.x + grip.width * 0.5, grip.y + grip.height * 0.5];
+            let divider = r.dividers.iter().find(|d| d.id == 3).unwrap();
+            let x = if right {
+                divider.bounds.x
+            } else {
+                divider.bounds.x + divider.bounds.width
+            };
+            let y = divider.bounds.y + divider.bounds.height * 0.5;
+            let sign = if right { -1. } else { 1. };
+            perform(serde_json::json!([
+                {"point": start}, {"down": true}, {"point": [viewport[0] * 0.5, y]}
+            ]));
+            for distance in [90., 80., 60., 40., 20., 1., 0.] {
+                perform(serde_json::json!([{"point": [x + sign * distance, y]}]));
+                let hint = w.drop_hint.borrow().clone();
+                if distance == 90. {
+                    assert!(hint.is_none());
+                } else {
+                    let hint = hint.unwrap_or_else(|| panic!("missing native column hint: right={right}, collapsed={collapsed}, distance={distance}"));
+                    assert_eq!(hint.bounds.height, divider.bounds.height);
+                }
+                assert_eq!(
+                    state(&w).workspace,
+                    before,
+                    "drag keeps the column in place until release"
+                );
+            }
+            perform(serde_json::json!([{"down": false}]));
+            let after = state(&w).workspace;
+            assert_ne!(after, before);
+            after.validate().unwrap();
+            assert!(after.layout.floating.is_empty());
+            assert!(after.layout.is_collapsed(8));
+            assert_eq!(
+                after.layout.group_panels(8).unwrap(),
+                before.layout.group_panels(8).unwrap()
+            );
+            let r = w.resolved();
+            let column = r.collapsed.iter().find(|c| c.id == 8).unwrap();
+            let target = if collapsed {
+                r.collapsed.iter().find(|c| c.id == 4).unwrap().bounds
+            } else {
+                r.groups.iter().find(|g| g.id == 5).unwrap().bounds
+            };
+            assert!(if right {
+                column.bounds.x + column.bounds.width <= target.x
+            } else {
+                column.bounds.x >= target.x + target.width
+            });
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::UndoWorkspace,
+            });
+            assert_eq!(state(&w).workspace, before);
+            w.dispatch(UiAction::Invoke {
+                command: CommandId::RedoWorkspace,
+            });
+            assert_eq!(state(&w).workspace, after);
         }
     }
     std::fs::write(dir.join("finished"), "done").unwrap();

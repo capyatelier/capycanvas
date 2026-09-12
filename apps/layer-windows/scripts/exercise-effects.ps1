@@ -177,10 +177,13 @@ try {
     if([Math]::Abs((Property 'shadows').value.value[1]-.33) -gt .000001){throw 'Scalar channel edit changed another channel'}
     Capture 'color'
     $theme=(Model).state.theme
-    Invoke 'View' -Name
-    (Control 'Dark Mode' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    $null=Control 'property-shadows-color'
+    Invoke 'Preferences' -Name
+    (Control 'Color theme' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    $choice=if($theme -eq 'dark'){'Light'}else{'Dark'}
+    (Control $choice -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-Until {(Model).state.theme -ne $theme} 'Theme change not acknowledged'
+    Invoke 'Close' -Name
+    Wait-Until {!(Find 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window))} 'Preferences did not close'
     Capture 'alternate-theme'
     Invoke 'Filters' -Name
     Wait-Until {@((Model).layout.groups|Where-Object {$_.active -eq 'adjustments'}).Count -gt 0} 'Filters tab did not reopen'
