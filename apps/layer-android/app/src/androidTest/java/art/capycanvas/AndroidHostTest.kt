@@ -210,6 +210,55 @@ class AndroidHostTest {
         }
     }
 
+    @Test fun detachedTabsUseUpdatedSourceSlots() {
+        val fixture = JSONObject(defaultWorkspace)
+        fixture.getJSONObject("layout").apply {
+            put("bands", JSONArray(listOf(
+                obj("id" to 40, "edge" to "left", "extent" to 252, "root" to obj("kind" to "tabs", "id" to 41,
+                    "panels" to JSONArray(listOf("brushes", "sizes")), "active" to "brushes", "tab_style" to "icon_name")),
+                obj("id" to 42, "edge" to "right", "extent" to 252, "root" to obj("kind" to "tabs", "id" to 43,
+                    "panels" to JSONArray(listOf("layers", "properties")), "active" to "layers", "tab_style" to "icon_name")))))
+            put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray())
+            put("next_id", maxOf(44, getInt("next_id")))
+        }
+        fixture.put("zen_mode", false)
+        val workspace = compose.onNodeWithTag("workspace")
+        val root = workspace.fetchSemanticsNode().boundsInRoot
+        val density = compose.activity.resources.displayMetrics.density
+        fun bounds(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+        fun settle() { compose.waitForIdle(); SystemClock.sleep(100); compose.waitForIdle() }
+        for (mouse in listOf(true, false)) {
+            action(obj("type" to "restore_workspace", "workspace" to fixture))
+            val source = bounds("tab-layers").center - root.topLeft
+            val away = root.center - root.topLeft
+            var pressed = true
+            try {
+                if (mouse) workspace.performMouseInput { moveTo(source); press(); moveTo(away, 200) }
+                else workspace.performTouchInput { down(source); moveTo(away, 200) }
+                settle()
+                assertTrue(group("layers").getBoolean("floating"))
+                val remaining = bounds("tab-properties")
+                val target = androidx.compose.ui.geometry.Offset(remaining.right + 12 * density, remaining.center.y) - root.topLeft
+                if (mouse) workspace.performMouseInput { moveTo(target, 200) }
+                else workspace.performTouchInput { moveTo(target, 200) }
+                settle()
+                val marker = bounds("workspace-drop-hint")
+                assertEquals("Insertion follows the remaining source tab, not its old frozen slot", remaining.right, marker.center.x, 2f)
+                if (mouse) workspace.performMouseInput { release() } else workspace.performTouchInput { up() }
+                pressed = false
+                action(obj("type" to "close_settings"))
+                assertEquals(43, group("layers").getInt("id"))
+                assertEquals(listOf("properties", "layers"), group("layers").array("panels").values().map { it.toString() })
+                action(obj("type" to "invoke", "command" to "undo_workspace"))
+                assertEquals(listOf("layers", "properties"), group("layers").array("panels").values().map { it.toString() })
+                action(obj("type" to "invoke", "command" to "redo_workspace"))
+                assertEquals(listOf("properties", "layers"), group("layers").array("panels").values().map { it.toString() })
+            } finally {
+                if (pressed) { if (mouse) workspace.performMouseInput { cancel() } else workspace.performTouchInput { cancel() } }
+            }
+        }
+    }
+
     @Test fun workspaceUsesNativeMouseAndPenCursors() {
         val fixture = JSONObject(defaultWorkspace)
         fun tabs(id: Int, vararg panels: String) = obj("kind" to "tabs", "id" to id,
@@ -246,7 +295,7 @@ class AndroidHostTest {
                 }
             } finally { event.recycle() }
         }
-        fun hover(point: androidx.compose.ui.geometry.Offset, type: Int, penType: Int? = type) {
+        fun hover(point: androidx.compose.ui.geometry.Offset, type: Int, penType: Int? = if (type == PointerIcon.TYPE_GRAB || type == PointerIcon.TYPE_GRABBING) null else type) {
             root.performMouseInput { moveTo(point) }; settle(); icon(point, type)
             root.performMouseInput { exit() }
             val event = event(point, MotionEvent.TOOL_TYPE_STYLUS)
@@ -284,6 +333,7 @@ class AndroidHostTest {
         root.performMouseInput { moveTo(start); press(); moveTo(away, 300) }; settle()
         compose.waitUntil(10_000) { group("sizes").getBoolean("floating") }
         icon(away, PointerIcon.TYPE_GRABBING)
+        icon(away, null, MotionEvent.TOOL_TYPE_STYLUS)
         // The native SurfaceView must also keep the active cursor across canvas.
         compose.runOnIdle { assertEquals(PointerIcon.getSystemIcon(native.context, PointerIcon.TYPE_GRABBING), findCanvas(compose.activity.window.decorView)!!.pointerIcon) }
         root.performMouseInput { release() }; settle()

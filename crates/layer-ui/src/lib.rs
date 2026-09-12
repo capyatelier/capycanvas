@@ -5,6 +5,8 @@
 //! the separate input path. No toolkit, executor, callbacks, or pixel copies.
 
 mod camera;
+mod workspace_update;
+pub use workspace_update::*;
 mod eyedropper;
 pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
@@ -863,6 +865,11 @@ pub enum UiAction {
         viewport: [f32; 2],
         #[serde(default)]
         tabs: Vec<TabHit>,
+    },
+    /// Freeze the displayed tab slots and clip after recognizing a panel drag.
+    BeginTabDrag {
+        tabs: Vec<TabHit>,
+        clip: Bounds,
     },
     ResizeFloating {
         group: u32,

@@ -16,9 +16,20 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("boolean", "WORKSPACE_BENCHMARK", "false")
         ndk.abiFilters.addAll(capyAbis)
     }
     buildFeatures { compose = true; buildConfig = true }
+    buildTypes {
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            matchingFallbacks += "release"
+            buildConfigField("boolean", "WORKSPACE_BENCHMARK", "true")
+        }
+    }
+    testBuildType = if (providers.gradleProperty("capyBenchmark").isPresent) "benchmark" else "debug"
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

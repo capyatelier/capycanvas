@@ -20,11 +20,13 @@ import org.json.JSONObject
 
 internal val LocalWorkspaceZ = staticCompositionLocalOf { 0 }
 
-/** System icons render at the device's cursor size for both mouse and pen. */
+/** Mouse handles use system hands; pen handles keep Android's default hover.
+ * Directional resize cursors remain available to either pointing device. */
 @Composable internal fun Modifier.workspacePointerIcon(type: Int?): Modifier {
     if (type == null) return this
     val icon = remember(type) { PointerIcon(type) }
-    return pointerHoverIcon(icon).stylusHoverIcon(icon)
+    val mouse = pointerHoverIcon(icon)
+    return if (type == AndroidPointerIcon.TYPE_GRAB || type == AndroidPointerIcon.TYPE_GRABBING) mouse else mouse.stylusHoverIcon(icon)
 }
 
 @Composable internal fun Modifier.workspaceDragCursor(type: Int?): Modifier {
@@ -32,7 +34,8 @@ internal val LocalWorkspaceZ = staticCompositionLocalOf { 0 }
     // Keep the mouse hover node installed before contact, so it owns the
     // pointer when a resize/drag changes the icon without a new hover-enter.
     val mouse = pointerHoverIcon(icon, overrideDescendants = type != null)
-    return if (type == null) mouse else mouse.stylusHoverIcon(icon, overrideDescendants = true)
+    return if (type == null || type == AndroidPointerIcon.TYPE_GRABBING || type == AndroidPointerIcon.TYPE_GRAB) mouse
+        else mouse.stylusHoverIcon(icon, overrideDescendants = true)
 }
 
 internal fun resizePointerIcon(edge: String) = when (edge) {
@@ -56,6 +59,11 @@ internal class DockInteraction(val host: CanvasHost) {
     private val columnDrawers = mutableMapOf<Int, JSONObject>()
     val anchors = mutableMapOf<String, Rect>()
     val tabs = mutableMapOf<String, JSONObject>()
+    val tabClips = mutableMapOf<Int, Rect>()
+    private var frozenTabs = emptyList<JSONObject>()
+    private var frozenTabGroup: Int? = null
+    private var frozenTabClip: Rect? = null
+    private var frozenPanel: String? = null
     var origin = Offset.Zero
     var density = 1f
     var viewport = JSONArray(listOf(1, 1))
@@ -149,8 +157,12 @@ internal class DockInteraction(val host: CanvasHost) {
             "measurements" to JSONArray(columnDrawers.values.toList())))
         actions.add(JSONObject(action.toString()).put("phase", phase).put("viewport", viewport)
             .put("position", JSONArray(listOf(position.x, position.y))).apply {
-                if (action.getString("type") == "drag_workspace") put("tabs", JSONArray(tabs.values.toList()))
+                if (action.getString("type") == "drag_workspace") put("tabs", JSONArray(tabHits()))
             })
+        if (phase == "down") frozenTabClip?.let { clip ->
+            actions.add(obj("type" to "begin_tab_drag", "tabs" to JSONArray(frozenTabs), "clip" to
+                obj("x" to clip.left, "y" to clip.top, "width" to clip.width, "height" to clip.height)))
+        }
         val request = generation
         host.workspaceGesture(actions, if (preview && action.optJSONObject("item") != null) query() else null, moving = phase == "move") {
             // A newer pointer position must not starve completed feedback.
@@ -158,10 +170,22 @@ internal class DockInteraction(val host: CanvasHost) {
             if (request == generation) hint = it as? JSONObject
         }
     }
+    private fun tabHits(): List<JSONObject> {
+        // Frozen slots belong to the attached preview. After tear-off the source
+        // group has different members/widths and must use its displayed slots.
+        if (host.workspaceGeometry?.group != null) return tabs.values.toList()
+        return tabs.values.filter { it.optInt("group") != frozenTabGroup } + frozenTabs
+    }
+    fun isDraggedTab(panel: String) = dragging && frozenPanel == panel
     private fun query() = obj("type" to "drop", "item" to active?.optJSONObject("item"),
-        "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabs.values.toList()), "expansion" to expansion)
+        "position" to JSONArray(listOf(position.x, position.y)), "tabs" to JSONArray(tabHits()), "expansion" to expansion)
     fun start(action: JSONObject, point: Offset, cursor: Int) {
+        host.beginWorkspaceGesture()
         active = action; position = point; dragging = true; generation++
+        frozenPanel = action.optJSONObject("item")?.takeIf { it.optString("kind") == "panel" }?.optString("panel")
+        frozenTabGroup = tabs.values.firstOrNull { it.optString("panel") == frozenPanel }?.getInt("group")
+        frozenTabs = tabs.values.filter { it.optInt("group") == frozenTabGroup }.map { JSONObject(it.toString()) }
+        frozenTabClip = frozenTabGroup?.let { tabClips[it] }?.let { Rect(it.left / density, it.top / density, it.right / density, it.bottom / density) }
         dragCursor = if (action.optJSONObject("item") != null) AndroidPointerIcon.TYPE_GRABBING else cursor
         refresh(); send("down")
     }
@@ -177,7 +201,7 @@ internal class DockInteraction(val host: CanvasHost) {
         if (!dragging) return
         val action = active!!
         val request = ++generation
-        fun end() { active = null; hint = null; dragging = false; dragCursor = null; refresh() }
+        fun end() { active = null; hint = null; dragging = false; dragCursor = null; frozenTabs = emptyList(); frozenTabGroup = null; frozenTabClip = null; frozenPanel = null; refresh() }
         if (action.getString("type") == "tile_drag" && !cancel) {
             host.query(query()) { result ->
                 if (request == generation) {

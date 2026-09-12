@@ -34,6 +34,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
@@ -59,12 +60,18 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     IntOffset((rect.number("x") * density).roundToInt(), (rect.number("y") * density).roundToInt())
 }.size(rect.number("width").coerceAtLeast(0f).dp, rect.number("height").coerceAtLeast(0f).dp)
 
-@Composable private fun floatingBounds(bounds: JSONObject, dragging: Boolean): JSONObject {
+@Composable private fun floatingBounds(bounds: JSONObject, dragging: Boolean, host: CanvasHost, group: Int): JSONObject {
     val target = Rect(bounds.number("x"), bounds.number("y"),
         bounds.number("x") + bounds.number("width"), bounds.number("y") + bounds.number("height"))
     val animated = remember { Animatable(target, Rect.VectorConverter) }
+    val wasDragging = remember { mutableStateOf(false) }
     LaunchedEffect(target, dragging) {
-        if (dragging) animated.snapTo(target) else animated.animateTo(target, tween(200))
+        val finishedDrag = wasDragging.value && !dragging
+        wasDragging.value = dragging
+        if (dragging) animated.snapTo(target) else {
+            if (finishedDrag) host.lastWorkspaceGroup?.takeIf { it.first == group }?.let { animated.snapTo(it.second) }
+            animated.animateTo(target, tween(200))
+        }
     }
     val r = if (dragging) target else animated.value
     return obj("x" to r.left, "y" to r.top, "width" to r.width, "height" to r.height)
@@ -157,6 +164,17 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val dock = remember(host) { DockInteraction(host) }
+    val activity = LocalActivity.current
+    val requestingDragFrames = dock.dragging
+    DisposableEffect(requestingDragFrames, activity) {
+        val window = activity?.window
+        val previous = window?.attributes?.preferredRefreshRate ?: 0f
+        if (requestingDragFrames && window != null) {
+            val rate = window.decorView.display?.supportedModes?.maxOfOrNull { it.refreshRate }?.coerceAtMost(120f) ?: 60f
+            window.attributes = window.attributes.apply { preferredRefreshRate = rate }
+        }
+        onDispose { if (requestingDragFrames && window != null) window.attributes = window.attributes.apply { preferredRefreshRate = previous } }
+    }
     dock.density = density
     dock.enabled = snapshot?.optBoolean("partial_zen") != true && snapshot?.objectOrNull("preferences") == null && snapshot?.objectOrNull("picker") == null && snapshot?.objectOrNull("toolbar_prompt") == null && snapshot?.objectOrNull("toolbar_manager") == null
     val panels = host.panelContent?.array("panels")?.objects()?.associateBy { it.getString("id") } ?: emptyMap()
@@ -229,11 +247,12 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                   CompositionLocalProvider(LocalWorkspaceZ provides index) {
                     val expansion = dock.expansion?.takeIf { it.getInt("group") == group.getInt("id") }
                     val base = group.getJSONObject("bounds")
-                    val shown = if (group.optBoolean("floating")) floatingBounds(base, dock.dragging) else base
+                    val shown = if (group.optBoolean("floating")) floatingBounds(base, dock.dragging, host, group.getInt("id")) else base
                     val bounds = expansion?.getJSONObject("bounds") ?: shown
                     val shape = expansion?.takeIf { it.getJSONObject("configuration").number("y") > 0f }
                         ?.let { expandedShape(it, density) } ?: RoundedCornerShape(8.dp)
-                    Box(Modifier.placed(bounds, density).zIndex(100f + index).testTag("group-${group.getInt("id")}").chromeRegion(dock)
+                    val placement = if (expansion == null) Modifier.workspacePlaced(host, group.getInt("id"), bounds, shown, density) else Modifier.placed(bounds, density)
+                    Box(placement.zIndex(100f + index).testTag("group-${group.getInt("id")}").chromeRegion(dock)
                         .shadow(if (expansion != null) 16.dp else 6.dp, shape).clip(shape)) {
                         val preview = expansion?.getJSONObject("preview")
                         val mod = if (preview == null) Modifier.fillMaxSize() else Modifier.placed(preview, density)
@@ -246,7 +265,7 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
                         }
                     }
                     if (expansion == null) group.array("resize_handles").objects().forEach { handle ->
-                        Box(Modifier.placed(handle.getJSONObject("bounds"), density).zIndex(100f + index)
+                        Box(Modifier.workspacePlaced(host, group.getInt("id"), handle.getJSONObject("bounds"), base, density).zIndex(100f + index)
                             .testTag("resize-${group.getInt("id")}-${handle.getString("edge")}").workspaceSource(dock,
                             obj("type" to "resize_floating", "group" to group.getInt("id"), "edge" to handle.getString("edge")),
                             priority = 4, cursor = resizePointerIcon(handle.getString("edge"))))
@@ -279,9 +298,17 @@ internal fun Modifier.placed(rect: JSONObject, density: Float): Modifier = offse
 
 /** Transient feedback must not invalidate the workspace and every panel. */
 @Composable private fun WorkspaceDropHint(dock: DockInteraction) {
-    val bounds = dock.hint?.getJSONObject("bounds") ?: return
-    Box(Modifier.placed(bounds, LocalDensity.current.density).zIndex(Float.MAX_VALUE)
-        .background(LocalPalette.current.accent).testTag("workspace-drop-hint"))
+    val visible by remember(dock) { derivedStateOf { dock.hint != null } }
+    if (!visible) return
+    val density = LocalDensity.current.density
+    Layout(content = {}, modifier = Modifier.offset {
+        val b = dock.hint?.objectOrNull("bounds")
+        IntOffset(((b?.number("x") ?: 0f) * density).roundToInt(), ((b?.number("y") ?: 0f) * density).roundToInt())
+    }.zIndex(Float.MAX_VALUE).background(LocalPalette.current.accent).testTag("workspace-drop-hint")) { _, _ ->
+        val b = dock.hint?.objectOrNull("bounds")
+        layout(((b?.number("width") ?: 0f) * density).roundToInt().coerceAtLeast(0),
+            ((b?.number("height") ?: 0f) * density).roundToInt().coerceAtLeast(0)) {}
+    }
 }
 
 /** Read camera state here so navigation never invalidates the workspace tree. */
@@ -396,7 +423,7 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
     }
     DisposableEffect(group.getInt("id"), group.array("panels").toString()) {
         val prefix = "${group.getInt("id")}:"
-        onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) } }
+        onDispose { dock.tabs.keys.removeAll { it.startsWith(prefix) }; dock.tabClips.remove(group.getInt("id")) }
     }
     Surface(modifier, color = colors.panel) {
         Column {
@@ -404,7 +431,8 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                 Row(Modifier.fillMaxWidth().height(36.dp).testTag("group-header-${group.getInt("id")}").background(colors.tabs).dragSource(dock, groupItem)
                     .combinedClickable(onClick = { if (panel.optBoolean("expanded")) host.customize(obj("type" to "close_expanded")) },
                         onDoubleClick = { dock.doubleClickHandle(groupItem) }, onLongClick = { dock.context(groupItem) }), verticalAlignment = Alignment.CenterVertically) {
-                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
+                    Row(Modifier.weight(1f).onGloballyPositioned { dock.tabClips[group.getInt("id")] = it.boundsInRoot().translate(-dock.origin) }
+                        .horizontalScroll(rememberScrollState()).clickable(enabled = panel.optBoolean("expanded")) { host.customize(obj("type" to "close_expanded")) }) {
                         group.array("panels").values().forEachIndexed { index, id ->
                             val p = panels[id.toString()] ?: return@forEachIndexed
                             val selected = id == active
@@ -415,7 +443,9 @@ private fun expandedShape(expansion: JSONObject, density: Float) = GenericShape 
                                     // Contact handling needs the panel ID as well as the drop-target geometry.
                                     dock.tabs["${group.getInt("id")}:$index"] = obj("group" to group.getInt("id"), "index" to index, "panel" to id,
                                         "bounds" to obj("x" to pos.x, "y" to pos.y, "width" to r.width / dock.density, "height" to r.height / dock.density))
-                                }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier).zIndex(if (selected) 1f else 0f)
+                                }.height(36.dp).then(if (!content.getBoolean("show_name")) Modifier.width(36.dp) else Modifier)
+                                .zIndex(if (dock.isDraggedTab(id.toString())) 2f else if (selected) 1f else 0f)
+                                .workspaceTabMotion(host, group.getInt("id"), id.toString(), index, dock.density)
                                 .drawBehind {
                                     if (selected) {
                                         val r = 6.dp.toPx(); val w = size.width; val h = size.height

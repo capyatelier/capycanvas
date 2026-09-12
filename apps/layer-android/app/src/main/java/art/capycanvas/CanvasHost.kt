@@ -99,6 +99,14 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private var inputCount = 0
     private var snapshotAttempts = 0L
     private var snapshotsPublished = 0L
+    private var workspaceUpdatesPublished = 0L
+    internal var workspaceGeometry by mutableStateOf<WorkspaceGeometry?>(null)
+        private set
+    internal var lastWorkspaceGroup: Pair<Int, androidx.compose.ui.geometry.Rect>? = null
+        private set
+    private var workspaceModelRevision = -1L // Main thread: model required by the geometry.
+    private var lastWorkspaceUpdate: WorkspaceGeometry? = null // Native owner only.
+    internal fun beginWorkspaceGesture() { lastWorkspaceGroup = null }
     private var cameraUpdatesPublished = 0L
     // Buffers have one owner: input callback -> render task -> this bounded pool.
     // A backlog may allocate extra buffers, but no input is dropped or overwritten.
@@ -171,9 +179,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     private fun presentWorkspace(presentation: WorkspacePresentation) {
         refreshChrome()
-        val value = presentation.preview?.let { org.json.JSONTokener(Native.query(handle, it.toString())).nextValue() }
         publish(true)
-        if (presentation.preview != null) main.post { presentation.reply(if (value == JSONObject.NULL) null else value) }
+        val value = lastWorkspaceUpdate?.hint
+        if (presentation.preview != null) main.post { presentation.reply(value) }
         wake()
     }
     internal fun workspaceGesture(actions: List<JSONObject>, preview: JSONObject? = null, moving: Boolean = false, reply: (Any?) -> Unit = {}) = post {
@@ -385,10 +393,11 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             "inputs" to rows(measuredInputs, inputCount, 5),
             "snapshot_attempts" to snapshotAttempts, "snapshots_published" to snapshotsPublished,
             "camera_updates_published" to cameraUpdatesPublished,
+            "workspace_updates_published" to workspaceUpdatesPublished,
             "pointer_allocations" to pointerAllocations,
             "frame_fields" to JSONArray(listOf("vsync_ns", "start_ns", "cpu_render_present_ns", "expected_presentation_ns", "paint_ns", "acquire_ns", "viewport_ns", "queue_present_ns", "poll_ns", "publish_schedule_ns", "cpu_callback_ns")),
             "input_fields" to JSONArray(listOf("event_ns", "arrival_ns", "worker_start_ns", "cpu_input_ns", "sample_count")))
-        if (reset) { frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0 }
+        if (reset) { frameCount = 0; inputCount = 0; snapshotAttempts = 0; snapshotsPublished = 0; cameraUpdatesPublished = 0; workspaceUpdatesPublished = 0 }
         main.post { reply(report) }
     }
     internal fun recordUiDraw() {
@@ -401,9 +410,23 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val now = SystemClock.uptimeMillis()
         if (!force && now - snapshotAt < 33) return
         snapshotAt = now
-        if (BuildConfig.DEBUG) snapshotAttempts++
+        if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) snapshotAttempts++
         val serialized = Native.snapshot(handle) ?: return
         val next = JSONObject(serialized)
+        val geometry = next.objectOrNull("workspace_update")?.let(WorkspaceGeometry::read)
+        if (geometry != null) lastWorkspaceUpdate = geometry
+        if (!next.has("state") && geometry != null) {
+            workspaceUpdatesPublished++
+            main.post {
+                applyWorkspaceGeometry(geometry)
+                next.objectOrNull("camera")?.let { camera ->
+                    snapshot?.getJSONObject("state")?.put("camera", camera)
+                    panelContent?.getJSONObject("state")?.put("camera", camera)
+                    updateCameraReadout(camera)
+                }
+            }
+            return
+        }
         next.objectOrNull("camera")?.let { camera ->
             if (BuildConfig.DEBUG) cameraUpdatesPublished++
             main.post {
@@ -418,7 +441,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        if (BuildConfig.DEBUG) snapshotsPublished++
+        if (BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK) snapshotsPublished++
         lastCanvasReady = next.optBoolean("canvas_ready")
         val stage = when { next.optBoolean("shaders_ready") -> 3; next.optBoolean("brush_ready") -> 2; lastCanvasReady -> 1; next.optBoolean("gpu_ready") -> 0; else -> -1 }
         if (stage > lastStartupStage) {
@@ -457,8 +480,15 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         main.post {
             if (changedContent) panelContent = content
             snapshot = next
+            workspaceModelRevision = geometry?.modelRevision ?: -1L
+            if (geometry != null) applyWorkspaceGeometry(geometry) else workspaceGeometry = null
             updateCameraReadout(state.getJSONObject("camera"))
         }
+    }
+    private fun applyWorkspaceGeometry(next: WorkspaceGeometry) {
+        if (next.modelRevision != workspaceModelRevision || next.revision < (workspaceGeometry?.revision ?: -1L)) return
+        workspaceGeometry = next
+        if (next.group != null && next.bounds != null) lastWorkspaceGroup = next.group to next.bounds
     }
     private fun updateCameraReadout(camera: JSONObject) {
         cameraState = camera

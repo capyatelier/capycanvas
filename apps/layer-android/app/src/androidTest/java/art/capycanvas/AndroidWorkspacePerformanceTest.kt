@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
+import android.view.Choreographer
 import android.view.FrameMetrics
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -87,11 +88,22 @@ class AndroidWorkspacePerformanceTest {
             }
             fixture.put("zen_mode", false)
             val measuring = AtomicBoolean(false)
-            val durations = mutableListOf<Long>()
+            data class Frame(val duration: Long, val deadline: Long, val vsync: Long)
+            val durations = mutableListOf<Frame>()
+            val drawnRevisions = mutableSetOf<Long>()
+            var lostMetrics = 0
             val frames = HandlerThread("workspace-frame-metrics").apply { start() }
-            val listener = Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
-                if (measuring.get()) synchronized(durations) { durations.add(metrics.getMetric(FrameMetrics.TOTAL_DURATION)) }
+            val listener = Window.OnFrameMetricsAvailableListener { _, metrics, dropped ->
+                if (measuring.get()) synchronized(durations) {
+                    durations.add(Frame(metrics.getMetric(FrameMetrics.TOTAL_DURATION),
+                        metrics.getMetric(FrameMetrics.DEADLINE), metrics.getMetric(FrameMetrics.VSYNC_TIMESTAMP)))
+                    lostMetrics += dropped
+                }
             }
+            val drawListener = android.view.ViewTreeObserver.OnDrawListener {
+                if (measuring.get()) host.workspaceGeometry?.revision?.let { drawnRevisions.add(it) }
+            }
+            scenario.onActivity { owner.view.viewTreeObserver.addOnDrawListener(drawListener) }
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
             try {
                 for (mouse in listOf(true, false)) for (mode in listOf("attached", "floating", "destination")) {
@@ -106,46 +118,91 @@ class AndroidWorkspacePerformanceTest {
                     val first = bounds("tab-brushes").center
                     val last = bounds("tab-sizes").center
                     val down = SystemClock.uptimeMillis()
-                    fun event(action: Int, point: Offset) {
-                        scenario.onActivity {
-                            val properties = arrayOf(MotionEvent.PointerProperties().apply {
-                                id = 0; toolType = if (mouse) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
-                            })
-                            val coords = arrayOf(MotionEvent.PointerCoords().apply { x = point.x; y = point.y; pressure = 1f })
-                            val motion = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords,
-                                0, if (mouse && action != MotionEvent.ACTION_CANCEL) MotionEvent.BUTTON_PRIMARY else 0,
-                                1f, 1f, 0, 0, if (mouse) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_TOUCHSCREEN, 0)
-                            owner.view.dispatchTouchEvent(motion); motion.recycle()
-                        }
+                    fun eventOnMain(action: Int, point: Offset) {
+                        val properties = arrayOf(MotionEvent.PointerProperties().apply {
+                            id = 0; toolType = if (mouse) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
+                        })
+                        val coords = arrayOf(MotionEvent.PointerCoords().apply { x = point.x; y = point.y; pressure = 1f })
+                        val motion = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coords,
+                            0, if (mouse && action != MotionEvent.ACTION_CANCEL) MotionEvent.BUTTON_PRIMARY else 0,
+                            1f, 1f, 0, 0, if (mouse) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_TOUCHSCREEN, 0)
+                        owner.view.dispatchTouchEvent(motion); motion.recycle()
                     }
+                    fun event(action: Int, point: Offset) = scenario.onActivity { eventOnMain(action, point) }
                     event(MotionEvent.ACTION_DOWN, source)
                     try {
                         event(MotionEvent.ACTION_MOVE, if (mode == "attached") first else workspace.center)
-                        SystemClock.sleep(150)
+                        SystemClock.sleep(750)
+                        var retainedSnapshot: JSONObject? = null
+                        var retainedPanels: JSONObject? = null
+                        scenario.onActivity { retainedSnapshot = host.snapshot; retainedPanels = host.panelContent }
                         report(reset = true)
-                        synchronized(durations) { durations.clear() }
+                        synchronized(durations) { durations.clear(); lostMetrics = 0 }
+                        scenario.onActivity { drawnRevisions.clear() }
                         measuring.set(true)
+                        val traceName = "workspace-benchmark-${if (mouse) "mouse" else "touch"}-$mode"
+                        android.os.Trace.beginAsyncSection(traceName, 1)
                         val start = SystemClock.uptimeMillis()
+                        val finished = CountDownLatch(1)
                         var samples = 0
-                        do {
-                            val elapsed = SystemClock.uptimeMillis() - start
-                            val progress = (sin(elapsed * Math.PI / 500) * .5 + .5).toFloat()
-                            val point = if (mode == "floating") Offset(workspace.center.x + (progress - .5f) * workspace.width * .25f, workspace.center.y)
-                                else Offset(first.x + (last.x - first.x) * progress, first.y)
-                            event(MotionEvent.ACTION_MOVE, point)
-                            samples++
-                            SystemClock.sleep(8)
-                        } while (SystemClock.uptimeMillis() - start < 2500)
+                        var refreshRate = 0f
+                        // Generate native motion on the real display clock. Sleeping
+                        // 8 ms AFTER a blocking main-thread call caps input below 120 Hz.
+                        lateinit var motion: Choreographer.FrameCallback
+                        scenario.onActivity {
+                            refreshRate = owner.view.display.refreshRate
+                            val choreographer = Choreographer.getInstance()
+                            motion = Choreographer.FrameCallback {
+                                val elapsed = SystemClock.uptimeMillis() - start
+                                if (elapsed >= 5000) { finished.countDown() }
+                                else {
+                                    val progress = (sin(elapsed * Math.PI / 500) * .5 + .5).toFloat()
+                                    val point = if (mode == "floating") Offset(workspace.center.x + (progress - .5f) * workspace.width * .25f, workspace.center.y)
+                                        else Offset(first.x + (last.x - first.x) * progress, first.y)
+                                    eventOnMain(MotionEvent.ACTION_MOVE, point)
+                                    samples++
+                                    choreographer.postFrameCallback(motion)
+                                }
+                            }
+                            choreographer.postFrameCallback(motion)
+                        }
+                        try { assertTrue("Real display input producer completed", finished.await(15, TimeUnit.SECONDS)) }
+                        finally {
+                            scenario.onActivity { Choreographer.getInstance().removeFrameCallback(motion) }
+                            android.os.Trace.endAsyncSection(traceName, 1)
+                        }
                         measuring.set(false)
                         val elapsed = SystemClock.uptimeMillis() - start
-                        val timings = synchronized(durations) { durations.sorted() }
+                        val rows = synchronized(durations) { durations.toList() }
+                        val timings = rows.map { it.duration }.sorted()
+                        val vsyncs = rows.map { it.vsync }.distinct().sorted()
+                        val intervals = vsyncs.zipWithNext { a, b -> b - a }.sorted()
+                        var drawn = 0
+                        scenario.onActivity { drawn = drawnRevisions.size }
                         assertTrue("Android must render while dragging", timings.isNotEmpty())
-                        fun percentile(fraction: Double) = timings[((timings.size - 1) * fraction).toInt()] / 1_000_000.0
+                        fun percentile(values: List<Long>, fraction: Double) = values[((values.size - 1) * fraction).toInt()] / 1_000_000.0
                         val metrics = report()
+                        assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
+                        scenario.onActivity {
+                            assertSame(retainedSnapshot, host.snapshot)
+                            assertSame(retainedPanels, host.panelContent)
+                            val geometry = host.workspaceGeometry!!
+                            if (geometry.group != null) {
+                                val shown = find(owner.semanticsOwner.unmergedRootSemanticsNode, "group-${geometry.group}")!!.boundsInRoot
+                                val density = owner.view.resources.displayMetrics.density
+                                assertEquals("Native placement follows Rust geometry", workspace.left + geometry.bounds!!.left * density, shown.left, 1.1f)
+                                assertEquals(workspace.top + geometry.bounds.top * density, shown.top, 1.1f)
+                            }
+                        }
                         val result = obj("mouse" to mouse, "mode" to mode, "elapsed_ms" to elapsed, "inputs" to samples,
-                            "frames" to timings.size, "frame_p50_ms" to percentile(.5), "frame_p95_ms" to percentile(.95),
-                            "frames_over_16ms" to timings.count { it > 16_666_667 },
-                            "snapshot_attempts" to metrics.getLong("snapshot_attempts"), "snapshots" to metrics.getLong("snapshots_published"))
+                            "display_hz" to refreshRate, "debuggable" to BuildConfig.DEBUG,
+                            "frames" to rows.size, "distinct_vsyncs" to vsyncs.size, "drawn_revisions" to drawn,
+                            "frame_rate" to (vsyncs.size * 1000.0 / elapsed), "drawn_update_rate" to (drawn * 1000.0 / elapsed),
+                            "frame_p50_ms" to percentile(timings, .5), "frame_p95_ms" to percentile(timings, .95),
+                            "vsync_interval_p50_ms" to percentile(intervals, .5), "vsync_interval_p95_ms" to percentile(intervals, .95),
+                            "deadline_misses" to rows.count { it.deadline > 0 && it.duration > it.deadline }, "lost_metrics" to lostMetrics,
+                            "snapshot_attempts" to metrics.getLong("snapshot_attempts"), "snapshots" to metrics.getLong("snapshots_published"),
+                            "workspace_updates" to metrics.getLong("workspace_updates_published"))
                         Log.i("CapyDragPerf", result.toString())
                     } finally {
                         measuring.set(false)
@@ -157,6 +214,7 @@ class AndroidWorkspacePerformanceTest {
             } finally {
                 measuring.set(false)
                 window.removeOnFrameMetricsAvailableListener(listener)
+                scenario.onActivity { owner.view.viewTreeObserver.removeOnDrawListener(drawListener) }
                 frames.quitSafely()
                 action(obj("type" to "restore_workspace", "workspace" to saved))
                 waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").toString() == saved.toString() }

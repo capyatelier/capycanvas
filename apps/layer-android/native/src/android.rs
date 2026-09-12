@@ -523,9 +523,10 @@ pub extern "system" fn Java_art_capycanvas_Native_snapshot(
     _: JClass,
     handle: jlong,
 ) -> jstring {
-    match unsafe { app(handle) }.host.take_snapshot() {
-        Some(snapshot) => string(&mut env, Ok(snapshot.to_string())),
-        None => std::ptr::null_mut(),
+    match unsafe { app(handle) }.host.take_update_bytes() {
+        Ok(Some(bytes)) => string(&mut env, String::from_utf8(bytes).map_err(error)),
+        Ok(None) => std::ptr::null_mut(),
+        Err(e) => string(&mut env, Err(error(e))),
     }
 }
 #[unsafe(no_mangle)]

@@ -10,7 +10,7 @@ pub use renderer::Renderer;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct SnapshotKey {
     revision: u64,
     logical: [f32; 2],
@@ -46,6 +46,7 @@ pub struct NativeHost {
     deferred_contacts: std::collections::BTreeSet<u64>,
     last_pen: Option<PenEvent>,
     last_snapshot: Option<SnapshotKey>,
+    last_workspace_model_revision: Option<u64>,
     last_camera_revision: Option<u64>,
     document_view_revision: u64,
     last_durable_workspace: Option<layer_ui::WorkspaceState>,
@@ -73,6 +74,7 @@ impl NativeHost {
             deferred_contacts: Default::default(),
             last_pen: None,
             last_snapshot: None,
+            last_workspace_model_revision: None,
             last_camera_revision: None,
             document_view_revision: 0,
             last_durable_workspace: None,

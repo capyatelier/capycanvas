@@ -2485,6 +2485,10 @@ impl Workspace {
         None
     }
 
+    // DEPRECATED workspace presentation path. Migrate to UiSession::workspace_update
+    // (crates/layer-ui/src/workspace_update.rs): refresh models on model_revision
+    // changes, otherwise apply geometry in GTK placement/drawing. Keep dispatching
+    // every DragWorkspace phase; only the publication/refresh path is superseded.
     fn dispatch_drag(self: &Rc<Self>, target: DragTarget, phase: ContactPhase, position: [f32; 2]) {
         let tabs = if matches!(target, DragTarget::Dock(_)) && phase == ContactPhase::Up {
             self.tab_hits()

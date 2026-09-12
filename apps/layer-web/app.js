@@ -761,6 +761,10 @@ function workspaceCursor(cursor) {
     workspace.style.removeProperty("--workspace-cursor");
   }
 }
+// DEPRECATED workspace presentation path. Expose UiSession::workspace_update
+// through Wasm (crates/layer-ui/src/workspace_update.rs); retain DOM/content while
+// model_revision is unchanged and apply the absolute geometry once per frame.
+// Preserve every DragWorkspace input phase and shared cancellation/history.
 function workspaceGestureEvent(phase, e) {
   const drag = workspaceGesture;
   if (!drag) return;

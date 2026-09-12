@@ -184,7 +184,9 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                             Row(Modifier.fillMaxWidth().height(tabHeight.dp).testTag("column-drawer-header-$id")
                                 .background(LocalPalette.current.tabs).then(if (current != null) Modifier.dragSource(dock, item) else Modifier),
                                 verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.weight(1f).clipToBounds().onGloballyPositioned { tabClip = it.boundsInRoot().translate(-dock.origin) }) {
+                                Box(Modifier.weight(1f).clipToBounds().onGloballyPositioned {
+                                    tabClip = it.boundsInRoot().translate(-dock.origin); dock.tabClips[group] = tabClip
+                                }) {
                                     Row(Modifier.horizontalScroll(rememberScrollState()).testTag("column-drawer-tabs-$id")) {
                                         tabs.array("panels").values().forEachIndexed { tabIndex, panelId ->
                                             val panel = bodies[panelId.toString()] ?: return@forEachIndexed
@@ -194,7 +196,9 @@ private fun JSONObject.relativeTo(parent: JSONObject) = JSONObject(toString())
                                                     enabled = current != null,
                                                     modifier = Modifier.height(tabHeight.dp).testTag("drawer-tab-$panelId")
                                                         .then(if (current != null) Modifier.dragSource(dock, obj("kind" to "panel", "panel" to panelId)) else Modifier)
-                                                        .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null)) {
+                                                        .drawerTabHit(dock, columnId, group, tabIndex, panelId.toString(), tabClip, current != null)
+                                                        .zIndex(if (dock.isDraggedTab(panelId.toString())) 2f else 0f)
+                                                        .workspaceTabMotion(host, group, panelId.toString(), tabIndex, dock.density)) {
                                                     if (presentation.getBoolean("show_icon")) SharedIcon(panel.getString("icon"), null)
                                                     if (presentation.getBoolean("show_name")) Text(panel.getString("title"))
                                                 }

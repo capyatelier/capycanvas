@@ -23,7 +23,7 @@ pub(crate) struct TabDrag {
     source: usize,
     press: f32,
     tabs: Vec<TabHit>,
-    clip: Bounds,
+    pub(crate) clip: Bounds,
     switches: Vec<f32>,
 }
 
@@ -78,6 +78,10 @@ impl TabDrag {
 
     pub fn grab_offset_x(&self) -> f32 {
         self.press - self.tabs[self.source].bounds.x
+    }
+
+    pub(crate) fn source_bounds(&self) -> Bounds {
+        self.tabs[self.source].bounds
     }
 
     pub fn preview(&self, position: [f32; 2]) -> Option<TabDragPreview> {

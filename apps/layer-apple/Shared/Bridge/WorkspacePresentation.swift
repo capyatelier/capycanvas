@@ -100,6 +100,10 @@ import SwiftUI
         guard next != chromeKey else { return }; chromeKey = next
         chrome(["kind": "refresh"])
     }
+    // DEPRECATED workspace publication path. Migrate the native snapshot request
+    // to NativeHost::take_update_bytes and consume workspace_update before the
+    // camera-only branch. Retain models by model_revision and apply geometry to
+    // native placement/drawing; keep every DragWorkspace phase and Rust history.
     private func send(_ operation: Drag, phase: String) {
         guard operation.item["kind"].string != "tile", let store else { return }
         if !operation.item["type"].isNull {

@@ -63,6 +63,10 @@ struct WorkspaceGestures::Impl:std::enable_shared_from_this<Impl>{
         }
         return result;
     }
+    // DEPRECATED workspace publication path. Migrate capy_snapshot to
+    // NativeHost::take_update_bytes and handle workspace_update before the
+    // camera-only branch. Retain models by model_revision, applying absolute
+    // geometry to native placement; preserve all DragWorkspace input phases.
     void send(hstring phase){
         if(str(action,L"type")==L"tile_drag")return;
         auto next=J::Parse(action.Stringify());

@@ -50,6 +50,8 @@ struct WorkspaceDrag {
     chrome_revealed: bool,
     moved: bool,
     drawer: Option<DrawerAnchor>,
+    position: [f32; 2],
+    viewport: [f32; 2],
 }
 #[derive(Clone, Copy)]
 struct FloatingResize {
@@ -80,6 +82,8 @@ pub struct UiSession<R: CanvasRenderer> {
     floating_resize: Option<FloatingResize>,
     workspace_drag: Option<WorkspaceDrag>,
     workspace_tab_drag: Option<crate::tab_drag::TabDrag>,
+    workspace_drag_tabs: Vec<TabHit>,
+    workspace_model_revision: u64,
     workspace_history: workspace::WorkspaceHistory,
     workspace_transition: bool,
     managed_workspace: Option<ManagedWorkspace>,
@@ -131,6 +135,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             floating_resize: None,
             workspace_drag: None,
             workspace_tab_drag: None,
+            workspace_drag_tabs: Vec::new(),
+            workspace_model_revision: 0,
             workspace_history: workspace::WorkspaceHistory::default(),
             workspace_transition: false,
             managed_workspace: None,
@@ -881,6 +887,48 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_tab_drag.as_ref()?.preview(position)
     }
 
+    pub fn workspace_model_revision(&self) -> u64 {
+        self.workspace_model_revision
+    }
+
+    /// One coherent presentation, usable directly by GTK, through Wasm, or via
+    /// a native bridge. Geometry is in logical workspace units, never pixels.
+    pub fn workspace_update(&self) -> WorkspaceUpdate {
+        WorkspaceUpdate {
+            revision: self.state.revision,
+            model_revision: self.workspace_model_revision,
+            drag: self.workspace_drag.map(|drag| WorkspaceDragPresentation {
+                group: drag.floating.and_then(|id| {
+                    self.layout(drag.viewport)
+                        .groups
+                        .into_iter()
+                        .find(|g| g.id == id)
+                        .map(|g| WorkspaceGroupPosition {
+                            id,
+                            bounds: g.bounds,
+                        })
+                }),
+                tab: self.workspace_tab_drag.as_ref().and_then(|tab| {
+                    self.tab_drag_preview(drag.position)
+                        .map(|preview| WorkspaceTabPresentation {
+                            group: tab.group,
+                            panel: drag.panel,
+                            clip: tab.clip,
+                            source: tab.source_bounds(),
+                            preview,
+                        })
+                }),
+                drop_hint: self.drop_hint(
+                    drag.viewport,
+                    drag.position,
+                    &self.workspace_drag_tabs,
+                    drag.original,
+                    None,
+                ),
+            }),
+        }
+    }
+
     fn drag_workspace(
         &mut self,
         item: DockItem,
@@ -920,6 +968,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             return Ok(());
         }
+        self.workspace_drag_tabs.clear();
+        self.workspace_drag_tabs.extend_from_slice(tabs);
         self.interaction.hover = Some(position);
         self.interaction.viewport = Some(viewport);
         self.interaction.zen_entry_guard = false;
@@ -949,6 +999,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                     chrome_revealed: true,
                     moved: false,
                     drawer: None,
+                    position,
+                    viewport,
                 });
                 self.state.customization = CustomizationState::default();
                 return Ok(());
@@ -970,6 +1022,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             let whole = matches!(normalized, DockItem::Group { .. });
             self.workspace_history.begin(&self.state.workspace);
             self.workspace_drag = Some(WorkspaceDrag {
+                position,
+                viewport,
                 original: item,
                 item: normalized,
                 panel: match item {
@@ -1028,6 +1082,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .workspace_drag
             .filter(|d| d.original == item)
             .ok_or("Workspace drag is not active")?;
+        drag.position = position;
+        drag.viewport = viewport;
         drag.chrome_revealed |= self.layout(viewport).near_chrome(position, viewport, true);
         drag.moved |= position != drag.press;
         if drag.floating.is_none()
@@ -1413,6 +1469,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("A workspace change is in progress".into());
         }
         use regions::*;
+        let model_revision = self.workspace_model_revision;
+        let drag_before = self.workspace_drag;
+        let moving_workspace = matches!(
+            &action,
+            UiAction::DragWorkspace {
+                phase: ContactPhase::Move,
+                ..
+            }
+        );
         let revision = self.engine.document().revision;
         let transforming = self.operation.active();
         let was_expanded = self.state.customization.has_drawer();
@@ -1456,6 +1521,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 self.request(HostRequestKind::Workspace { command })?;
                 (HOST, false)
+            }
+            UiAction::BeginTabDrag { tabs, clip } => {
+                self.begin_tab_drag(&tabs, clip);
+                return Ok(self.changed(0, false));
             }
             UiAction::MeasureColumnDrawers { measurements } => {
                 self.state
@@ -2275,7 +2344,24 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.refresh_commands() {
             changed |= COMMANDS;
         }
-        Ok(self.changed(changed, wake || transforming != self.operation.active()))
+        let change = self.changed(changed, wake || transforming != self.operation.active());
+        // Preserve legacy region notifications, but let incremental consumers
+        // distinguish ordinary motion from tear-off and every other UI change.
+        // An unrelated action/measurement advances model_revision independently.
+        if moving_workspace
+            && changed == (LAYOUT | CUSTOMIZATION)
+            && drag_before
+                .zip(self.workspace_drag)
+                .is_some_and(|(before, after)| {
+                    before.original == after.original
+                        && before.floating == after.floating
+                        && before.viewport == after.viewport
+                        && before.chrome_revealed == after.chrome_revealed
+                })
+        {
+            self.workspace_model_revision = model_revision;
+        }
+        Ok(change)
     }
 
     /// Raw records retain platform timestamp/history/prediction metadata. A
@@ -3217,6 +3303,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if regions != 0 {
             self.state.revision += 1;
+            if regions != regions::CAMERA {
+                self.workspace_model_revision = self.state.revision;
+            }
         }
         UiChange {
             revision: self.state.revision,
