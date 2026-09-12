@@ -15,6 +15,7 @@ import AppKit
     @MainActor func attach(_ window: NSWindow?) {
         if window != nil && self.window === window { return }
         store?.windowPresentation.changeFullscreen = nil
+        store?.focusWindow = nil
         finishFullscreen(error: "The drawing window was detached")
         if let previous = self.window, previous.delegate === self { previous.delegate = downstream }
         self.window = window; downstream = window?.delegate
@@ -22,6 +23,9 @@ import AppKit
         store?.projectFiles.closeWindow = { [weak window] in window?.performClose(nil) }
         fullscreenTransition = false
         if let window {
+            store?.focusWindow = { [weak window] in
+                window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            }
             store?.windowPresentation.observe(fullscreen: window.styleMask.contains(.fullScreen))
             store?.windowPresentation.changeFullscreen = { [weak self] target, completion in
                 guard let self, self.window != nil else { completion(false, "The drawing window is unavailable"); return }
@@ -73,28 +77,45 @@ import AppKit
         observedFullscreen(error: "The drawing window could not leave full screen")
     }
     @MainActor func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if approved || store?.state["document_file"]["close_ready"].bool == true {
+        if approved {
             approved = false
-            return downstream?.windowShouldClose?(sender) ?? true
+            let allowed = downstream?.windowShouldClose?(sender) ?? true
+            if !allowed { store?.cancelPreparedClose() }
+            return allowed
         }
         guard !asking else { return false }
         guard let store else { return downstream?.windowShouldClose?(sender) ?? true }
         asking = true
-        store.projectFiles.confirmClose { [weak self, weak sender] allowed in
+        let confirm: (Bool) -> Void = { [weak self, weak sender] allowed in
             guard let self else { return }
-            self.asking = false
-            if allowed {
-                self.approved = true
-                // Avoid recursively closing while AppKit is still deciding the
-                // original windowShouldClose call (an unmodified file is fast).
-                DispatchQueue.main.async { sender?.performClose(nil) }
+            guard allowed else { self.asking = false; return }
+            store.prepareClose { [weak self, weak sender] saved in
+                guard let self else { return }
+                self.asking = false
+                if saved {
+                    self.approved = true
+                    DispatchQueue.main.async { sender?.performClose(nil) }
+                } else {
+                    store.cancelPreparedClose()
+                    if store.workspaceLibrary?.error == nil && store.storageFailure == nil {
+                        store.projectFiles.error = "Some changes could not be saved. Retry before closing this window."
+                    }
+                }
             }
         }
+        if store.state["document_file"]["close_ready"].bool { confirm(true) }
+        else { store.projectFiles.confirmClose(confirm) }
         return false
     }
     @MainActor func windowWillClose(_ notification: Notification) {
         store?.recovery.close()
         downstream?.windowWillClose?(notification)
+    }
+    func windowDidBecomeKey(_ notification: Notification) {
+        downstream?.windowDidBecomeKey?(notification)
+        if let library = store?.workspaceLibrary {
+            Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
+        }
     }
     override func responds(to selector: Selector!) -> Bool {
         super.responds(to: selector) || (downstream?.responds(to: selector) ?? false)

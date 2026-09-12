@@ -12,6 +12,8 @@ mod navigator;
 mod recovery;
 #[path = "workspace_tests.rs"]
 mod workspace;
+#[path = "workspace_library_tests.rs"]
+mod workspace_library;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 

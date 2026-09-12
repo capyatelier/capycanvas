@@ -1,7 +1,9 @@
 use crate::*;
 use layer_ui::{DockLayout, Panel};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ManagerPage {
     Workspaces,
     Templates,
@@ -18,7 +20,8 @@ impl ManagerPage {
         }
     }
 }
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ManagerAction {
     New,
     SaveAsNew,
@@ -75,7 +78,7 @@ impl ManagerAction {
         matches!(self, Self::Delete(_) | Self::DeleteToolbar(_))
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagerButton {
     pub action: ManagerAction,
     pub label: String,
@@ -92,14 +95,14 @@ impl ManagerButton {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagerRow {
     pub id: String,
     pub title: String,
     pub subtitle: String,
     pub builtin: bool,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ManagerDetails {
     pub title: String,
     pub description: String,
@@ -107,6 +110,41 @@ pub struct ManagerDetails {
     pub actions: Vec<ManagerButton>,
 }
 impl<S: WorkspaceStore> WorkspaceManager<S> {
+    pub fn toolbar_details(&self, panel: Panel, idle: bool) -> Result<ManagerDetails, StoreError> {
+        if panel.kind() != layer_ui::PanelKind::Tiles {
+            return Err(StoreError::invalid("Choose a toolbar."));
+        }
+        let current = self
+            .current()
+            .ok_or_else(|| StoreError::invalid("No workspace is active."))?;
+        let capture = current.capture()?;
+        let config = capture
+            .history
+            .layout()
+            .panel(panel)
+            .map_err(StoreError::invalid)?;
+        let visible = capture.history.layout().panel_group(panel).is_some();
+        Ok(ManagerDetails {
+            title: config.title().into(),
+            description: format!(
+                "Toolbar in {}. Changes are saved with this workspace and can be recovered in Layout History.",
+                current.metadata.name
+            ),
+            preview: None,
+            actions: [
+                ManagerAction::ShowToolbar(panel, !visible),
+                ManagerAction::RenameToolbar(panel),
+                ManagerAction::DuplicateToolbar(panel),
+                ManagerAction::SaveToolbar(panel),
+                ManagerAction::ReplaceToolbar(panel),
+                ManagerAction::DeleteToolbar(panel),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, action)| ManagerButton::new(action, idle, index == 0))
+            .collect(),
+        })
+    }
     pub async fn inspect_details(
         &self,
         stored: &StoredEntity,
@@ -189,29 +227,28 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             })
             .collect()
     }
-    pub fn details(&self, stored: &StoredEntity, idle: bool, now: u64) -> ManagerDetails {
-        let entity = &stored.entity;
-        let id = &entity.id;
+    /// Compact managers can show every row's actions without loading retained
+    /// history or template contents. Details use the same availability policy.
+    pub fn summary_actions(&self, item: &ItemSummary, idle: bool, now: u64) -> Vec<ManagerButton> {
+        self.metadata_actions(&item.id, &item.metadata, item.claim.as_ref(), idle, now)
+    }
+    fn metadata_actions(
+        &self,
+        id: &String,
+        metadata: &Metadata,
+        claim: Option<&Claim>,
+        idle: bool,
+        now: u64,
+    ) -> Vec<ManagerButton> {
         let current = self.active_id().as_ref() == Some(id);
-        let elsewhere = stored
-            .claim
-            .as_ref()
-            .is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now);
-        let available = !elsewhere && !entity.metadata.builtin;
-        let preview = match &entity.content {
-            ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
-            ItemContent::Reusable { current, .. } => match &current.content {
-                ReusableContent::Layout { layout } => Some(layout.clone()),
-                _ => None,
-            },
-        };
-        let mut description = entity.metadata.description.clone();
+        let elsewhere = claim.is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now);
+        let available = !elsewhere && !metadata.builtin;
         let mut actions = Vec::new();
         let mut add =
             |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
-        if entity.metadata.deleted_at_ms.is_none() {
-            match &entity.content {
-                ItemContent::Workspace { .. } => {
+        if metadata.deleted_at_ms.is_none() {
+            match metadata.kind {
+                ItemKind::Workspace => {
                     add(
                         if elsewhere {
                             ManagerAction::SwitchToWindow(id.clone())
@@ -224,13 +261,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     add(ManagerAction::Rename(id.clone()), available, false);
                     add(ManagerAction::Delete(id.clone()), available && idle, false);
                 }
-                ItemContent::Reusable {
-                    current: revision, ..
-                } => {
-                    if entity.metadata.builtin {
-                        description.push_str("\nIncluded with CapyCanvas.");
-                    }
-                    if revision.content.kind() == ItemKind::Template {
+                ItemKind::Template | ItemKind::Toolbar => {
+                    if metadata.kind == ItemKind::Template {
                         add(ManagerAction::UseTemplate(id.clone()), idle, true);
                     } else {
                         add(ManagerAction::AddToolbar(id.clone()), idle, true);
@@ -242,8 +274,6 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     }
                     if available {
                         add(ManagerAction::Rename(id.clone()), true, false);
-                    }
-                    if available {
                         add(ManagerAction::Delete(id.clone()), true, false);
                     }
                 }
@@ -252,11 +282,32 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         if current && let Some(primary) = actions.first_mut() {
             primary.label = "Current workspace".into();
         }
+        actions
+    }
+    pub fn details(&self, stored: &StoredEntity, idle: bool, now: u64) -> ManagerDetails {
+        let entity = &stored.entity;
+        let preview = match &entity.content {
+            ItemContent::Workspace { history, .. } => Some(history.layout().clone()),
+            ItemContent::Reusable { current, .. } => match &current.content {
+                ReusableContent::Layout { layout } => Some(layout.clone()),
+                _ => None,
+            },
+        };
+        let mut description = entity.metadata.description.clone();
+        if entity.metadata.builtin {
+            description.push_str("\nIncluded with CapyCanvas.");
+        }
         ManagerDetails {
             title: entity.metadata.name.clone(),
             description: description.trim().into(),
             preview,
-            actions,
+            actions: self.metadata_actions(
+                &entity.id,
+                &entity.metadata,
+                stored.claim.as_ref(),
+                idle,
+                now,
+            ),
         }
     }
 }

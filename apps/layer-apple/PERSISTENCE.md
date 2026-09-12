@@ -12,6 +12,68 @@ its document, camera and Undo history. Closing one scene leaves the other scenes
 open. The command is also available through shortcut and toolbar customization;
 an iPad environment without multiple-window support reports that limitation.
 
+## Workspace library
+
+Both Apple apps use the shared SQLite workspace library by default. Shared
+Swift manager pages follow the compact workspace and saved-layout design: New,
+Switch, Rename/Delete, Save Layout and Load Layout. Toolbars expose the
+shared current-workspace and saved-toolbar actions. Rust owns the rows, action
+availability, forms, validation and history policy. Row actions use metadata
+summaries without loading every item's retained layout history.
+
+Load Layout applies a saved layout to the current workspace as one
+undoable change, preserving its identity, brush settings, colors and artwork.
+Selecting a workspace or saved-layout row previews it in the actual editor
+before an explicit Switch or Load. Layout History uses the same preview
+mechanism. Every durable capture still sees the layout from before preview;
+Cancel restores that layout and Restore commits one undoable change. Closing
+or suspending the scene cancels a pending preview.
+The workspace browser initially selects the current workspace. Saved Layouts
+starts without a selection; filtering clears selection and preview. Late or rapid
+selection replies cannot revive a dismissed preview. Save Layout suggests the
+workspace name followed by “Layout”.
+
+The native package transport supports coordinated `.capyworkspace`,
+`.capytemplate` and `.capytoolbar` delivery and consistent database backup.
+These storage capabilities are covered by direct integration checks; the compact
+workspace screens follow the revised shared design without storage-administration,
+import/export, trash or metadata/version-management controls.
+
+`NativeWorkspaceLibrary` has a separate serial Dispatch queue; SQLite runs on
+the shared Rust storage worker. The drawing owner only captures or adopts
+validated workspace state. `WorkspaceLibrary` serializes explicit transitions,
+coalesces autosave, renews leases, revalidates suspended owners, and includes its
+writes in the editor persistence barrier. Startup blocks new editor input until
+restoration completes. Ownership recovery blocks new pen contacts and shortcuts
+while allowing existing contacts and property corrections to finish. It retains the outgoing workspace
+until storage and adoption acknowledge the transition. Failed ownership retains
+in-memory changes for Save as New Workspace or a current-state export.
+
+Migration reads unacknowledged `workspaces/<scene>.json` and `workspace.json`
+sources on the storage queue. It preserves distinct scenes, aliases an identical
+fallback, commits mappings with the imported records, and retains the original
+files. Acknowledged files are no longer read or written. Unknown/corrupt inputs
+fail before creating default workspaces. Concurrent imports reconcile both
+identical and partially overlapping source sets through the shared manager.
+
+The direct checks use temporary storage and both Apple platform configurations:
+
+```sh
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-library.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-coordinator.swift
+bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
+cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --features layer-workspace/native
+```
+
+They exercise latest-edit switching, failed-transition unlock, migration and
+restart beside another owner, templates/metadata/versions, toolbars, layout
+history, import/export packages, trash, consistent SQLite backup and recovery as
+a new workspace after a competing owner claims an expired lease. A deliberately
+locked temporary database verifies that the drawing owner still serves edits
+and queries, and that later edits survive the earlier save acknowledgement.
+This is integration evidence, not physical lifecycle or sustained frame-rate
+acceptance. Raw logs remain in ignored local artifacts.
+
 ## Artwork files
 
 The shared Rust document request flow owns busy state, save checkpoints and
@@ -111,36 +173,44 @@ Queued input, fixtures and surface attachment follow validated restoration.
 Neither the UI thread nor the active render owner performs file reads/writes.
 
 Files live under the app's own Application Support directory. `settings.json`
-contains the shared settings model. `workspaces/<scene UUID>.json` belongs to one
-system-restored scene. `workspace.json` is the last committed layout used to seed
-a new scene. A new scene saves its own initial snapshot without replacing that
-default, so another window's changes cannot alter its future restore.
+contains shared app settings. `workspaces.sqlite3` holds named workspaces,
+layout/history, latest tool/color/Zen values, reusable templates/toolbars,
+metadata history and scene bindings. Legacy scene/default JSON files are retained
+as migration inputs and are no longer written by normal app launches. Tests can
+explicitly disable the library to exercise the legacy adapter.
 
 Settings commits propagate to the process's other owners. Pending local writes
 defer incoming notifications; owners converge to the newest successful commit.
 A failed local save retains the accepted in-memory edit and offers Retry Save.
-Workspaces remain independent after their initial copy. Full native multi-scene
-lifecycle acceptance, including physical iPad window management, remains open.
+Workspaces remain independent after their initial copy. A live workspace's
+Duplicate/Save Layout action captures its owning window's latest accepted
+state instead of copying a stale on-disk version. Switch to Window focuses that
+owner through a small AppKit/UIKit adapter.
 
-Rust's durable workspace view excludes in-flight layout gestures, measurements
-and scroll allocations. The native host emits it only when committed topology
-changes; camera patches and ordinary brush edits do not trigger workspace writes.
-Startup does not overwrite an invalid saved model with defaults. Read failures
-are reported, and the original file remains available for repair.
+Layout persistence excludes in-flight gestures, measurements and scroll
+allocations. Committed layout history and latest working tool values have
+independent generations. Motion/camera publications do not schedule storage.
+Autosave coalesces full editor publications, queries unchanged layouts without
+copying their history, and performs database work off the input owner. Startup
+does not overwrite invalid or unsupported saved data with defaults; the storage
+service retains current-state and consistent database exports for recovery.
 
-Each JSON file is limited to 1 MiB, matching the existing settings reader's limit.
-Writes create a private temporary file in the destination directory, sync its
-contents, rename it atomically, then sync the directory before acknowledgment.
-Files use mode 0600 and newly created storage directories use mode 0700. Settings
-requests remain pending in Rust until their write completes. Scene and default
-workspace files are individually atomic; failure updating the default is reported
-even if the scene file was saved successfully.
+JSON preferences and legacy migration inputs are limited to 1 MiB per file.
+Preference writes sync a private temporary file, atomically rename it, then sync
+the directory before acknowledgement. Settings requests remain pending in Rust
+until the write completes. Packages use coordinated, bounded file I/O outside
+the input owner; destination cancellation or failure does not acknowledge an
+export or replace existing bytes.
 
-Lifecycle flushing places barriers across the owner and I/O queues. iPad uses a
-background-task allowance; Mac waits before responding to application termination.
-Failed saves are visible in the editor or active settings sheet and can be retried.
-These adapters do not guarantee completion after a forced kill before a write
-finishes; recovery preserves the last completed generation in that case.
+Close flushes accepted edits before releasing the fenced workspace claim.
+A failed release keeps close pending; canceling close revalidates ownership
+before editing resumes. App sleep and iPad backgrounding suspend input and flush
+within the platform's available lifetime; activation revalidates before editing.
+Discarded iPad scenes attempt a final workspace close and preserve artwork
+recovery. Teardown and an explicit Quit Anyway release their own claims without
+overwriting saved copies. An abrupt process kill can still retain only the last
+completed save, with ownership recovered after the shared lease expires. Full
+physical lifecycle/expiration coverage remains an acceptance requirement.
 
 ## Checks
 

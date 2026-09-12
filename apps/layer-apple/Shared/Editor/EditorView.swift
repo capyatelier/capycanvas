@@ -52,10 +52,7 @@ struct EditorView<Canvas: View>: View {
             }
             #if DEBUG
             if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
-                Text(store.storagePending ? "Saving" : store.storageFailure == nil ? "Saved" : "Failed")
-                    .foregroundStyle(.clear).frame(width: 1, height: 1)
-                    .accessibilityIdentifier("persistence-status")
-                    .accessibilityValue(store.state["theme"].string)
+                PersistenceProbe(store: store)
             }
             #endif
         }
@@ -82,6 +79,7 @@ struct EditorView<Canvas: View>: View {
         .font(.system(size: store.catalog["text_size_pt"].number > 0 ? store.catalog["text_size_pt"].number * 4 / 3 : 44 / 3))
         .tint(Color(red: 53 / 255, green: 132 / 255, blue: 228 / 255))
         .modifier(StorageAlert(store: store, active: store.snapshot["preferences"].isNull))
+        .modifier(OptionalWorkspaceManager(store: store))
         .modifier(ProjectFilesModifier(files: store.projectFiles))
         .modifier(RecoveryPresentation(recovery: store.recovery))
         .modifier(WorkspaceDialogs(store: store))
@@ -89,7 +87,10 @@ struct EditorView<Canvas: View>: View {
             SettingsView(store: store).modifier(StorageAlert(store: store))
         }
         .onAppear { systemTheme() }
-        .onOpenURL { store.projectFiles.openURL($0) }
+        .onOpenURL { url in
+            if store.workspaceLibrary != nil, let kind = WorkspacePackageKind.forURL(url) { store.workspaceManager.openURL(url, kind: kind) }
+            else { store.projectFiles.openURL(url) }
+        }
         .onChange(of: windowRequest, initial: true) { _, id in
             guard id > lastWindowRequest else { return }
             lastWindowRequest = id
@@ -144,6 +145,15 @@ struct EditorView<Canvas: View>: View {
         }.padding(6).frame(height: 48)
     }
 
+}
+
+private struct OptionalWorkspaceManager: ViewModifier {
+    @ObservedObject var store: EditorStore
+    func body(content: Content) -> some View {
+        if let library = store.workspaceLibrary {
+            content.modifier(WorkspaceManagerPresentation(manager: store.workspaceManager, library: library))
+        } else { content }
+    }
 }
 
 private struct StorageAlert: ViewModifier {
@@ -215,3 +225,23 @@ private struct EditorHeaderLayout: Layout {
         subviews[2].place(at: CGPoint(x: bounds.maxX - trailing.width, y: bounds.minY), proposal: ProposedViewSize(trailing))
     }
 }
+
+#if DEBUG
+private struct PersistenceProbe: View {
+    @ObservedObject var store: EditorStore
+    var body: some View {
+        if let library = store.workspaceLibrary { ManagedPersistenceProbe(store: store, library: library) }
+        else { Self.label(store, saving: false, failed: false) }
+    }
+    static func label(_ store: EditorStore, saving: Bool, failed: Bool) -> some View {
+        Text(failed || store.storageFailure != nil ? "Failed" : saving || store.storagePending ? "Saving" : "Saved")
+            .foregroundStyle(.clear).frame(width: 1, height: 1)
+            .accessibilityIdentifier("persistence-status").accessibilityValue(store.state["theme"].string)
+    }
+}
+private struct ManagedPersistenceProbe: View {
+    @ObservedObject var store: EditorStore
+    @ObservedObject var library: WorkspaceLibrary
+    var body: some View { PersistenceProbe.label(store, saving: library.hasUnsavedChanges, failed: library.error != nil) }
+}
+#endif

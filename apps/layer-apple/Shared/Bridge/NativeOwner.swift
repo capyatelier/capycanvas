@@ -32,6 +32,7 @@ final class NativeOwner: @unchecked Sendable {
     private var lastTraceState: UInt64?
     private let persistence: EditorPersistence
     private let scene: String
+    private let managedWorkspaces: Bool
     private let observerID = UUID()
     private var settingsRequests = Set<UInt64>()
     private var settingsWrites = 0
@@ -50,12 +51,14 @@ final class NativeOwner: @unchecked Sendable {
     private var lastStorageStatus: Data?
     #if DEBUG
     private var initialActions: [JSON] = []
+    private var workspaceInitialized = false
+    private var surfaceSized = false
     #endif
     let receive: @Sendable (JSON?, String?) -> Void
     var persistenceRoot: URL? { persistence.root }
 
     init(platform: UInt32, scene: String, persistence: EditorPersistence = .shared,
-        traceDuration: TimeInterval? = nil, workload: [String: Any]? = nil,
+        traceDuration: TimeInterval? = nil, workload: [String: Any]? = nil, managedWorkspaces: Bool = false,
         receive: @escaping @Sendable (JSON?, String?) -> Void) throws {
         #if DEBUG
         let fixtureActions = try ProcessInfo.processInfo.environment["CAPY_INITIAL_ACTIONS"].map { try JSON.decode($0).array } ?? []
@@ -65,9 +68,10 @@ final class NativeOwner: @unchecked Sendable {
             throw HostFailure(message: "Could not create the native canvas session")
         }
         self.queue = queue; self.handle = handle; self.receive = receive
-        self.persistence = persistence; self.scene = scene
+        self.persistence = persistence; self.scene = scene; self.managedWorkspaces = managedWorkspaces
         #if DEBUG
         initialActions = fixtureActions
+        workspaceInitialized = !managedWorkspaces
         #endif
         trace = FrameTrace.configured(platform: platform, defaultDuration: traceDuration, workload: workload)
         // Reserve the first owner operation before exposing this instance.
@@ -76,7 +80,7 @@ final class NativeOwner: @unchecked Sendable {
         let loaded = PersistenceLoad()
         queue.suspend()
         queue.async { [self] in restore(loaded.value()) }
-        persistence.load(scene: scene, observer: observerID, changed: { [weak self] change in
+        persistence.load(scene: scene, observer: observerID, managedWorkspaces: managedWorkspaces, changed: { [weak self] change in
             self?.perform { [weak self] in
                 guard let self else { return }
                 if change.revision > appliedSettingsRevision { latestSettings = change }
@@ -133,6 +137,16 @@ final class NativeOwner: @unchecked Sendable {
             receive(nil, nil)
         }
     }
+    /// Capture/transition/adoption alone run on the drawing owner. Storage and
+    /// manager policy use NativeWorkspaceLibrary's independent serial queue.
+    func workspaceSession(_ value: JSON, completion: @escaping @Sendable (JSON?, String?) -> Void) {
+        queue.async { [self] in
+            do {
+                let reply = try request(6, value)
+                try publish(); completion(reply, nil)
+            } catch { completion(nil, error.localizedDescription) }
+        }
+    }
     private func restore(_ loaded: EditorPersistence.Loaded) {
         for (key, data, action) in [("settings", loaded.settings, "restore_settings"),
             ("workspace", loaded.workspace, "restore_workspace")] {
@@ -144,13 +158,16 @@ final class NativeOwner: @unchecked Sendable {
         }
         storageErrors.merge(loaded.errors) { _, new in new }
         initialWorkspaceNeedsSave = loaded.workspaceNeedsSnapshot && storageErrors["workspace"] == nil
-        do { try publish() } catch { receive(nil, error.localizedDescription) }
+        do {
+            if managedWorkspaces { _ = try request(6, JSON(["type": "read_only", "value": true])) }
+            try publish()
+        } catch { receive(nil, error.localizedDescription) }
         reportStorage()
     }
     private func persist(_ snapshot: JSON) throws {
         guard !snapshot["state"].isNull else { return }
         currentSettings = snapshot["state"]["settings"]
-        if !snapshot["workspace_persistence"].isNull {
+        if !managedWorkspaces && !snapshot["workspace_persistence"].isNull {
             if !firstWorkspace || initialWorkspaceNeedsSave {
                 let data = try JSONSerialization.data(withJSONObject: snapshot["workspace_persistence"].raw, options: [.sortedKeys])
                 saveWorkspace(data, updateDefault: !firstWorkspace)
@@ -343,6 +360,9 @@ final class NativeOwner: @unchecked Sendable {
                 try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), width, height, scale, $0))
             }
             self.layer = layer
+            #if DEBUG
+            surfaceSized = true
+            #endif
             try applyInitialActions()
             try publish()
         }
@@ -366,15 +386,33 @@ final class NativeOwner: @unchecked Sendable {
     func resize(width: UInt32, height: UInt32, scale: Float) {
         perform { [self] in
             try check(capy_apple_resize(handle, width, height, scale))
+            #if DEBUG
+            surfaceSized = true
+            #endif
             try applyInitialActions(); try publish()
         }
     }
     private func applyInitialActions() throws {
         #if DEBUG
+        guard workspaceInitialized && surfaceSized else { return }
+        if initialActions.contains(where: { $0["type"].string == "workspace_manager" }) {
+            // Workspace fixture commands have the same idle requirement as
+            // their UI entries. Bundled filter preparation can outlive launch.
+            guard canvasReady && shadersReady && bundledFiltersLoaded,
+                try request(6, JSON(["type": "capture", "generation": 0]))?["idle"].bool == true else { return }
+        }
         // Fixture actions can collapse or resize columns. Apply them once,
         // after restoration and the first real surface size, not at 1×1 startup.
         let actions = initialActions; initialActions = []
         for action in actions { _ = try request(0, action) }
+        #endif
+    }
+    func workspaceDidInitialize() {
+        #if DEBUG
+        perform { [self] in
+            workspaceInitialized = true
+            try applyInitialActions(); try publish()
+        }
         #endif
     }
     func importLayer(_ url: URL) {
@@ -505,6 +543,12 @@ final class NativeOwner: @unchecked Sendable {
                     try publish(); lastSnapshotTime = now
                 }
                 if canvasReady && !bundledFiltersLoaded { try loadBundledFilters() }
+                #if DEBUG
+                if !initialActions.isEmpty {
+                    try applyInitialActions()
+                    if initialActions.isEmpty { try publish() }
+                }
+                #endif
                 if let observation {
                     let state: UInt64 = (canvasReady ? 1 : 0) | (bundledFiltersLoaded ? 2 : 0)
                         | (result == 1 ? 4 : 0) | (shadersReady ? 8 : 0)

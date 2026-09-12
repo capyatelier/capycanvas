@@ -70,6 +70,65 @@ platforms with no required work remaining.
 This scope supersedes the earlier iPad-only goal and the original design
 review's treatment of macOS as a later port.
 
+## Shared Apple workspace library and live previews — 2026-09-12
+
+The workspace library is enabled by default on both Apple targets. Shared Swift
+manager pages use Rust's current compact workspace/saved-layout and toolbar actions.
+The integrated shared changes through `afbc696` include Load Layout on the current
+workspace and temporary live-editor previews for selected workspaces, saved
+layouts and history. Loading a saved layout preserves the workspace identity and
+working brush/color state; history Cancel leaves durable
+capture untouched and Restore creates one undoable layout change. The main
+manager follows the revised shared design without storage administration or
+backup/version controls. Storage transport and retained-history capabilities
+remain covered by direct service checks.
+
+The coordinator covers legacy migration without dual writes, per-scene
+restoration beside a live owner, latest-edit switching, failed-switch unlock,
+workspace/saved-layout/toolbar/history operations and native package delivery. A
+SQLite write lock leaves drawing-owner edits and queries responsive; edits
+accepted during a blocked save survive its acknowledgement. Competing-owner
+recovery preserves in-memory changes. Close waits for an acknowledged lease
+release, canceled close revalidates editing, discarded iPad scenes retire their
+claim, and explicit teardown preserves the last saved data. Read-only ownership
+blocks new contacts and shortcuts while allowing existing ink to finish.
+
+All 367 integrated Rust checks pass (38 Apple, 24 host, 269 UI, 36 workspace;
+one existing hardware host check ignored), plus 14 Windows workspace checks.
+The Windows storage-worker integration preserves both ports' settings policy;
+Apple coordinator checks pass on both presets after that integration.
+The subsequent Android/Web drawer integration passes the shared suite and
+the direct native Mac drawer geometry/action check.
+The actual Swift manager workflows
+pass on both Apple presets, including held-contact metadata edits, saved-layout
+application, selected-row preview without adoption or persistence, preview
+cancellation and history restoration, local toolbar prompts, window
+ownership and package delivery. Approved defaults, saved-layout naming, filtering
+away a preview, rapid selection and dismissal while selection is pending are
+covered directly. Twenty-four AppKit component captures cover both presets,
+two themes, narrow/wide manager widths and workspace/layout/history states.
+They establish component layout evidence, not UIKit or full-editor pixel parity.
+Both final integrated Release targets build with signing enabled.
+
+The focused iPad Simulator history check passes after its Debug fixture waits
+for bundled-filter and document readiness. Both signed physical apps completed
+an isolated ink smoke check and postlude with no renderer errors, rejected input
+or missing presentations. Their one-second measured intervals have no zero-time
+presentations; each app reports one outside that interval. These are launch/ink
+checks, not sustained performance acceptance. The owned validation apps are
+closed and the artist's original apps remain running. The final Mac smoke
+interval has six CPU frames over its 11.11 ms budget; sustained performance
+remains unaccepted. Physical checks include the selected-row preview integration
+and precede the final approved selection defaults, captions and Windows worker
+and Android/Web drawer integrations. Direct workflows and the focused Simulator check cover the dialog
+adjustments; final signed builds, the shared suite and direct coordinator checks
+cover the integrated worker. Full physical
+lifecycle/input coverage, full visual parity and sustained 90 Hz Mac / 120 Hz
+iPad acceptance remain open.
+See [Apple persistence](../../apps/layer-apple/PERSISTENCE.md#workspace-library)
+for implementation boundaries and reproduction commands. Raw logs, captures and
+private platform details stay in ignored artifacts.
+
 ## Incremental Apple workspace publication — 2026-09-11
 
 Both Apple targets now consume the shared incremental `workspace_update`
@@ -585,7 +644,7 @@ build is only build evidence.
 | 2. Launch, live canvas under header, idle scheduling and basic input | Physical app launches. Simulator launch/geometry capture passes. User confirms basic Pencil pressure, pen-up and Undo/Redo; full lifecycle checks remain. | Launch/render, full-window geometry, mouse stroke and keyboard undo/redo checked. Shared frame admission and final-state flush implemented; lifecycle/idle measurements remain. |
 | 3. Complete input contract and bounded transport | Coalescing, prediction and estimated corrections implemented with synthetic oracles. Basic physical Pencil/palm check passes; correction delivery, full sensors/navigation/interruption coverage remain. | Mouse/tablet/proximity, wheel, trackpad and keyboard adapters exist. Physical sensors, complete shortcuts, interruption coverage and bounded transport remain. |
 | 4. Complete feature inventory and editor/settings implementation | Initial shared editor controls exist; full inventory, specialized controls and all workflows remain. | Same shared controls compile; full inventory and native desktop actions/services remain. |
-| 5. Document/settings/workspace persistence and lifecycle | Atomic preferences and private artwork recovery implemented; Simulator settings/workspace and artwork restart checks pass. Manual Save/Open, recovery and checkpoint policy pass direct checks; provider delivery and full physical lifecycle matrix remain. | Same persistence and recovery; native restart and owner isolation pass. Manual Save/Open, recovery and unsaved close pass direct checks; full window/display/sleep/memory-pressure matrix remains. |
+| 5. Document/settings/workspace persistence and lifecycle | Atomic preferences, private artwork recovery and SQLite workspace library implemented. Migration, scene ownership, switching and history pass direct checks; Simulator restart and history Restore pass. Provider delivery and full physical lifecycle matrix remain. | Same persistence, recovery and workspace library. Native restart, owner isolation, Save/Open, recovery, workspace switching and failed/canceled close pass direct checks; full window/display/sleep/memory-pressure matrix remains. |
 | 6. Progressive visual acceptance for every editor component/state | Matching initial simulator/Chrome capture and full pixel report exist; baseline fails parity. Device captures and complete fixture matrix remain. | Matching native Mac/Chrome initial captures exist; baseline fails parity. Complete fixture matrix remains. |
 | 7. Hardware performance, sustained sessions and delivery | Shared recorder and five synthetic profiles implemented. One physical ten-minute 4K watercolor run completes; CPU p99 is 9.120 ms. Full matrix, frame-budget tails, physical latency and overhead calibration remain. | Same profiles; one native ten-minute 4K watercolor run completes. Current validation target is 90 Hz. Full matrix, memory growth, physical latency and overhead calibration remain. The user deferred 120 Hz testing until suitable hardware is available. |
 

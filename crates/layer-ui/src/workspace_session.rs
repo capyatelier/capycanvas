@@ -115,7 +115,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .tiles_mut()?
                 .clear();
             layout.rename_toolbar(panel, &name)?;
-            layout.insert_tools(panel, None, &controls)?;
+            if !controls.is_empty() {
+                layout.insert_tools(panel, None, &controls)?;
+            }
             panel
         } else {
             let name = layout.unused_toolbar_name(name);

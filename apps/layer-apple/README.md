@@ -42,6 +42,16 @@ Tool Set, Tool, Brush size, Color, Navigator/Diagnostics,
 Properties/Filters and Layers. Restoring a saved workspace preserves its layout
 and toolbar contents, including workspaces from earlier Apple builds.
 
+Both apps include Manage Workspaces, Saved Layouts, Layout History and toolbar
+management backed by the shared SQLite library. Selecting a workspace or saved
+layout previews it in the editor; Switch or Load applies the selection. Cancel
+restores the previous layout. Load Layout opens Saved Layouts with no selection;
+filtering away a preview also restores the previous arrangement. Loading a saved layout preserves the current
+workspace's identity, brush settings, colors and artwork. Shared Rust owns
+availability, forms, history and storage policy; the Apple coordinator keeps
+database work off the drawing owner. See [Apple persistence](PERSISTENCE.md#workspace-library)
+for migration, window ownership and direct workflow checks.
+
 Both hosts support all five shared toolbar styles: small, medium, large, medium
 labeled and large labeled. Ribbons, floating panels, content drawers and partial
 Zen use the Rust icon sizes, label line counts and weight. Labeled tiles place

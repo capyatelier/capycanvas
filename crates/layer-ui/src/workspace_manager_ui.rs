@@ -22,7 +22,7 @@ pub struct WorkspaceChoice {
     pub id: String,
     pub name: String,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ManagedWorkspace {
     pub id: String,
     pub name: String,

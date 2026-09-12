@@ -31,7 +31,7 @@ final class EditorPersistence: @unchecked Sendable {
         #endif
         return base
     }
-    func load(scene: String, observer: UUID, changed: @escaping @Sendable (SettingsChange) -> Void,
+    func load(scene: String, observer: UUID, managedWorkspaces: Bool = false, changed: @escaping @Sendable (SettingsChange) -> Void,
         completion: @escaping @Sendable (Loaded) -> Void) {
         queue.async { [self] in
             observers[observer] = changed
@@ -39,14 +39,16 @@ final class EditorPersistence: @unchecked Sendable {
             if let root {
                 do { result.settings = try AtomicJSONFile.read(root.appendingPathComponent("settings.json")) }
                 catch { result.errors["settings"] = "Could not restore settings: \(error.localizedDescription)" }
-                do {
-                    let sceneURL = workspaceURL(scene)
-                    result.workspace = try AtomicJSONFile.read(sceneURL)
-                    if result.workspace == nil {
-                        result.workspace = try AtomicJSONFile.read(root.appendingPathComponent("workspace.json"))
-                        result.workspaceNeedsSnapshot = true
-                    }
-                } catch { result.errors["workspace"] = "Could not restore workspace: \(error.localizedDescription)" }
+                if !managedWorkspaces {
+                    do {
+                        let sceneURL = workspaceURL(scene)
+                        result.workspace = try AtomicJSONFile.read(sceneURL)
+                        if result.workspace == nil {
+                            result.workspace = try AtomicJSONFile.read(root.appendingPathComponent("workspace.json"))
+                            result.workspaceNeedsSnapshot = true
+                        }
+                    } catch { result.errors["workspace"] = "Could not restore workspace: \(error.localizedDescription)" }
+                }
             }
             completion(result)
         }

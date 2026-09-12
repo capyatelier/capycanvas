@@ -1,7 +1,14 @@
 import SwiftUI
 
 @main struct CapyCanvasApp: App {
+    @UIApplicationDelegateAdaptor(WorkspaceSceneLifecycle.self) private var lifecycle
     var body: some Scene { WindowGroup(id: "editor") { EditorSessionScene { IPadEditorScene(scene: $0) } } }
+}
+
+@MainActor private final class WorkspaceSceneLifecycle: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
+        EditorStore.discardSceneSessions(Set(sceneSessions.map(\.persistentIdentifier)))
+    }
 }
 
 private struct IPadEditorScene: View {
@@ -20,9 +27,15 @@ private struct IPadEditorScene: View {
             .onChange(of: phase) { _, next in
                 if next != .active {
                     store.input(["type": "blur"])
+                    store.workspaceLibrary?.suspend()
                     PersistenceBackground.flush(store)
                 }
-                else { store.wake?() }
+                else {
+                    if let library = store.workspaceLibrary {
+                        Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
+                    }
+                    store.wake?()
+                }
             }
     }
 }

@@ -3,6 +3,10 @@
 mod manager;
 mod presentation;
 pub use presentation::*;
+mod prompts;
+pub use prompts::*;
+mod history_presentation;
+pub use history_presentation::*;
 mod model;
 mod package;
 mod protocol;

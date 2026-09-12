@@ -5,6 +5,8 @@ mod project;
 pub use project::*;
 mod previews;
 pub use previews::*;
+mod workspaces;
+pub use workspaces::*;
 #[cfg(test)]
 mod tests;
 use layer_host::{NativeHost, PointerBatch};
@@ -183,6 +185,7 @@ pub unsafe extern "C" fn capy_apple_request(
                 Some(serde_json::to_value(reply).map_err(|e| e.to_string())?)
             }
             2 => Some(a.host.query(value)?),
+            6 => Some(workspaces::session_request(&mut a.host, value)?),
             4 => Some(
                 serde_json::to_value(
                     serde_json::from_value::<layer_ui::NumericRequest>(value)

@@ -2,6 +2,7 @@
 set -euo pipefail
 CAPY_APP="$(cd "$(dirname "$0")/.." && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 CAPY_CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/capy-project-files.XXXXXX")"
 trap 'rm -rf "$CAPY_CHECK_DIR"' EXIT
 CAPY_TARGET_DIR="${CARGO_TARGET_DIR:-$CAPY_APP/../../target}"

@@ -9,6 +9,7 @@ use std::{
 struct TestStore {
     worker: StoreWorker,
     fail: Cell<bool>,
+    fail_release: Cell<bool>,
     lose_reply: Cell<bool>,
     block_receipts: Cell<bool>,
     gate: RefCell<Option<async_channel::Receiver<()>>>,
@@ -16,6 +17,12 @@ struct TestStore {
 }
 impl WorkspaceStore for TestStore {
     async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
+        if matches!(&request, StoreRequest::Release { .. }) && self.fail_release.get() {
+            return Err(StoreError::new(
+                ErrorKind::FailedWrite,
+                "Simulated release failure",
+            ));
+        }
         if matches!(request, StoreRequest::Receipt { .. }) && self.block_receipts.get() {
             return Err(StoreError::new(
                 ErrorKind::Unavailable,
@@ -59,6 +66,7 @@ impl Fixture {
             TestStore {
                 worker,
                 fail: Cell::new(false),
+                fail_release: Cell::new(false),
                 lose_reply: Cell::new(false),
                 block_receipts: Cell::new(false),
                 gate: RefCell::new(None),
@@ -75,6 +83,151 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.directory);
     }
+}
+
+#[test]
+fn close_retains_ownership_until_release_is_acknowledged_and_can_be_retried() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let id = m.active_id().unwrap();
+        let lease = m.lease_expires_at_ms();
+        m.store.fail_release.set(true);
+        assert!(m.close().await.is_err());
+        assert_eq!(m.lease_expires_at_ms(), lease);
+        assert!(m.load(&id).await.unwrap().claim.is_some());
+        m.store.fail_release.set(false);
+        m.close().await.unwrap();
+        assert!(m.load(&id).await.unwrap().claim.is_none());
+        assert!(m.lease_expires_at_ms().is_none());
+        m.revalidate_owner(2_000).await.unwrap();
+        assert!(m.load(&id).await.unwrap().claim.is_some());
+    });
+}
+
+#[test]
+fn legacy_scenes_migrate_atomically_once_with_fallback_aliases_and_original_baselines() {
+    pollster::block_on(async {
+        for platform in [Platform::Ios, Platform::Mac] {
+            let f = Fixture::new();
+            let m = &f.manager;
+            let before = m.items().len();
+            let mut workspace = layer_ui::WorkspaceState::for_platform(platform);
+            workspace.zen_mode = true;
+            let scenes = vec![
+                ("apple:scene:one".into(), workspace.clone()),
+                ("apple:scene:two".into(), workspace.clone()),
+            ];
+            let fallback = ("apple:fallback".into(), workspace.clone());
+            let mapping = m
+                .migrate_legacy(&scenes, Some(&fallback), 2000)
+                .await
+                .unwrap();
+            assert_ne!(mapping["apple:scene:one"], mapping["apple:scene:two"]);
+            assert_eq!(mapping["apple:fallback"], mapping["apple:scene:one"]);
+            assert_eq!(m.items().len(), before + 2);
+            let entity = m.load(&mapping["apple:scene:one"]).await.unwrap().entity;
+            let capture = entity.capture().unwrap();
+            assert!(capture.working.zen_mode && capture.history.undo.is_empty());
+            assert_eq!(capture.history.layout(), &workspace.layout);
+            let ItemContent::Workspace {
+                baseline, origin, ..
+            } = entity.content
+            else {
+                panic!()
+            };
+            assert_eq!(baseline, workspace.layout);
+            assert!(origin.is_none());
+            // A later legacy file cannot replace acknowledged database content.
+            let mut stale = scenes.clone();
+            stale[0].1.version = 999;
+            assert_eq!(
+                m.migrate_legacy(&stale, Some(&fallback), 3000)
+                    .await
+                    .unwrap(),
+                mapping
+            );
+            assert_eq!(m.items().len(), before + 2);
+            let invalid = vec![
+                ("apple:new:valid".into(), workspace.clone()),
+                ("apple:new:invalid".into(), stale[0].1.clone()),
+            ];
+            assert!(m.migrate_legacy(&invalid, None, 4000).await.is_err());
+            assert!(matches!(
+                m.store
+                    .execute(StoreRequest::LegacyImport {
+                        source: "apple:new:valid".into()
+                    })
+                    .await
+                    .unwrap(),
+                StoreResponse::Binding(None)
+            ));
+            let separate = (
+                "apple:other:fallback".into(),
+                layer_ui::WorkspaceState::for_platform(platform),
+            );
+            let other = m.migrate_legacy(&[], Some(&separate), 5000).await.unwrap();
+            assert_ne!(other["apple:other:fallback"], mapping["apple:fallback"]);
+            assert_eq!(m.items().len(), before + 3);
+            m.bind_resume_key("apple:resume:one").await.unwrap();
+            assert!(
+                matches!(m.store.execute(StoreRequest::Binding { key: "apple:resume:one".into() }).await.unwrap(), StoreResponse::Binding(Some(id)) if Some(id.as_str())==m.active_id().as_deref())
+            );
+        }
+    });
+}
+
+#[test]
+fn concurrent_legacy_import_uses_the_winning_mapping_and_retires_its_duplicate_delivery() {
+    struct RacingStore {
+        worker: StoreWorker,
+        scenes: Vec<(String, layer_ui::WorkspaceState)>,
+        inject: Cell<bool>,
+    }
+    impl WorkspaceStore for RacingStore {
+        async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
+            if matches!(&request, StoreRequest::Commit { batch } if !batch.legacy_imports.is_empty())
+                && self.inject.replace(false)
+            {
+                let other = WorkspaceManager::new(self.worker.clone(), Platform::Mac);
+                other.migrate_legacy(&self.scenes, None, 2000).await?;
+            }
+            self.worker.execute(request).await
+        }
+    }
+    pollster::block_on(async {
+        for partial_overlap in [false, true] {
+            let f = Fixture::new();
+            let mut scenes = vec![(
+                "apple:scene:race".into(),
+                layer_ui::WorkspaceState::for_platform(Platform::Mac),
+            )];
+            let winner_sources = scenes.clone();
+            if partial_overlap {
+                scenes.push(("apple:scene:later".into(), scenes[0].1.clone()));
+            }
+            let fallback = ("apple:fallback".into(), scenes[0].1.clone());
+            let m = WorkspaceManager::new(
+                RacingStore {
+                    worker: f.manager.store.worker.clone(),
+                    scenes: winner_sources,
+                    inject: Cell::new(true),
+                },
+                Platform::Mac,
+            );
+            let mapping = m
+                .migrate_legacy(&scenes, Some(&fallback), 2000)
+                .await
+                .unwrap();
+            assert_eq!(m.items().len(), f.manager.items().len() + scenes.len());
+            assert_eq!(mapping["apple:fallback"], mapping["apple:scene:race"]);
+            assert!(m.load(&mapping["apple:scene:race"]).await.is_ok());
+            assert!(m.error().is_none() && !m.has_failed_operation());
+            assert!(
+                matches!(m.store.execute(StoreRequest::Pending).await.unwrap(), StoreResponse::Pending(pending) if pending.is_empty())
+            );
+        }
+    });
 }
 
 #[test]

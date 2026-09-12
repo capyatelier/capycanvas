@@ -13,6 +13,14 @@ CapyApple *capy_apple_create(uint32_t platform); /* 0 iPadOS, 1 macOS */
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
+typedef struct CapyWorkspaceLibrary CapyWorkspaceLibrary;
+/* A separate serial workspace owner, never the UI or input/render queue.
+   SQLite I/O is shared across windows by the Rust storage worker.
+   Replies are owned JSON envelopes {value,status} or {error,status}.
+   Flush/close explicitly before destroy; destroy alone cannot confirm saving. */
+CapyWorkspaceLibrary *capy_workspace_library_create(uint32_t platform, const char *directory, const char *resume_key);
+char *capy_workspace_library_request(CapyWorkspaceLibrary *library, const char *json);
+void capy_workspace_library_destroy(CapyWorkspaceLibrary *library);
 typedef struct CapyProjectTask CapyProjectTask;
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
@@ -41,7 +49,8 @@ char *capy_apple_numeric(const char *json);
    1 HLS. Result: 0 miss/invalid, 1 hue ring, 2 field. No session/GPU access. */
 uint32_t capy_apple_color_hit(float x, float y, float size, uint32_t space);
 /* request: 0 action, 1 UI input, 2 query, 3 compatibility snapshot, 4 numeric control,
- * 5 incremental update (full models or workspace/camera presentation).
+ * 5 incremental update (full models or workspace/camera presentation),
+ * 6 workspace session capture/transition/adoption (no database I/O).
    Returned JSON is owned; release using capy_apple_string_free. NULL is either
    no changed snapshot or failure (consult capy_apple_error). */
 char *capy_apple_request(CapyApple *app, uint32_t request, const char *json);

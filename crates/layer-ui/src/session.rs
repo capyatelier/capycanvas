@@ -512,6 +512,23 @@ impl<R: CanvasRenderer> UiSession<R> {
             reply.handled = true;
             return Ok(reply);
         }
+        if self.workspace_read_only
+            && matches!(
+                &input,
+                UiInput::Key { pressed: true, .. }
+                    | UiInput::Pointer {
+                        phase: ContactPhase::Down,
+                        ..
+                    }
+                    | UiInput::Chrome {
+                        event: ChromeEvent::Contact { .. },
+                        ..
+                    }
+            )
+        {
+            reply.handled = true;
+            return Ok(reply);
+        }
         let mut released_chrome_pin = false;
         match input {
             UiInput::Chrome {
@@ -1551,6 +1568,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 UiAction::WorkspaceManager { .. }
                     | UiAction::CompleteRequest { .. }
                     | UiAction::CloseSettings
+                    | UiAction::RestoreSettings { .. }
                     | UiAction::MeasureColumnDrawers { .. }
                     | UiAction::MeasureDrawerTiles { .. }
                     | UiAction::MeasureColumnScroll { .. }
@@ -1585,6 +1603,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 &action,
                 UiAction::CompleteRequest { .. }
                     | UiAction::CloseSettings
+                    | UiAction::RestoreSettings { .. }
                     | UiAction::MeasureColumnDrawers { .. }
                     | UiAction::MeasureDrawerTiles { .. }
                     | UiAction::MeasureColumnScroll { .. }
@@ -2564,7 +2583,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Raw records retain platform timestamp/history/prediction metadata. A
     /// full queue returns the untouched record; hosts must retry after a frame.
     pub fn pen(&mut self, event: PenEvent) -> Result<(), PenEvent> {
-        if self.workspace_transition {
+        if self.workspace_transition || (self.workspace_read_only && event.phase == PenPhase::Down)
+        {
             return Ok(());
         }
         if matches!(self.layer_interaction.tool, LayerCanvasTool::Region { .. }) {
@@ -4015,6 +4035,40 @@ mod tests {
     }
 
     #[test]
+    fn read_only_workspace_rejects_new_contacts_and_keys_but_finishes_existing_ink() {
+        let mut s = session();
+        let before = s.engine.document().clone();
+        s.set_workspace_read_only(true);
+        s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+        s.pen(event(&s, 2, PenPhase::Move, 1.)).unwrap();
+        s.pen(event(&s, 3, PenPhase::Up, 1.)).unwrap();
+        s.frame(4, 4).unwrap();
+        assert_eq!(s.engine.document(), &before);
+        let reply = s
+            .input(UiInput::Key {
+                key: "b".into(),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::default(),
+                editing: false,
+                divider: None,
+            })
+            .unwrap();
+        assert!(reply.handled && s.interaction.keys.is_empty());
+        s.set_workspace_read_only(false);
+        s.pen(event(&s, 5, PenPhase::Down, 1.)).unwrap();
+        s.frame(6, 6).unwrap();
+        s.set_workspace_read_only(true);
+        s.pen(event(&s, 7, PenPhase::Up, 1.)).unwrap();
+        s.frame(8, 8).unwrap();
+        assert_ne!(s.engine.document(), &before);
+        s.require_workspace_idle().unwrap();
+        s.set_workspace_read_only(false);
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().layers, before.layers);
+    }
+
+    #[test]
     fn pending_workspace_adoption_blocks_new_input_without_touching_artwork() {
         let mut s = session();
         let capture = s.capture_workspace().unwrap();
@@ -4086,6 +4140,94 @@ mod tests {
         assert_eq!(durable_layout(&s.state.workspace.layout), customized);
         assert_eq!(s.workspace_working_state(), working);
         assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 4);
+    }
+
+    #[test]
+    fn host_acknowledgements_finish_during_workspace_transition_and_ownership_recovery() {
+        let mut s = session();
+        for read_only in [false, true] {
+            s.set_workspace_read_only(false);
+            s.dispatch(UiAction::SetTheme {
+                theme: Some(Theme::Dark),
+            })
+            .unwrap();
+            let request = s
+                .state
+                .requests
+                .iter()
+                .find(|r| matches!(r.kind, HostRequestKind::SaveSettings { .. }))
+                .unwrap()
+                .id;
+            let artwork = s.engine.document().clone();
+            if read_only {
+                s.set_workspace_read_only(true);
+            } else {
+                s.begin_workspace_transition().unwrap();
+            }
+            s.dispatch(UiAction::CompleteRequest {
+                id: request,
+                error: None,
+            })
+            .unwrap();
+            assert!(!s.state.requests.iter().any(|r| r.id == request));
+            let workspace = s.capture_workspace().unwrap();
+            let mut settings = s.state.settings.clone();
+            settings.theme = Some(Theme::Light);
+            s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
+            assert_eq!(s.state.settings.theme, Some(Theme::Light));
+            assert_eq!(s.capture_workspace().unwrap(), workspace);
+            assert!(s.dispatch(UiAction::SetBrushSize { value: 79. }).is_err());
+            assert_eq!(s.engine.document(), &artwork);
+            s.end_workspace_transition();
+        }
+    }
+
+    #[test]
+    fn replacing_a_toolbar_with_an_empty_library_entry_preserves_placement_and_undo() {
+        let mut s = session();
+        let before = s.capture_workspace().unwrap();
+        let source = before
+            .history
+            .layout()
+            .panels
+            .iter()
+            .find(|p| p.id.kind() == PanelKind::Tiles && !p.tiles().is_empty())
+            .unwrap()
+            .clone();
+        let placement = s.state.workspace.layout.panel_group(source.id);
+        let mut empty = source.clone();
+        if let PanelContent::Toolbar { name, tiles } = &mut empty.content {
+            *name = "Empty Library Toolbar".into();
+            tiles.clear();
+        }
+        let artwork = s.engine.document().clone();
+        s.install_workspace_toolbar(empty, Some(source.id), None)
+            .unwrap();
+        assert!(
+            s.state
+                .workspace
+                .layout
+                .panel(source.id)
+                .unwrap()
+                .tiles()
+                .is_empty()
+        );
+        assert_eq!(s.state.workspace.layout.panel_group(source.id), placement);
+        assert_eq!(s.workspace_working_state(), before.working);
+        invoke(&mut s, CommandId::UndoWorkspace);
+        assert_eq!(s.state.workspace.layout.panel(source.id).unwrap(), &source);
+        invoke(&mut s, CommandId::RedoWorkspace);
+        assert!(
+            s.state
+                .workspace
+                .layout
+                .panel(source.id)
+                .unwrap()
+                .tiles()
+                .is_empty()
+        );
+        assert_eq!(s.workspace_working_state(), before.working);
+        assert_eq!(s.engine.document(), &artwork);
     }
 
     #[test]

@@ -52,6 +52,11 @@ final class CanvasView: UIView {
         super.didMoveToWindow()
         sceneGeometry = nil
         if let window {
+            store.systemSceneID = window.windowScene?.session.persistentIdentifier
+            store.focusWindow = { [weak window] in
+                guard let scene = window?.windowScene else { return }
+                UIApplication.shared.requestSceneSessionActivation(scene.session, userActivity: nil, options: nil)
+            }
             sceneGeometry = window.windowScene?.observe(\.effectiveGeometry, options: [.initial, .new]) { [weak self] scene, _ in
                 DispatchQueue.main.async {
                     guard let self, self.window?.windowScene === scene else { return }
@@ -73,6 +78,7 @@ final class CanvasView: UIView {
             becomeFirstResponder()
             setNeedsLayout()
         } else {
+            store.focusWindow = nil
             if store.state["document_file"]["close_ready"].bool { store.recovery.close() }
             stop()
         }

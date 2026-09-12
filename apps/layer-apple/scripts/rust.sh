@@ -11,4 +11,12 @@ esac
 cd "$CAPY_ROOT"
 CAPY_PROFILE=dev
 if [[ "${CONFIGURATION:-Debug}" == Release ]]; then CAPY_PROFILE=release; fi
-env -u SDKROOT cargo build --locked -p layer-apple --target "$CAPY_TARGET" --profile "$CAPY_PROFILE"
+if [[ "$CAPY_TARGET" == aarch64-apple-darwin ]]; then
+  # Xcode invokes toolchain clang directly; bundled SQLite needs the SDK's
+  # standard C headers. Native host and target use the same macOS SDK here.
+  export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+else
+  # Cross builds resolve host and iOS target SDKs independently.
+  unset SDKROOT
+fi
+cargo build --locked -p layer-apple --target "$CAPY_TARGET" --profile "$CAPY_PROFILE"

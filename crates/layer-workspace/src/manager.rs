@@ -290,23 +290,23 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         }
     }
     pub async fn release(&self, entity: &StoredEntity) {
+        let _ = self.release_checked(entity).await;
+    }
+    async fn release_checked(&self, entity: &StoredEntity) -> Result<()> {
         if let Some(claim) = &entity.claim {
-            let _ = self
-                .store
+            self.store
                 .execute(StoreRequest::Release {
                     id: entity.entity.id.clone(),
                     owner: self.owner.clone(),
                     fence: claim.fence.to_string(),
                 })
-                .await;
+                .await?;
         }
+        Ok(())
     }
-    pub async fn initialize(&self, now: u64) -> Result<StoredEntity> {
-        if self.has_failed_operation()
-            && let Some(incoming) = self.retry_failed_operation().await?
-        {
-            return Ok(incoming);
-        }
+    /// Populate built-ins without claiming or creating a window workspace.
+    /// Native scene restoration can then prefer its own durable binding.
+    pub async fn initialize_catalog(&self, now: u64) -> Result<()> {
         self.store
             .execute(StoreRequest::Maintenance {
                 owner: None,
@@ -343,6 +343,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             }
             self.refresh().await?;
         }
+        Ok(())
+    }
+    pub async fn initialize(&self, now: u64) -> Result<StoredEntity> {
+        if self.has_failed_operation()
+            && let Some(incoming) = self.retry_failed_operation().await?
+        {
+            return Ok(incoming);
+        }
+        self.initialize_catalog(now).await?;
         let binding = match self
             .store
             .execute(StoreRequest::Binding {
@@ -588,6 +597,14 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             .and_then(|s| s.claim.as_ref())
             .is_some_and(|c| c.owner == self.owner && c.expires_at_ms > now)
     }
+    pub fn lease_expires_at_ms(&self) -> Option<u64> {
+        self.state
+            .borrow()
+            .saved
+            .as_ref()
+            .and_then(|s| s.claim.as_ref())
+            .map(|c| c.expires_at_ms)
+    }
     /// Resume an expired owner only after a coherent claim proves no intervening
     /// writes. Dirty memory is preserved; an unresolved old-fence delivery needs
     /// explicit recovery as a new workspace, never silent payload mutation.
@@ -765,9 +782,21 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     }
     pub async fn close(&self) -> Result<()> {
         self.flush().await?;
+        self.release_owner().await
+    }
+
+    /// Release only this owner's fenced claim. Teardown may use this after a
+    /// failed save; it neither overwrites the saved copy nor discards recovery.
+    pub async fn release_owner(&self) -> Result<()> {
         let saved = self.state.borrow().saved.clone();
         if let Some(saved) = saved {
-            self.release(&saved).await;
+            self.release_checked(&saved).await?;
+            if let Some(current) = self.state.borrow_mut().saved.as_mut()
+                && current.entity.id == saved.entity.id
+                && current.claim == saved.claim
+            {
+                current.claim = None;
+            }
         }
         Ok(())
     }
@@ -822,3 +851,6 @@ mod operations;
 
 #[path = "manager_recovery.rs"]
 mod recovery;
+
+#[path = "manager_migration.rs"]
+mod migration;

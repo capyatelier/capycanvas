@@ -26,12 +26,24 @@ private struct MacEditorScene: View {
 }
 
 @MainActor private final class PersistenceTermination: NSObject, NSApplicationDelegate {
+    private var sleepObservers: [NSObjectProtocol] = []
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let center = NSWorkspace.shared.notificationCenter
+        sleepObservers = [
+            center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { EditorStore.suspendWorkspaces() }
+            },
+            center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { EditorStore.resumeWorkspaces() }
+            }
+        ]
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // AppKit must receive terminateLater before its eventual reply.
         DispatchQueue.main.async { EditorStore.confirmCloseAll { allowed in
             guard allowed else { sender.reply(toApplicationShouldTerminate: false); return }
-            EditorStore.flushAll { saved in
-            if saved { EditorStore.finishClosingAll { sender.reply(toApplicationShouldTerminate: true) } }
+            EditorStore.finishClosingAll { saved in
+            if saved { sender.reply(toApplicationShouldTerminate: true) }
             else {
                 let alert = NSAlert()
                 alert.messageText = "Some changes could not be saved."
@@ -39,7 +51,7 @@ private struct MacEditorScene: View {
                 alert.addButton(withTitle: "Return to App"); alert.addButton(withTitle: "Quit Anyway")
                 let quit = alert.runModal() == .alertSecondButtonReturn
                 if !quit { EditorStore.resetCloseApprovals() }
-                if quit { EditorStore.finishClosingAll { sender.reply(toApplicationShouldTerminate: true) } }
+                if quit { EditorStore.detachWorkspaceOwners { sender.reply(toApplicationShouldTerminate: true) } }
                 else { sender.reply(toApplicationShouldTerminate: false) }
             }
             }

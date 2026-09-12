@@ -19,7 +19,11 @@ import SwiftUI
     var cameraRevision: UInt64 = 0
     var wake: (() -> Void)?
     var interruptInput: (() -> Void)?
+    var focusWindow: (() -> Void)?
+    var systemSceneID: String?
     private(set) var native: NativeOwner?
+    private(set) var workspaceLibrary: WorkspaceLibrary?
+    lazy var workspaceManager = WorkspaceManager(store: self)
     private var drawingWorkload: DrawingWorkload?
     lazy var layerThumbnails = LayerThumbnails(store: self)
     lazy var filterPreviews = FilterPreviews(store: self)
@@ -33,7 +37,8 @@ import SwiftUI
     var state: SnapshotProjection { ui.state }
     var workspaceMotion: WorkspaceMotion { ui.workspace }
 
-    init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared) {
+    init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared,
+        managedWorkspaces: Bool = true) {
         do {
             let workload = try DrawingWorkloadPlan.configured()
             // Performance runs never read or replace the artist's preferences
@@ -41,12 +46,19 @@ import SwiftUI
             let storage = workload == nil ? persistence : EditorPersistence(root:
                 FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
+            let usesWorkspaceLibrary = managedWorkspaces && storage.root != nil
             native = try NativeOwner(platform: platform, scene: scene, persistence: storage,
-                traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata) { [weak self] snapshot, failure in
+                traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata,
+                managedWorkspaces: usesWorkspaceLibrary) { [weak self] snapshot, failure in
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
                 DispatchQueue.main.async { self?.catalog = result ?? JSON() }
+            }
+            if usesWorkspaceLibrary, let root = storage.root {
+                let library = try WorkspaceLibrary(store: self, platform: platform, root: root, scene: scene)
+                workspaceLibrary = library
+                Task { do { try await library.start() } catch { library.error = error.localizedDescription } }
             }
             if let workload { drawingWorkload = DrawingWorkload(store: self, plan: workload) }
         } catch { failure = error.localizedDescription }
@@ -70,6 +82,8 @@ import SwiftUI
                 recovery.observe(state["document_file"])
                 contentDrawers.refresh()
                 workspace.refresh()
+                workspaceLibrary?.observe()
+                if workspaceLibrary != nil { workspaceManager.receive(state.json) }
             case .workspace, .camera:
                 // Camera patches update the readout alone; dragging the canvas
                 // must not rebuild every panel and brush preview at input rate.
@@ -86,7 +100,15 @@ import SwiftUI
         guard let native else { completion(false); return }
         native.flushPersistence { [weak self] succeeded in DispatchQueue.main.async {
             guard let self else { completion(false); return }
-            self.recovery.flush { completion(succeeded && $0) }
+            Task { @MainActor in
+                var workspaceSaved = true
+                if let library = self.workspaceLibrary {
+                    do { try await library.flush() }
+                    catch { library.error = error.localizedDescription; workspaceSaved = false }
+                }
+                let saved = succeeded && workspaceSaved
+                self.recovery.flush { completion(saved && $0) }
+            }
         } }
     }
     static func flushAll(_ completion: @escaping @MainActor (Bool) -> Void) {
@@ -117,13 +139,78 @@ import SwiftUI
     static func resetCloseApprovals() {
         for live in instances.allObjects { live.native?.documentRequest(closeDecision: 4) { _ in } }
     }
-    static func finishClosingAll(_ completion: @escaping @MainActor () -> Void) {
-        let stores = instances.allObjects
-        guard !stores.isEmpty else { completion(); return }
-        var remaining = stores.count
-        for store in stores {
-            store.recovery.close { _ in remaining -= 1; if remaining == 0 { completion() } }
+    static func workspaceOwner(id: String, owner: String) -> EditorStore? {
+        instances.allObjects.first {
+            $0.workspaceLibrary?.ready == true && $0.workspaceLibrary?.status["active_id"].string == id
+                && $0.workspaceLibrary?.status["owner"].string == owner
         }
+    }
+    static func suspendWorkspaces() {
+        for store in instances.allObjects {
+            store.input(["type": "blur"])
+            store.workspaceLibrary?.suspend()
+            store.flushPersistence { _ in }
+        }
+    }
+    static func resumeWorkspaces() {
+        for store in instances.allObjects {
+            if let library = store.workspaceLibrary {
+                Task { do { try await library.resume() } catch { library.error = error.localizedDescription } }
+            }
+            store.wake?()
+        }
+    }
+    static func discardSceneSessions(_ identifiers: Set<String>) {
+        for store in instances.allObjects where store.systemSceneID.map(identifiers.contains) == true {
+            Task { @MainActor in
+                do { try await store.workspaceLibrary?.close() }
+                catch { await store.workspaceLibrary?.detach() }
+                // Keep private artwork recovery for an OS-discarded document.
+            }
+        }
+    }
+    static func detachWorkspaceOwners(_ completion: @escaping @MainActor () -> Void) {
+        let stores = instances.allObjects
+        Task { @MainActor in
+            for store in stores { await store.workspaceLibrary?.detach() }
+            completion()
+        }
+    }
+    func prepareClose(_ completion: @escaping @MainActor (Bool) -> Void) {
+        flushPersistence { [self] saved in
+            guard saved else { completion(false); return }
+            Task { @MainActor in
+                do { try await workspaceLibrary?.close() }
+                catch { workspaceLibrary?.error = error.localizedDescription; completion(false); return }
+                recovery.close { [self] saved in
+                    if saved { completion(true) }
+                    else { cancelPreparedClose { completion(false) } }
+                }
+            }
+        }
+    }
+    func cancelPreparedClose(_ completion: @escaping @MainActor () -> Void = {}) {
+        native?.documentRequest(closeDecision: 4) { _ in }
+        recovery.resume()
+        Task { @MainActor in
+            do { try await workspaceLibrary?.reopenAfterCancelledClose() }
+            catch { workspaceLibrary?.error = error.localizedDescription }
+            completion()
+        }
+    }
+    static func finishClosingAll(_ completion: @escaping @MainActor (Bool) -> Void) {
+        let stores = instances.allObjects
+        var pending = stores
+        func cancel() {
+            guard !stores.isEmpty else { completion(false); return }
+            var count = stores.count
+            for store in stores { store.cancelPreparedClose { count -= 1; if count == 0 { completion(false) } } }
+        }
+        func next() {
+            guard let store = pending.popLast() else { completion(true); return }
+            store.prepareClose { saved in if saved { next() } else { cancel() } }
+        }
+        next()
     }
     func dispatch(_ action: JSON) { native?.submit(0, action); wake?() }
     func dispatch(_ value: [String: Any]) { dispatch(JSON(value)) }

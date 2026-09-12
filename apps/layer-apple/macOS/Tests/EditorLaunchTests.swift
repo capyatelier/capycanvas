@@ -3,6 +3,10 @@ import XCTest
 final class EditorLaunchTests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    @MainActor func testWorkspaceLibraryHistory() {
+        checkWorkspaceLibraryHistory(in: editorTestApplication())
+    }
+
     @MainActor func testDrawerDragAndDock() {
         let app = editorTestApplication()
         app.launchArguments += ["-ApplePersistenceIgnoreState", "YES"]
