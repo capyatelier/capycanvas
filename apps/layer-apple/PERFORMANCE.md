@@ -18,6 +18,70 @@ and does not block current Mac milestones. The iPad target remains **120 Hz
 
 ## Short GPU execution captures
 
+### Correlating native drawing frames
+
+`tools/performance/metal_frames.py` joins a Metal recording to the native JSONL
+from the same process. Export `time-info` and
+`metal-application-encoders-list` alongside `metal-gpu-intervals` from one trace
+run. The clock anchor and rational Mach timebase convert Instruments timestamps
+to the native absolute clock; wall-clock dates are not used.
+Apple documents that [`CACurrentMediaTime`](https://developer.apple.com/documentation/quartzcore/cacurrentmediatime())
+derives its seconds from `mach_absolute_time`.
+
+The analyzer requires each CPU encoder interval to fit wholly inside one serial
+native frame. It then matches process, encoder and command-buffer identities to
+actual GPU execution, including work after the CPU frame has returned. Overlapping
+GPU stages are unioned. Missing, duplicate, conflicting or invalid observations
+remain visible. Frames with missing observed encoders are excluded from the
+aggregate GPU distribution, while their partial results remain in the report.
+Matching every **observed** encoder does not prove that the capture recorded
+every encoder; window boundaries and trace loss can omit both CPU and GPU work.
+Changing clock anchors are rejected rather than silently crossing sleep or a
+clock discontinuity. Native traces now include the process ID at export so a
+mismatched process is rejected. Older traces require the caller to verify pairing.
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcrun xctrace export --input artifacts/performance/metal/profile.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-info"]' \
+  --output artifacts/performance/metal/time.xml
+python3 tools/performance/metal_frames.py \
+  artifacts/performance/metal/gpu.xml artifacts/performance/metal/encoders.xml \
+  artifacts/performance/metal/time.xml artifacts/performance/metal/frames.jsonl \
+  --pid OWNED_PID --output artifacts/performance/metal/frame-gpu.json
+python3 -m unittest discover -s tools/performance -p 'test_*.py'
+```
+
+Both physical apps completed a short `ink` diagnostic on the shared changes
+through `4a0a808` and the full-cadence candidate described below. Their optional
+GPU queue-span recorder was disabled. Separate five-second Metal recordings
+requested a two-second rolling window. The actual retained target GPU extents
+are only 171 ms on Mac and 1,010 ms on iPad; the requested window is not a claim
+of continuous coverage. These profiled runs are separate from sustained timing.
+
+| Observed correlation | Mac | Physical iPad |
+| --- | ---: | ---: |
+| Native frames with observed encoders matched | 9 | 122 |
+| Matched CPU encoders | 55 | 767 |
+| Matched Active GPU intervals | 92 | 1,292 |
+| Active GPU intervals without a native frame | 54 | 5 |
+| CPU encoders outside native frame intervals | 1 | 0 |
+| Observed frame GPU union p50 / p95 / p99 / max, ms | 0.745 / 0.759 / 0.760 / 0.760 | 1.648 / 1.679 / 1.704 / 1.712 |
+
+Neither capture has invalid matched intervals or identity/order conflicts.
+The observed GPU costs are below the current frame budgets, but these small,
+incomplete, profiled samples do not establish full frame or workload acceptance.
+Recorded presentation follows the last associated GPU execution by
+18.842–19.484 ms on Mac and 12.702–14.438 ms on iPad. This suggests that
+presentation scheduling deserves further investigation; it is not a measurement
+of physical input latency or proof that rendering is the only source of delay.
+The ten new correlation checks cover clock conversion, overlapping execution,
+partial/ambiguous identities, execution ordering, presentation endpoints and
+capture pairing. The existing 17 trace checks also pass. Raw traces, identifiers
+and reports remain in ignored local artifacts.
+
+### Earlier standalone GPU probe
+
 `tools/performance/metal_trace.py` reads the actual GPU execution intervals and
 CPU encoder identities exported by Instruments. It requires an explicit target
 PID: even a process-targeted Metal System Trace can contain other processes' GPU
@@ -204,6 +268,74 @@ The report retains the first and last presentation's distance from the measured
 interval boundaries, denied display-link admissions, frames without viewport
 submission and missing/zero-time completions. A completed input producer cannot
 establish continuous rendering if its window becomes occluded.
+
+## Full-cadence experiment and ten-minute ink: 2026-09-12
+
+An unpublished candidate requested `minimum = maximum = preferred` at the
+display's maximum rate on both hosts, updating the Mac preference after display
+changes. Apple describes [`preferredFrameRateRange`](https://developer.apple.com/documentation/quartzcore/cadisplaylink/preferredframeraterange)
+as a callback preference subject to system policy, not a presentation guarantee.
+The candidate retained the ordinary idle pause and three Metal drawables.
+It was **not adopted**: the completed measurements below still miss cadence
+targets and do not establish a sustained improvement. The published scheduler
+is unchanged; the new runtime change only labels local trace exports with PID.
+
+Twenty-second `ink` pairs with GPU timestamps enabled preceded the sustained
+tests. Mac CPU p99 was 12.361 ms before / 12.324 ms with the candidate; continuous
+long intervals were 57 / 48. iPad CPU p99 was 3.953 / 3.316 ms, with 21 / 4 long
+intervals. A subsequent 45-second candidate run with GPU timestamps disabled
+still recorded Mac CPU p99 12.261 ms and 173 long intervals. These short samples
+do not isolate an instrumentation correction or establish a cadence benefit.
+
+Both physical Release apps then completed ten measured minutes of `ink` on
+shared changes through `4a0a808` plus that candidate, followed by the normal
+postlude. GPU queue-span recording was disabled; the CPU/input/presentation
+recorder remained enabled. No compiler, UI automation or GPU profiler ran during
+measurement. Lightweight local analysis and process monitoring continued.
+The viewport was 2752×2064 on iPad and settled at 2400×1740 on Mac. Each app used
+its isolated benchmark bundle and fresh private workload persistence root.
+
+| Measured interval | Physical iPad | Mac |
+| --- | ---: | ---: |
+| Duration, seconds | 600.008 | 600.010 |
+| Display maximum / target, Hz | 120 | 90 |
+| Nonpredicted input samples | 135,003 | 135,003 |
+| Actual presentations | 66,975 | 49,811 |
+| CPU owner service p50 / p95 / p99 / max, ms | 0.935 / 1.158 / 4.794 / 13.671 | 1.328 / 1.823 / 7.602 / 17.511 |
+| CPU service above host budget | 347 | 497 |
+| Continuous presentation p50 / p95 / p99 / max, ms | 8.333 / 8.334 / 12.499 / 20.832 | 11.111 / 11.111 / 22.222 / 44.445 |
+| Continuous intervals above target plus 5% tolerance / total | 750 / 66,599 | 1,084 / 49,435 |
+| Frame admission to actual presentation p50 / p95 / p99 / max, ms | 17.622 / 17.640 / 24.390 / 34.270 | 21.990 / 33.181 / 43.999 / 55.344 |
+| Peak physical footprint, MiB | 338.16 | 251.84 |
+| First-to-last measured footprint growth, MiB | +31.91 | +13.34 |
+| Observed thermal states | Nominal | Nominal |
+
+Both measured intervals have zero rejected input, renderer errors, missing
+presentation callbacks and zero-time presentations. The full traces have no
+recorder overflow; they retain four iPad and one Mac zero-time presentations
+outside measurement. First and last presentations are within 10 ms of each
+measured boundary. Memory includes the recorder's reserved 74.52 MiB capacity;
+growth cannot be attributed solely to document/history or called a leak from
+these observations. Nominal thermal states do not prove constant clock rates.
+
+Both CPU p99 values fall below their host budgets, but maxima and presentation
+tails still fail the sustained targets. Admission-to-presentation association
+is not physical input latency. GPU execution for the entire interval is not
+measured by this recorder-off pair; the separate short correlated captures above
+do not fill that coverage gap. The full five-profile matrix, calibrated recorder
+overhead, physical input latency, memory/lifecycle checks and complete performance
+acceptance remain open. Mac 120 Hz stays deferred by the user.
+
+Drawable acquisition accounts for at least 75% of owner service in all 347
+over-budget iPad frames and 489 of the 497 Mac frames. On iPad, 346 of those
+347 frames occur within 200 ms of a stroke restart; only 20 Mac over-budget
+frames do. This identifies different scheduling patterns to investigate without
+claiming that the native clock preference or GPU execution alone caused them.
+
+Both completed benchmark apps were closed. The ordinary drawing apps were
+preserved. Subsequent integration and final-build checks are separate from these
+candidate measurements; raw artifacts remain local under
+`artifacts/performance/resumed-ebc507a`.
 
 ## Physical ten-minute baseline: 2026-09-11
 

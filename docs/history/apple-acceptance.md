@@ -85,6 +85,53 @@ workspace/layer tests do not establish these new device-specific requirements.
 Numeric sliders and other direct-manipulation controls retain their existing
 interaction without a reorder hold.
 
+## Native GPU correlation and resumed hardware measurements — 2026-09-12
+
+Both physical hosts now have actual Instruments GPU captures correlated to
+native drawing-frame records. The new `metal_frames.py` analyzer uses exported
+Mach clock anchors, complete CPU encoder intervals and process/encoder/buffer
+identities. It unions overlapping GPU execution and retains partial, missing,
+ambiguous and invalid observations. Native exports include their PID; legacy
+captures require verified pairing. Ten new correlation checks and the existing
+17 trace checks pass, along with the Swift recorder's concurrency, completion
+grace and atomic process-tagged export checks.
+
+The short ink diagnostics match 122 iPad frames and nine Mac frames. Observed
+GPU union p99 is 1.704 ms and 0.760 ms respectively, but the capture windows are
+incomplete and retain unmatched work. These results do not establish complete
+GPU frame coverage or physical input latency. See
+[the correlation guide](../../apps/layer-apple/PERFORMANCE.md#correlating-native-drawing-frames)
+for reproduction, coverage limits and actual retained durations.
+
+An unpublished full-cadence preference also completed ten measured minutes of
+ink on both physical hosts, with optional GPU timestamps disabled. Each receives
+135,003 nonpredicted input samples without rejection or renderer errors. iPad
+records 66,975 actual presentations and Mac 49,811. CPU p99 is 4.794 ms on iPad
+and 7.602 ms on Mac, but continuous presentation p99 is 12.499 ms and 22.222 ms.
+There are 750 iPad and 1,084 Mac continuous intervals above the host period plus
+5% tolerance. Drawable acquisition dominates over-budget CPU samples; iPad
+stalls cluster at stroke restart while Mac stalls also occur during strokes.
+The candidate does not establish a sustained improvement and was not adopted.
+The published scheduler remains unchanged. The
+[complete results](../../apps/layer-apple/PERFORMANCE.md#full-cadence-experiment-and-ten-minute-ink-2026-09-12)
+retain maxima, memory growth, instrumentation settings and missing evidence.
+
+Shared workspace/switcher, Windows numeric-control and GTK/Web drag milestones
+through `bee29ce` are integrated. The 396 Rust checks pass with real Metal access;
+one existing host hardware test remains ignored by default. A preceding sandbox
+run failed its GPU cases with `AdapterUnavailable` and is retained locally.
+Both final signed Release apps build and verify. Each completes a five-second
+ink smoke interval after warm-up on the integrated source with the original
+scheduler: 559 actual iPad presentations and 411 Mac presentations, with no
+rejected input, renderer errors or missing/zero-time presentations during
+measurement. Both exported PIDs match the launched process, and the owned apps
+are closed. These short checks do not replace the candidate's separate
+ten-minute measurements or establish sustained acceptance for the final build.
+The new switcher configuration and Apple device-specific drag requirements remain
+implementation work, as do full feature, visual, lifecycle, physical-input and
+performance acceptance. Save/Load Layout remain excluded and Mac 120 Hz deferred.
+Raw artifacts, process/device IDs and signing information stay private.
+
 ## Shared compact layer opacity — 2026-09-12
 
 Both Apple targets now use the common numeric editor for layer opacity, removing

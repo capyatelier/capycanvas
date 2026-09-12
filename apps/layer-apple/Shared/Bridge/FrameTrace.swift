@@ -117,6 +117,7 @@ final class FrameTrace: @unchecked Sendable {
             #endif
             let header: [String: Any] = ["schema": 1, "clock": "CACurrentMediaTime nanoseconds", "platform": platform,
                 "configuration": configuration, "duration_seconds": duration, "started_ns": started,
+                "process_identifier": ProcessInfo.processInfo.processIdentifier,
                 "gpu_timing_requested": recordsGpuTiming,
                 "capacity": capacity, "dropped_records": snapshot.dropped, "record_stride_bytes": MemoryLayout<FrameTraceEvent>.stride,
                 "input_source": workload == nil ? "platform" : "synthetic", "workload": workload as Any? ?? NSNull(),
