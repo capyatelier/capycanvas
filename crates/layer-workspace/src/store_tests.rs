@@ -70,6 +70,45 @@ fn workspace(name: &str) -> Entity {
 }
 
 #[test]
+fn storage_enforces_included_workspace_delete_protection() {
+    let mut f = Fixture::new();
+    let mut entity = workspace("Painter");
+    entity.metadata.builtin = true;
+    let id = entity.id.clone();
+    f.store
+        .commit(
+            CommitBatch::prepare(
+                f.owner.clone(),
+                vec![Mutation::Create {
+                    entity,
+                    claim: true,
+                    name_policy: NamePolicy::Exact,
+                }],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let stored = f.store.load(&id).unwrap();
+    let mut metadata = stored.entity.metadata.clone();
+    metadata.deleted_at_ms = Some(2_000_000);
+    let deleting = Mutation::Update {
+        id: id.clone(),
+        generations: stored.generations,
+        fence: stored.claim.unwrap().fence,
+        metadata: Some(metadata),
+        content: None,
+        working: None,
+        name_policy: NamePolicy::Exact,
+    };
+    assert!(
+        f.store
+            .commit(CommitBatch::prepare(f.owner.clone(), vec![deleting]).unwrap())
+            .is_err()
+    );
+    assert_eq!(f.store.load(&id).unwrap().entity, stored.entity);
+}
+
+#[test]
 fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
     let mut f = Fixture::new();
     let entity = f.create("Future Workspace");

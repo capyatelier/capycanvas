@@ -182,7 +182,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     ) && batch
                         .writes
                         .iter()
-                        .any(|write| write.id != DEFAULT_TEMPLATE_ID)
+                        .any(|write| !(write.create && model::is_default_item(&write.id)))
                         && state
                             .pending
                             .as_ref()
@@ -263,7 +263,12 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let StoreResponse::List(items) = self.store.execute(StoreRequest::List).await? else {
             return Err(StoreError::invalid("Unexpected workspace list reply."));
         };
-        self.state.borrow_mut().items = items;
+        // Retain the old Default record for existing references, without listing
+        // it in the workspace catalog. New installs have no saved-layout library.
+        self.state.borrow_mut().items = items
+            .into_iter()
+            .filter(|i| !(i.id == DEFAULT_TEMPLATE_ID && i.metadata.builtin))
+            .collect();
         Ok(())
     }
     pub async fn load(&self, id: &str) -> Result<StoredEntity> {
@@ -315,35 +320,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             })
             .await?;
         self.refresh().await?;
-        if !self.items().iter().any(|i| i.id == DEFAULT_TEMPLATE_ID) {
-            let mut default = Entity::reusable(
-                "Default",
-                "The standard editor layout.",
-                ReusableContent::Layout {
-                    layout: DockLayout::for_platform(self.platform),
-                },
-                now,
-            );
-            default.id = DEFAULT_TEMPLATE_ID.into();
-            default.metadata.builtin = true;
-            let result = self
-                .publish(CommitBatch::prepare(
-                    self.owner.clone(),
-                    vec![Mutation::Create {
-                        entity: default,
-                        claim: false,
-                        name_policy: NamePolicy::Exact,
-                    }],
-                )?)
-                .await;
-            if let Err(error) = result {
-                if !matches!(error.kind, ErrorKind::Conflict | ErrorKind::NameCollision) {
-                    return Err(error);
-                }
-            }
-            self.refresh().await?;
-        }
-        Ok(())
+        self.ensure_defaults(now).await
     }
     pub async fn initialize(&self, now: u64) -> Result<StoredEntity> {
         if self.has_failed_operation()
@@ -351,6 +328,19 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         {
             return Ok(incoming);
         }
+        self.refresh().await?;
+        // Fresh included rows must not displace a user's prior workspace, even
+        // when a host has already initialized the catalog for scene restoration.
+        let prior_workspace = self
+            .items()
+            .into_iter()
+            .filter(|i| {
+                i.metadata.kind == ItemKind::Workspace
+                    && i.metadata.deleted_at_ms.is_none()
+                    && !i.metadata.builtin
+            })
+            .max_by_key(|i| i.metadata.last_used_ms)
+            .map(|i| i.id);
         self.initialize_catalog(now).await?;
         let binding = match self
             .store
@@ -362,44 +352,79 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             StoreResponse::Binding(binding) => binding,
             _ => None,
         };
-        let existing = binding
+        let id = binding
             .filter(|id| {
                 self.items()
                     .iter()
                     .any(|i| &i.id == id && i.metadata.deleted_at_ms.is_none())
             })
-            .or_else(|| {
-                self.items()
-                    .iter()
-                    .filter(|i| {
-                        i.metadata.kind == ItemKind::Workspace && i.metadata.deleted_at_ms.is_none()
-                    })
-                    .max_by_key(|i| i.metadata.last_used_ms)
-                    .map(|i| i.id.clone())
-            });
-        if let Some(id) = existing {
-            match self.prepare_switch(&id, now).await {
-                Ok(entity) => return Ok(entity),
-                Err(error) if error.kind == ErrorKind::OwnedElsewhere => {
-                    let source = self.load(&id).await?.entity.capture()?;
-                    let baseline = source.history.layout().clone();
-                    let capture = WorkspaceCapture {
-                        history: layer_ui::LayoutHistory::new(&baseline),
-                        working: source.working,
-                    };
-                    return self
-                        .create_and_bind(
-                            Entity::workspace("My Workspace", capture, baseline, None, now),
-                            NamePolicy::Unique,
-                        )
-                        .await;
-                }
-                Err(error) => return Err(error),
+            .or(prior_workspace)
+            .unwrap_or_else(|| DEFAULT_WORKSPACES[1].0.into());
+        match self.prepare_switch(&id, now).await {
+            Ok(entity) => return Ok(entity),
+            Err(error) if error.kind == ErrorKind::OwnedElsewhere => {
+                let source = self.load(&id).await?.entity.capture()?;
+                let baseline = source.history.layout().clone();
+                let capture = WorkspaceCapture {
+                    history: layer_ui::LayoutHistory::new(&baseline),
+                    working: source.working,
+                };
+                return self
+                    .create_and_bind(
+                        Entity::workspace("My Workspace", capture, baseline, None, now),
+                        NamePolicy::Unique,
+                    )
+                    .await;
             }
+            Err(error) => Err(error),
         }
-        let template = self.load(DEFAULT_TEMPLATE_ID).await?;
-        let entity = self.workspace_from_template(&template.entity, "My Workspace", now)?;
-        self.create_and_bind(entity, NamePolicy::Unique).await
+    }
+
+    async fn ensure_defaults(&self, now: u64) -> Result<()> {
+        for (workspace_id, preset) in DEFAULT_WORKSPACES {
+            let layout = preset.layout(self.platform);
+            let mut workspace = Entity::workspace(
+                preset.name(),
+                WorkspaceCapture {
+                    history: layer_ui::LayoutHistory::new(&layout),
+                    working: preset.working_state(),
+                },
+                layout,
+                None,
+                now,
+            );
+            workspace.id = workspace_id.into();
+            workspace.metadata.builtin = true;
+            self.ensure_default(workspace).await?;
+        }
+        Ok(())
+    }
+    async fn ensure_default(&self, entity: Entity) -> Result<()> {
+        if self.items().iter().any(|i| i.id == entity.id) {
+            return Ok(());
+        }
+        let id = entity.id.clone();
+        let batch = CommitBatch::prepare(
+            self.owner.clone(),
+            vec![Mutation::Create {
+                entity,
+                claim: false,
+                name_policy: NamePolicy::Unique,
+            }],
+        )?;
+        let operation = batch.operation_id.clone();
+        let result = self.publish(batch).await;
+        self.refresh().await?;
+        if let Err(error) = result {
+            // Another window may have seeded this same stable ID.
+            if error.kind != ErrorKind::Conflict || !self.items().iter().any(|i| i.id == id) {
+                return Err(error);
+            }
+            let mut cleanup = CommitBatch::prepare(self.owner.clone(), Vec::new())?;
+            cleanup.abandon_operations.push(operation);
+            self.publish(cleanup).await?;
+        }
+        Ok(())
     }
     fn workspace_from_template(&self, template: &Entity, name: &str, now: u64) -> Result<Entity> {
         let ItemContent::Reusable { current, .. } = &template.content else {

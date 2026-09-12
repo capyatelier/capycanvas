@@ -50,6 +50,7 @@ impl NativeWorkspaces {
             }
             WorkspaceCommand::Switch { id } => A::Switch(id),
             WorkspaceCommand::New => A::New,
+            WorkspaceCommand::ResetBrushes => A::ResetBrushes,
             WorkspaceCommand::ResetLayout => A::Reset(current.ok_or("No workspace is active")?),
             WorkspaceCommand::LayoutHistory => A::History(current.ok_or("No workspace is active")?),
             WorkspaceCommand::SaveToolbar { panel } => A::SaveToolbar(panel),
@@ -87,6 +88,7 @@ impl NativeWorkspaces {
                 .map_err(StoreError::invalid)?;
         }
         self.busy.set(true);
+        self.update_status();
         self.operation_generation
             .set(self.operation_generation.get().wrapping_add(1));
         w.surface.set_sensitive(false);
@@ -207,6 +209,35 @@ impl NativeWorkspaces {
                         return Err(error);
                     }
                 }
+            }
+            A::ResetBrushes => {
+                let prompt = manager.prompt(&A::ResetBrushes, now_ms()).await?;
+                if !dialog::confirm(
+                    w,
+                    &prompt.title,
+                    &prompt.message,
+                    &prompt.confirm,
+                    prompt.destructive,
+                )
+                .await
+                {
+                    return Ok(());
+                }
+                let _operation = self.begin_operation(w).await?;
+                let (change, capture) = {
+                    let mut gpu = w.gpu.borrow_mut();
+                    let session = &mut gpu.as_mut().unwrap().session;
+                    let change = session
+                        .reset_workspace_brushes()
+                        .map_err(StoreError::invalid)?;
+                    (
+                        change,
+                        session.capture_workspace().map_err(StoreError::invalid)?,
+                    )
+                };
+                manager.observe(capture, now_ms());
+                w.changed(Ok(change));
+                manager.flush().await?;
             }
             A::Delete(id) => {
                 let stored = self.selected(&id).await?;
@@ -427,7 +458,7 @@ impl NativeWorkspaces {
             ),
             _ => (
                 "New Workspace",
-                "Keep tool settings and a layout for a task, such as painting.",
+                "Copy your current tool settings and layout into a new workspace.",
                 "Create and Switch",
             ),
         };

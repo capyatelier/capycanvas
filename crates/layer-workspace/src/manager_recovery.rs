@@ -66,7 +66,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             let names: Vec<_> = batch
                 .writes
                 .iter()
-                .filter(|w| w.id != DEFAULT_TEMPLATE_ID)
+                .filter(|w| {
+                    w.id != DEFAULT_TEMPLATE_ID && !(w.create && model::is_default_item(&w.id))
+                })
                 .map(|write| {
                     write
                         .metadata
@@ -103,7 +105,9 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         self.flush().await?;
         let mut entities = Vec::new();
         for write in &batch.writes {
-            if write.id == DEFAULT_TEMPLATE_ID {
+            if write.id == DEFAULT_TEMPLATE_ID
+                || (write.create && model::is_default_item(&write.id))
+            {
                 continue;
             }
             let base = if write.create {

@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkspaceCommand {
     Manage,
+    // Legacy variants remain decodable while hosts update; neither has menu UI.
     ManageTemplates,
-    New,
     SaveAsTemplate,
+    New,
+    ResetBrushes,
     ResetLayout,
     LayoutHistory,
     Switch { id: String },
@@ -76,6 +78,11 @@ impl ManagedWorkspace {
                         idle && can_reset,
                     ),
                 ],
+                vec![command(
+                    "Reset All Brushes…",
+                    WorkspaceCommand::ResetBrushes,
+                    idle,
+                )],
             ],
         )
     }

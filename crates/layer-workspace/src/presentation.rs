@@ -35,6 +35,7 @@ pub enum ManagerAction {
     Duplicate(String),
     SaveAsTemplate(String),
     Reset(String),
+    ResetBrushes,
     History(String),
     UpdateFromCurrent(String),
     Delete(String),
@@ -61,6 +62,7 @@ impl ManagerAction {
             Self::Rename(_) | Self::RenameToolbar(_) => "Rename…",
             Self::Duplicate(_) | Self::DuplicateToolbar(_) => "Duplicate…",
             Self::SaveAsTemplate(_) => "Save Layout…",
+            Self::ResetBrushes => "Reset All Brushes…",
             Self::Reset(_) => "Restore Starting Layout…",
             Self::History(_) => "Layout History…",
             Self::UpdateFromCurrent(_) => "Replace with Current Layout…",
@@ -242,7 +244,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     ) -> Vec<ManagerButton> {
         let current = self.active_id().as_ref() == Some(id);
         let elsewhere = claim.is_some_and(|c| c.owner != self.owner && c.expires_at_ms > now);
-        let available = !elsewhere && !metadata.builtin;
+        let available = !elsewhere && !metadata.read_only();
         let mut actions = Vec::new();
         let mut add =
             |action, enabled, primary| actions.push(ManagerButton::new(action, enabled, primary));
@@ -259,7 +261,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                         true,
                     );
                     add(ManagerAction::Rename(id.clone()), available, false);
-                    add(ManagerAction::Delete(id.clone()), available && idle, false);
+                    add(
+                        ManagerAction::Delete(id.clone()),
+                        available && idle && !metadata.builtin,
+                        false,
+                    );
                 }
                 ItemKind::Template | ItemKind::Toolbar => {
                     if metadata.kind == ItemKind::Template {

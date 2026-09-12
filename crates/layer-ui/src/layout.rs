@@ -1378,6 +1378,10 @@ impl DockLayout {
     }
 }
 
+#[path = "layout_presets.rs"]
+mod presets;
+pub use presets::WorkspacePreset;
+
 impl Default for DockLayout {
     fn default() -> Self {
         let tabs = |id, panel| DockNode::Tabs {

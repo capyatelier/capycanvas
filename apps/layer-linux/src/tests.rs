@@ -3,12 +3,12 @@
 //! Physical tablet/touch delivery remains a human test (not faked here).
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
+#[path = "workspace_drawer_style_tests.rs"]
+mod workspace_drawer_style;
 #[path = "workspace_motion_tests.rs"]
 mod workspace_motion;
 #[path = "workspace_resize_tests.rs"]
 mod workspace_resize;
-#[path = "workspace_drawer_style_tests.rs"]
-mod workspace_drawer_style;
 use super::*;
 use layer_core::Point;
 use layer_engine::{PenEvent, PenPhase, SampleFlags, ToolKind};
@@ -11587,7 +11587,9 @@ fn native_column_drawer_drag_input() {
     // The asynchronously loaded shipped preset can replace the realized fixture.
     // This regression addresses the fixed fixture's group and tab IDs.
     let original = layer_ui::WorkspaceState::default();
-    w.dispatch(UiAction::RestoreWorkspace { workspace: original.clone() });
+    w.dispatch(UiAction::RestoreWorkspace {
+        workspace: original.clone(),
+    });
     pump(250);
     let saved = |w: &Workspace| serde_json::to_value(state(w).workspace).unwrap();
     let center = |b: Bounds| [b.x + b.width * 0.5, b.y + b.height * 0.5];
@@ -13566,6 +13568,101 @@ fn native_workspace_menu_input() {
         step += 1;
         pump(250);
     };
+    let manager = w.workspaces.manager.as_ref().unwrap();
+    assert_eq!(
+        manager.active_id().as_deref(),
+        Some(layer_workspace::DEFAULT_WORKSPACES[1].0)
+    );
+    let document = w
+        .gpu
+        .borrow()
+        .as_ref()
+        .unwrap()
+        .session
+        .engine()
+        .document()
+        .clone();
+    w.dispatch(UiAction::SetBrushSize { value: 37. });
+    for (visit, index) in [0, 2, 1, 0, 1].into_iter().enumerate() {
+        let (id, preset) = layer_workspace::DEFAULT_WORKSPACES[index];
+        let button = find_named(
+            w.header.upcast_ref(),
+            &format!("workspace-switch-{}", preset.name().to_lowercase()),
+        )
+        .unwrap();
+        let bounds = button.compute_bounds(&w.window).unwrap();
+        click(
+            [
+                bounds.x() + bounds.width() / 2.,
+                bounds.y() + bounds.height() / 2.,
+            ],
+            272,
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !w.workspaces.switcher.is_sensitive() {
+            pump(20);
+            assert!(Instant::now() < deadline, "workspace switch timed out");
+        }
+        assert_eq!(manager.active_id().as_deref(), Some(id));
+        assert!(
+            button
+                .downcast_ref::<gtk::ToggleButton>()
+                .unwrap()
+                .is_active()
+        );
+        assert_eq!(
+            durable_layout(&state(&w).workspace.layout),
+            preset.layout(Platform::Gtk)
+        );
+        assert_eq!(
+            w.gpu.borrow().as_ref().unwrap().session.engine().document(),
+            &document
+        );
+        capture_reference(
+            &w,
+            dir.join(format!("{}.png", preset.name())).to_str().unwrap(),
+            1.,
+        );
+        if index == 0 {
+            if visit > 0 {
+                assert_eq!(state(&w).brush.diameter, 73.);
+            }
+            // Medium toolbar drawers remain reachable with no docked panels.
+            for panel in [Panel::Brushes, Panel::Sizes, Panel::Layers] {
+                let layout = state(&w).workspace.layout;
+                let tile = layout
+                    .panels
+                    .iter()
+                    .flat_map(|p| p.tiles())
+                    .find(|t| t.control == ToolbarControl::Panel { panel })
+                    .unwrap();
+                let button =
+                    find_named(w.surface.upcast_ref(), &format!("tile-{}", tile.id)).unwrap();
+                let bounds = button.compute_bounds(&w.window).unwrap();
+                let point = [
+                    bounds.x() + bounds.width() / 2.,
+                    bounds.y() + bounds.height() / 2.,
+                ];
+                click(point, 272);
+                assert!(
+                    state(&w).customization.drawer.is_some(),
+                    "Painter {panel:?} drawer"
+                );
+                if panel == Panel::Layers {
+                    capture_reference(&w, dir.join("Painter-Layers.png").to_str().unwrap(), 1.);
+                }
+                click(point, 272);
+                assert!(state(&w).customization.drawer.is_none());
+                assert_eq!(
+                    durable_layout(&state(&w).workspace.layout),
+                    durable_layout(&layout)
+                );
+            }
+            w.dispatch(UiAction::SetBrushSize { value: 73. });
+        } else if index == 1 {
+            assert_eq!(state(&w).brush.diameter, 37.);
+        }
+    }
     for label in ["Window", "File"] {
         let button = menu(w.header.upcast_ref(), label).unwrap();
         let bounds = button.compute_bounds(&w.window).unwrap();
@@ -13648,6 +13745,50 @@ fn native_workspace_menu_input() {
             );
             w.workspaces.ui.close();
             pump(250);
+            click(
+                [
+                    bounds.x() + bounds.width() * 0.5,
+                    bounds.y() + bounds.height() * 0.5,
+                ],
+                272,
+            );
+            let workspace = menu_label(popup.upcast_ref(), "Workspaces").unwrap();
+            click(popup_point(&popup, &workspace), 272);
+            assert!(menu_label(popup.upcast_ref(), "Load Layout…").is_none());
+            assert!(menu_label(popup.upcast_ref(), "Save Layout…").is_none());
+            let reset = menu_label(popup.upcast_ref(), "Reset All Brushes…").unwrap();
+            click(popup_point(&popup, &reset), 272);
+            let button = find_button(w.window.upcast_ref(), "Reset Brushes").unwrap();
+            capture_reference(&w, dir.join("Reset-Brushes.png").to_str().unwrap(), 1.);
+            let bounds = button.compute_bounds(&w.window).unwrap();
+            click(
+                [
+                    bounds.x() + bounds.width() / 2.,
+                    bounds.y() + bounds.height() / 2.,
+                ],
+                272,
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while w.workspaces.busy.get() {
+                pump(20);
+                assert!(Instant::now() < deadline);
+            }
+            assert!(
+                manager
+                    .current()
+                    .unwrap()
+                    .capture()
+                    .unwrap()
+                    .working
+                    .tools
+                    .overrides
+                    .is_empty()
+            );
+            assert_eq!(
+                state(&w).brush.diameter,
+                layer_core::default_brush(layer_core::DefaultBrushPreset::GPen).diameter
+            );
+            pump(200);
         }
         popup.popdown();
         pump(200);
@@ -14342,8 +14483,10 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     first.dispatch(UiAction::SetBrushSize { value: 73. });
     let manager = first.workspaces.manager.as_ref().unwrap();
     let id = manager.active_id().unwrap();
-    // Release the lease while retaining the old window, modelling takeover after
-    // suspension. Fake-clock expiry itself is covered by the shared store tests.
+    // Suspend the first host's input and renewal while releasing its lease.
+    // Otherwise GTK focus events can correctly reacquire the released lease
+    // before the second window starts. Fake-clock expiry has shared store tests.
+    first.workspaces.busy.set(true);
     glib::MainContext::default()
         .block_on(manager.close())
         .unwrap();
@@ -14354,6 +14497,7 @@ fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
         second.workspaces.manager.as_ref().unwrap().active_id(),
         Some(id.clone())
     );
+    first.workspaces.busy.set(false);
     first.workspaces.revalidate(&first);
     let deadline = Instant::now() + Duration::from_secs(5);
     while manager.error().is_none() {

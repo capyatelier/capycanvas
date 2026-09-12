@@ -15,6 +15,8 @@ mod dialog;
 mod history;
 #[path = "workspace_manager_storage.rs"]
 mod storage;
+#[path = "workspace_switcher.rs"]
+mod switcher;
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -27,6 +29,9 @@ pub(crate) struct NativeWorkspaces {
     pub manager: Option<Rc<Manager>>,
     pub root: gtk::Box,
     pub label: gtk::Label,
+    pub switcher: gtk::Box,
+    switch_buttons: Vec<gtk::ToggleButton>,
+    switch_pending: Cell<bool>,
     retry: gtk::Button,
     recovery: gtk::Button,
     pub ready: Cell<bool>,
@@ -79,6 +84,8 @@ impl NativeWorkspaces {
         recovery.set_visible(false);
         root.append(&recovery);
         root.set_visible(manager.is_some());
+        let (switcher, switch_buttons) = switcher::build();
+        switcher.set_sensitive(false);
         let now = Instant::now();
         Self {
             ui: dialog::ManagerUi::new(),
@@ -86,6 +93,9 @@ impl NativeWorkspaces {
             manager,
             root,
             label,
+            switcher,
+            switch_buttons,
+            switch_pending: Cell::new(false),
             retry,
             recovery,
             busy: Cell::new(false),
@@ -115,6 +125,7 @@ impl NativeWorkspaces {
             });
         }
         self.ui.bind(w);
+        self.bind_switcher(w);
         w.window.connect_is_active_notify(glib::clone!(
             #[weak]
             w,
@@ -519,6 +530,7 @@ impl NativeWorkspaces {
         self.recovery.set_visible(true);
     }
     pub fn update_status(&self) {
+        self.update_switcher();
         let Some(manager) = &self.manager else {
             return;
         };
@@ -606,8 +618,10 @@ impl NativeWorkspaces {
                 .as_mut()
                 .and_then(|g| g.session.capture_workspace().ok());
             if capture.as_ref() != self.failed_snapshot.borrow().as_ref() {
-                self.show_error(StoreError::new(layer_workspace::ErrorKind::Unavailable,
-                    "Your workspace couldn’t be saved. Keep this window open and try again."));
+                self.show_error(StoreError::new(
+                    layer_workspace::ErrorKind::Unavailable,
+                    "Your workspace couldn’t be saved. Keep this window open and try again.",
+                ));
                 self.recover_close(w);
                 return true;
             }

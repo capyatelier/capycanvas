@@ -3980,6 +3980,13 @@ mod tests {
             })
         ));
         assert_eq!(menu.sections[1][0].label, "Workspaces");
+        assert!(
+            menu.sections[1][0]
+                .sections
+                .iter()
+                .flatten()
+                .any(|i| i.label == "Reset All Brushes…")
+        );
         assert!(menu.sections[2].iter().any(|i| i.label == "Layers"));
         assert!(
             menu.sections[2]
@@ -4003,6 +4010,7 @@ mod tests {
             vec![
                 vec!["New Workspace…", "Manage Workspaces…"],
                 vec!["Layout History…", "Restore Starting Layout…"],
+                vec!["Reset All Brushes…"],
             ]
         );
         assert!(
@@ -4010,18 +4018,12 @@ mod tests {
                 .tooltip
                 .contains("Restore Starting Layout")
         );
-        assert!(
-            workspaces
-                .sections
-                .iter()
-                .flatten()
-                .all(|item| !matches!(
-                    item.action,
-                    Some(UiAction::WorkspaceManager {
-                        command: WorkspaceCommand::SaveAsTemplate | WorkspaceCommand::ManageTemplates
-                    })
-                ))
-        );
+        assert!(workspaces.sections.iter().flatten().all(|item| !matches!(
+            item.action,
+            Some(UiAction::WorkspaceManager {
+                command: WorkspaceCommand::SaveAsTemplate | WorkspaceCommand::ManageTemplates
+            })
+        )));
         assert_eq!(menu.sections[1].len(), 2);
         let toolbars = &menu.sections[1][1];
         assert_eq!(toolbars.label, "Quick Access Toolbars");
@@ -4085,6 +4087,48 @@ mod tests {
         s.dispatch(UiAction::SetBrushSize { value: 50. }).unwrap();
         assert_eq!(s.state.brush.diameter, 50.);
         assert_eq!(s.engine.document(), &before);
+    }
+
+    #[test]
+    fn reset_all_workspace_brushes_preserves_layout_color_tool_and_document() {
+        let mut s = session();
+        s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
+        invoke(&mut s, CommandId::Eraser);
+        s.dispatch(UiAction::SetBrushOpacity { value: 0.35 })
+            .unwrap();
+        s.dispatch(UiAction::SetColor {
+            rgba: [0.2, 0.4, 0.6, 1.],
+        })
+        .unwrap();
+        invoke(&mut s, CommandId::Move);
+        let before = s.capture_workspace().unwrap();
+        let document = s.engine.document().clone();
+        assert_eq!(before.working.tools.overrides.len(), 2);
+        s.reset_workspace_brushes().unwrap();
+        let after = s.capture_workspace().unwrap();
+        assert!(after.working.tools.overrides.is_empty());
+        assert_eq!(after.history, before.history);
+        assert_eq!(after.working.colors, before.working.colors);
+        assert_eq!(after.working.preset, before.working.preset);
+        assert_eq!(after.working.canvas_tool, before.working.canvas_tool);
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(
+            s.state.brush.opacity,
+            default_brush(DefaultBrushPreset::Eraser).opacity
+        );
+        invoke(&mut s, CommandId::Pen);
+        assert_eq!(
+            s.state.brush.diameter,
+            default_brush(DefaultBrushPreset::GPen).diameter
+        );
+        let unchanged = s.capture_workspace().unwrap();
+        s.reset_workspace_brushes().unwrap();
+        assert_eq!(s.capture_workspace().unwrap(), unchanged);
+        s.begin_workspace_transition().unwrap();
+        s.begin_workspace_layout_preview().unwrap();
+        assert!(s.reset_workspace_brushes().is_err());
+        s.cancel_workspace_layout_preview();
+        s.end_workspace_transition();
     }
 
     #[test]

@@ -72,6 +72,7 @@ pub use layout::{
     DockBand, DockItem, DockLayout, DockNode, DockTarget, Edge, FloatingGroup,
     FloatingResizeHandle, FloatingToolbarLayout, GroupPlacement, PANEL_CONFIGURATION_WIDTH,
     PANEL_EXPANSION_MS, Panel, PanelExpansion, PanelMeasurement, ResizeEdge, ResolvedLayout,
+    WorkspacePreset,
 };
 pub use layout::{
     DropHint, LAYERS_MIN_WIDTH, PANEL_CONTENT_INSET, PanelKind, TAB_BAR_HEIGHT, TILE_SIZE,

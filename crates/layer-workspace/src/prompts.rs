@@ -119,7 +119,25 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             _ => None,
         };
         let mut p = match action {
-            A::New | A::EditAsWorkspace(_) => {
+            A::New => {
+                let mut p = ManagerPrompt::confirm(
+                    "New Workspace",
+                    "Copy your current tool settings and layout into a new workspace.",
+                    "Create and Switch",
+                );
+                p.name = Some("New Workspace".into());
+                p
+            }
+            A::ResetBrushes => {
+                let mut p = ManagerPrompt::confirm(
+                    "Reset All Brushes?",
+                    "Restore every brush’s settings in this workspace to their defaults.",
+                    "Reset Brushes",
+                );
+                p.destructive = true;
+                p
+            }
+            A::EditAsWorkspace(_) => {
                 let mut choices = vec![ManagerChoice {
                     id: String::new(),
                     label: "Current layout".into(),

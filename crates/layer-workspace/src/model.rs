@@ -10,7 +10,28 @@ pub const TRASH_LIFETIME_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 pub const OWNER_RENEW_MS: u64 = 10_000;
 pub const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
+/// Retained for older saved-layout references; new installs only seed workspaces.
 pub const DEFAULT_TEMPLATE_ID: &str = "builtin:default";
+/// Stable identities: names and contents of the workspaces remain editable.
+pub const DEFAULT_WORKSPACES: [(&str, layer_ui::WorkspacePreset); 3] = [
+    (
+        "builtin:workspace:painter",
+        layer_ui::WorkspacePreset::Painter,
+    ),
+    (
+        "builtin:workspace:illustrator",
+        layer_ui::WorkspacePreset::Illustrator,
+    ),
+    (
+        "builtin:workspace:photographer",
+        layer_ui::WorkspacePreset::Photographer,
+    ),
+];
+pub(crate) fn is_default_item(id: &str) -> bool {
+    DEFAULT_WORKSPACES
+        .iter()
+        .any(|(workspace, _)| *workspace == id)
+}
 
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -126,6 +147,8 @@ pub struct Metadata {
     pub kind: ItemKind,
     pub name: String,
     pub description: String,
+    /// Included items cannot be deleted. Included layouts/toolbars are also
+    /// read-only; included workspaces can be renamed and edited normally.
     pub builtin: bool,
     #[serde(with = "counter")]
     pub created_at_ms: u64,
@@ -172,7 +195,7 @@ impl Metadata {
                 "Item metadata exceeds supported limits.",
             ));
         }
-        if self.builtin {
+        if self.read_only() {
             return Err(StoreError::invalid(
                 "Load this included layout into a workspace to customize it.",
             ));
@@ -190,6 +213,10 @@ impl Metadata {
         self.description = description.into();
         self.modified_at_ms = now;
         self.validate()
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.builtin && self.kind != ItemKind::Workspace
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

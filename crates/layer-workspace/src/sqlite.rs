@@ -638,7 +638,7 @@ fn apply_write(
     }
     let row = header(connection, &write.id)?;
     check_owner(&row, owner, write.fence, now)?;
-    if row.builtin {
+    if row.builtin && row.kind != "workspace" {
         return Err(StoreError::invalid(
             "Load this included layout into a workspace to customize it.",
         ));
@@ -653,6 +653,11 @@ fn apply_write(
     if let Some(metadata) = &write.metadata {
         if metadata.kind.key() != row.kind || metadata.builtin != row.builtin {
             return Err(StoreError::invalid("Item type cannot change."));
+        }
+        if row.builtin && metadata.deleted_at_ms.is_some() {
+            return Err(StoreError::invalid(
+                "Included workspaces cannot be deleted.",
+            ));
         }
         let metadata = resolve_name(connection, metadata.clone(), &write.id, write.name_policy)?;
         generations.metadata = advance(generations.metadata)?;

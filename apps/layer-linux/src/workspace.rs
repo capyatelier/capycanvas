@@ -911,6 +911,7 @@ impl Workspace {
         status.add_css_class("error");
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let workspaces = manager::NativeWorkspaces::new();
+        header_status.prepend(&workspaces.switcher);
         content.append(&surface);
         content.append(&status);
         content.append(&workspaces.root);

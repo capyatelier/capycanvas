@@ -9,6 +9,25 @@ the design on 2026-09-12. Other hosts can proceed from the
 and platform acceptance checks remain outstanding. Earlier approval/status notes
 below describe historical checkpoints rather than the current gate.
 
+## Default workspaces and workspace-only simplification: 2026-09-12
+
+Added Painter, Illustrator, and Photographer as editable, undeletable defaults
+with a GTK header switcher. Painter has only Medium left/top toolbars;
+Photographer has left tools and expanded/collapsed right columns. Illustrator
+preserves the previous default arrangement. Existing workspaces and settings
+survive initialization, switching, and restart.
+
+Removed the separate saved-layout UI and added Reset All Brushes for the current
+workspace. New Workspace copies the current settings and arrangement with a
+name-only dialog. Research, screenshots, behavior, and host integration notes are
+in [default workspaces](../ui/default-workspaces.md).
+
+Validation: 313 shared tests and six native GTK interaction/lifecycle tests pass;
+shared, Apple, and Windows host bridges compile. GTK tests cover real pointer
+input, previews, persistence, ownership, save failure, and fullscreen placement.
+The takeover test now suspends its first host while releasing the lease, matching
+the intended suspension scenario after shared lifecycle changes.
+
 ## Milestone 1: shared state and restoration
 
 Implemented layout-only durable history with independent undo/redo references,

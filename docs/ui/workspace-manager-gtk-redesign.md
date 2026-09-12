@@ -1,9 +1,9 @@
 # Approved GTK workspace manager design
 
-Updated for the user’s 2026-09-12 simplification: workspaces are the saved setup;
-separate layout load/save controls have been removed. This is the visual reference
-for other hosts; use the [host implementation handoff](workspace-manager-host-handoff.md) for scope,
-integration responsibilities, and acceptance checks.
+The compact manager was approved on 2026-09-12. Subsequent direction removes the
+saved-layout library and introduces [three default workspaces](default-workspaces.md)
+and Reset All Brushes. The [host handoff](workspace-manager-host-handoff.md) contains
+the current contract. Earlier saved-layout screenshots are historical only.
 
 ## Menus
 
@@ -14,6 +14,7 @@ Workspaces groups its commands by purpose:
 
 - New Workspace / Manage Workspaces
 - Layout History / Restore Starting Layout
+- Reset All Brushes
 
 Undo Layout Change and Redo Layout Change describe what the top-level actions undo.
 **Layout History** contains earlier arrangements of the current workspace.
@@ -37,12 +38,19 @@ or change either workspace's saved layout/history.
 
 ![Workspace list with preview](workspace-manager-gtk/workspaces.png)
 
-New Workspace asks for a name and copies the current layout and tool settings into
-an independent workspace. There is no saved-layout source selector. A separate
-Reset All Brushes action is planned; it is not implemented by this UI cleanup.
+## New Workspace and brush reset
 
-Recently Deleted, backups, import/export, and version-management controls remain
-absent from these managers.
+New Workspace asks for a name and copies the current settings and arrangement.
+All changes save automatically. There is no separate layout library or starting
+layout dropdown. The three included workspaces can be edited and renamed, but
+have no Delete action.
+
+Reset All Brushes asks:
+
+> Restore every brush’s settings in this workspace to their defaults.
+
+Cancel keeps the settings; Reset Brushes applies the defaults to all presets in
+this workspace, including inactive brushes. Current color and tool stay selected.
 
 ## Layout History
 
@@ -50,8 +58,8 @@ The scrollable list previews the actual editor layout. Cancel restores the layou
 from before opening the dialog; Restore This Version commits one undoable change.
 The title includes the current workspace name. There are no preview instructions.
 
-Restore Starting Layout returns to the layout the workspace began with. It remains
-undoable. Its command and confirmation replace the ambiguous Reset Layout label and sit beside Layout History.
+Restore Starting Layout returns to the arrangement the workspace began with. It remains undoable. Its command and
+confirmation replace the ambiguous Reset Layout label and sit beside Layout History.
 
 ![Layout History](workspace-manager-gtk/history.png)
 
@@ -63,7 +71,7 @@ Close the older GTK instance and run from the repository root:
 cargo run --locked --release -p layer-linux
 ```
 
-Check Window → Workspaces and Layout History. Create a workspace, change its tool
-settings and panel arrangement, then switch between workspaces. Preview another
-workspace and cancel before trying Switch to Workspace. Preview and restore a
-history entry, then undo the change.
+Try the three header choices, then Window → Workspaces → Manage Workspaces.
+Use **+** to copy a setup, move a panel, and preview an earlier arrangement in
+Layout History. Check Cancel before restoring a version or switching workspaces.
+Reset All Brushes restores the brush defaults in the current workspace.

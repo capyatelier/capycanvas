@@ -212,6 +212,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
+    /// Reset every preset override in this workspace, including inactive tools.
+    /// Keep the current color, selected tool, layout and document history.
+    pub fn reset_workspace_brushes(&mut self) -> Result<UiChange, String> {
+        self.require_workspace_idle()?;
+        if self.workspace_preview.is_some() {
+            return Err("Finish previewing the workspace first".into());
+        }
+        if self.tools.overrides.is_empty() {
+            return Ok(UiChange::default());
+        }
+        let mut brush = default_brush(preset(self.state.brush.preset)?);
+        brush.color_rgba_linear = self.engine.configured_brush().color_rgba_linear;
+        self.engine.set_brush(brush.clone()).map_err(error)?;
+        self.tools.overrides.clear();
+        self.state.brush.diameter = brush.diameter;
+        self.state.brush.opacity = brush.opacity;
+        self.cursor.hover.reset();
+        self.refresh_tools();
+        self.refresh_commands();
+        Ok(self.changed(regions::BRUSH | regions::COMMANDS, false))
+    }
+
     /// Includes every accepted edit, even while the storage worker is busy.
     /// Captures use a committed gesture boundary; callers must not use disk alone.
     pub fn capture_workspace(&mut self) -> Result<WorkspaceCapture, String> {

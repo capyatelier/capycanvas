@@ -27,8 +27,8 @@ These workflows should be arrangements of a common editor rather than separate
 applications with duplicated rendering code. The existing layout and panel
 models let users choose which controls are visible and where they belong. Tool
 Settings follows the active tool, and Properties exposes the relevant effect
-parameters. This is the basis for presenting fewer, more relevant controls for
-each workflow; complete audience-specific workspace presets are not yet provided.
+parameters. The [Painter, Illustrator, and Photographer defaults](default-workspaces.md)
+provide initial arrangements for these tasks and remain editable workspaces.
 
 ## Session, actions and views
 
@@ -64,9 +64,10 @@ resize behavior and configuration.
 
 [`WorkspaceState`](../../crates/layer-ui/src/workspace.rs) is the durable layout
 value. Transient menus, native widgets and unfinished gestures are not serialized.
-GTK now uses `layer-workspace` for named workspaces, saved layouts, automatic
-saving, and durable layout history. Workspaces include latest tool settings;
-saved layouts contain reusable arrangements. Other hosts' legacy workspace
+GTK now uses `layer-workspace` for named workspaces, automatic saving, and durable
+layout history. Workspaces include tool settings and the arrangement of tools and
+panels. Reset All Brushes restores brush defaults within the current workspace;
+there is no separate saved-layout library. Other hosts' legacy workspace
 persistence remains the migration source as they adopt the
 [approved workspace-manager design and handoff](workspace-manager-host-handoff.md).
 Layout undo is separate from document undo. A drag is treated as one layout

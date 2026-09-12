@@ -350,25 +350,22 @@ impl ManagerUi {
                             .as_ref()
                             .is_some_and(|c| c.owner != manager.owner && c.expires_at_ms > now_ms())
                 });
-                if !item.builtin {
-                    let more = actions_menu(
-                        w,
-                        &format!("Options for {}", item.title),
-                        vec![
-                            ManagerButton {
-                                action: ManagerAction::Rename(item.id.clone()),
-                                label: "Rename…".into(),
-                                enabled: !elsewhere,
-                                primary: false,
-                            },
-                            ManagerButton {
-                                action: ManagerAction::Delete(item.id.clone()),
-                                label: "Delete…".into(),
-                                enabled: !elsewhere,
-                                primary: false,
-                            },
-                        ],
-                    );
+                {
+                    let mut actions = vec![ManagerButton {
+                        action: ManagerAction::Rename(item.id.clone()),
+                        label: "Rename…".into(),
+                        enabled: !elsewhere,
+                        primary: false,
+                    }];
+                    if !item.builtin {
+                        actions.push(ManagerButton {
+                            action: ManagerAction::Delete(item.id.clone()),
+                            label: "Delete…".into(),
+                            enabled: !elsewhere,
+                            primary: false,
+                        });
+                    }
+                    let more = actions_menu(w, &format!("Options for {}", item.title), actions);
                     more.set_valign(gtk::Align::Center);
                     row.add_suffix(&more);
                 }

@@ -86,6 +86,197 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn concurrent_default_catalog_creation_retires_only_the_duplicate_seed() {
+    struct RacingStore {
+        worker: StoreWorker,
+        race: Cell<bool>,
+    }
+    impl WorkspaceStore for RacingStore {
+        async fn execute(&self, request: StoreRequest) -> Result<StoreResponse> {
+            if matches!(request, StoreRequest::Commit { .. }) && self.race.replace(false) {
+                let other = WorkspaceManager::new(self.worker.clone(), Platform::Gtk);
+                other.initialize_catalog(1_000).await?;
+            }
+            self.worker.execute(request).await
+        }
+    }
+    pollster::block_on(async {
+        let directory = std::env::temp_dir().join(format!("capy-defaults-race-{}", new_id()));
+        let worker = StoreWorker::shared(&directory).unwrap();
+        let m = WorkspaceManager::new(
+            RacingStore {
+                worker,
+                race: Cell::new(true),
+            },
+            Platform::Gtk,
+        );
+        m.initialize_catalog(1_000).await.unwrap();
+        assert_eq!(m.items().len(), 3);
+        assert!(!m.has_failed_operation());
+        assert!(
+            matches!(m.store.execute(StoreRequest::Pending).await.unwrap(), StoreResponse::Pending(p) if p.is_empty())
+        );
+        let initial = m.initialize(2_000).await.unwrap();
+        assert_eq!(initial.entity.id, DEFAULT_WORKSPACES[1].0);
+        m.activate(initial);
+        let prompt = m.prompt(&ManagerAction::New, 2_000).await.unwrap();
+        assert!(prompt.choices.is_empty() && prompt.choice_label.is_none());
+        assert_eq!(prompt.name.as_deref(), Some("New Workspace"));
+        m.close().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    });
+}
+
+#[test]
+fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restart() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        assert_eq!(m.items().len(), 3);
+        assert_eq!(m.active_id().as_deref(), Some(DEFAULT_WORKSPACES[1].0));
+        for (id, preset) in DEFAULT_WORKSPACES {
+            let workspace = m.load(id).await.unwrap();
+            assert_eq!(workspace.entity.metadata.name, preset.name());
+            assert!(workspace.entity.metadata.builtin && !workspace.entity.metadata.read_only());
+            assert_eq!(
+                workspace.entity.capture().unwrap().history.layout(),
+                &preset.layout(Platform::Gtk)
+            );
+            assert!(m.delete_item(id, None, 2_000).await.is_err());
+            let details = m.details(&workspace, true, 2_000);
+            assert!(
+                details
+                    .actions
+                    .iter()
+                    .any(|a| matches!(a.action, ManagerAction::Rename(_)) && a.enabled)
+            );
+            assert!(
+                !details
+                    .actions
+                    .iter()
+                    .any(|a| matches!(a.action, ManagerAction::Delete(_)) && a.enabled)
+            );
+        }
+        let painter = DEFAULT_WORKSPACES[0].0;
+        let incoming = m.prepare_switch(painter, 3_000).await.unwrap();
+        let outgoing = m.activate(incoming).unwrap();
+        m.release(&outgoing).await;
+        let mut capture = m.current().unwrap().capture().unwrap();
+        let mut layout = capture.history.layout().clone();
+        layout.bands[0].extent += 60.;
+        capture.history.append(&layout, "Resize Tools toolbar");
+        capture
+            .working
+            .tools
+            .set_override(capture.working.preset, "size", 73.)
+            .unwrap();
+        m.observe(capture.clone(), 4_000);
+        m.rename(painter, "My Painting", "", 5_000).await.unwrap();
+        let incoming = m
+            .prepare_switch(DEFAULT_WORKSPACES[2].0, 6_000)
+            .await
+            .unwrap();
+        let outgoing = m.activate(incoming).unwrap();
+        m.release(&outgoing).await;
+        let restored = m.prepare_switch(painter, 7_000).await.unwrap();
+        assert_eq!(restored.entity.metadata.name, "My Painting");
+        assert_eq!(
+            restored.entity.capture().unwrap(),
+            m.load(painter).await.unwrap().entity.capture().unwrap()
+        );
+        assert_eq!(restored.entity.capture().unwrap().working, capture.working);
+        assert_eq!(restored.entity.capture().unwrap().history.layout(), &layout);
+        let outgoing = m.activate(restored).unwrap();
+        m.release(&outgoing).await;
+        m.close().await.unwrap();
+        let reopened =
+            WorkspaceManager::new(StoreWorker::shared(&f.directory).unwrap(), Platform::Gtk);
+        let incoming = reopened.initialize(8_000).await.unwrap();
+        assert_eq!(incoming.entity.id, painter);
+        assert_eq!(incoming.entity.metadata.name, "My Painting");
+        assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
+        assert_eq!(incoming.entity.capture().unwrap().working, capture.working);
+        assert_eq!(reopened.items().len(), 3);
+        reopened.activate(incoming);
+        reopened.close().await.unwrap();
+    });
+}
+
+#[test]
+fn default_catalog_upgrade_preserves_existing_workspace_and_name_collisions() {
+    pollster::block_on(async {
+        let directory = std::env::temp_dir().join(format!("capy-presets-upgrade-{}", new_id()));
+        let worker = StoreWorker::shared(&directory).unwrap();
+        let owner = Owner::fresh();
+        let mut layout = DockLayout::for_platform(Platform::Gtk);
+        layout.bands[0].extent += 80.;
+        let user = Entity::workspace(
+            "Painter",
+            WorkspaceCapture::from_template(&layout).unwrap(),
+            layout.clone(),
+            None,
+            500,
+        );
+        let user_id = user.id.clone();
+        let mut legacy = Entity::reusable(
+            "Default",
+            "The standard editor layout.",
+            ReusableContent::Layout {
+                layout: DockLayout::for_platform(Platform::Gtk),
+            },
+            400,
+        );
+        legacy.id = DEFAULT_TEMPLATE_ID.into();
+        legacy.metadata.builtin = true;
+        worker
+            .execute(StoreRequest::Commit {
+                batch: CommitBatch::prepare(
+                    owner,
+                    vec![
+                        Mutation::Create {
+                            entity: user,
+                            claim: false,
+                            name_policy: NamePolicy::Exact,
+                        },
+                        Mutation::Create {
+                            entity: legacy.clone(),
+                            claim: false,
+                            name_policy: NamePolicy::Exact,
+                        },
+                    ],
+                )
+                .unwrap(),
+            })
+            .await
+            .unwrap();
+        let manager = WorkspaceManager::new(worker, Platform::Gtk);
+        let incoming = manager.initialize(1_000).await.unwrap();
+        assert_eq!(incoming.entity.id, user_id);
+        assert_eq!(incoming.entity.metadata.name, "Painter");
+        assert_eq!(incoming.entity.capture().unwrap().history.layout(), &layout);
+        assert_eq!(manager.items().len(), 4);
+        assert_eq!(manager.rows(ManagerPage::Workspaces, "", 1_000).len(), 4);
+        assert_eq!(
+            manager.load(DEFAULT_TEMPLATE_ID).await.unwrap().entity,
+            legacy
+        );
+        assert_eq!(
+            manager
+                .load(DEFAULT_WORKSPACES[0].0)
+                .await
+                .unwrap()
+                .entity
+                .metadata
+                .name,
+            "Painter (2)"
+        );
+        manager.activate(incoming);
+        manager.close().await.unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+    });
+}
+
+#[test]
 fn close_retains_ownership_until_release_is_acknowledged_and_can_be_retried() {
     pollster::block_on(async {
         let f = Fixture::new();
@@ -793,7 +984,7 @@ fn package_validation_and_failed_publication_never_expose_partial_imports() {
         m.store.fail.set(false);
         m.refresh().await.unwrap();
         assert_eq!(m.items().len(), before);
-        assert_eq!(m.active_name().as_deref(), Some("My Workspace"));
+        assert_eq!(m.active_name().as_deref(), Some("Illustrator"));
         assert!(m.import_workspace_package(&bytes, 2_000).await.is_ok());
     });
 }
@@ -803,7 +994,7 @@ fn template_creation_duplication_switching_and_original_baselines_are_independen
     pollster::block_on(async {
         let f = Fixture::new();
         let m = &f.manager;
-        assert_eq!(m.active_name().as_deref(), Some("My Workspace"));
+        assert_eq!(m.active_name().as_deref(), Some("Illustrator"));
         let initial = m.current().unwrap();
         let mut capture = initial.capture().unwrap();
         let mut layout = capture.history.layout().clone();

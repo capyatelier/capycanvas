@@ -1,8 +1,8 @@
 # Workspace manager: approved host implementation handoff
 
-The user approved the GTK design on 2026-09-12 and then removed separate layout
-load/save from scope. Implement saved workspaces, workspace previews, and history.
-This document and the [GTK visual reference](workspace-manager-gtk-redesign.md)
+The user approved the compact GTK manager on 2026-09-12 and then simplified the
+product to **workspaces only**: remove Save Layout, Load Layout, and the saved-layout
+manager; add Reset All Brushes. Other-platform implementation can start. This document and the [GTK visual reference](workspace-manager-gtk-redesign.md)
 define the approved scope. The [original proposal](workspace-manager-proposal.md)
 and its review are historical background; their larger UI is superseded.
 
@@ -12,14 +12,17 @@ and its review are historical background; their larger UI is superseded.
 | --- | --- |
 | Workspace | A named layout and its latest tool settings, saved automatically for a task |
 | Layout History | Earlier arrangements of the current workspace; excludes historical tool settings and document edits |
-| Starting layout | The workspace's original arrangement |
+| Starting layout | The workspace's original arrangement, retained as its tools and panels are rearranged |
 
-Use the exact shared captions and introductory copy in
+Use the exact shared captions in
 [`workspace_manager_ui.rs`](../../crates/layer-ui/src/workspace_manager_ui.rs) and
-the GTK reference. Do not implement separate saved-layout menus, dialogs, or host
-operations. Shared template APIs and serialized records remain temporarily; their
-removal belongs to the core cleanup. Preserve existing stored data during that
-transition. A Reset All Brushes action is planned separately.
+the GTK reference. The older `Template` storage/package APIs remain readable for
+compatibility; they are not product features or a reason to add layout-library UI.
+Legacy `ManageTemplates`, `SaveAsTemplate`, and layout manager actions have no UI
+routes and should not be exposed in other hosts.
+
+See [default workspaces](default-workspaces.md) for Painter, Illustrator,
+Photographer, their fixed header switcher, and the research behind their controls.
 
 ## Approved UI and behavior
 
@@ -28,16 +31,18 @@ Workspaces, then Quick Access Toolbars, followed by the direct panel rows.
 Quick Access Toolbars is a sibling directly below Workspaces. Panel and toolbar
 visibility names omit the redundant "panel" and "toolbar" suffixes.
 
-Workspaces contains recent workspace choices followed by two sections:
+Workspaces contains recent workspace choices followed by three sections:
 
 1. New Workspace… / Manage Workspaces…
 2. Layout History… / Restore Starting Layout…
+3. Reset All Brushes…
 
 Recent workspace menu choices switch directly. The manager dialogs use preview
 selection and explicit confirmation instead:
 
 - **Workspaces:** compact selectable list, top-right square + for New Workspace,
   per-row Rename/Delete options, Cancel and Switch to Workspace below the list.
+  Included workspaces can be renamed and edited but cannot be deleted.
   Initially select the current workspace and disable its Switch button. An item
   already owned by another window offers Switch to Window through the existing
   ownership policy.
@@ -46,17 +51,21 @@ selection and explicit confirmation instead:
   Restore button. Entries identify affected panels/toolbars and the action/date.
   Do not add "select a version to preview" instructions.
 
-In both dialogs, row selection, double-click, and Enter on a row only preview
+In the workspace manager and Layout History, row selection, double-click, and Enter on a row only preview
 the arrangement in the actual editor behind the dialog. Confirming with the
 button finalizes it. Cancel, Escape, back navigation, and native modal dismissal
 restore the original arrangement. Use opaque dialogs and a light enough backdrop
 to see the preview. Adapt sizing to the host and viewport without changing these
 semantics; retain keyboard focus, accessibility labels, and scrollable lists.
 
-New Workspace asks for a name and copies the current layout and tool settings into
-a new independent history. There is no saved-layout source selector. Switching to
-a workspace restores that workspace’s latest tool settings and layout. Restore
-Starting Layout restores its original baseline with one undoable change.
+New Workspace asks only for a name and copies the current tool settings and layout
+into a new independent workspace/history. Changes are saved automatically.
+Restore Starting Layout restores the workspace's original baseline with one
+undoable change. Reset All Brushes confirms once, then resets every brush preset's
+settings in the current workspace through `UiSession::reset_workspace_brushes`.
+It preserves the current color, selected tool, arrangement, other workspaces, and
+artwork. Capture/observe and flush the resulting working state with the normal
+save/retry path. It does not create layout or document history.
 
 Keep the existing simple toolbar management flow. Do not add Recently Deleted,
 backup/import/export, metadata or saved-layout version screens, duplication/update
@@ -105,7 +114,7 @@ window focus. Keep workspace decisions in shared Rust. In particular:
 
 ## Platform work and coordination
 
-| Host | Work still required |
+| Host | Integration responsibilities |
 | --- | --- |
 | Web (`apps/layer-web`) | IndexedDB implementation of the shared store protocol; Wasm async transport, DOM dialogs, tab ownership, visibility/page lifecycle, legacy localStorage migration |
 | Android (`apps/layer-android`) | Shared native worker/manager bridge, app-private directory, Compose dialogs, activity/suspend/recreate lifecycle, legacy state migration |
@@ -133,13 +142,16 @@ refactor is a prerequisite to starting the host work.
 
 ## Acceptance evidence for each host
 
-1. Real native/browser input opens menus, the New Workspace + dialog, row options, and history.
+1. Real native/browser input opens menus, the + dialog, row options, and history.
    Capture and inspect screenshots against the approved GTK reference.
 2. Selection previews without switching, saving, or adding history. Verify rapid
    selections, filtering away a selection, Cancel/Escape/back, and dismissal while
-   a load is pending. Verify workspace naming and explicit button apply.
-3. Switch to Workspace restores that workspace's own latest tool settings and
-   layout. Layout History and Restore Starting Layout preserve tool settings.
+   a load is pending. Verify name-only workspace creation and explicit button apply.
+3. Switch to Workspace restores that workspace's latest settings. The pill uses
+   the three stable default IDs and preserves edits between switches. Layout
+   History and Restore Starting Layout preserve tool settings. Reset All Brushes
+   resets all brush presets only in the current workspace; Cancel changes nothing.
+   Default workspaces reject deletion through both UI and storage.
 4. Restart preserves active workspaces, settings, layout history, and undo/redo.
    Live tool changes do not create layout history; gestures create one event.
 5. Existing legacy state migrates once, including interrupted/concurrent startup.

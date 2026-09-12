@@ -370,6 +370,11 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
         let mut incoming = None;
         let result: Result<Option<StoredEntity>> = async {
             let mut metadata = deleting.entity.metadata.clone();
+            if metadata.builtin {
+                return Err(StoreError::invalid(
+                    "Included layouts and workspaces cannot be deleted.",
+                ));
+            }
             metadata.deleted_at_ms = Some(now);
             let mut mutations = vec![update(&deleting, Some(metadata), None, None)?];
             let replacement_id = if active {
@@ -388,9 +393,18 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     incoming = Some(claimed);
                     Some(replacement.to_string())
                 } else {
-                    let template = self.load(DEFAULT_TEMPLATE_ID).await?;
-                    let entity =
-                        self.workspace_from_template(&template.entity, "My Workspace", now)?;
+                    let preset = layer_ui::WorkspacePreset::Illustrator;
+                    let layout = preset.layout(self.platform);
+                    let entity = Entity::workspace(
+                        "My Workspace",
+                        WorkspaceCapture {
+                            history: layer_ui::LayoutHistory::new(&layout),
+                            working: preset.working_state(),
+                        },
+                        layout,
+                        None,
+                        now,
+                    );
                     let replacement = entity.id.clone();
                     mutations.push(Mutation::Create {
                         entity,
