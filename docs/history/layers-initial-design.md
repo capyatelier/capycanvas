@@ -123,7 +123,16 @@ Use one continuous list surface: no rounded card or permanent border around each
 
 Row selection, the active content/mask target and reference layers are independent. Tapping a row name selects that row and its content; tapping either thumbnail explicitly selects that target. Tapping the already-active, selected row's name leaves its current target unchanged. Double-click names to rename in place (Enter or focus loss commits; Escape cancels). Header blend/opacity always edit the drawing target's owner, never mask strength. Checkbox clicks toggle selection without changing that drawing target. Bulk property controls with mixed values are deferred.
 
-Mouse/pen dragging anywhere on a row reorders it using a translucent native drag preview; on touch, ordinary list drags scroll and the trailing grip starts movement. Thumbnail taps still select targets. Native gestures handle device recognition and drag presentation; shared Rust owns selection and move validation/results. Ordinary state updates retain row widgets so a selection change cannot interrupt double-clicks or drags. There is no separate multi-selection mode.
+The [2026-09-12 drag convention](../ui/drag-and-reorder.md) supersedes the original
+mouse/pen grouping: mouse can drag a row immediately, while touch and pen require
+a hold on the row body before reordering. Ordinary pre-hold touch/pen movement
+remains available for scrolling. The trailing grip starts dragging without a
+hold for every device. Thumbnail taps still select targets. Native gestures
+handle device recognition and the translucent drag preview; shared Rust owns
+selection and move validation/results. Ordinary state updates retain row widgets
+so a selection change cannot interrupt double-clicks or drags. There is no
+separate multi-selection mode. Current host gaps are in the
+[source inventory](../ui/drag-inventory.md).
 
 Drop hints distinguish above/below a row from inside a group. A successful drop into a collapsed group opens it. A drag moves its source layer (or group subtree), including owned masks; moving multiple checked rows together is deferred. Never reuse workspace floating-panel docking or tear-off rules for artwork layers. Invalid destinations are rejected before commit.
 

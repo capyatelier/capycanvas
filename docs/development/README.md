@@ -29,6 +29,11 @@ substitute for the platform build scripts.
 
 ## Find the right place to change
 
+UI changes must follow the [agent interaction rules](../../AGENTS.md) and the
+[drag and reorder convention](../ui/drag-and-reorder.md). Classify the hit surface
+and input device before choosing a gesture recognizer; existing implementations
+still have [documented gaps](../ui/drag-inventory.md).
+
 | Change | Start here |
 | --- | --- |
 | Layer semantics, edit history or saved drawing data | [Documents and edits](../internals/documents.md), then `layer-core`. |

@@ -5,6 +5,13 @@ at Layers' expense. The requirements below remain the shared behavior contract.
 Web/Android-specific presentation is not part of this GTK approval milestone;
 shared models and behavior remain portable.
 
+Drag pickup requirements were updated on 2026-09-12 by the
+[drag and reorder convention](ui/drag-and-reorder.md). It takes precedence over
+the older interaction checkpoints below: tiles require a hold for all devices,
+list bodies require one for touch/pen, and handles/title/tab bars stay immediate.
+The [current inventory](ui/drag-inventory.md) distinguishes remaining host changes
+from behavior already covered by these historical tests.
+
 ## Approved GTK checkpoint
 
 The integrated feature audit on 2026-09-11 passes the following native scenarios

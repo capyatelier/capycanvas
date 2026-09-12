@@ -24,6 +24,13 @@ workspace state and project data also have separate persistence models.
 
 ## Sliding workspace tabs
 
+Tabs and their title bars use immediate dragging after native movement slop,
+without a hold. Reorderable tile bodies require a hold for every device; list
+bodies require one for touch and pen. Hosts must follow the
+[drag and reorder convention](../../docs/ui/drag-and-reorder.md) before starting
+the shared gesture. A `DockItem::Panel` payload alone does not identify whether
+the contact began on a tab, handle, or collapsed-column tile.
+
 At pointer down, capture every tab's original `TabHit` (including its full natural
 width) and the visible tab-strip bounds, in logical workspace coordinates. Once
 the drag is recognized, send `DragWorkspace` with `ContactPhase::Down` and the

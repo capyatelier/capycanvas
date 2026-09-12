@@ -69,10 +69,17 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   management lives under Workspace. Its confirmation explains Workspace Undo
   with the current shortcut. A tabbed
   toolbar keeps the group grip; its configuration column contains these options.
-- Mouse/pen secondary click and touch press-and-hold open the same menu.
+- Drag pickup must follow the [drag and reorder convention](drag-and-reorder.md):
+  tile bodies require a hold for mouse, touch, and pen; grips and title/tab bars
+  allow dragging without a hold. This also applies inside drawers and to
+  draggable collapsed-column icons. See the [inventory](drag-inventory.md) for
+  implementations that still need to change.
+- Secondary click and supported press-and-hold context gestures open the same menu.
   Native gesture recognition owns timing/slop; the deepest applicable target
   wins. Recognized hold/drag suppresses the ordinary click, and scrolling cancels
-  a pending hold. Existing input/context menus inside text inputs remain native.
+  a pending hold. Moving with the same held contact closes the menu and starts
+  dragging; release without dragging retains the menu. Existing input/context
+  menus inside text inputs remain native.
 - **Configure <name> panel…** / **Configure <name> toolbar…** raises the existing tab group and animates its bounds
   into a two-column layout. The original column remains a live preview of the
   compact panel; a wider configuration column opens on the canvas-facing side.
@@ -104,10 +111,12 @@ visibility is a separate setting. See [Zen modes](shared-ui.md#window-chrome-and
   icons, descriptions and explicit confirmation/cancel. Creation also asks for
   a trimmed, case-insensitively unique name. Invalid names leave the draft open.
 - Tiles move within and between ribbons, including wrapped/vertical/tabbed
-  ribbons. A blue insertion line previews the exact core-validated destination.
+  ribbons, after a hold followed by movement with any device. A blue insertion
+  line previews the exact core-validated destination.
   Stable tile IDs prevent stale drags from moving a different tile after edits.
 - Ribbons wrap and grow where space permits, then clip at their panel boundary.
-  They do not scroll: dragging remains reserved for tile reordering. Clipping
+  They do not scroll: hold-then-drag is reserved for tile reordering; their grips
+  move the toolbar without a hold. Clipping
   preserves every configured tile, so resizing can reveal it again. Insertion
   previews only target visible slots and are clipped to the same boundary.
 - Tiles use Small 36×36, Large 72×72, or Labeled 108×72 logical units. Large
@@ -278,9 +287,10 @@ toolbar prompts, picker, tile layout, expanded geometry and validated drop APIs.
 Panel, group and resize gestures capture on the stable workspace, so replacing a
 tab or grip during tear-off cannot cancel the gesture. Rust handles every phase,
 including sizing cycles, history, snapping and Zen visibility. External resize
-strips suppress native selection drags. Touch uses pointer capture for moving
-tiles and a cancellable long-press recognizer for context menus; mouse/pen
-secondary click uses the browser context event. Disabled command buttons remain
+strips suppress native selection drags. The required tile pickup is a cancellable
+hold for mouse, touch, and pen, followed by captured dragging; secondary click
+uses the browser context event. Current missing hold guards are recorded in the
+[source inventory](drag-inventory.md). Disabled command buttons remain
 inside an enabled drag/context target, so they can still be removed or moved.
 
 The web expansion animates the existing group's two columns with one CSS
@@ -296,8 +306,10 @@ Compose. `WorkspaceMenus.kt` presents shared items and actions, including nested
 menu pages, validation, hints and disabled states. `WorkspaceInput.kt` holds only
 native hit geometry, pointer capture and asynchronous reply guards. The stable
 workspace captures panel/group/divider/resize gestures; child reparenting cannot
-cancel a live tear-off. Tile reordering uses the same validated drop query.
-Touch long-press and mouse secondary click open the shared context model.
+cancel a live tear-off. Tile reordering uses the same validated drop query and
+must wait for a hold on every input device; headers and grips stay immediate.
+Context gestures open the shared context model. The source inventory records
+the current pickup-policy gaps separately from these requirements.
 
 Floating groups remain composed when Zen hides docked groups. Core bounds drive
 their layout, external handles and compact/vertical/horizontal presets; Compose

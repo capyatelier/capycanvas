@@ -26,6 +26,14 @@ assuming a Linux machine can build and validate every native client.
 
 ## Linux and web interaction
 
+For reorder gestures, follow the required
+[drag convention and validation matrix](../ui/drag-and-reorder.md#required-validation-when-implementing).
+Test mouse, touch, and pen separately. In particular, assert that tile movement
+before a hold does **not** reorder, pen/touch row movement before a hold scrolls,
+and handles/title/tab bars drag without waiting. A test that succeeds after a
+hold does not establish that the hold is required. Current gaps and relevant
+suites are listed in the [drag inventory](../ui/drag-inventory.md).
+
 Build the [Linux client](linux.md) before running its ignored interactive tests.
 Run GTK tests individually, with one test thread per process:
 

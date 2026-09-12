@@ -308,6 +308,14 @@ regenerates them; no live brush jobs or canvas readbacks run when opening the pi
 
 ## Actions and observation
 
+Drag pickup follows the [application-wide convention](drag-and-reorder.md):
+reorderable tiles require a hold for mouse, touch, and pen; list-row bodies
+require a hold for touch/pen but allow immediate mouse dragging; explicit handles
+and title/tab bars never require a hold. Native recognition supplies timing,
+device identity, and capture; the shared actions below retain drop validation,
+layout publication, cancellation, and history. See the
+[inventory](drag-inventory.md) for current host gaps.
+
 `dispatch(UiAction)` returns `Result<UiChange, String>`. `UiChange` contains a
 revision, changed-region bits, and `canvas_wake`. The host updates only affected
 views and schedules a display callback when needed. `state()` is read-only;

@@ -33,6 +33,12 @@ navigation or a native control. Tool selection, pressure response and navigation
 rules remain shared. Native widgets retain their own focus, text editing and
 accessibility behavior.
 
+Native control pickup follows the [drag and reorder convention](../ui/drag-and-reorder.md).
+Preserve actual device identity: pen requires the touch-style hold before list
+reordering, mouse does not, and every device must hold before reordering a tile.
+Handles and title/tab bars drag without a hold. These UI rules do not delay
+painting, canvas navigation, or direct manipulation controls.
+
 Once a gesture becomes a stroke, the [brush engine](brushes.md) evaluates its
 sensors and places dabs. Adapters should not add another layer of brush smoothing
 or pressure behavior that changes the brush between platforms.

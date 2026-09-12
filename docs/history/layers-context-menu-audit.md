@@ -116,6 +116,12 @@ review PNGs stay ignored under `artifacts/ui/layers-gtk/`.
 
 ## Whole-row holds (2026-09-11)
 
+The [2026-09-12 convention](../ui/drag-and-reorder.md) additionally requires pen
+row-body dragging to wait for a hold, alongside touch. Mouse row-body dragging
+and all explicit row grips remain immediate. The acceptance evidence below
+predates that requirement; it does not establish pen hold gating. See the
+[implementation inventory](../ui/drag-inventory.md) for the remaining changes.
+
 Web and GTK now allow holding row text, padding, thumbnails, mask/link controls,
 selection/visibility controls, or the grip, then reordering with the same contact.
 The menu closes when dragging starts and remains available when the hold is
