@@ -15,7 +15,7 @@ struct WorkspaceDialogs: ViewModifier {
 
 private struct WorkspaceDialog: View {
     @ObservedObject var store: EditorStore
-    private var snapshot: JSON { store.snapshot }
+    private var snapshot: SnapshotProjection { store.snapshot }
     var body: some View {
         Group {
             if !snapshot["toolbar_prompt"].isNull { prompt(snapshot["toolbar_prompt"]) }

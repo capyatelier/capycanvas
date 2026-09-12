@@ -124,26 +124,7 @@ struct EditorView<Canvas: View>: View {
             HStack(spacing: 6) {
                 Color.clear.frame(width: 36 + store.headerLeadingInset, height: 36)
                 if showsApplicationMenus {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 6) {
-                            ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
-                                let menu = store.snapshot["application_menus"][index]
-                                Menu { CatalogMenuItems(store: store, id: menu["id"].string) } label: {
-                                    Text(menu["label"].string).fontWeight(.bold).padding(.horizontal, 17).frame(height: 36)
-                                        .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                                }.buttonStyle(.plain).accessibilityIdentifier("menu-" + menu["label"].string)
-                            }
-                        }.fixedSize()
-                        Menu {
-                            ForEach(store.snapshot["application_menus"].array.indices, id: \.self) { index in
-                                let menu = store.snapshot["application_menus"][index]
-                                Menu(menu["label"].string) { CatalogMenuItems(store: store, id: menu["id"].string) }
-                            }
-                        } label: {
-                            SharedIcon(name: "menu").frame(width: 36, height: 36)
-                                .background(palette["bg"], in: RoundedRectangle(cornerRadius: 6))
-                        }.buttonStyle(.plain).accessibilityLabel("Menus").accessibilityIdentifier("application-menus")
-                    }
+                    ApplicationMenus(store: store, palette: palette)
                 }
             }
             let tab = store.state["tabs"][0]

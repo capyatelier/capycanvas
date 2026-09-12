@@ -84,7 +84,7 @@ private struct WorkspacePanelGroup: View {
     let group: JSON
     let expansion: JSON
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private func panel(_ id: JSON) -> JSON { store.snapshot["panels"].array.first { $0["id"].string == id.string } ?? JSON() }
+    private func panel(_ id: JSON) -> JSON { store.panel(id.string) }
     private var active: JSON { panel(group["active"]) }
     var body: some View {
         Group {

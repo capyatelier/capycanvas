@@ -5,8 +5,7 @@ import SwiftUI
 }
 
 @MainActor final class EditorStore: ObservableObject {
-    @Published private var structuralSnapshot = JSON()
-    private var currentState = JSON()
+    private let ui = EditorSnapshotState()
     let camera = CameraReadout()
     @Published var catalog = JSON()
     @Published var failure: String?
@@ -30,8 +29,8 @@ import SwiftUI
     lazy var projectFiles = ProjectFiles(store: self)
     lazy var windowPresentation = WindowPresentation(store: self)
     lazy var recovery = ArtworkRecovery(store: self)
-    var snapshot: JSON { structuralSnapshot.replacing("state", with: currentState) }
-    var state: JSON { currentState }
+    var snapshot: SnapshotProjection { ui.snapshot }
+    var state: SnapshotProjection { ui.state }
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared) {
         do {
@@ -62,12 +61,11 @@ import SwiftUI
                 return
             }
             if !next["state"].isNull {
-                currentState = next["state"]
-                structuralSnapshot = next
+                ui.receive(next)
                 filterPreviews.refresh()
-                camera.value = state["camera"]
-                projectFiles.receive(state)
-                windowPresentation.receive(state)
+                if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
+                projectFiles.receive(state.json)
+                windowPresentation.receive(state.json)
                 recovery.observe(state["document_file"])
                 contentDrawers.refresh()
                 workspace.refresh()
@@ -75,8 +73,8 @@ import SwiftUI
             else if !next["camera"].isNull {
                 // Camera patches update the readout alone; dragging the canvas
                 // must not rebuild every panel and brush preview at input rate.
-                currentState = state.replacing("camera", with: next["camera"]).replacing("revision", with: next["revision"])
-                camera.value = next["camera"]
+                ui.receive(next)
+                if !SnapshotProjection.equal(camera.value.raw, next["camera"].raw) { camera.value = next["camera"] }
             }
             cameraRevision = state["camera"]["revision"].uint
         }
@@ -156,7 +154,9 @@ import SwiftUI
                 "modifiers": ["command": command, "shift": shift, "alt": alt]])
         }
     }
-    func command(_ id: String) -> JSON { state["commands"].array.first { $0["id"].string == id } ?? JSON() }
+    func command(_ id: String) -> JSON { ui.command(id) }
+    func panel(_ id: String) -> JSON { ui.panel(id) }
+    func applicationMenu(_ id: String) -> JSON { ui.applicationMenu(id) }
     func query(_ value: [String: Any], completion: @escaping @MainActor (JSON) -> Void) {
         guard let native else { completion(JSON()); return }
         native.submit(2, JSON(value)) { result in DispatchQueue.main.async { completion(result ?? JSON()) } }

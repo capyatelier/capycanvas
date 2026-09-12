@@ -252,6 +252,49 @@ Synthetic images check EXIF orientation, sRGB channels, straight alpha, row orde
 and rejection of dimensions beyond the shared import limit. File decoding runs
 off the UI and render-owner queues; document import runs on the serial owner.
 
+The shared JSON transport uses direct Foundation container lookup to avoid
+bridging a complete dictionary for each field read by the editor. Check native
+and decoded containers, scalar fidelity, bounds, immutable edits and round trips
+without launching an app; optional JSON files extend the recursive check to wire
+fixtures:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -O -parse-as-library \
+  apps/layer-apple/Shared/Bridge/JSON.swift \
+  apps/layer-apple/tests/json-lookup.swift -o /tmp/capy-json-lookup-tests
+/tmp/capy-json-lookup-tests
+```
+
+Both editors observe snapshot fields and individual command, panel and menu
+entries through the shared `EditorSnapshotState`. SwiftUI reevaluates readers
+when their values change; stroke-boundary enablement updates no longer publish
+the entire editor as changed. Values and actions still come from Rust.
+`store.state` and `store.snapshot` are live main-actor field readers. A subscript
+returns immutable `JSON`; `.json` takes an immutable whole-object snapshot and
+observes all its fields. Use that explicit copy for document/lifecycle handoff.
+Related readers are updated before observation signals are published, so even
+synchronous observers see a coherent revision. Camera patches update the same
+canonical state without rebuilding the command, panel or menu indexes.
+
+Check observation fidelity and actual SwiftUI rendered-value propagation without
+XCTest or a visible editor. The latter uses an invisible AppKit hosting view;
+both checks exercise the code shared with iPad:
+
+```sh
+for check in snapshot-projection snapshot-views; do
+  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swiftc -O -parse-as-library \
+    apps/layer-apple/Shared/Bridge/JSON.swift \
+    apps/layer-apple/Shared/Bridge/SnapshotProjection.swift \
+    apps/layer-apple/Shared/Bridge/EditorSnapshotState.swift \
+    "apps/layer-apple/tests/$check.swift" -o "/tmp/capy-$check-tests" || exit
+  "/tmp/capy-$check-tests" || exit
+done
+```
+
+The field check also accepts optional JSON wire-fixture files. These checks
+establish data fidelity and selective invalidation; hardware results and the
+remaining presentation gaps are recorded in [PERFORMANCE.md](PERFORMANCE.md).
+
 The shared Swift scheduler has a fast standalone check, with an asynchronous
 native-owner test double and no application launch:
 

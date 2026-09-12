@@ -5,7 +5,7 @@ struct WorkspaceZenToolbars: View {
     var body: some View {
         ForEach(store.snapshot["zen_toolbars"]["sections"].array.indices, id: \.self) { index in
             let section = store.snapshot["zen_toolbars"]["sections"][index]
-            let panel = store.snapshot["panels"].array.first { $0["id"].string == section["panel"].string } ?? JSON()
+            let panel = store.panel(section["panel"].string)
             let tiles = section["tiles"].array.compactMap { pair in panel["tiles"].array.first { $0["id"].uint == pair[0].uint }?.raw }
             WorkspaceToolbar(store: store,
                 panel: panel.replacing("tiles", with: JSON(tiles)).replacing("tile_style", with: section["style"]),
@@ -48,7 +48,7 @@ private struct WorkspaceCollapsedColumn: View {
                         let group = column["groups"][index]
                         ForEach(group["icons"].array.indices, id: \.self) { index in
                             let icon = group["icons"][index]
-                            let panel = store.snapshot["panels"].array.first { $0["id"].string == icon["panel"].string } ?? JSON()
+                            let panel = store.panel(icon["panel"].string)
                             IconTile(icon: panel["icon"].string, label: panel["title"].string, selected: group["active"].string == panel["id"].string) {
                                 store.customize(["type": "toggle_column_drawer", "group": group["group"].raw, "panel": panel["id"].raw])
                             }.modifier(WorkspaceContext(store: store, target: JSON(["kind": "panel", "panel": panel["id"].raw])))
