@@ -1526,6 +1526,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !matches!(
                 &action,
                 UiAction::WorkspaceManager { .. }
+                    | UiAction::CompleteRequest { .. }
+                    | UiAction::CloseSettings
                     | UiAction::MeasureColumnDrawers { .. }
                     | UiAction::MeasureDrawerTiles { .. }
                     | UiAction::MeasureColumnScroll { .. }
@@ -1558,7 +1560,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_transition
             && !matches!(
                 &action,
-                UiAction::MeasureColumnDrawers { .. }
+                UiAction::CompleteRequest { .. }
+                    | UiAction::CloseSettings
+                    | UiAction::MeasureColumnDrawers { .. }
                     | UiAction::MeasureDrawerTiles { .. }
                     | UiAction::MeasureColumnScroll { .. }
                     | UiAction::SystemThemeChanged { .. }

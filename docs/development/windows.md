@@ -42,7 +42,12 @@ Attaching or reconfiguring the swap chain requires coordination with the UI thre
 the worker pauses for that surface operation, not for ordinary widget updates.
 
 Shared snapshots drive tool, color, layer, Navigator and preference controls. Windows persists
-settings under `%LOCALAPPDATA%\CapyAtelier\CapyCanvas\settings.json`. The native File menu and pickers provide New, Open, Save, Save As and PNG Export.
+preferences in `settings.json` and workspaces in `workspaces.sqlite3` under
+`%LOCALAPPDATA%\CapyAtelier\CapyCanvas`. Workspace layout history and latest tool
+settings use the shared manager and asynchronous SQLite worker. The canvas owner
+polls completed operations; database I/O stays off the UI and render threads.
+Autosave and close preserve edits accepted while an earlier save is pending.
+The native File menu and pickers provide New, Open, Save, Save As and PNG Export.
 Layers uses virtualized native rows and bounded asynchronous GPU thumbnails.
 Layer menus and editing controls share their policy with the other ports.
 The Layers image picker decodes oriented sRGB pixels on the document worker;
@@ -60,8 +65,14 @@ local files; export does not mark the editable project as saved.
 ## Validate
 
 ```powershell
-cargo test --locked -p layer-host -p layer-windows --lib
+cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib
+./apps/layer-windows/scripts/exercise-persistence.ps1 -Executable ./artifacts/windows/Debug/CapyCanvas.exe
 ```
+
+The persistence fixture owns disposable profiles through the absolute
+`CAPY_SETTINGS_DIRECTORY` override. It verifies autosave, restart, final-edit
+saving and storage recovery with native UI Automation. Its profiles, captures,
+and reports remain under ignored `artifacts/windows`.
 
 The [Windows host notes](../../apps/layer-windows/README.md) contain interaction
 and diagnostic commands. The [implementation record](../history/windows-implementation.md)

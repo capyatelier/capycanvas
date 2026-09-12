@@ -209,7 +209,13 @@ impl Worker {
         self.shared.ready.notify_one();
     }
     fn stop(&mut self) -> Result<(), String> {
-        self.shared.stopping.store(true, Ordering::Release);
+        {
+            // Serialize the predicate change with the worker entering wait.
+            // An atomic alone permits notify to occur just before wait, losing
+            // the only shutdown notification and leaving join blocked forever.
+            let _mailbox = self.shared.mailbox.lock().unwrap();
+            self.shared.stopping.store(true, Ordering::Release);
+        }
         self.shared.ready.notify_one();
         if let Some(thread) = self.thread.take() {
             thread
@@ -915,7 +921,9 @@ mod tests {
     }
     #[test]
     fn import_completion_rejects_changed_document_target_and_close_and_keeps_undo() {
-        for change in 0..5 {
+        // Repeated idle/retired-worker teardown also covers stop racing with
+        // the next condition-variable wait after a discarded completion.
+        for change in (0..5).cycle().take(100) {
             let mut f = Fixture::new();
             pending_import(&mut f, 1, true);
             match change {

@@ -90,7 +90,22 @@ fn original_database_export_includes_wal_and_preserves_unsupported_payloads() {
         worker.request(StoreRequest::List).wait().unwrap_err().kind,
         ErrorKind::UnsupportedSchema
     );
+    #[cfg(windows)]
+    for name in [
+        "WORKSPACES.SQLITE3",
+        "WORKSPACES.SQLITE3-WAL",
+        "WORKSPACES.SQLITE3-SHM",
+    ] {
+        assert!(
+            worker
+                .backup_database(&f.directory.join(name))
+                .wait()
+                .is_err()
+        );
+    }
     let destination = f.directory.join("original-backup.sqlite3");
+    // Native save pickers can authorize replacing an earlier backup.
+    std::fs::write(&destination, b"previous successful backup").unwrap();
     worker.backup_database(&destination).wait().unwrap();
     let backup = Connection::open(&destination).unwrap();
     assert_eq!(
@@ -840,6 +855,43 @@ fn newer_schemas_and_corrupt_items_are_preserved() {
         .unwrap();
     assert_eq!(version, SCHEMA_VERSION + 1);
 }
+
+#[test]
+fn the_last_native_client_drains_accepted_requests_and_joins_sqlite() {
+    let directory = std::env::temp_dir().join(format!("capy-workspace-joined-{}", new_id()));
+    let first = StoreWorker::shared(&directory).unwrap();
+    let last = first.clone();
+    first.request(StoreRequest::List).wait().unwrap();
+    drop(first);
+    // Closing one window leaves another window's shared worker operational.
+    last.request(StoreRequest::List).wait().unwrap();
+    let entity = workspace("Final accepted workspace");
+    let id = entity.id.clone();
+    let batch = CommitBatch::prepare(
+        Owner::fresh(),
+        vec![Mutation::Create {
+            entity,
+            claim: false,
+            name_policy: NamePolicy::Exact,
+        }],
+    )
+    .unwrap();
+    let reply = last.request(StoreRequest::Commit { batch });
+    drop(last);
+    // No waiting here: the last client's Drop must have joined the worker.
+    assert!(matches!(
+        reply.poll(),
+        Some(Ok(StoreResponse::Committed(_)))
+    ));
+    let mut reopened = SqliteStore::open(&directory.join("workspaces.sqlite3")).unwrap();
+    assert_eq!(
+        reopened.load(&id).unwrap().entity.metadata.name,
+        "Final accepted workspace"
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn native_worker_shares_storage_across_window_clients() {
     let directory = std::env::temp_dir().join(format!("capy-workspace-worker-{}", new_id()));

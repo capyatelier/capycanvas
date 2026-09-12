@@ -5,6 +5,7 @@
 #include "SettingsView.h"
 #include "DocumentView.h"
 #include "WorkspaceDialogs.h"
+#include "WorkspaceStorageView.h"
 #include "CanvasWorkBuffer.h"
 #include "CanvasSnapshotMailbox.h"
 #include "FilterPreviews.h"
@@ -49,6 +50,7 @@ private:
     std::unique_ptr<SettingsView> settings;
     std::unique_ptr<DocumentView> documents;
     std::unique_ptr<WorkspaceDialogs> workspaceDialogs;
+    std::unique_ptr<WorkspaceStorageView> workspaceStorage;
     winrt::Windows::Data::Json::JsonObject lastModel;
     bool applyingDialogs=false,headerPopupOpen=false,workspacePopupOpen=false;
     std::atomic<bool> menuOpen{false},dialogOpen{false};

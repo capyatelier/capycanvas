@@ -1122,6 +1122,7 @@ dependencies = [
  "layer-render",
  "layer-render-wgpu",
  "layer-ui",
+ "layer-workspace",
  "png",
  "pollster",
  "serde",

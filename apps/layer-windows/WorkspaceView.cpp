@@ -246,6 +246,9 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         data->updating=true;
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         data->model=snapshot;data->state=object(snapshot,L"state");
+        // Adoption and layout restoration discard transient host measurements.
+        // Reconcile the new model even when retained controls have identical sizes.
+        lastMeasurements=L"";
         data->refreshPalette();
         auto theme=data->theme(),palette=object(data->state,L"palette").Stringify();
         if(theme!=previousTheme||palette!=previousPalette){
@@ -314,7 +317,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         zen->Apply();collapsed->Apply();drawers->Apply();gestures->Refresh();
         camera.Foreground(data->brush(L"text"));place(camera,object(layout,L"status"));
         camera.TextAlignment(TextAlignment::Right);updateCamera(object(data->state,L"camera"));
-        updatePopup();publishOverviews();reportTitlebar();
+        updatePopup();publishOverviews();reportTitlebar();queueMeasurements();
         applyMotion(object(update,L"drag"));tracePresentation();return true;
     }
 
@@ -448,16 +451,20 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         auto json=report.Stringify();if(json==lastMeasurements)return;lastMeasurements=json;
         data->dispatch(O({{L"type",S(L"measure_panels")},{L"measurements",report}}));
     }
-    void measured(){
-        if(presenting||data->updating||!root.IsLoaded())return;
-        // Coalesce layout notifications after native arrange. Measuring the
-        // scroll extents never realizes the entire virtualized Layers list.
+    void queueMeasurements(){
+        // Run after the current model application and coalesce native arrange
+        // notifications. Retained controls may not raise LayoutUpdated on adoption.
         if(!measurementQueued){
             measurementQueued=true;
             if(!root.DispatcherQueue().TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock()){
                 self->measurementQueued=false;self->reportTitlebar();self->measurePanels();
             }}))measurementQueued=false;
         }
+    }
+    void measured(){
+        if(presenting||data->updating||!root.IsLoaded())return;
+        // Measuring scroll extents never realizes the entire virtualized Layers list.
+        queueMeasurements();
         expansion->Apply(configurationHeight());backgrounds();publishOverviews();tracePresentation();
         if(!popup&&!str(object(data->state,L"customization"),L"control").empty())updatePopup();
     }

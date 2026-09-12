@@ -19,22 +19,27 @@ fn io_error(operation: &str, error: std::io::Error) -> String {
     format!("Could not {operation} preferences ({:?}).", error.kind())
 }
 
+pub(crate) fn data_directory() -> Result<PathBuf, String> {
+    let directory = if let Some(value) = std::env::var_os("CAPY_SETTINGS_DIRECTORY") {
+        PathBuf::from(value)
+    } else {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("Windows app data is unavailable.")?)
+            .join("CapyAtelier")
+            .join("CapyCanvas")
+    };
+    if !directory.is_absolute() {
+        return Err("The app data directory must be an absolute path.".into());
+    }
+    Ok(directory)
+}
+
 pub(crate) struct SettingsFile {
     directory: PathBuf,
     preserve_existing: bool,
 }
 impl SettingsFile {
     fn environment() -> Result<Self, String> {
-        let directory = if let Some(value) = std::env::var_os("CAPY_SETTINGS_DIRECTORY") {
-            PathBuf::from(value)
-        } else {
-            PathBuf::from(
-                std::env::var_os("LOCALAPPDATA").ok_or("Windows app data is unavailable.")?,
-            )
-            .join("CapyAtelier")
-            .join("CapyCanvas")
-        };
-        Self::new(directory)
+        Self::new(data_directory()?)
     }
     fn new(directory: PathBuf) -> Result<Self, String> {
         if !directory.is_absolute() {

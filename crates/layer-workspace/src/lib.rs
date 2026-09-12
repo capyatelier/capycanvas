@@ -19,4 +19,4 @@ pub use sqlite::{Clock, SqliteStore};
 #[cfg(feature = "native")]
 mod worker;
 #[cfg(feature = "native")]
-pub use worker::{StoreReply, StoreWorker};
+pub use worker::{StoreReply, StoreWorker, validate_database_export_destination};
