@@ -60,6 +60,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -67,8 +68,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.PopupPositionProvider
 import com.caverock.androidsvg.SVG
 
 internal class Palette(val dark: Boolean, private val source: org.json.JSONObject) {
@@ -245,6 +251,19 @@ private data class PanelHeaderIndication(val color: Color) : IndicationNodeFacto
         }
     }
 }
+/** GTK's south/north anchor: center below the tile, flip up and slide at edges. */
+private class TileTooltipPositionProvider(private val gap: Int) : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize,
+        layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        val x = (anchorBounds.left + (anchorBounds.width - popupContentSize.width) / 2)
+            .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+        val below = anchorBounds.bottom + gap
+        val y = if (below + popupContentSize.height <= windowSize.height) below
+            else anchorBounds.top - gap - popupContentSize.height
+        return IntOffset(x, y.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)))
+    }
+}
+
 /** Hover only: touch holds remain available for editing and context menus. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun HoverTip(label: String, modifier: Modifier = Modifier,
@@ -252,6 +271,8 @@ private data class PanelHeaderIndication(val color: Color) : IndicationNodeFacto
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val state = rememberTooltipState()
+    val gap = with(LocalDensity.current) { 4.dp.roundToPx() }
+    val position = remember(gap) { TileTooltipPositionProvider(gap) }
     var text by remember(label) { mutableStateOf(label) }
     val currentResolve by rememberUpdatedState(resolve)
     LaunchedEffect(hovered, label) {
@@ -263,8 +284,16 @@ private data class PanelHeaderIndication(val color: Color) : IndicationNodeFacto
     }
     Box(modifier, propagateMinConstraints = true) {
     TooltipBox(modifier = Modifier.hoverable(interaction),
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = { PlainTooltip { Text(text) } }, state = state,
+        positionProvider = position,
+        tooltip = {
+            // Adwaita tooltip colors and metrics, using the editor's readable
+            // text size in both themes. Padding includes its one-pixel border.
+            val shape = RoundedCornerShape(9.dp)
+            Box(Modifier.testTag("hover-tooltip").widthIn(max = 400.dp).background(Color(0xcc000006), shape)
+                .border(1.dp, Color.White.copy(alpha = .1f), shape).padding(horizontal = 11.dp, vertical = 7.dp)) {
+                Text(text, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            }
+        }, state = state,
         focusable = false, enableUserInput = false, content = content)
     }
 }

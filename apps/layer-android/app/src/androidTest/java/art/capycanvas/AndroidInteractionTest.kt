@@ -689,6 +689,74 @@ class AndroidInteractionTest {
         }
     }
 
+    @Test fun hoverTooltipsStayReadableAndFollowTileEdges() {
+        val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
+        val layout = fixture.getJSONObject("layout")
+        val bands = layout.array("bands").objects()
+        val toolbarBand = bands.first { it.getInt("id") == 44 }
+        val tile = layout.array("panels").objects().first { it.getString("id") == "toolbar" }
+            .getJSONObject("content").array("tiles").objects().first { it.getJSONObject("control").getString("kind") != "divider" }.getInt("id")
+        fun hover(at: Offset, pointer: Int, exit: Boolean = false) {
+            val now = SystemClock.uptimeMillis()
+            val event = MotionEvent.obtain(now, now, if (exit) MotionEvent.ACTION_HOVER_EXIT else MotionEvent.ACTION_HOVER_ENTER, 1,
+                arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = pointer }),
+                arrayOf(MotionEvent.PointerCoords().apply { x = at.x; y = at.y }),
+                0, 0, 1f, 1f, 0, 0, if (pointer == MotionEvent.TOOL_TYPE_MOUSE) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_STYLUS, 0)
+            try { instrumentation.runOnMainSync {
+                owner.view.dispatchGenericMotionEvent(event)
+                if (!exit) { event.action = MotionEvent.ACTION_HOVER_MOVE; owner.view.dispatchGenericMotionEvent(event) }
+            } }
+            finally { event.recycle() }
+        }
+        fun tooltip(): Pair<ViewRootForTest, SemanticsNode>? = android.view.inspector.WindowInspector.getGlobalWindowViews().firstNotNullOfOrNull { view ->
+            findView<ViewRootForTest>(view)?.let { root -> find(root.semanticsOwner.unmergedRootSemanticsNode, "hover-tooltip")?.let { root to it } }
+        }
+        try {
+            for (theme in listOf("light", "dark")) for (pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_STYLUS)) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                for (placement in listOf("below", "above", "left", "right")) {
+                    toolbarBand.put("edge", when (placement) { "above" -> "bottom"; "left" -> "left"; else -> "top" })
+                    layout.put("bands", JSONArray(if (placement == "left") listOf(toolbarBand) else bands))
+                    restore()
+                    val tag = if (placement == "right") "header-settings" else "tile-toolbar-$tile"
+                    val anchor = bounds(tag)
+                    hover(anchor.center, pointer)
+                    waitFor("$theme/$pointer/$placement tooltip") { tooltip() != null }
+                    SystemClock.sleep(180)
+                    var tip = Rect.Zero
+                    val origin = IntArray(2)
+                    instrumentation.runOnMainSync {
+                        owner.view.getLocationOnScreen(origin)
+                        val (root, node) = checkNotNull(tooltip())
+                        val location = IntArray(2); root.view.getLocationOnScreen(location)
+                        tip = node.boundsInRoot.translate(Offset(location[0].toFloat(), location[1].toFloat()))
+                        assertTrue("Tooltip does not take window focus", owner.view.hasWindowFocus())
+                    }
+                    val button = anchor.translate(Offset(origin[0].toFloat(), origin[1].toFloat()))
+                    if (placement == "above") assertEquals("Bottom tooltip flips above its tile", button.top - 4 * density, tip.bottom, 2f)
+                    else assertEquals("Tooltip is below its tile", button.bottom + 4 * density, tip.top, 2f)
+                    if (placement in listOf("below", "above")) assertEquals("Tooltip centers on the tile", button.center.x, tip.center.x, 2f)
+                    val image = instrumentation.uiAutomation.takeScreenshot()
+                    try {
+                        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/tooltips/$theme-$pointer-$placement.png")
+                        file.parentFile!!.mkdirs(); file.outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                        assertTrue("Tooltip stays on screen", tip.left >= 0 && tip.top >= 0 && tip.right <= image.width && tip.bottom <= image.height)
+                        val backdrop = image.getPixel(tip.center.x.toInt(), (tip.top + 3 * density).toInt())
+                        assertTrue("Tooltip has a dark backdrop in either theme", listOf(0, 8, 16).all { (backdrop shr it and 255) < 100 })
+                        var white = 0
+                        for (y in tip.top.toInt() until tip.bottom.toInt()) for (x in tip.left.toInt() until tip.right.toInt()) {
+                            val pixel = image.getPixel(x, y)
+                            if (listOf(0, 8, 16).all { (pixel shr it and 255) > 230 }) white++
+                        }
+                        assertTrue("Tooltip has readable white lettering", white > 10)
+                    } finally { image.recycle() }
+                    hover(anchor.center, pointer, exit = true)
+                    waitFor("Tooltip leaves with hover") { tooltip() == null }
+                }
+            }
+        } finally { hover(Offset.Zero, MotionEvent.TOOL_TYPE_MOUSE, exit = true); action(obj("type" to "set_theme", "theme" to originalTheme)) }
+    }
+
     @Test fun emptyHeadersCollapseButTabsDoNot() {
         fixture.getJSONObject("layout").array("bands").objects().forEach { it.getJSONObject("root").put("tab_style", "icon") }
         for (pointer in listOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)) for (id in listOf(41, 43)) {

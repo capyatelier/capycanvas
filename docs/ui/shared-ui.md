@@ -435,7 +435,10 @@ not a claim that the application is already localized.
 Android tooltips use Material's [TooltipBox](https://developer.android.com/develop/ui/compose/components/tooltip)
 with explicit hover activation. They do not consume touch holds reserved for
 dragging or context menus. Their layout wrapper preserves parent sizing and
-grid weights. No shortcut lookup runs on the stroke-input path.
+grid weights. The bubble follows Adwaita styling: white editor-sized text on a
+dark background, a subtle border and compact rounded padding. It centers 4dp
+below its tile, flips above when needed and slides horizontally to stay visible.
+No shortcut lookup runs on the stroke-input path.
 
 Applied settings emit a durable `HostRequest::SaveSettings`; GTK writes atomically
 on GIO's I/O pool and web uses localStorage. Completion/error returns through
