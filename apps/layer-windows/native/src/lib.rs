@@ -17,6 +17,8 @@ mod previews;
 #[cfg(any(target_os = "windows", test))]
 mod workspace;
 #[cfg(any(target_os = "windows", test))]
+mod snapshots;
+#[cfg(any(target_os = "windows", test))]
 pub use navigator::capy_navigator_image;
 #[cfg(any(target_os = "windows", test))]
 mod settings;

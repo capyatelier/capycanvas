@@ -571,7 +571,7 @@ capture uses a measured 986 by 658 DIP viewport and Fit canvas, with actual
 display scale and uncropped client-image dimensions recorded locally. This
 supports comparison with `tools/visual/chrome-capture.mjs`.
 
-The next styling pass aligns desktop header spacing, the shared grip asset,
+The editor styling pass aligns desktop header spacing, the shared grip asset,
 disabled icons, active-tab shoulders, compact layer opacity and property-choice
 rows. Tool Set follows the GTK/Android full-width preview arrangement; the Web
 reference differs there. Full visual parity remains unaccepted.
@@ -580,7 +580,7 @@ Attached tabs use shared frozen geometry and insertion thresholds. Native
 Composition animations slide neighboring copies without moving original hit
 rectangles. The tab strip and scrolling content survive panel-body replacement
 during tear-off, preserving the active pointer capture. The bridge queues Down
-and BeginTabDrag together and uses the shared workspace_drag_preview query.
+and BeginTabDrag together. Shared workspace updates supply tab previews and drop hints.
 
 ~~~powershell
 ./apps/layer-windows/scripts/exercise-tab-drag.ps1 -Executable <native-exe>
@@ -593,10 +593,37 @@ timer keeps delivering held frames while UI Automation or screenshot capture
 blocks the observation thread. It does not establish physical digitizer or
 latency acceptance.
 
-Main through 08a0c15 is integrated, including shared workspace motion publication
-and workspace manager/recovery infrastructure. Windows still needs to adopt the
-incremental motion publication path and connect the workspace store/manager.
-Runtime filter package import, packaging, physical gestures, DPI/device
-lifecycle, full visual parity and all overlap/scroll/drag combinations remain.
-The intermittent final shader-worker join remains open.
-Presentation benchmarking remains deferred.
+## Incremental workspace motion
+
+Windows uses NativeHost::take_update_bytes. Full snapshots establish retained
+models; matching workspace_update messages move only native presentation.
+Revision checks reject stale placements and mismatched content. The UI mailbox
+retains separate full-model, motion and camera slots, so replacing a motion
+packet cannot lose its camera update. Full refreshes supersede older placement.
+All input phases and commands remain ordered in the existing input queue.
+
+Floating frames and their resize grips use native translation transforms.
+TransformToVisual supplies matching hit/clip and GPU Navigator coordinates;
+motion publishes the overview allocations and native transparent holes directly,
+without rerunning panel layout or requiring a layout callback. Attached-tab
+previews and drop hints use the same stream; only toolbar-tile drag/drop retains
+the separate geometry query. Fast tear-off transfers the source Button capture
+using the original press path, even when the first move is already outside it.
+
+The touch fixture additionally verifies unchanged full-model counts and model
+revisions during steady dragging, native control identities, shared/native
+absolute positions, resize-grip movement, a simultaneous camera update, and GPU
+Navigator pixels over an opaque lower panel at two positions. Cancellation
+restores the lower pixels and workspace. CAPY_TRACE_UI exposes local presentation
+diagnostics for these assertions; ordinary runs do not publish that test data.
+The serializer tests compare full and incremental wire values, release/cancel,
+Undo/Redo and camera state. Separate native tests cover mailbox coalescing,
+revision ordering and ordered input boundaries.
+
+Main through 3e14bab is integrated, including the other ports' workspace
+manager/recovery and held-layer improvements. Windows still needs workspace
+store/manager integration, multiwindow support, runtime filter package import,
+packaging, physical gestures, DPI/device lifecycle, full visual parity and all
+overlap/scroll/drag combinations. The intermittent shader-worker final join and
+strict GPU filter-reference mismatch remain open. Final painting presentation
+and input-latency acceptance remain deferred.

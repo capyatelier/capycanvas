@@ -5,6 +5,7 @@
 #include "WorkspaceExpansion.h"
 #include "ZenToolbars.h"
 #include "WorkspaceGeometry.h"
+#include "WorkspacePublication.h"
 #include "OverviewOcclusion.h"
 #include "WorkspaceDrawers.h"
 #include "CollapsedColumns.h"
@@ -25,6 +26,7 @@
 #include <cmath>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <vector>
 
 using namespace winrt;
@@ -53,6 +55,12 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     std::array<float,3> titlebar{};
     hstring lastTitlebar;
     bool presenting=false;
+    WorkspacePublication publication;
+    std::optional<uint32_t> movingGroup;
+    bool trace=GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0)!=0;
+    uint64_t fullUpdates=0,motionUpdates=0;
+    J workspaceUpdate;
+    hstring lastPresentation;
     OverviewOcclusion overviewOcclusion;
     std::map<std::wstring,Border> handles;
     Dispatch overviews;
@@ -67,6 +75,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         Border footer{nullptr};
         std::wstring key;
         J geometry,presented;
+        Windows::Foundation::Point offset{};
+        TranslateTransform translation;
         hstring backgroundKey;
         std::unique_ptr<PanelBody> body;
         std::map<std::wstring,Button> tabs;
@@ -209,11 +219,30 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             popup.ShowAt(anchor);
         }else for(auto const& bind:popupBindings)bind();
     }
-    void apply(J const& snapshot){
-        if(!snapshot.HasKey(L"state")){
-            auto cameraPatch=object(snapshot,L"camera");
-            data->state.Insert(L"camera",cameraPatch);updateCamera(cameraPatch);return;
+    static uint64_t revision(J const& update,wchar_t const* field){
+        double value=num(update,field,-1);
+        if(!std::isfinite(value)||value<0||value>9007199254740991.||std::floor(value)!=value)
+            throw hresult_invalid_argument(L"Invalid workspace publication revision");
+        return uint64_t(value);
+    }
+    bool apply(J const& snapshot){
+        bool full=snapshot.HasKey(L"state");
+        auto update=object(snapshot,L"workspace_update");
+        // Workspace motion can also carry a camera. It is never a camera-only
+        // fallback, and it must reference the content already retained here.
+        if(full||update.Size()){
+            if(!publication.Accept(full,revision(update,L"revision"),revision(update,L"model_revision")))return false;
+            workspaceUpdate=update;
         }
+        if(!full){
+            if(update.Size()){++motionUpdates;applyMotion(object(update,L"drag"));}
+            if(snapshot.HasKey(L"camera")){
+                auto cameraPatch=object(snapshot,L"camera");
+                data->state.Insert(L"camera",cameraPatch);updateCamera(cameraPatch);
+            }
+            tracePresentation();return true;
+        }
+        ++fullUpdates;movingGroup.reset();
         data->updating=true;
         struct Reset {bool& value;~Reset(){value=false;}} reset{data->updating};
         data->model=snapshot;data->state=object(snapshot,L"state");
@@ -232,13 +261,14 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto [it,added]=groups.try_emplace(id);auto& group=it->second;
             if(added){
                 group.frame.Child(group.content);group.frame.Background(clear());group.frame.CornerRadius({8,8,8,8});
+                group.frame.RenderTransform(group.translation);
                 group.background.IsHitTestVisible(false);group.background.Fill(data->brush(L"panel"));
                 group.content.Children().Append(group.background);group.content.Children().Append(group.border);
                 group.configurationFrame.Background(clear());group.content.Children().Append(group.configurationFrame);
                 root.Children().Append(group.frame);
                 AutomationProperties::SetAutomationId(group.frame,L"workspace-group-"+to_hstring(id));
             }
-            group.geometry=geometry;
+            group.geometry=geometry;group.offset={};
             // Geometry-only changes retain controls, focus, capture and scroll.
             auto structure=J::Parse(geometry.Stringify());
             for(auto field:{L"bounds",L"resize_handles",L"tiles",L"footer_grip"})if(structure.HasKey(field))structure.Remove(field);
@@ -285,6 +315,71 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         camera.Foreground(data->brush(L"text"));place(camera,object(layout,L"status"));
         camera.TextAlignment(TextAlignment::Right);updateCamera(object(data->state,L"camera"));
         updatePopup();publishOverviews();reportTitlebar();
+        applyMotion(object(update,L"drag"));tracePresentation();return true;
+    }
+
+    Rect placement(Group const& group)const{
+        auto bounds=rectangle(object(group.presented.Size()?group.presented:group.geometry,L"bounds"));
+        bounds.X+=group.offset.X;bounds.Y+=group.offset.Y;return bounds;
+    }
+    void placeMotion(uint32_t id,Group const& group){
+        // Native render transforms preserve control resolution and move hit/clip
+        // coordinates without invalidating the retained panel's layout.
+        group.translation.X(group.offset.X);group.translation.Y(group.offset.Y);
+        // Resize grips are siblings of the frame. Apply the same absolute
+        // offset so their hit rectangles stay attached to the native panel.
+        for(auto value:array(group.geometry,L"resize_handles")){
+            auto handle=value.GetObject();
+            auto key=L"floating-"+std::to_wstring(id)+L"-"+std::wstring(str(handle,L"edge"));
+            auto found=handles.find(key);if(found==handles.end())continue;
+            auto transform=found->second.RenderTransform().as<TranslateTransform>();
+            transform.X(group.offset.X);transform.Y(group.offset.Y);
+        }
+    }
+    void applyMotion(J const& drag){
+        bool previousPresenting=std::exchange(presenting,true),moved=false;
+        struct Reset{bool& flag;bool previous;~Reset(){flag=previous;}} reset{presenting,previousPresenting};
+        auto motion=object(drag,L"group");
+        std::optional<uint32_t> next;
+        if(motion.Size())next=uint32_t(num(motion,L"id"));
+        if(movingGroup&&movingGroup!=next)if(auto found=groups.find(*movingGroup);found!=groups.end()){
+            found->second.offset={};placeMotion(found->first,found->second);moved=true;
+        }
+        movingGroup=next;
+        if(next)if(auto found=groups.find(*next);found!=groups.end()){
+            auto& group=found->second;
+            auto from=rectangle(object(group.geometry,L"bounds")),to=rectangle(object(motion,L"bounds"));
+            Point offset{to.X-from.X,to.Y-from.Y};
+            moved|=offset.X!=group.offset.X||offset.Y!=group.offset.Y;
+            group.offset=offset;placeMotion(*next,group);
+        }
+        gestures->Present(drag);
+        // TransformToVisual includes render transforms immediately. Publish the
+        // GPU allocations and native holes together without waiting for layout.
+        if(moved){backgrounds();publishOverviews();}
+    }
+    void tracePresentation(){
+        if(!trace)return;
+        A positions;
+        for(auto const& [id,group]:groups){
+            if(!group.frame.IsLoaded())continue;
+            auto bounds=group.frame.TransformToVisual(root).TransformBounds(
+                {0,0,float(group.frame.ActualWidth()),float(group.frame.ActualHeight())});
+            positions.Append(O({{L"id",N(id)},{L"bounds",rectangle(bounds)}}));
+        }
+        A grips;
+        for(auto const& [id,handle]:handles){
+            if(!handle.IsLoaded())continue;
+            auto bounds=handle.TransformToVisual(root).TransformBounds(
+                {0,0,float(handle.ActualWidth()),float(handle.ActualHeight())});
+            grips.Append(O({{L"id",S(hstring(id))},{L"bounds",rectangle(bounds)}}));
+        }
+        auto value=O({{L"revision",N(double(publication.Revision()))},
+            {L"model_revision",N(double(publication.ModelRevision()))},
+            {L"full_updates",N(double(fullUpdates))},{L"motion_updates",N(double(motionUpdates))},
+            {L"workspace_update",workspaceUpdate},{L"groups",positions},{L"handles",grips},
+            {L"overviews",lastOverviews.empty()?A{}:A::Parse(lastOverviews)}}).Stringify();
+        if(value!=lastPresentation){lastPresentation=value;AutomationProperties::SetItemStatus(root,value);}
     }
 
     double configurationHeight()const{
@@ -363,7 +458,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
                 self->measurementQueued=false;self->reportTitlebar();self->measurePanels();
             }}))measurementQueued=false;
         }
-        expansion->Apply(configurationHeight());backgrounds();publishOverviews();
+        expansion->Apply(configurationHeight());backgrounds();publishOverviews();tracePresentation();
         if(!popup&&!str(object(data->state,L"customization"),L"control").empty())updatePopup();
     }
     void present(){
@@ -376,7 +471,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
             auto bounds=object(active?expanded:group.geometry,L"bounds");auto box=rectangle(bounds);
             auto preview=active?object(expanded,L"preview"):rectangle({0,0,box.Width,box.Height});
             auto previewBox=rectangle(preview);
-            place(group.frame,bounds);place(group.border,preview);
+            place(group.frame,bounds);placeMotion(id,group);place(group.border,preview);
             group.content.Width(box.Width);group.content.Height(box.Height);
             RectangleGeometry clip;clip.Rect({0,0,box.Width,box.Height});group.content.Clip(clip);
             group.frame.Visibility(group.hidden?Visibility::Collapsed:Visibility::Visible);
@@ -430,7 +525,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
         for(auto& [id,group]:groups){
             if(!group.frame.IsLoaded()||group.hidden)continue;
             A slots;appendGroupOverviews(slots,group);
-            auto bounds=object(group.presented.Size()?group.presented:group.geometry,L"bounds");
+            auto bounds=rectangle(placement(group));
             auto key=O({{L"expansion",group.presented},{L"bounds",bounds},{L"slots",slots},
                 {L"width",N(num(document,L"width"))},{L"height",N(num(document,L"height"))}}).Stringify();
             if(key==group.backgroundKey)continue;group.backgroundKey=key;
@@ -453,7 +548,8 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
     void resizeHandle(std::wstring const& key,J const& bounds,J const& action,int z,bool resetColumn=false){
         auto [it,added]=handles.try_emplace(key);
         auto handle=it->second;
-        if(added){handle.Background(clear());root.Children().Append(handle);}
+        if(added){handle.Background(clear());handle.RenderTransform(TranslateTransform());root.Children().Append(handle);}
+        auto transform=handle.RenderTransform().as<TranslateTransform>();transform.X(0);transform.Y(0);
         place(handle,bounds);Canvas::SetZIndex(handle,z);gestures->Source(handle,action,{},resetColumn);
         AutomationProperties::SetAutomationId(handle,hstring(key));AutomationProperties::SetName(handle,L"Resize panel");
         AutomationProperties::SetHelpText(handle,resetColumn?L"Drag to resize the column. Double-click to restore its default width.":L"Drag to resize the panel.");
@@ -474,7 +570,7 @@ struct WorkspaceView::Impl : std::enable_shared_from_this<Impl> {
 WorkspaceView::WorkspaceView(Dispatch send,Json catalog,Dispatch overviews,PreviewTransport previews,std::function<void(bool)> popupChanged,Dispatch document,Dispatch input):impl(std::make_shared<Impl>(std::move(send),catalog,std::move(overviews),std::move(previews),std::move(popupChanged),std::move(document),std::move(input))){impl->init();}
 WorkspaceView::~WorkspaceView()=default;
 Canvas WorkspaceView::Root()const{return impl->root;}
-void WorkspaceView::Apply(Json const& snapshot){impl->apply(snapshot);}
+bool WorkspaceView::Apply(Json const& snapshot){return impl->apply(snapshot);}
 WorkspaceView::Json WorkspaceView::ChromeFacts(bool popupOpen){impl->data->externalPopup=popupOpen;return J::Parse(impl->data->chrome.Stringify());}
 bool WorkspaceView::CancelGesture(){return impl->gestures->Cancel();}
 void WorkspaceView::SetTitlebarInsets(float left,float right,float height){

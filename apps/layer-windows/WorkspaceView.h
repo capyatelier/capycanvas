@@ -12,7 +12,7 @@ public:
     WorkspaceView(Dispatch dispatch, Json catalog, Dispatch overviews, PreviewTransport previews,std::function<void(bool)> popupChanged, Dispatch document, Dispatch input);
     ~WorkspaceView();
     winrt::Microsoft::UI::Xaml::Controls::Canvas Root() const;
-    void Apply(Json const& snapshot);
+    bool Apply(Json const& snapshot);
     Json ChromeFacts(bool popupOpen);
     bool CancelGesture();
     void SetTitlebarInsets(float left,float right,float height);

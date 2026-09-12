@@ -6,6 +6,7 @@
 #include "DocumentView.h"
 #include "WorkspaceDialogs.h"
 #include "CanvasWorkBuffer.h"
+#include "CanvasSnapshotMailbox.h"
 #include "FilterPreviews.h"
 #include "native/include/capy_windows.h"
 #include <atomic>
@@ -56,9 +57,9 @@ private:
     std::unordered_set<uint64_t> consumedContacts; // render thread
     winrt::Microsoft::UI::Xaml::Controls::StackPanel toolbar;
     winrt::Microsoft::UI::Xaml::Controls::Grid root;
-    std::string pendingFull, pendingCamera;
+    CanvasSnapshotMailbox snapshots;
     bool snapshotPosted=false;
-    void Publish(std::string snapshot, bool full);
+    void Publish(std::string snapshot, winrt::Windows::Data::Json::JsonObject const& model);
     void ApplyPending();
     void ApplyModel(winrt::Windows::Data::Json::JsonObject const&);
     void Popup(bool open);

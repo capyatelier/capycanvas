@@ -443,7 +443,7 @@ void CanvasWindow::Run() {
             if(auto snapshot=capy_snapshot(host)){
                 std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
                 auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
-                Publish(snapshot,model.HasKey(L"state"));
+                Publish(snapshot,model);
             }
             prepared=capy_prepare_gpu(host)>=0;
         }
@@ -475,7 +475,7 @@ void CanvasWindow::Run() {
                 if(auto snapshot=capy_snapshot(host)){
                     std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
                     auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
-                    Publish(snapshot,model.HasKey(L"state"));
+                    Publish(snapshot,model);
                 }
             }
             // DXGI waits before draining input so a frame uses the freshest arrived samples.
@@ -532,7 +532,7 @@ void CanvasWindow::Run() {
             if(auto snapshot=capy_snapshot(host)) {
                 std::unique_ptr<char,decltype(&capy_string_free)> owned(snapshot,capy_string_free);
                 auto model=Windows::Data::Json::JsonObject::Parse(to_hstring(snapshot));
-                Publish(snapshot,model.HasKey(L"state"));
+                Publish(snapshot,model);
                 if(model.HasKey(L"brush_ready")) {
                     bool ready=model.GetNamedBoolean(L"brush_ready");
                     brushReady=ready;
@@ -665,7 +665,10 @@ void CanvasWindow::Finish() {
     CapyLifecycle("window_closed");
 }
 
-void CanvasWindow::Publish(std::string snapshot,bool full) {
+void CanvasWindow::Publish(std::string snapshot,Windows::Data::Json::JsonObject const& model) {
+    bool full=model.HasKey(L"state");
+    std::optional<std::string> camera;
+    if(!full&&model.HasKey(L"camera"))camera=to_string(CapyUi::O({{L"camera",model.GetNamedValue(L"camera")}}).Stringify());
     // Explicit local test evidence. This can include user state and is never
     // enabled by ordinary or presentation-probe launches.
     if(full&&GetEnvironmentVariableW(L"CAPY_TRACE_UI",nullptr,0))
@@ -673,22 +676,22 @@ void CanvasWindow::Publish(std::string snapshot,bool full) {
     bool post;
     {
         std::lock_guard lock(mutex);if(closing)return;
-        if(full){pendingFull=std::move(snapshot);pendingCamera.clear();}
-        else pendingCamera=std::move(snapshot);
+        snapshots.Push(std::move(snapshot),full,model.HasKey(L"workspace_update"),std::move(camera));
         post=!snapshotPosted;snapshotPosted=true;
     }
     if(post)dispatcher.TryEnqueue([weak=weak_from_this()]{if(auto self=weak.lock())self->ApplyPending();});
 }
 void CanvasWindow::ApplyPending() {
-    std::string full,camera;
+    CanvasSnapshotMailbox::Batch batch;
     {
         std::lock_guard lock(mutex);snapshotPosted=false;
         if(closing)return;
-        full.swap(pendingFull);camera.swap(pendingCamera);
+        batch=snapshots.Take();
     }
     try {
-        if(!full.empty())ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(full)));
-        if(!closing&&!camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(camera)));
+        if(!batch.full.empty())ApplyModel(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.full)));
+        if(!closing&&!batch.workspace.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.workspace)));
+        if(!closing&&!batch.camera.empty())workspace->Apply(Windows::Data::Json::JsonObject::Parse(to_hstring(batch.camera)));
     } catch(hresult_error const& error) {Fail(to_string(error.message()));}
 }
 
@@ -748,6 +751,7 @@ void CanvasWindow::Fullscreen() {
 }
 void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     using namespace CapyUi;
+    if(!workspace->Apply(model))return;
     lastModel=model;
     auto state=object(model,L"state");auto theme=str(state,L"theme",L"dark");
     if(flag(object(state,L"document_file"),L"close_ready")){Stop();return;}
@@ -765,5 +769,5 @@ void CanvasWindow::ApplyModel(Windows::Data::Json::JsonObject const& model) {
     foreground.A=128;window.AppWindow().TitleBar().ButtonInactiveForegroundColor(foreground);
     auto tabs=array(state,L"tabs");
     if(tabs.Size())window.Title(str(tabs.GetObjectAt(0),L"title")+L" · Capy Canvas");
-    workspace->Apply(model);header->Apply(model);ApplyDialogs();
+    header->Apply(model);ApplyDialogs();
 }

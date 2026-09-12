@@ -11,6 +11,7 @@ public:
         CapyUi::J const& action,CapyUi::J const& context={},bool doubleClick=false,
         CapyUi::J const& tab={});
     void Refresh();
+    void Present(CapyUi::J const& drag);
     void ChromeChanged();
     bool Cancel();
 private:

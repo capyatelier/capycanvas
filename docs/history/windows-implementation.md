@@ -1247,3 +1247,59 @@ DPI/device lifecycle, packaging and physical input remain. The intermittent
 shader-worker shutdown delay and strict GPU filter-reference mismatch are still
 open. Final painting presentation and input-latency acceptance remain deferred.
 Private captures, profiles, traces, logs and binaries remain ignored/local.
+
+## Retained native workspace motion
+
+The Windows bridge now serializes NativeHost::take_update_bytes directly and
+appends escaped Windows metadata without constructing another tree of UI models.
+A full snapshot establishes the model revision; later workspace updates apply
+absolute geometry against that retained revision. A three-slot mailbox
+keeps full models, motion and camera updates separately. A later motion without
+a camera cannot erase an earlier camera change. Full completion/cancellation
+snapshots discard older presentation. Input actions still use the ordered queue.
+
+Floating panel frames and resize grips retain native translation transforms.
+The transform moves rendered controls and their hit/clip coordinates without
+rerunning content layout. TransformToVisual gives GPU overview allocations in
+the same coordinates; the native transparent holes and compositor occlusion
+are updated with those placements. This uses the existing canvas swap chain.
+Attached-tab previews and drop hints consume the shared update stream instead
+of issuing a query for each motion. Toolbar-tile drop queries remain separate.
+
+The OS-touch fixture caught a fast tear-off capture failure: the first move's
+OriginalSource could already be outside the source tab. Windows still held the
+Button capture, but the adapter looked for it along the new source's ancestors.
+The adapter now retains weak references along the original press path and
+transfers that contact after drag slop. Preview hiding retains the local grab
+until gesture completion, so a queued pre-Down snapshot cannot discard it.
+
+The complete native motion fixture passes attached reorder, two grab positions,
+fixed hit rectangles, release/cancel, held floating movement, retained tab and
+numeric controls, native resize-grip movement and workspace Undo. A fast
+Navigator tear-off additionally checks matching shared/native/GPU positions,
+unchanged models through a mixed camera update, retained Navigator controls,
+GPU pixels over an opaque lower panel at two positions, cancellation and lower
+pixel restoration. All review input is OS-injected touch. Local screenshots
+were visually inspected; these checks do not establish physical pen behavior,
+full visual parity or input/presentation latency.
+
+Main through 3e14bab is integrated. The shared Windows tree passes 334 unit tests
+(264 UI, 20 host, 50 Windows; three explicit GPU tests ignored), strict Windows
+Clippy and the native build. Native queue/mailbox tests verify stale revision
+rejection, matching retained models, camera preservation and completion ordering.
+The Windows serialization fixture compares 32 floating moves with the
+compatibility wire format, including mixed camera, final release/cancellation
+and Undo/Redo, and requires incremental traffic below one tenth of full models.
+
+The editor, Layers, drawers, effects and configuration-expansion native suites
+also pass, including their five-second zero-exit gates. Four shared overview
+regressions pass on the Windows D3D12 adapter; the explicitly ignored presentation
+benchmark was not run. The final Android/Web-only integration leaves the
+validated shared Rust and Windows sources unchanged.
+
+Workspace store/manager integration, full gesture/scroll/overlap parity,
+multiwindow, runtime filter packages, DPI/device recovery, packaging and physical
+input remain. The intermittent shader-worker shutdown delay and strict GPU
+filter-reference mismatch remain open. Final painting presentation and input
+latency benchmarks are deferred. Private captures, profiles, traces, logs and
+binaries remain ignored/local.

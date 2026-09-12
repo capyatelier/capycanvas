@@ -10,7 +10,7 @@ public:
     ~WorkspaceTabDrag();
     void Grab(CapyUi::J const& tab,std::vector<winrt::weak_ref<winrt::Microsoft::UI::Xaml::FrameworkElement>> const& tabs);
     CapyUi::J Begin();
-    void Update(CapyUi::J const& preview);
+    void Update(CapyUi::J const& presentation);
     void Refresh(std::vector<winrt::weak_ref<winrt::Microsoft::UI::Xaml::FrameworkElement>> const& tabs);
     void Clear();
 private:

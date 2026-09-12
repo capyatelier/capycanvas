@@ -42,13 +42,17 @@ struct WorkspaceTabDrag::Impl {
         AutomationProperties::SetAccessibilityView(overlay,Microsoft::UI::Xaml::Automation::Peers::AccessibilityView::Raw);
     }
     ~Impl(){clear();}
-    void clear(){
+    void hide(){
         for(auto& entry:entries){
-            if(entry.animation)entry.copy.StopAnimation(entry.animation);
+            if(entry.animation){entry.copy.StopAnimation(entry.animation);entry.animation=nullptr;}
+            if(entry.copy)entry.copy.Translation({float(entry.target),0,0});
             if(visible)if(auto original=entry.source.get())original.Opacity(entry.opacity);
         }
         uint32_t index;if(root.Children().IndexOf(overlay,index))root.Children().RemoveAt(index);
-        overlay.Children().Clear();entries.clear();clip=J{};visible=false;
+        visible=false;
+    }
+    void clear(){
+        hide();overlay.Children().Clear();entries.clear();clip=J{};
     }
     void grab(J const& tab,std::vector<weak_ref<FrameworkElement>> const& candidates){
         clear();if(!tab.Size())return;
@@ -104,11 +108,20 @@ struct WorkspaceTabDrag::Impl {
         visible=true;root.Children().Append(overlay);
         return O({{L"tabs",hits},{L"clip",clip}});
     }
-    void update(J const& preview){
-        if(!visible)return;
-        if(!preview.Size()){clear();return;}
+    void update(J const& presentation){
+        if(entries.empty())return;
+        auto preview=object(presentation,L"preview");
+        // A queued full refresh can precede the local Down acknowledgement.
+        // Hide its absent/other preview without discarding this contact's grab.
+        if(!preview.Size()||num(presentation,L"group")!=group||str(presentation,L"panel")!=entries[source].panel){
+            hide();return;
+        }
         auto offsets=array(preview,L"offsets");
-        if(offsets.Size()!=entries.size()){clear();return;}
+        if(offsets.Size()!=entries.size()){hide();return;}
+        if(!visible){
+            for(auto const& entry:entries)if(auto original=entry.source.get())original.Opacity(0);
+            root.Children().Append(overlay);visible=true;
+        }
         for(uint32_t i=0;i<entries.size();++i){
             auto& entry=entries[i];
             double target=i==source?num(object(preview,L"bounds"),L"x")-num(object(entry.hit,L"bounds"),L"x"):
@@ -151,6 +164,6 @@ WorkspaceTabDrag::WorkspaceTabDrag(std::shared_ptr<WorkspaceData> data,Canvas ro
 WorkspaceTabDrag::~WorkspaceTabDrag()=default;
 void WorkspaceTabDrag::Grab(J const& tab,std::vector<weak_ref<FrameworkElement>> const& tabs){impl->grab(tab,tabs);}
 J WorkspaceTabDrag::Begin(){return impl->begin();}
-void WorkspaceTabDrag::Update(J const& preview){impl->update(preview);}
+void WorkspaceTabDrag::Update(J const& presentation){impl->update(presentation);}
 void WorkspaceTabDrag::Refresh(std::vector<weak_ref<FrameworkElement>> const& tabs){impl->refresh(tabs);}
 void WorkspaceTabDrag::Clear(){impl->clear();}

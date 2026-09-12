@@ -1,9 +1,49 @@
 #include "../CanvasWorkBuffer.h"
 #include "../CanvasQueryQueue.h"
+#include "../CanvasSnapshotMailbox.h"
+#include "../WorkspacePublication.h"
 #include <cassert>
 #include <iostream>
 
 int main() {
+    WorkspacePublication publication;
+    assert(!publication.Accept(false,10,4)); // Motion cannot establish models.
+    assert(publication.Accept(true,10,4));
+    assert(publication.Accept(false,12,4));
+    assert(!publication.Accept(false,11,4)); // An older queued placement is stale.
+    assert(!publication.Accept(false,13,5)); // A new model is required first.
+    assert(publication.Revision()==12&&publication.ModelRevision()==4);
+    assert(!publication.Accept(true,11,4)); // Nor can an old full snapshot rewind it.
+    assert(publication.Accept(true,13,5));
+    assert(!publication.Accept(false,14,4)); // Old content must never be moved.
+    assert(publication.Accept(true,13,5)); // Host visibility/size refresh.
+    assert(publication.Accept(false,14,5));
+    std::cout<<"Workspace publication: matching models, ordered motion and host refresh passed\n";
+    CanvasSnapshotMailbox snapshots;
+    snapshots.Push("models A",true,true);
+    snapshots.Push("motion A + camera 1",false,true,"camera 1");
+    snapshots.Push("motion B",false,true);
+    auto shown=snapshots.Take();
+    assert(shown.full=="models A"&&shown.workspace=="motion B"&&shown.camera=="camera 1");
+    snapshots.Push("motion C + camera 2",false,true,"camera 2");
+    snapshots.Push("camera 3",false,false,"camera 3");
+    snapshots.Push("motion D",false,true);
+    shown=snapshots.Take();
+    assert(shown.full.empty()&&shown.workspace=="motion D"&&shown.camera=="camera 3");
+    // A completed gesture's full model must discard every older motion/camera.
+    snapshots.Push("motion E + camera 4",false,true,"camera 4");
+    snapshots.Push("models B (release)",true,true);
+    shown=snapshots.Take();
+    assert(shown.full=="models B (release)"&&shown.workspace.empty()&&shown.camera.empty());
+    snapshots.Push("models C",true,true);
+    snapshots.Push("motion F",false,true);
+    snapshots.Push("models D (cancel)",true,true);
+    snapshots.Push("camera 5",false,false,"camera 5");
+    shown=snapshots.Take();
+    assert(shown.full=="models D (cancel)"&&shown.workspace.empty()&&shown.camera=="camera 5");
+    shown=snapshots.Take();
+    assert(shown.full.empty()&&shown.workspace.empty()&&shown.camera.empty());
+    std::cout<<"Canvas presentation: retained models, independent motion/camera coalescing and completion boundaries passed\n";
     CanvasWorkBuffer queue;
     // Saturation must not consume the caller's rejected command. Every
     // accepted boundary and command remains in the original order.

@@ -542,25 +542,21 @@ pub unsafe extern "C" fn capy_frame(host: *mut CapyHost, now: u64, presentation:
 pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
     let mut result = std::ptr::null_mut();
     guard(host, |host| {
-        if let Some(mut snapshot) = host.native.take_snapshot() {
-            if snapshot.get("state").is_some() {
-                snapshot["windows_importing"] = serde_json::json!(
-                    host.documents
-                        .as_ref()
-                        .is_some_and(|service| service.importing())
-                );
-                snapshot["windows_image_import"] = host
-                    .documents
-                    .as_ref()
-                    .and_then(|service| service.import_request())
-                    .unwrap_or(serde_json::Value::Null);
-                snapshot["windows_isolated_settings"] = serde_json::json!(
-                    std::env::var_os("CAPY_SETTINGS_DIRECTORY")
-                        .map(std::path::PathBuf::from)
-                        .is_some_and(|path| path.is_absolute())
-                );
-            }
-            result = CString::new(snapshot.to_string()).map_err(err)?.into_raw();
+        let metadata = crate::snapshots::WindowsMetadata {
+            windows_importing: host
+                .documents
+                .as_ref()
+                .is_some_and(|service| service.importing()),
+            windows_image_import: host
+                .documents
+                .as_ref()
+                .and_then(|service| service.import_request()),
+            windows_isolated_settings: std::env::var_os("CAPY_SETTINGS_DIRECTORY")
+                .map(std::path::PathBuf::from)
+                .is_some_and(|path| path.is_absolute()),
+        };
+        if let Some(snapshot) = crate::snapshots::take(&mut host.native, &metadata).map_err(err)? {
+            result = CString::new(snapshot).map_err(err)?.into_raw();
         }
         Ok(0)
     });
